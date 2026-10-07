@@ -665,6 +665,7 @@ export function createDemoBackend(): Backend {
         assetSize: 12_538_880,
         sumsUrl: "",
         installed: true,
+        installKind: "setup" as const,
       };
     },
     async updateDownload() {

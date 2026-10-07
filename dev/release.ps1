@@ -85,7 +85,11 @@ New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item "$env:CARGO_TARGET_DIR\release\celer-setup.exe" "$out\Celer-Setup-$Version.exe" -Force
 Copy-Item "$env:CARGO_TARGET_DIR\release\bundle\nsis\Celer_$($Version)_x64-setup.exe" "$out\Celer-$Version-nsis-setup.exe" -Force
 Copy-Item "$env:CARGO_TARGET_DIR\release\celer.exe" "$out\Celer-$Version-portable.exe" -Force
-$sums = Get-ChildItem $out -Filter *.exe | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
+# MSI (per machine, for IT deployments / GPO): name carries the WiX language, e.g. Celer_1.2.0_x64_es-ES.msi.
+$msi = Get-ChildItem "$env:CARGO_TARGET_DIR\release\bundle\msi" -Filter "Celer_$($Version)_x64_*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+Check ($null -ne $msi) "No se generó el paquete MSI"
+Copy-Item $msi.FullName "$out\Celer-$Version-x64.msi" -Force
+$sums = Get-ChildItem $out -File | Where-Object { $_.Extension -in ".exe", ".msi" } | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
 Set-Content "$out\SHA256SUMS.txt" $sums -Encoding ascii
 Get-ChildItem $out | ForEach-Object { "{0,-34} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB) }
 

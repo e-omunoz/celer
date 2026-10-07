@@ -1,0 +1,96 @@
+# macOS and Linux packages. Windows installers are built locally by dev/release.ps1; this attaches the
+# other platforms to the same GitHub Release. It runs only when a release is published (or by hand), so
+# it costs no Actions minutes on everyday pushes.
+name: Release (macOS, Linux)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the packages to (empty: build only and keep them as run artifacts)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux
+          - os: macos-14
+            label: macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.label == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Linux build dependencies
+        if: matrix.label == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev libssl-dev rpm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npx tauri build ${{ matrix.label == 'macos' && '--target universal-apple-darwin' || '' }}
+
+      - name: Collect packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p out
+          if [ "${{ matrix.label }}" = "linux" ]; then
+            B=src-tauri/target/release/bundle
+            cp "$(ls $B/appimage/*.AppImage | head -n1)" "out/Celer-$VERSION-linux-x86_64.AppImage"
+            cp "$(ls $B/deb/*.deb | head -n1)" "out/Celer-$VERSION-linux-amd64.deb"
+            cp "$(ls $B/rpm/*.rpm | head -n1)" "out/Celer-$VERSION-linux-x86_64.rpm"
+            (cd out && sha256sum * > "SHA256SUMS-linux.txt")
+          else
+            B=src-tauri/target/universal-apple-darwin/release/bundle
+            cp "$(ls $B/dmg/*.dmg | head -n1)" "out/Celer-$VERSION-macos-universal.dmg"
+            (cd out && shasum -a 256 * > "SHA256SUMS-macos.txt")
+          fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: celer-${{ matrix.label }}
+          path: out/*
+          retention-days: 7
+
+      - name: Attach to the release
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" out/* --clobber

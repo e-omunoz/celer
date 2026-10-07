@@ -26,7 +26,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 libloading = "0.9"
 parking_lot = "0.12"
 anyhow = "1"
-keyring = { version = "3", features = ["windows-native", "apple-native"] }
+# Native credential stores: Windows Credential Manager, macOS Keychain, Linux Secret Service (keyutils fallback).
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 uuid = { version = "1", features = ["v4"] }
 rust_xlsxwriter = { version = "0.99", default-features = false }
 ureq = "2"

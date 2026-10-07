@@ -29,13 +29,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": "all",
     "shortDescription": "Swift SQL for every database",
     "longDescription": "Celer is a fast desktop SQL client for PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, Informix and ODBC.",
     "publisher": "Celer",
     "category": "DeveloperTool",
     "windows": {
-      "nsis": { "installMode": "currentUser" }
+      "nsis": { "installMode": "currentUser" },
+      "wix": { "language": "es-ES" }
     },
     "icon": [
       "icons/32x32.png",

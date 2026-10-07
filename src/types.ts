@@ -184,6 +184,8 @@ export interface UpdateInfo {
   sumsUrl: string;
   /** Installed with Celer Setup: the update installs itself and reopens Celer. */
   installed: boolean;
+  /** setup: automatic · portable: opens the installer · msi / other (macOS, Linux): download from GitHub. */
+  installKind: "setup" | "portable" | "msi" | "other";
 }
 
 export const defaultSettings: Settings = {

@@ -30,6 +30,26 @@ pub struct UpdateInfo {
     pub sums_url: String,
     /// Celer instalado con Celer Setup (hay un uninstall.exe al lado): la actualización es automática.
     pub installed: bool,
+    /// "setup" (automática), "portable" (abre el instalador), "msi" (descargar el .msi nuevo),
+    /// "other" (macOS/Linux: descargar el paquete del sistema).
+    pub install_kind: &'static str,
+}
+
+/// Cómo se instaló esta copia; decide qué hace el botón de actualizar.
+pub fn install_kind() -> &'static str {
+    if !cfg!(windows) {
+        return "other";
+    }
+    if installed_by_setup() {
+        return "setup";
+    }
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_lowercase()).unwrap_or_default();
+    // The MSI installs per machine under Program Files; Celer Setup and NSIS install per user.
+    if exe.contains(r"\program files") {
+        "msi"
+    } else {
+        "portable"
+    }
 }
 
 #[derive(Deserialize)]
@@ -113,9 +133,12 @@ pub fn check() -> Result<UpdateInfo> {
     }
     let current = current_version();
     let latest = release.tag_name.trim_start_matches(['v', 'V']).to_string();
+    let kind = install_kind();
+    // Only Celer Setup can update in place; MSI, macOS and Linux get the release page for their package.
     let setup = release
         .assets
         .iter()
+        .filter(|_| kind == "setup" || kind == "portable")
         .find(|a| a.name.starts_with(SETUP_PREFIX) && a.name.to_ascii_lowercase().ends_with(".exe"));
     let sums = release.assets.iter().find(|a| a.name == SUMS_NAME);
     Ok(UpdateInfo {
@@ -130,6 +153,7 @@ pub fn check() -> Result<UpdateInfo> {
         asset_size: setup.map(|a| a.size).unwrap_or(0),
         sums_url: sums.map(|a| a.browser_download_url.clone()).unwrap_or_default(),
         installed: installed_by_setup(),
+        install_kind: kind,
     })
 }
 

@@ -90,9 +90,12 @@ export function UpdateDialog() {
 
       <Show when={info()?.available && update.status !== "error"}>
         <p class="upd-fine">
-          {info()!.installed
-            ? "Celer se cerrará, el instalador se actualizará solo y volverá a abrirlo. Tus conexiones, consultas y ajustes se conservan."
-            : "Esta copia no se instaló con Celer Setup: se abrirá el instalador para que elijas dónde instalar la nueva versión."}
+          {{
+            setup: "Celer se cerrará, el instalador se actualizará solo y volverá a abrirlo. Tus conexiones, consultas y ajustes se conservan.",
+            portable: "Esta copia es portable: se abrirá Celer Setup para que elijas dónde instalar la nueva versión. Tus conexiones y ajustes se conservan.",
+            msi: "Celer se instaló con el paquete MSI: descarga el .msi nuevo desde GitHub e instálalo encima (tus datos se conservan).",
+            other: "Descarga el paquete de tu sistema (.dmg, .deb, .rpm o AppImage) desde GitHub. Tus conexiones y ajustes se conservan.",
+          }[info()!.installKind ?? "setup"]}
         </p>
       </Show>
 
@@ -104,7 +107,7 @@ export function UpdateDialog() {
             <span class="spacer" />
             <button type="button" class="btn" onClick={close}>Más tarde</button>
             <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void downloadUpdate()}>
-              <ArrowDownToLine size={14} /> {info()?.assetUrl ? "Descargar e instalar" : "Descargar"}
+              <ArrowDownToLine size={14} /> {info()?.assetUrl ? "Descargar e instalar" : "Descargar desde GitHub"}
             </button>
           </Match>
           <Match when={update.status === "downloading"}>
