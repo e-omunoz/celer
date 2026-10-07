@@ -271,14 +271,18 @@ if (want("keys")) {
 
 // Loading every row: Gib at the laptop, live progress and Cancel.
 if (want("busy")) {
+  await openEvents();
   await js(`[...pane().querySelectorAll('.filter-chips .link')].find((b) => b.textContent === 'Quitar todos')?.click(); await sleep(400);`);
-  await js(`[...pane().querySelectorAll('.tb-icon')].find((b) => b.title.startsWith('Recargar'))?.click(); await until(() => [...pane().querySelectorAll('.data-toolbar .btn')].some((b) => b.textContent.includes('Cargar todo')), 15000);`);
+  await js(`[...pane().querySelectorAll('.tb-icon')].find((b) => b.title.startsWith('Recargar'))?.click(); await until(() => [...pane().querySelectorAll('.data-toolbar .btn')].some((b) => b.textContent.includes('Cargar todo')), 15000); await until(() => !pane().querySelector('.data-toolbar .spin, .progress-bar'), 15000); await sleep(600);`);
   // Click and poll from here: the overlay shows after 300 ms and loading 200k rows takes ~2 s.
   await js(`[...pane().querySelectorAll('.data-toolbar .btn')].find((b) => b.textContent.includes('Cargar todo')).click();`);
   for (let i = 0; i < 60; i++) {
     await sleep(60);
-    const shown = await js(`return !!pane().querySelector('.busy-overlay') && /filas/.test(pane().querySelector('.busy-detail')?.textContent ?? '');`);
-    if (shown) {
+    // Wait for the fade-in to finish too, or Gib and the card come out see-through.
+    const shown = await js(`
+      const o = pane().querySelector('.busy-overlay');
+      return !!o && /filas/.test(pane().querySelector('.busy-detail')?.textContent ?? '')
+        && o.getAnimations().every((a) => a.playState === 'finished' || a.effect?.getTiming().iterations === Infinity);`);    if (shown) {
       writeFileSync(join(out, "busy.png"), await app.shot());
       console.log("still busy");
       break;

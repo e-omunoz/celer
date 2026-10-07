@@ -257,12 +257,6 @@
     </g>
 
     <g class="all">
-      <!-- left arm (behind the body) -->
-      <g class="arm-l">
-        <rect x="51" y="162" width="18" height="32" rx="9" fill="url(#sleeve)" stroke="#C9CDD4" stroke-width="1.2"/>
-        <rect x="53.5" y="190" width="13" height="26" rx="6.5" fill="url(#fur)"/>
-        <circle cx="60" cy="219" r="8.5" fill="#F2D0AC" stroke="#D4AC86" stroke-width="1.2"/>
-      </g>
       <!-- body: shirt, collar, tie -->
       <path fill="url(#shirt)" stroke="#C9CDD4" stroke-width="1.2" d="M46 280v-72c0-33 15-50 35-54h38c20 4 35 21 35 54v72z"/>
       <path d="M100 160v120" stroke="#CDD0D6" stroke-width="1.2"/>
@@ -273,6 +267,13 @@
       <path fill="#1B1C21" d="M95 158h10l2 8.5H93z"/>
       <path fill="#1B1C21" d="M93 166.5h14L111 199 100 209 89 199z"/>
       <path d="M96 170l9 12M95 182l11 13" stroke="#2C2E35" stroke-width="2"/>
+
+      <!-- left arm (in front of the shirt) -->
+      <g class="arm-l">
+        <rect x="51" y="162" width="18" height="32" rx="9" fill="url(#sleeve)" stroke="#C9CDD4" stroke-width="1.2"/>
+        <rect x="53.5" y="190" width="13" height="26" rx="6.5" fill="url(#fur)"/>
+        <circle cx="60" cy="219" r="8.5" fill="#F2D0AC" stroke="#D4AC86" stroke-width="1.2"/>
+      </g>
 
       <g class="head">
         <g class="ear-l"><circle cx="36" cy="94" r="22" fill="url(#fur)"/><circle cx="44" cy="96" r="13.5" fill="#E2B38B"/></g>
