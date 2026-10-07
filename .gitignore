@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Build outputs (installers are published as GitHub Release assets, not committed)
+release/
+installer/dist/
+src-tauri/target/
+installer/src-tauri/target/
+src-tauri/gen/schemas/
+installer/src-tauri/gen/schemas/
+
+# Local Claude Code session files
+.claude/settings.local.json

@@ -3,8 +3,8 @@
 A fast, lightweight desktop SQL client, built as an alternative to DBeaver.
 Powered by **Tauri 2**, a **Rust** core and a **SolidJS** interface.
 
-> **Status:** phase 1 client is usable. The Rust core compiles on Linux, SQLite is embedded,
-> and the SolidJS interface follows the [design guide](docs/DESIGN.md).
+> **Status:** builds and runs on Windows. Native PostgreSQL, MySQL/MariaDB, SQL Server and SQLite drivers;
+> redesigned interface (Claude-warm palette, DataGrip density). See [STATUS.md](STATUS.md).
 > See [STATUS.md](STATUS.md) and the [roadmap](docs/ROADMAP.md).
 
 <p align="center">
@@ -25,8 +25,8 @@ app never depends on a driver just to start. Full matrix and plan: [docs/DRIVERS
 
 | Group | Engines | Status |
 |---|---|---|
-| Done | SQL Server (native), Informix (IBM CLI / Client SDK), SQLite (embedded), any ODBC source | ✅ written |
-| Tier 1 | PostgreSQL family (CockroachDB, YugabyteDB, TimescaleDB…), MySQL / MariaDB family, libSQL / Turso, Oracle, IBM Db2 (LUW, i, z/OS) | 🟡 planned |
+| Done | PostgreSQL (native), MySQL / MariaDB (native), SQL Server (native), SQLite (embedded), Informix (IBM CLI / Client SDK), any ODBC source | ✅ |
+| Tier 1 | libSQL / Turso, Oracle, IBM Db2 (LUW, i, z/OS) | 🟡 planned |
 | Tier 2 | Redshift, DuckDB, ClickHouse, Snowflake, BigQuery, Trino / Presto, Databricks, SAP HANA, Firebird, Athena, Flight SQL | 🟡 planned |
 | Tier 3 (NoSQL) | MongoDB, Redis / Valkey, Cassandra / ScyllaDB, Elasticsearch / OpenSearch | 🟡 planned |
 | Via ODBC | Teradata, Vertica, SAP ASE (Sybase), Access, Progress OpenEdge, and more | ⚪ generic |
