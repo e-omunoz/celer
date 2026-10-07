@@ -1,4 +1,4 @@
-# Publishes a Celer release: version bump, changelog, checks, builds, tag and GitHub Release with installers.
+﻿# Publishes a Celer release: version bump, changelog, checks, builds, tag and GitHub Release with installers.
 #   powershell -ExecutionPolicy Bypass -File dev\release.ps1 -Bump minor        # 1.1.0 -> 1.2.0
 #   powershell -ExecutionPolicy Bypass -File dev\release.ps1 -Version 1.1.0     # release the current version
 #   … -Draft  (draft release)  -SkipTests  -NoPublish (build and tag locally only)
@@ -105,8 +105,8 @@ $branch = & $git rev-parse --abbrev-ref HEAD
 
 Step "GitHub Release"
 $notesFile = "$out\NOTES.md"
-Set-Content $notesFile ("$notes`n`n---`n**Instalación:** descarga ``Celer-Setup-$Version.exe`` (instalador de Celer, sin permisos de administrador). " +
-  "Alternativas: ``Celer-$Version-nsis-setup.exe`` (instalador clásico) o ``Celer-$Version-portable.exe`` (sin instalar).") -Encoding utf8
+[IO.File]::WriteAllText($notesFile, "$notes`n`n---`n**Install:** download ``Celer-Setup-$Version.exe``. It installs for your user only, without administrator rights, and from now on Celer updates itself. " +
+  "Also available: ``Celer-$Version-nsis-setup.exe`` (classic installer) and ``Celer-$Version-portable.exe`` (no install). Verify the downloads with ``SHA256SUMS.txt``.", [Text.UTF8Encoding]::new($false))
 $assets = Get-ChildItem $out -File | Where-Object { $_.Name -notin "NOTES.md", "COMMIT_MSG.txt" } | ForEach-Object { $_.FullName }
 $args = @("release", "create", $tag) + $assets + @("--title", "Celer $Version", "--notes-file", $notesFile, "--target", $branch)
 if ($Draft) { $args += "--draft" }

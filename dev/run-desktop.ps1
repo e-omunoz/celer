@@ -1,4 +1,4 @@
-# Builds the debug desktop app and launches it with the DevTools protocol on port 9333 (see dev/cdp.mjs).
+﻿# Builds the debug desktop app and launches it with the DevTools protocol on port 9333 (see dev/cdp.mjs).
 param([switch]$NoBuild)
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent

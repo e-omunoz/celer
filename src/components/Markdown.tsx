@@ -32,8 +32,11 @@ export function parseBlocks(source: string): Block[] {
       const ordered = /^\s*\d+[.)]\s+/.test(line);
       const items: string[] = [];
       while (i < lines.length && /^\s*([-*]|\d+[.)])\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*([-*]|\d+[.)])\s+/, ""));
+        let item = lines[i].replace(/^\s*([-*]|\d+[.)])\s+/, "");
         i++;
+        // Indented lines that are not items themselves continue the item (wrapped changelog entries).
+        while (i < lines.length && /^\s+\S/.test(lines[i]) && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i])) item += ` ${lines[i++].trim()}`;
+        items.push(item);
       }
       blocks.push({ type: "list", ordered, items });
       continue;

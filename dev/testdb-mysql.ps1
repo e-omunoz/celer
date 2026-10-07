@@ -1,4 +1,4 @@
-# Portable MariaDB test server for Celer's MySQL/MariaDB driver.
+﻿# Portable MariaDB test server for Celer's MySQL/MariaDB driver.
 #
 #   powershell -ExecutionPolicy Bypass -File dev\testdb-mysql.ps1 start   # (default) start if not running
 #   powershell -ExecutionPolicy Bypass -File dev\testdb-mysql.ps1 stop

@@ -1,4 +1,4 @@
-<#
+﻿<#
   Servidor PostgreSQL portable para pruebas de Celer (sin instalacion ni permisos de administrador).
 
   Uso:

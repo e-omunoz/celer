@@ -1,4 +1,4 @@
-# Auto-commit: stages every change, writes a descriptive message and pushes the current branch.
+﻿# Auto-commit: stages every change, writes a descriptive message and pushes the current branch.
 # Run by the Claude Code "Stop" hook after each working session, or by hand:
 #   powershell -ExecutionPolicy Bypass -File dev\autocommit.ps1 [-Message "feat: …"] [-NoPush]
 param([string]$Message = "", [switch]$NoPush)

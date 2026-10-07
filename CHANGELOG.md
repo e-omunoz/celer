@@ -6,6 +6,9 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Release notes in the update dialog: wrapped list items were shown as loose paragraphs.
+
 ## [1.1.0] - 2026-10-07
 
 ### Added
@@ -13,7 +16,7 @@ All notable changes to Celer are documented here. The format follows
   multi-database tree, full DDL reconstruction, dollar-quote aware splitter, error positions.
 - Native **MySQL / MariaDB** driver: streaming reader with bounded memory, `KILL QUERY` cancellation,
   `DELIMITER`-aware splitter, TLS modes, `SHOW CREATE` DDL.
-- Redesigned interface (Claude-warm palette, DataGrip density) with 8 themes, virtualised explorer, command
+- Redesigned interface (warm palette, dense and quiet layout) with 8 themes, virtualised explorer, command
   palette, inspector (value, record, history), Output log, toasts and context menus.
 - Custom window frame with Windows 11-style caption buttons in the theme's colours.
 - **Gib**: startup splash (thinks → idea → hops to the status bar), reactions to queries, errors, connections and
