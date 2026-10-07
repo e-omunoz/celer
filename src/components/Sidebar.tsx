@@ -28,10 +28,10 @@ export function Sidebar() {
                 {(conn) => (
                   <article class="conn" classList={{ on: Boolean(state.sessions[conn.id]) }}>
                     <button type="button" class="conn-main" onClick={() => void (state.sessions[conn.id] ? loadChildren(conn.id, [], !state.tree[pathKey(conn.id, [])]?.open) : connect(conn.id))}>
-                      <i style={{ background: conn.color || "var(--accent)" }} />
+                      <i style={{ background: conn.production ? "var(--danger)" : (conn.color || "var(--accent)") }} />
                       <span>
                         <b>{conn.name}</b>
-                        <small>{label(conn.kind)}{conn.production ? " · prod" : ""}{conn.readOnly ? " · solo lectura" : ""}</small>
+                        <small>{label(conn.kind)}{conn.production ? " · PROD" : ""}{conn.readOnly ? " · solo lectura" : ""}</small>
                       </span>
                     </button>
                     <div class="conn-actions">
@@ -55,7 +55,7 @@ export function Sidebar() {
           )}
         </For>
         <Show when={!state.connections.length}>
-          <p class="hint">Todavía no hay conexiones. Crea una de SQLite para empezar sin instalar nada.</p>
+          <p class="hint">Aún no hay conexiones. Nueva conexión abre SQLite sin instalar nada.</p>
         </Show>
       </div>
     </aside>

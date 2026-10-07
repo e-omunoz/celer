@@ -1,6 +1,7 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { sql, MSSQL, SQLite, StandardSQL } from "@codemirror/lang-sql";
-import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { createEffect, onCleanup, onMount } from "solid-js";
@@ -8,6 +9,17 @@ import type { DbKind } from "../types";
 
 const language = new Compartment();
 const theme = new Compartment();
+
+const sqlHighlight = HighlightStyle.define([
+  { tag: tags.keyword, color: "var(--syntax-keyword)" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.name), tags.typeName], color: "var(--syntax-function)" },
+  { tag: tags.string, color: "var(--syntax-string)" },
+  { tag: tags.number, color: "var(--syntax-number)" },
+  { tag: tags.comment, color: "var(--syntax-comment)", fontStyle: "italic" },
+  { tag: tags.special(tags.variableName), color: "var(--syntax-param)" },
+  { tag: [tags.className, tags.namespace], color: "var(--syntax-table)" },
+  { tag: tags.name, color: "var(--text)" },
+]);
 
 function dialectOf(kind: DbKind) {
   if (kind === "mssql") return MSSQL;
@@ -51,7 +63,7 @@ export function SqlEditor(props: {
         doc: props.doc,
         extensions: [
           history(),
-          syntaxHighlighting(defaultHighlightStyle),
+          syntaxHighlighting(sqlHighlight),
           EditorView.lineWrapping,
           language.of(sql({ dialect: dialectOf(props.kind), schema: props.schema, upperCaseKeywords: true })),
           theme.of(themeExtension()),

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 128" fill="none">
+  <defs>
+    <linearGradient id="ember" x1="24" y1="20" x2="108" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF8A3D"/>
+      <stop offset="1" stop-color="#E8571A"/>
+    </linearGradient>
+  </defs>
+  <path d="M89.5 38.5A36 36 0 1 0 89.5 89.5" stroke="url(#ember)" stroke-width="16" stroke-linecap="round"/>
+  <rect x="54" y="49" width="50" height="7" rx="3.5" fill="currentColor"/>
+  <rect x="46" y="60.5" width="72" height="7" rx="3.5" fill="currentColor"/>
+  <rect x="54" y="72" width="50" height="7" rx="3.5" fill="currentColor"/>
+  <text x="148" y="82" fill="currentColor" font-family="Inter, Segoe UI, sans-serif" font-size="56" font-weight="600" letter-spacing="-0.6">Celer</text>
+</svg>

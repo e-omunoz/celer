@@ -4,8 +4,12 @@ A fast, lightweight desktop SQL client, built as an alternative to DBeaver.
 Powered by **Tauri 2**, a **Rust** core and a **SolidJS** interface.
 
 > **Status:** phase 1 client is usable. The Rust core compiles on Linux, SQLite is embedded,
-> and the SolidJS interface covers connections, the object tree, the SQL editor and the data grid.
+> and the SolidJS interface follows the [design guide](docs/DESIGN.md).
 > See [STATUS.md](STATUS.md) and the [roadmap](docs/ROADMAP.md).
+
+<p align="center">
+  <img src="docs/brand/reference/lockup.png" alt="Celer" width="280" />
+</p>
 
 ## Goals
 

@@ -1,5 +1,7 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
 import { DataGrid } from "./Grid";
+import { Gib } from "../gib/Gib";
+import { Mark } from "../brand/Mark";
 import { SqlEditor } from "./Editor";
 import {
   canEdit,
@@ -15,6 +17,7 @@ import {
   fetchMore,
   formatActive,
   insertTableRow,
+  openConnDialog,
   openScript,
   refreshHistory,
   reloadTable,
@@ -32,6 +35,22 @@ import {
 } from "../state";
 import type { SqlTab, TableTab } from "../state";
 
+function Welcome() {
+  const [mood, setMood] = createSignal<"wave" | "idle" | "love">("wave");
+  onMount(() => {
+    const timer = window.setTimeout(() => setMood("idle"), 1600);
+    return () => window.clearTimeout(timer);
+  });
+  return (
+    <div class="empty">
+      <Gib size={150} mood={mood()} onClick={() => { setMood("love"); window.setTimeout(() => setMood("idle"), 1200); }} />
+      <div class="brand"><Mark size={28} /><h2>Celer</h2></div>
+      <p>SQL rápido para cualquier base de datos.</p>
+      <button type="button" class="btn primary" onClick={() => openConnDialog()}>Nueva conexión</button>
+    </div>
+  );
+}
+
 export function Workspace() {
   return (
     <section class="workspace">
@@ -39,14 +58,15 @@ export function Workspace() {
         <For each={state.tabs}>
           {(item) => (
             <button type="button" class="tab" classList={{ on: item.id === state.activeTabId }} onClick={() => selectTab(item.id)}>
+              <span class="tab-strip" style={{ background: connectionById(item.connId)?.production ? "var(--danger)" : (connectionById(item.connId)?.color || "var(--accent)") }} />
               <span>{item.title}</span>
               <i onClick={(event) => { event.stopPropagation(); void closeTab(item.id); }}>✕</i>
             </button>
           )}
         </For>
       </div>
-      <Show when={state.activeTabId} keyed fallback={<div class="empty"><h2>Celer</h2><p>Abre una conexión y ejecuta SQL con Ctrl+Enter.</p></div>}>
-        {(id) => <ActivePane id={id} />}
+      <Show when={state.tabs.find((tab) => tab.id === state.activeTabId)} keyed fallback={<Welcome />}>
+        {(tab) => <ActivePane id={tab.id} />}
       </Show>
       <Show when={state.historyOpen}>
         <div class="history">
@@ -90,16 +110,16 @@ function SqlPane(props: { tab: SqlTab }) {
   return (
     <div class="pane">
       <div class="pane-bar">
-        <span class="badge" style={{ background: conn()?.color || "var(--accent)" }} />
+        <span class="badge" style={{ background: conn()?.production ? "var(--danger)" : (conn()?.color || "var(--accent)") }} />
         <b>{conn()?.name ?? "Sin conexión"}</b>
         <Show when={props.tab.database}><span class="muted">{props.tab.database}</span></Show>
         <Show when={conn()?.readOnly}><span class="pill">solo lectura</span></Show>
-        <Show when={conn()?.production}><span class="pill warn">producción</span></Show>
+        <Show when={conn()?.production}><span class="pill prod">PROD</span></Show>
         <span class="spacer" />
         <button type="button" class="btn tiny" onClick={() => void openScript()}>Abrir</button>
         <button type="button" class="btn tiny" onClick={() => void saveScript()}>Guardar</button>
         <button type="button" class="btn tiny" onClick={formatActive}>Formatear</button>
-        <button type="button" class="btn tiny primary" onClick={() => void runActive("statement")}>Ejecutar</button>
+        <button type="button" class="btn tiny run" onClick={() => void runActive("statement")}>Ejecutar</button>
         <button type="button" class="btn tiny" onClick={() => void runActive("script")}>Script</button>
         <button type="button" class="btn tiny" disabled={!props.tab.running} onClick={() => void cancelActive()}>Cancelar</button>
       </div>
@@ -135,7 +155,7 @@ function SqlPane(props: { tab: SqlTab }) {
           <button type="button" class="btn tiny" disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>Rollback</button>
           <button type="button" class="btn tiny" onClick={() => void startExport()}>Exportar</button>
         </div>
-        <Show when={result()?.columns.length} fallback={<div class="empty small">{props.tab.running ? "Ejecutando…" : props.tab.results.length ? "La sentencia no devolvió columnas." : "Ctrl+Enter ejecuta la sentencia del cursor. Alt+X ejecuta el script."}</div>}>
+        <Show when={result()?.columns.length} fallback={<div class="empty small">{props.tab.running ? "Ejecutando…" : props.tab.results.length ? "La sentencia no devolvió columnas." : <><Gib size={72} mood="idle" /><span>Ctrl+Enter ejecuta la sentencia del cursor. Alt+X ejecuta el script.</span></>}</div>}>
           <DataGrid
             columns={result()!.columns}
             rows={result()!.rows}
@@ -178,6 +198,8 @@ function TablePane(props: { tab: TableTab }) {
           columns={props.tab.gridCols}
           rows={displayRows(props.tab)}
           deleted={props.tab.deleted}
+          edits={props.tab.edits}
+          insertStart={props.tab.rows.length}
           hasMore={props.tab.hasMore}
           editable={editable()}
           onEdit={(row, col, value) => editCell(props.tab.id, row, col, value)}

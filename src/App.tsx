@@ -2,6 +2,8 @@ import { onMount, Show } from "solid-js";
 import { Modals } from "./components/Modals";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
+import { Companion } from "./gib/Companion";
+import { Mark } from "./brand/Mark";
 import { isTauri } from "./api";
 import {
   activeTab,
@@ -9,6 +11,7 @@ import {
   cancelActive,
   commitActive,
   connect,
+  connectionById,
   formatActive,
   openConnDialog,
   openQuery,
@@ -35,14 +38,15 @@ export default function App() {
   return (
     <div class="app">
       <header class="toolbar">
-        <div class="brand">Celer</div>
-        <button type="button" class="btn" onClick={() => openConnDialog()}>Conexión</button>
-        <button type="button" class="btn" onClick={() => openQuery(session() ? tab()?.connId ?? null : null)}>Consulta</button>
+        <div class="brand"><Mark /><span>Celer</span></div>
+        <Show when={connectionById(tab()?.connId)?.production}><span class="pill prod">PROD</span></Show>
+        <button type="button" class="btn" title="Nueva conexión" onClick={() => openConnDialog()}>Conexión</button>
+        <button type="button" class="btn" title="Nueva consulta" onClick={() => openQuery(session() ? tab()?.connId ?? null : null)}>Consulta</button>
         <span class="sep" />
-        <button type="button" class="btn primary" title="Ctrl+Enter" onClick={() => void runActive("statement")}>Ejecutar</button>
-        <button type="button" class="btn" title="Alt+X" onClick={() => void runActive("script")}>Script</button>
-        <button type="button" class="btn" onClick={() => void cancelActive()} disabled={!sqlTab()?.running}>Cancelar</button>
-        <button type="button" class="btn" onClick={formatActive}>Formatear</button>
+        <button type="button" class="btn run" title="Ejecutar sentencia (Ctrl+Enter)" onClick={() => void runActive("statement")}>Ejecutar</button>
+        <button type="button" class="btn" title="Ejecutar script (Alt+X)" onClick={() => void runActive("script")}>Script</button>
+        <button type="button" class="btn" title="Cancelar" onClick={() => void cancelActive()} disabled={!sqlTab()?.running}>Cancelar</button>
+        <button type="button" class="btn" title="Formatear SQL" onClick={formatActive}>Formatear</button>
         <span class="sep" />
         <button type="button" class="btn" disabled={!sqlTab()?.inTransaction} onClick={() => void commitActive(false)}>Commit</button>
         <button type="button" class="btn" disabled={!sqlTab()?.inTransaction} onClick={() => void commitActive(true)}>Rollback</button>
@@ -76,6 +80,7 @@ export default function App() {
           <button type="button" class="btn tiny" onClick={() => void connect(tab()!.connId!)}>Conectar</button>
         </Show>
         <span>v{state.appInfo.version || "…"}</span>
+        <Companion />
       </footer>
       <Show when={state.toast}><div class="toast" onClick={() => setState("toast", "")}>{state.toast}</div></Show>
       <Modals />
@@ -89,14 +94,20 @@ function ForDatabases(props: { names: string[]; current: string }) {
 }
 
 function themeLabel() {
-  if (state.settings.theme === "dark") return "Oscuro";
-  if (state.settings.theme === "contrast") return "Contraste";
-  if (state.settings.theme === "light") return "Claro";
-  return "Sistema";
+  const labels: Record<string, string> = {
+    dark: "Oscuro",
+    light: "Claro",
+    contrast: "Contraste",
+    "contrast-light": "Contraste claro",
+    fjord: "Fjord",
+    sand: "Sand",
+    system: "Sistema",
+  };
+  return labels[state.settings.theme] ?? "Tema";
 }
 
 async function cycleTheme() {
-  const order = ["system", "light", "dark", "contrast"] as const;
+  const order = ["dark", "light", "contrast", "contrast-light", "fjord", "sand", "system"] as const;
   const next = order[(order.indexOf(state.settings.theme) + 1) % order.length];
   await saveSettings({ theme: next });
 }

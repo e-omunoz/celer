@@ -17,6 +17,8 @@ export function DataGrid(props: {
   columns: ColumnInfo[];
   rows: Cell[][];
   deleted?: number[];
+  edits?: Record<string, string | null>;
+  insertStart?: number;
   hasMore?: boolean;
   editable?: boolean;
   onEdit?: (row: number, col: number, value: string | null) => void;
@@ -73,18 +75,23 @@ export function DataGrid(props: {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const styles = getComputedStyle(document.documentElement);
-    const fg = styles.getPropertyValue("--fg").trim();
-    const muted = styles.getPropertyValue("--muted").trim();
+    const fg = styles.getPropertyValue("--text").trim() || styles.getPropertyValue("--fg").trim();
+    const muted = styles.getPropertyValue("--text-muted").trim() || styles.getPropertyValue("--muted").trim();
+    const faint = styles.getPropertyValue("--text-faint").trim() || muted;
     const line = styles.getPropertyValue("--grid-line").trim();
     const head = styles.getPropertyValue("--grid-head").trim();
     const sel = styles.getPropertyValue("--grid-sel").trim();
     const alt = styles.getPropertyValue("--row-alt").trim();
-    const bg = styles.getPropertyValue("--bg-elev").trim();
-    const accent = styles.getPropertyValue("--accent").trim();
+    const bg = styles.getPropertyValue("--surface").trim() || styles.getPropertyValue("--bg-elev").trim();
+    const modified = styles.getPropertyValue("--grid-modified").trim();
+    const insertedBg = styles.getPropertyValue("--grid-inserted").trim();
+    const deletedBg = styles.getPropertyValue("--grid-deleted").trim();
+    const warning = styles.getPropertyValue("--warning").trim();
+    const mono = styles.getPropertyValue("--mono").trim() || "monospace";
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, width, height);
-    ctx.font = `12px ${styles.getPropertyValue("--sans").trim() || "sans-serif"}`;
+    ctx.font = `12.5px ${mono}`;
     ctx.textBaseline = "middle";
     const cols = widths();
     const indexes = order();
@@ -96,7 +103,8 @@ export function DataGrid(props: {
       const source = indexes[viewRow];
       const y = HEAD_H + viewRow * ROW_H - view.y;
       const deleted = props.deleted?.includes(source);
-      ctx.fillStyle = deleted ? "rgba(185, 28, 28, 0.12)" : viewRow % 2 ? alt : bg;
+      const inserted = props.insertStart !== undefined && source >= props.insertStart;
+      ctx.fillStyle = deleted ? deletedBg || "rgba(248, 81, 73, 0.14)" : inserted ? insertedBg || alt : viewRow % 2 ? alt : bg;
       ctx.fillRect(0, y, width, ROW_H);
       let x = GUTTER - view.x;
       for (let col = 0; col < props.columns.length; col++) {
@@ -113,16 +121,31 @@ export function DataGrid(props: {
             ctx.fillRect(x, y, w, ROW_H);
           }
           const raw = props.rows[source]?.[col];
+          const edited = Boolean(props.edits && Object.prototype.hasOwnProperty.call(props.edits, `${source}:${col}`));
+          if (edited) {
+            ctx.fillStyle = modified || sel;
+            ctx.fillRect(x, y, w, ROW_H);
+            ctx.fillStyle = warning || fg;
+            ctx.fillRect(x, y, 2, ROW_H);
+          }
           const alignRight = props.columns[col]?.kind === "number";
-          ctx.fillStyle = isNullCell(raw) ? muted : fg;
+          const isNull = isNullCell(raw);
+          ctx.fillStyle = isNull ? faint : fg;
           ctx.save();
           ctx.beginPath();
           ctx.rect(x + 1, y, w - 2, ROW_H);
           ctx.clip();
-          const label = isNullCell(raw) ? "NULL" : cellText(raw);
-          const sans = styles.getPropertyValue("--sans").trim() || "sans-serif";
-          ctx.font = `${deleted ? "italic " : ""}12px ${sans}`;
-          ctx.fillText(label, alignRight ? x + w - 8 - ctx.measureText(label).width : x + 8, y + ROW_H / 2);
+          const label = isNull ? "NULL" : cellText(raw);
+          ctx.font = `${deleted || isNull ? "italic " : ""}12.5px ${mono}`;
+          const textX = alignRight ? x + w - 8 - ctx.measureText(label).width : x + 8;
+          ctx.fillText(label, textX, y + ROW_H / 2);
+          if (deleted) {
+            ctx.strokeStyle = faint;
+            ctx.beginPath();
+            ctx.moveTo(textX, y + ROW_H / 2);
+            ctx.lineTo(textX + ctx.measureText(label).width, y + ROW_H / 2);
+            ctx.stroke();
+          }
           ctx.restore();
         }
         ctx.strokeStyle = line;
@@ -158,8 +181,8 @@ export function DataGrid(props: {
         const mark = sort()?.col === col ? (sort()!.dir === 1 ? " ↑" : " ↓") : "";
         ctx.fillText(props.columns[col].name + mark, x + 8, HEAD_H / 2);
         ctx.restore();
-        ctx.fillStyle = accent;
-        ctx.fillRect(x + w - 3, 0, 3, HEAD_H);
+        ctx.fillStyle = line;
+        ctx.fillRect(x + w - 1, 0, 1, HEAD_H);
       }
       x += w;
     }
@@ -315,9 +338,12 @@ export function DataGrid(props: {
     host?.addEventListener("wheel", onWheel, { passive: false });
     const observer = new ResizeObserver(() => paint());
     if (host) observer.observe(host);
+    const themeObserver = new MutationObserver(() => paint());
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style"] });
     onCleanup(() => {
       host?.removeEventListener("wheel", onWheel);
       observer.disconnect();
+      themeObserver.disconnect();
     });
   });
 

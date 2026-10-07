@@ -121,7 +121,17 @@ export interface ExportOptions {
   nullText: string;
 }
 
-export type ThemeName = "system" | "light" | "dark" | "contrast";
+export type ThemeName = "system" | "light" | "dark" | "contrast" | "contrast-light" | "fjord" | "sand";
+
+export type CompanionMode = "off" | "quiet" | "normal";
+
+export const ACCENTS = [
+  { name: "Ember", value: "#F26B1D" },
+  { name: "Blue", value: "#3B82F6" },
+  { name: "Teal", value: "#14B8A6" },
+  { name: "Violet", value: "#8B5CF6" },
+  { name: "Green", value: "#22C55E" },
+] as const;
 
 export interface Settings {
   theme: ThemeName;
@@ -131,16 +141,18 @@ export interface Settings {
   pageSize: number;
   ibmDriverPath: string;
   sidebarWidth: number;
+  companion: CompanionMode;
 }
 
 export const defaultSettings: Settings = {
-  theme: "system",
-  accent: "#c2410c",
+  theme: "dark",
+  accent: "#F26B1D",
   fontSize: 13,
   editorFontSize: 13,
   pageSize: 200,
   ibmDriverPath: "",
   sidebarWidth: 280,
+  companion: "normal",
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
@@ -162,7 +174,7 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     informixMode: "drda",
     odbcConnStr: "",
     extra: "",
-    color: "#c2410c",
+    color: "#F26B1D",
     production: false,
     readOnly: false,
     folder: "",

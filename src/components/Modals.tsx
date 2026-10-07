@@ -1,7 +1,9 @@
 import { For, Show } from "solid-js";
 import { isTauri } from "../api";
+import { ACCENTS, type ThemeName } from "../types";
 import {
   answerPassword,
+  applyTheme,
   browseSqlite,
   dismissConfirm,
   downloadDriver,
@@ -181,24 +183,42 @@ function readForm(form: HTMLFormElement): ConnConfig {
 function SettingsDialog() {
   return (
     <form class="modal dialog" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void saveSettings({
-      theme: String(data.get("theme")) as never,
+      theme: String(data.get("theme")) as ThemeName,
       accent: String(data.get("accent")),
       fontSize: Number(data.get("fontSize")),
       editorFontSize: Number(data.get("editorFontSize")),
       pageSize: Number(data.get("pageSize")),
       ibmDriverPath: String(data.get("ibmDriverPath") ?? ""),
+      companion: String(data.get("companion")) as "off" | "quiet" | "normal",
     }); setState("settingsOpen", false); }}>
-      <header><h2>Ajustes</h2><button type="button" onClick={() => setState("settingsOpen", false)}>✕</button></header>
+      <header><h2>Ajustes</h2><button type="button" onClick={() => { applyTheme(); setState("settingsOpen", false); }}>✕</button></header>
       <div class="form-grid">
-        <label>Tema
-          <select name="theme" value={state.settings.theme}>
+        <label class="span">Tema
+          <select name="theme" value={state.settings.theme} onChange={(event) => { document.documentElement.dataset.theme = event.currentTarget.value === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : event.currentTarget.value; }}>
+            <option value="dark">Celer Dark</option>
+            <option value="light">Celer Light</option>
+            <option value="contrast">Alto contraste oscuro</option>
+            <option value="contrast-light">Alto contraste claro</option>
+            <option value="fjord">Fjord</option>
+            <option value="sand">Sand</option>
             <option value="system">Sistema</option>
-            <option value="light">Claro</option>
-            <option value="dark">Oscuro</option>
-            <option value="contrast">Alto contraste</option>
           </select>
         </label>
-        <label>Acento<input name="accent" type="color" value={state.settings.accent} /></label>
+        <label class="span">Acento
+          <div class="swatches">
+            <For each={ACCENTS}>
+              {(item) => <button type="button" classList={{ on: state.settings.accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => { const input = document.querySelector<HTMLInputElement>("input[name=accent]"); if (input) input.value = item.value; }} />}
+            </For>
+            <input name="accent" type="color" value={state.settings.accent} />
+          </div>
+        </label>
+        <label>Compañero
+          <select name="companion" value={state.settings.companion}>
+            <option value="normal">Normal</option>
+            <option value="quiet">Silencioso</option>
+            <option value="off">Apagado</option>
+          </select>
+        </label>
         <label>Tamaño de interfaz<input name="fontSize" type="number" min="11" max="20" value={state.settings.fontSize} /></label>
         <label>Tamaño del editor<input name="editorFontSize" type="number" min="11" max="22" value={state.settings.editorFontSize} /></label>
         <label>Filas por página<input name="pageSize" type="number" min="50" max="5000" value={state.settings.pageSize} /></label>

@@ -12,6 +12,9 @@ Full plan: [docs/ROADMAP.md](docs/ROADMAP.md) · drivers: [docs/DRIVERS.md](docs
   - `src-tauri/src/sqlite.rs`: embedded SQLite (`rusqlite`, bundled). Paged fetch, `sqlite3_interrupt` cancellation, transactions, catalog and DDL.
   - `session.rs`: one session per tab on its own thread, paged results, cancellation, transactions.
   - `export.rs` (CSV/TSV/JSON/SQL/Excel), `store.rs` (connections, OS credential store with a mode-600 file fallback, history), `drivers.rs` (IBM driver discovery/download, including `.tar.gz`), `lib.rs` (Tauri commands).
+- Design system from [docs/DESIGN.md](docs/DESIGN.md): Celer Dark / Light / high contrast / Fjord / Sand,
+  Ember accent, green Run, Inter and JetBrains Mono, and Gib (`src/gib/`) on the welcome screen,
+  empty results and the status bar.
 - Phase 1 interface (SolidJS): connection manager, lazy object tree with filter, CodeMirror 6 SQL editor,
   canvas result grid, multi-result tabs, table viewer with primary-key editing and SQL preview, export dialog,
   query history, and light / dark / high-contrast themes.

@@ -13,6 +13,7 @@ import type {
   ResultSet,
   Settings,
   TableColumn,
+  ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn } from "./types";
 
@@ -117,7 +118,7 @@ export const [state, setState] = createStore({
   ready: false,
 });
 
-export const [resolvedTheme, setResolvedTheme] = createSignal<"light" | "dark" | "contrast">("light");
+export const [resolvedTheme, setResolvedTheme] = createSignal<Exclude<ThemeName, "system">>("dark");
 
 let toastTimer = 0;
 let saveTimer = 0;
@@ -164,9 +165,10 @@ export function applyTheme(settings: Settings = state.settings) {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.setProperty("--accent", settings.accent);
   document.documentElement.style.fontSize = `${settings.fontSize}px`;
-  if (isTauri() && theme !== "contrast") {
+  const light = theme === "light" || theme === "sand" || theme === "contrast-light";
+  if (isTauri()) {
     import("@tauri-apps/api/window")
-      .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(theme === "dark" ? "dark" : "light"))
+      .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(light ? "light" : "dark"))
       .catch(() => {});
   }
 }
@@ -204,7 +206,7 @@ export async function boot() {
   } catch {
     /* sin espacio de trabajo */
   }
-  if (!state.tabs.length) {
+  if (!state.tabs.length && state.connections.length) {
     const id = uid();
     setState("tabs", [blankSql(id)]);
     setState("activeTabId", id);
