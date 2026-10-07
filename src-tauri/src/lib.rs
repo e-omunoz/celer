@@ -5,6 +5,7 @@ mod mssql;
 mod odbc;
 mod odbc_driver;
 mod session;
+mod sqlite;
 mod store;
 
 use std::sync::Arc;
@@ -47,26 +48,34 @@ impl AppState {
             .map(|s| s.to_string())
     }
 
-    fn make_connector(&self, mut cfg: ConnConfig) -> CmdResult<impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static> {
+    fn make_connector(
+        &self,
+        mut cfg: ConnConfig,
+    ) -> CmdResult<impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static> {
         if cfg.password.is_none() && !cfg.integrated_auth {
             cfg.password = self.store.get_password(&cfg.id);
         }
-        let lib = match (cfg.kind, cfg.informix_mode.as_str()) {
-            (DbKind::Mssql, _) => None,
-            (DbKind::Informix, "drda") => {
+        let kind = cfg.kind;
+        let odbc_lib = match kind {
+            DbKind::Mssql | DbKind::Sqlite => None,
+            DbKind::Informix if cfg.informix_mode == "drda" => {
                 let dll = drivers::find_cli(self.ibm_driver_setting().as_deref(), &self.store.dir).ok_or_else(|| {
                     "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
                 })?;
                 drivers::prepare_env(&dll);
                 Some(dll.to_string_lossy().to_string())
             }
-            _ => Some(odbc::system_manager().to_string()),
+            DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
         };
         Ok(move || -> anyhow::Result<Box<dyn Driver>> {
-            Ok(match lib {
-                None => Box::new(mssql::MssqlDriver::connect(cfg)?),
-                Some(path) => Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?),
-            })
+            match kind {
+                DbKind::Sqlite => Ok(Box::new(sqlite::SqliteDriver::connect(cfg)?)),
+                DbKind::Mssql => Ok(Box::new(mssql::MssqlDriver::connect(cfg)?)),
+                DbKind::Informix | DbKind::Odbc => {
+                    let path = odbc_lib.unwrap_or_else(|| odbc::system_manager().to_string());
+                    Ok(Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?))
+                }
+            }
         })
     }
 }
@@ -86,7 +95,10 @@ fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
         .lock()
         .iter()
         .cloned()
-        .map(|c| ConnSummary { has_password: c.save_password && state.store.get_password(&c.id).is_some(), cfg: c })
+        .map(|c| ConnSummary {
+            has_password: c.save_password && state.store.get_password(&c.id).is_some(),
+            cfg: c,
+        })
         .collect()
 }
 
@@ -133,10 +145,15 @@ fn delete_connection(state: State<'_, Arc<AppState>>, id: String) -> CmdResult<(
 #[tauri::command]
 async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<String> {
     let connector = state.make_connector(cfg)?;
-    let h = SessionHandle::open("test".into(), connector).await.map_err(err)?;
+    let h = SessionHandle::open("test".into(), connector)
+        .await
+        .map_err(err)?;
     let t0 = std::time::Instant::now();
     let info = h.run(|d| d.server_info()).await.map_err(err)?;
-    Ok(format!("{info}\nTiempo de respuesta: {} ms", t0.elapsed().as_millis()))
+    Ok(format!(
+        "{info}\nTiempo de respuesta: {} ms",
+        t0.elapsed().as_millis()
+    ))
 }
 
 #[derive(Serialize)]
@@ -148,7 +165,11 @@ struct SessionInfo {
 }
 
 #[tauri::command]
-async fn open_session(state: State<'_, Arc<AppState>>, conn_id: String, password: Option<String>) -> CmdResult<SessionInfo> {
+async fn open_session(
+    state: State<'_, Arc<AppState>>,
+    conn_id: String,
+    password: Option<String>,
+) -> CmdResult<SessionInfo> {
     let mut cfg = state.conn(&conn_id)?;
     if password.is_some() {
         cfg.password = password;
@@ -156,12 +177,21 @@ async fn open_session(state: State<'_, Arc<AppState>>, conn_id: String, password
     let connector = state.make_connector(cfg)?;
     let h = SessionHandle::open(conn_id, connector).await.map_err(err)?;
     let (database, server_info) = h
-        .run(|d| Ok((d.current_database().unwrap_or_default(), d.server_info().unwrap_or_default())))
+        .run(|d| {
+            Ok((
+                d.current_database().unwrap_or_default(),
+                d.server_info().unwrap_or_default(),
+            ))
+        })
         .await
         .map_err(err)?;
     let id = uuid::Uuid::new_v4().to_string();
     state.sessions.insert(id.clone(), Arc::new(h));
-    Ok(SessionInfo { session_id: id, database, server_info })
+    Ok(SessionInfo {
+        session_id: id,
+        database,
+        server_info,
+    })
 }
 
 #[tauri::command]
@@ -172,17 +202,28 @@ fn close_session(state: State<'_, Arc<AppState>>, session_id: String) {
 }
 
 #[tauri::command]
-async fn execute(state: State<'_, Arc<AppState>>, session_id: String, sql: String, fetch: usize) -> CmdResult<ExecOutput> {
+async fn execute(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    sql: String,
+    fetch: usize,
+) -> CmdResult<ExecOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     let cfg = state.conn(&h.conn_id)?;
     if cfg.read_only && session::is_mutating(&sql) {
-        return Err("La conexión es de solo lectura: no se permiten sentencias que modifiquen datos".into());
+        return Err(
+            "La conexión es de solo lectura: no se permiten sentencias que modifiquen datos".into(),
+        );
     }
     h.run(move |d| d.execute(&sql, fetch)).await.map_err(err)
 }
 
 #[tauri::command]
-async fn fetch(state: State<'_, Arc<AppState>>, session_id: String, n: usize) -> CmdResult<FetchOutput> {
+async fn fetch(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    n: usize,
+) -> CmdResult<FetchOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| d.fetch(n)).await.map_err(err)
 }
@@ -200,7 +241,11 @@ fn cancel(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<()> 
 }
 
 #[tauri::command]
-async fn set_autocommit(state: State<'_, Arc<AppState>>, session_id: String, on: bool) -> CmdResult<bool> {
+async fn set_autocommit(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    on: bool,
+) -> CmdResult<bool> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| d.set_autocommit(on)).await.map_err(err)
 }
@@ -218,37 +263,60 @@ async fn rollback(state: State<'_, Arc<AppState>>, session_id: String) -> CmdRes
 }
 
 #[tauri::command]
-async fn meta_children(state: State<'_, Arc<AppState>>, session_id: String, path: Vec<String>) -> CmdResult<Vec<MetaNode>> {
+async fn meta_children(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    path: Vec<String>,
+) -> CmdResult<Vec<MetaNode>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| d.children(&path)).await.map_err(err)
 }
 
 #[tauri::command]
-async fn table_columns(state: State<'_, Arc<AppState>>, session_id: String, obj: ObjectRef) -> CmdResult<Vec<TableColumn>> {
+async fn table_columns(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    obj: ObjectRef,
+) -> CmdResult<Vec<TableColumn>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| d.table_columns(&obj)).await.map_err(err)
 }
 
 #[tauri::command]
-async fn object_ddl(state: State<'_, Arc<AppState>>, session_id: String, obj: ObjectRef) -> CmdResult<String> {
+async fn object_ddl(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    obj: ObjectRef,
+) -> CmdResult<String> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| d.ddl(&obj)).await.map_err(err)
 }
 
 #[tauri::command]
-async fn completion(state: State<'_, Arc<AppState>>, session_id: String, database: String) -> CmdResult<CompletionSchema> {
+async fn completion(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    database: String,
+) -> CmdResult<CompletionSchema> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| d.completion(&database)).await.map_err(err)
 }
 
 #[tauri::command]
-async fn list_databases(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<Vec<String>> {
+async fn list_databases(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> CmdResult<Vec<String>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(|d| d.databases()).await.map_err(err)
 }
 
 #[tauri::command]
-async fn use_database(state: State<'_, Arc<AppState>>, session_id: String, database: String) -> CmdResult<String> {
+async fn use_database(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    database: String,
+) -> CmdResult<String> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| {
         d.use_database(&database)?;
@@ -266,20 +334,33 @@ struct ObjectSql {
 }
 
 #[tauri::command]
-async fn object_sql(state: State<'_, Arc<AppState>>, session_id: String, obj: ObjectRef) -> CmdResult<ObjectSql> {
+async fn object_sql(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    obj: ObjectRef,
+) -> CmdResult<ObjectSql> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| {
         let q = d.qualified_name(&obj);
-        Ok(ObjectSql { select: format!("SELECT * FROM {q}"), qualified: q })
+        Ok(ObjectSql {
+            select: format!("SELECT * FROM {q}"),
+            qualified: q,
+        })
     })
     .await
     .map_err(err)
 }
 
 #[tauri::command]
-async fn quote_idents(state: State<'_, Arc<AppState>>, session_id: String, names: Vec<String>) -> CmdResult<Vec<String>> {
+async fn quote_idents(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    names: Vec<String>,
+) -> CmdResult<Vec<String>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| Ok(names.iter().map(|n| d.quote_ident(n)).collect())).await.map_err(err)
+    h.run(move |d| Ok(names.iter().map(|n| d.quote_ident(n)).collect()))
+        .await
+        .map_err(err)
 }
 
 #[derive(Clone, Serialize)]
@@ -316,7 +397,13 @@ async fn export_query(
             export::export(d, &sql, &options, mssql, &|rows| {
                 if last.get().elapsed().as_millis() > 250 {
                     last.set(std::time::Instant::now());
-                    let _ = app.emit("export-progress", ExportProgress { export_id: eid.clone(), rows });
+                    let _ = app.emit(
+                        "export-progress",
+                        ExportProgress {
+                            export_id: eid.clone(),
+                            rows,
+                        },
+                    );
                 }
             })
         })
@@ -349,17 +436,28 @@ fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_j
 }
 
 #[tauri::command]
-fn save_json(state: State<'_, Arc<AppState>>, name: String, value: serde_json::Value) -> CmdResult<()> {
+fn save_json(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    value: serde_json::Value,
+) -> CmdResult<()> {
     if !matches!(name.as_str(), "settings" | "workspace") {
         return Err("Nombre no permitido".into());
     }
-    state.store.write_atomic(&format!("{name}.json"), &serde_json::to_string(&value).map_err(err)?).map_err(err)
+    state
+        .store
+        .write_atomic(
+            &format!("{name}.json"),
+            &serde_json::to_string(&value).map_err(err)?,
+        )
+        .map_err(err)
 }
 
 #[tauri::command]
 fn read_text_file(path: String) -> CmdResult<String> {
     let bytes = std::fs::read(&path).map_err(err)?;
-    let s = String::from_utf8(bytes.clone()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
+    let s = String::from_utf8(bytes.clone())
+        .unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
     Ok(s.trim_start_matches('\u{feff}').to_string())
 }
 
@@ -380,7 +478,8 @@ fn odbc_dsns() -> CmdResult<Vec<String>> {
 
 #[tauri::command]
 fn ibm_driver_status(state: State<'_, Arc<AppState>>) -> Option<String> {
-    drivers::find_cli(state.ibm_driver_setting().as_deref(), &state.store.dir).map(|p| p.to_string_lossy().to_string())
+    drivers::find_cli(state.ibm_driver_setting().as_deref(), &state.store.dir)
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 #[derive(Clone, Serialize)]
@@ -390,7 +489,10 @@ struct DownloadProgress {
 }
 
 #[tauri::command]
-async fn ibm_driver_download(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> CmdResult<String> {
+async fn ibm_driver_download(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> CmdResult<String> {
     let dir = state.store.dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let last = std::cell::Cell::new(0u64);
@@ -421,10 +523,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let dir = app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("celer"));
+            let dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("celer"));
             let store = Store::new(dir);
             let conns = store.load_connections();
-            app.manage(Arc::new(AppState { store, conns: Mutex::new(conns), sessions: Sessions::default() }));
+            app.manage(Arc::new(AppState {
+                store,
+                conns: Mutex::new(conns),
+                sessions: Sessions::default(),
+            }));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

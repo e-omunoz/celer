@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
+#[cfg(windows)]
 use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, LazyLock};
@@ -56,23 +57,47 @@ const BLOCK_BYTES: usize = 4 * 1024 * 1024;
 type FnAllocHandle = unsafe extern "system" fn(i16, H, *mut H) -> i16;
 type FnFreeHandle = unsafe extern "system" fn(i16, H) -> i16;
 type FnSetAttr = unsafe extern "system" fn(H, i32, *mut c_void, i32) -> i16;
-type FnDriverConnect = unsafe extern "system" fn(H, *mut c_void, *const u16, i16, *mut u16, i16, *mut i16, u16) -> i16;
+type FnDriverConnect =
+    unsafe extern "system" fn(H, *mut c_void, *const u16, i16, *mut u16, i16, *mut i16, u16) -> i16;
 type FnH = unsafe extern "system" fn(H) -> i16;
 type FnExecDirect = unsafe extern "system" fn(H, *const u16, i32) -> i16;
 type FnNumResultCols = unsafe extern "system" fn(H, *mut i16) -> i16;
-type FnDescribeCol =
-    unsafe extern "system" fn(H, u16, *mut u16, i16, *mut i16, *mut i16, *mut usize, *mut i16, *mut i16) -> i16;
-type FnColAttribute = unsafe extern "system" fn(H, u16, u16, *mut c_void, i16, *mut i16, *mut isize) -> i16;
+type FnDescribeCol = unsafe extern "system" fn(
+    H,
+    u16,
+    *mut u16,
+    i16,
+    *mut i16,
+    *mut i16,
+    *mut usize,
+    *mut i16,
+    *mut i16,
+) -> i16;
+type FnColAttribute =
+    unsafe extern "system" fn(H, u16, u16, *mut c_void, i16, *mut i16, *mut isize) -> i16;
 type FnGetData = unsafe extern "system" fn(H, u16, i16, *mut c_void, isize, *mut isize) -> i16;
 type FnBindCol = unsafe extern "system" fn(H, u16, i16, *mut c_void, isize, *mut isize) -> i16;
 type FnRowCount = unsafe extern "system" fn(H, *mut isize) -> i16;
-type FnGetDiagRec = unsafe extern "system" fn(i16, H, i16, *mut u16, *mut i32, *mut u16, i16, *mut i16) -> i16;
+type FnGetDiagRec =
+    unsafe extern "system" fn(i16, H, i16, *mut u16, *mut i32, *mut u16, i16, *mut i16) -> i16;
 type FnEndTran = unsafe extern "system" fn(i16, H, i16) -> i16;
 type FnFreeStmt = unsafe extern "system" fn(H, u16) -> i16;
-type FnCatalog4 = unsafe extern "system" fn(H, *const u16, i16, *const u16, i16, *const u16, i16, *const u16, i16) -> i16;
-type FnCatalog3 = unsafe extern "system" fn(H, *const u16, i16, *const u16, i16, *const u16, i16) -> i16;
+type FnCatalog4 = unsafe extern "system" fn(
+    H,
+    *const u16,
+    i16,
+    *const u16,
+    i16,
+    *const u16,
+    i16,
+    *const u16,
+    i16,
+) -> i16;
+type FnCatalog3 =
+    unsafe extern "system" fn(H, *const u16, i16, *const u16, i16, *const u16, i16) -> i16;
 type FnGetInfo = unsafe extern "system" fn(H, u16, *mut c_void, i16, *mut i16) -> i16;
-type FnEnum = unsafe extern "system" fn(H, u16, *mut u16, i16, *mut i16, *mut u16, i16, *mut i16) -> i16;
+type FnEnum =
+    unsafe extern "system" fn(H, u16, *mut u16, i16, *mut i16, *mut u16, i16, *mut i16) -> i16;
 
 pub struct Api {
     _lib: Library,
@@ -107,7 +132,8 @@ pub struct Api {
 unsafe impl Send for Api {}
 unsafe impl Sync for Api {}
 
-static APIS: LazyLock<Mutex<HashMap<String, Arc<Api>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static APIS: LazyLock<Mutex<HashMap<String, Arc<Api>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl Api {
     /// Carga (una sola vez por ruta) la librería ODBC/CLI indicada.
@@ -132,14 +158,16 @@ impl Api {
             } else {
                 libloading::os::windows::Library::new(p)
             };
-            l.map_err(|e| anyhow!("No se pudo cargar {path}: {e}"))?.into()
+            l.map_err(|e| anyhow!("No se pudo cargar {path}: {e}"))?
+                .into()
         };
         #[cfg(not(windows))]
         let lib = Library::new(path).map_err(|e| anyhow!("No se pudo cargar {path}: {e}"))?;
 
         macro_rules! sym {
             ($name:literal) => {
-                *lib.get(concat!($name, "\0").as_bytes()).map_err(|e| anyhow!("{} no exporta {}: {}", path, $name, e))?
+                *lib.get(concat!($name, "\0").as_bytes())
+                    .map_err(|e| anyhow!("{} no exporta {}: {}", path, $name, e))?
             };
         }
         macro_rules! opt {
@@ -187,7 +215,16 @@ impl Api {
             let mut msg = vec![0u16; 2048];
             let mut len = 0i16;
             let rc = unsafe {
-                (self.get_diag_rec)(kind, h, rec, state.as_mut_ptr(), &mut native, msg.as_mut_ptr(), msg.len() as i16, &mut len)
+                (self.get_diag_rec)(
+                    kind,
+                    h,
+                    rec,
+                    state.as_mut_ptr(),
+                    &mut native,
+                    msg.as_mut_ptr(),
+                    msg.len() as i16,
+                    &mut len,
+                )
             };
             if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
                 break;
@@ -241,11 +278,25 @@ impl OdbcConn {
                 (api.free_handle)(SQL_HANDLE_ENV, env);
                 bail!(e);
             }
-            (api.set_connect_attr)(dbc, SQL_ATTR_LOGIN_TIMEOUT, timeout_secs as usize as *mut c_void, 0);
+            (api.set_connect_attr)(
+                dbc,
+                SQL_ATTR_LOGIN_TIMEOUT,
+                timeout_secs as usize as *mut c_void,
+                0,
+            );
             let cs = wide(conn_str);
             let mut out = vec![0u16; 2048];
             let mut out_len = 0i16;
-            let rc = (api.driver_connect)(dbc, null_mut(), cs.as_ptr(), SQL_NTS, out.as_mut_ptr(), out.len() as i16, &mut out_len, 0);
+            let rc = (api.driver_connect)(
+                dbc,
+                null_mut(),
+                cs.as_ptr(),
+                SQL_NTS,
+                out.as_mut_ptr(),
+                out.len() as i16,
+                &mut out_len,
+                0,
+            );
             if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
                 let e = api.diag(SQL_HANDLE_DBC, dbc);
                 (api.free_handle)(SQL_HANDLE_DBC, dbc);
@@ -257,19 +308,32 @@ impl OdbcConn {
     }
 
     pub fn set_autocommit(&self, on: bool) -> Result<()> {
-        let rc = unsafe { (self.api.set_connect_attr)(self.dbc, SQL_ATTR_AUTOCOMMIT, (on as usize) as *mut c_void, 0) };
+        let rc = unsafe {
+            (self.api.set_connect_attr)(
+                self.dbc,
+                SQL_ATTR_AUTOCOMMIT,
+                (on as usize) as *mut c_void,
+                0,
+            )
+        };
         self.api.check(rc, SQL_HANDLE_DBC, self.dbc)
     }
 
     pub fn end_tran(&self, commit: bool) -> Result<()> {
-        let rc = unsafe { (self.api.end_tran)(SQL_HANDLE_DBC, self.dbc, if commit { 0 } else { 1 }) };
+        let rc =
+            unsafe { (self.api.end_tran)(SQL_HANDLE_DBC, self.dbc, if commit { 0 } else { 1 }) };
         self.api.check(rc, SQL_HANDLE_DBC, self.dbc)
     }
 
     pub fn set_catalog(&self, name: &str) -> Result<()> {
         let w = wide(name);
         let rc = unsafe {
-            (self.api.set_connect_attr)(self.dbc, SQL_ATTR_CURRENT_CATALOG, w.as_ptr() as *mut c_void, ((w.len() - 1) * 2) as i32)
+            (self.api.set_connect_attr)(
+                self.dbc,
+                SQL_ATTR_CURRENT_CATALOG,
+                w.as_ptr() as *mut c_void,
+                ((w.len() - 1) * 2) as i32,
+            )
         };
         self.api.check(rc, SQL_HANDLE_DBC, self.dbc)
     }
@@ -277,7 +341,15 @@ impl OdbcConn {
     pub fn info(&self, what: u16) -> String {
         let mut buf = vec![0u16; 512];
         let mut len = 0i16;
-        let rc = unsafe { (self.api.get_info)(self.dbc, what, buf.as_mut_ptr() as *mut c_void, (buf.len() * 2) as i16, &mut len) };
+        let rc = unsafe {
+            (self.api.get_info)(
+                self.dbc,
+                what,
+                buf.as_mut_ptr() as *mut c_void,
+                (buf.len() * 2) as i16,
+                &mut len,
+            )
+        };
         if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
             return String::new();
         }
@@ -298,22 +370,57 @@ impl OdbcConn {
         st.collect_all()
     }
 
-    pub fn catalog_tables(&self, catalog: Option<&str>, schema: Option<&str>, table: Option<&str>, types: Option<&str>) -> Result<Vec<Vec<Cell>>> {
+    pub fn catalog_tables(
+        &self,
+        catalog: Option<&str>,
+        schema: Option<&str>,
+        table: Option<&str>,
+        types: Option<&str>,
+    ) -> Result<Vec<Vec<Cell>>> {
         let mut st = self.alloc_stmt()?;
         let a = [catalog, schema, table, types].map(|s| s.map(wide));
         let p = |w: &Option<Vec<u16>>| w.as_ref().map(|v| v.as_ptr()).unwrap_or(null());
         let l = |w: &Option<Vec<u16>>| if w.is_some() { SQL_NTS } else { 0 };
-        let rc = unsafe { (self.api.tables)(st.h, p(&a[0]), l(&a[0]), p(&a[1]), l(&a[1]), p(&a[2]), l(&a[2]), p(&a[3]), l(&a[3])) };
+        let rc = unsafe {
+            (self.api.tables)(
+                st.h,
+                p(&a[0]),
+                l(&a[0]),
+                p(&a[1]),
+                l(&a[1]),
+                p(&a[2]),
+                l(&a[2]),
+                p(&a[3]),
+                l(&a[3]),
+            )
+        };
         self.api.check(rc, SQL_HANDLE_STMT, st.h)?;
         st.collect_all()
     }
 
-    pub fn catalog_columns(&self, catalog: &str, schema: &str, table: &str) -> Result<Vec<Vec<Cell>>> {
+    pub fn catalog_columns(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<Vec<Cell>>> {
         let mut st = self.alloc_stmt()?;
         let a = [catalog, schema, table].map(|s| if s.is_empty() { None } else { Some(wide(s)) });
         let p = |w: &Option<Vec<u16>>| w.as_ref().map(|v| v.as_ptr()).unwrap_or(null());
         let l = |w: &Option<Vec<u16>>| if w.is_some() { SQL_NTS } else { 0 };
-        let rc = unsafe { (self.api.columns)(st.h, p(&a[0]), l(&a[0]), p(&a[1]), l(&a[1]), p(&a[2]), l(&a[2]), null(), 0) };
+        let rc = unsafe {
+            (self.api.columns)(
+                st.h,
+                p(&a[0]),
+                l(&a[0]),
+                p(&a[1]),
+                l(&a[1]),
+                p(&a[2]),
+                l(&a[2]),
+                null(),
+                0,
+            )
+        };
         self.api.check(rc, SQL_HANDLE_STMT, st.h)?;
         st.collect_all()
     }
@@ -323,7 +430,17 @@ impl OdbcConn {
         let a = [catalog, schema, table].map(|s| if s.is_empty() { None } else { Some(wide(s)) });
         let p = |w: &Option<Vec<u16>>| w.as_ref().map(|v| v.as_ptr()).unwrap_or(null());
         let l = |w: &Option<Vec<u16>>| if w.is_some() { SQL_NTS } else { 0 };
-        let rc = unsafe { (self.api.primary_keys)(st.h, p(&a[0]), l(&a[0]), p(&a[1]), l(&a[1]), p(&a[2]), l(&a[2])) };
+        let rc = unsafe {
+            (self.api.primary_keys)(
+                st.h,
+                p(&a[0]),
+                l(&a[0]),
+                p(&a[1]),
+                l(&a[1]),
+                p(&a[2]),
+                l(&a[2]),
+            )
+        };
         self.api.check(rc, SQL_HANDLE_STMT, st.h)?;
         st.collect_all()
     }
@@ -455,22 +572,47 @@ impl Stmt {
             let (mut name_len, mut dtype, mut dec, mut nullable) = (0i16, 0i16, 0i16, 0i16);
             let mut size: usize = 0;
             let rc = unsafe {
-                (self.api.describe_col)(self.h, c, name.as_mut_ptr(), name.len() as i16, &mut name_len, &mut dtype, &mut size, &mut dec, &mut nullable)
+                (self.api.describe_col)(
+                    self.h,
+                    c,
+                    name.as_mut_ptr(),
+                    name.len() as i16,
+                    &mut name_len,
+                    &mut dtype,
+                    &mut size,
+                    &mut dec,
+                    &mut nullable,
+                )
             };
             self.api.check(rc, SQL_HANDLE_STMT, self.h)?;
-            let col_name = String::from_utf16_lossy(&name[..(name_len.max(0) as usize).min(name.len())]);
+            let col_name =
+                String::from_utf16_lossy(&name[..(name_len.max(0) as usize).min(name.len())]);
             let mut tbuf = vec![0u16; 128];
             let mut tlen = 0i16;
             let mut num: isize = 0;
             unsafe {
-                (self.api.col_attribute)(self.h, c, SQL_DESC_TYPE_NAME, tbuf.as_mut_ptr() as *mut c_void, (tbuf.len() * 2) as i16, &mut tlen, &mut num)
+                (self.api.col_attribute)(
+                    self.h,
+                    c,
+                    SQL_DESC_TYPE_NAME,
+                    tbuf.as_mut_ptr() as *mut c_void,
+                    (tbuf.len() * 2) as i16,
+                    &mut tlen,
+                    &mut num,
+                )
             };
-            let mut type_name = String::from_utf16_lossy(&tbuf[..(tlen.max(0) as usize / 2).min(tbuf.len())]).to_lowercase();
+            let mut type_name =
+                String::from_utf16_lossy(&tbuf[..(tlen.max(0) as usize / 2).min(tbuf.len())])
+                    .to_lowercase();
             let (plan, kind) = plan_for(dtype, size);
             if type_name.is_empty() {
                 type_name = sql_type_name(dtype).into();
             }
-            self.columns.push(ColumnInfo { name: col_name, type_name, kind });
+            self.columns.push(ColumnInfo {
+                name: col_name,
+                type_name,
+                kind,
+            });
             self.plans.push(plan);
         }
         self.finished = false;
@@ -484,21 +626,38 @@ impl Stmt {
     fn bind_block(&mut self) -> Result<()> {
         let row_bytes: usize = self.plans.iter().map(|p| p.elem + 8).sum::<usize>().max(1);
         let rows = (BLOCK_BYTES / row_bytes).clamp(1, 512);
-        let mut b = Bound { bufs: vec![], inds: vec![], fetched: Box::new(0) };
+        let mut b = Bound {
+            bufs: vec![],
+            inds: vec![],
+            fetched: Box::new(0),
+        };
         unsafe {
             (self.api.set_stmt_attr)(self.h, SQL_ATTR_ROW_BIND_TYPE, null_mut(), 0);
-            let rc = (self.api.set_stmt_attr)(self.h, SQL_ATTR_ROW_ARRAY_SIZE, rows as *mut c_void, 0);
+            let rc =
+                (self.api.set_stmt_attr)(self.h, SQL_ATTR_ROW_ARRAY_SIZE, rows as *mut c_void, 0);
             if rc != SQL_SUCCESS {
                 // El driver no admite lectura por bloques: se lee fila a fila.
                 return Ok(());
             }
-            (self.api.set_stmt_attr)(self.h, SQL_ATTR_ROWS_FETCHED_PTR, (&mut *b.fetched) as *mut usize as *mut c_void, 0);
+            (self.api.set_stmt_attr)(
+                self.h,
+                SQL_ATTR_ROWS_FETCHED_PTR,
+                (&mut *b.fetched) as *mut usize as *mut c_void,
+                0,
+            );
         }
         for (i, p) in self.plans.iter().enumerate() {
             let mut buf = vec![0u8; p.elem * rows];
             let mut ind = vec![0isize; rows];
             let rc = unsafe {
-                (self.api.bind_col)(self.h, (i + 1) as u16, p.ctype, buf.as_mut_ptr() as *mut c_void, p.elem as isize, ind.as_mut_ptr())
+                (self.api.bind_col)(
+                    self.h,
+                    (i + 1) as u16,
+                    p.ctype,
+                    buf.as_mut_ptr() as *mut c_void,
+                    p.elem as isize,
+                    ind.as_mut_ptr(),
+                )
             };
             self.api.check(rc, SQL_HANDLE_STMT, self.h)?;
             b.bufs.push(buf);
@@ -558,7 +717,14 @@ impl Stmt {
                     let mut chunk = vec![0u16; 8192];
                     loop {
                         let mut ind: isize = 0;
-                        let rc = (self.api.get_data)(self.h, col, SQL_C_WCHAR, chunk.as_mut_ptr() as *mut c_void, (chunk.len() * 2) as isize, &mut ind);
+                        let rc = (self.api.get_data)(
+                            self.h,
+                            col,
+                            SQL_C_WCHAR,
+                            chunk.as_mut_ptr() as *mut c_void,
+                            (chunk.len() * 2) as isize,
+                            &mut ind,
+                        );
                         if rc == SQL_NO_DATA {
                             break;
                         }
@@ -569,7 +735,11 @@ impl Stmt {
                             return Ok(Cell::Null);
                         }
                         let avail = chunk.len() - 1;
-                        let n = if ind == SQL_NO_TOTAL || ind as usize / 2 > avail { avail } else { ind as usize / 2 };
+                        let n = if ind == SQL_NO_TOTAL || ind as usize / 2 > avail {
+                            avail
+                        } else {
+                            ind as usize / 2
+                        };
                         out.extend_from_slice(&chunk[..n]);
                         if rc == SQL_SUCCESS {
                             break;
@@ -585,20 +755,38 @@ impl Stmt {
                 SQL_C_BINARY => {
                     let mut buf = vec![0u8; BINARY_PREVIEW + 1];
                     let mut ind: isize = 0;
-                    let rc = (self.api.get_data)(self.h, col, SQL_C_BINARY, buf.as_mut_ptr() as *mut c_void, buf.len() as isize, &mut ind);
+                    let rc = (self.api.get_data)(
+                        self.h,
+                        col,
+                        SQL_C_BINARY,
+                        buf.as_mut_ptr() as *mut c_void,
+                        buf.len() as isize,
+                        &mut ind,
+                    );
                     if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO && rc != SQL_NO_DATA {
                         bail!(self.api.diag(SQL_HANDLE_STMT, self.h));
                     }
                     if ind == SQL_NULL_DATA {
                         return Ok(Cell::Null);
                     }
-                    let n = if ind == SQL_NO_TOTAL || ind as usize > buf.len() { buf.len() } else { ind as usize };
+                    let n = if ind == SQL_NO_TOTAL || ind as usize > buf.len() {
+                        buf.len()
+                    } else {
+                        ind as usize
+                    };
                     Ok(Cell::hex(&buf[..n], BINARY_PREVIEW))
                 }
                 _ => {
                     let mut buf = [0u8; 8];
                     let mut ind: isize = 0;
-                    let rc = (self.api.get_data)(self.h, col, p.ctype, buf.as_mut_ptr() as *mut c_void, 8, &mut ind);
+                    let rc = (self.api.get_data)(
+                        self.h,
+                        col,
+                        p.ctype,
+                        buf.as_mut_ptr() as *mut c_void,
+                        8,
+                        &mut ind,
+                    );
                     if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
                         bail!(self.api.diag(SQL_HANDLE_STMT, self.h));
                     }
@@ -664,23 +852,74 @@ pub fn cancel_stmt(api: &Api, slot: &Mutex<usize>) {
 }
 
 fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
-    let wchar = |chars: usize| ColPlan { ctype: SQL_C_WCHAR, elem: (chars + 1) * 2, lob: false };
-    let wlob = ColPlan { ctype: SQL_C_WCHAR, elem: 0, lob: true };
+    let wchar = |chars: usize| ColPlan {
+        ctype: SQL_C_WCHAR,
+        elem: (chars + 1) * 2,
+        lob: false,
+    };
+    let wlob = ColPlan {
+        ctype: SQL_C_WCHAR,
+        elem: 0,
+        lob: true,
+    };
     match dtype {
-        -7 => (ColPlan { ctype: SQL_C_BIT, elem: 1, lob: false }, ColKind::Bool),
-        -6 | 5 | 4 | -5 => (ColPlan { ctype: SQL_C_SBIGINT, elem: 8, lob: false }, ColKind::Number),
-        6 | 7 | 8 => (ColPlan { ctype: SQL_C_DOUBLE, elem: 8, lob: false }, ColKind::Number),
+        -7 => (
+            ColPlan {
+                ctype: SQL_C_BIT,
+                elem: 1,
+                lob: false,
+            },
+            ColKind::Bool,
+        ),
+        -6 | 5 | 4 | -5 => (
+            ColPlan {
+                ctype: SQL_C_SBIGINT,
+                elem: 8,
+                lob: false,
+            },
+            ColKind::Number,
+        ),
+        6 | 7 | 8 => (
+            ColPlan {
+                ctype: SQL_C_DOUBLE,
+                elem: 8,
+                lob: false,
+            },
+            ColKind::Number,
+        ),
         2 | 3 => (wchar(size.clamp(1, 100) + 3), ColKind::Number),
-        -2 | -3 if size > 0 && size <= 8000 => (ColPlan { ctype: SQL_C_BINARY, elem: size, lob: false }, ColKind::Binary),
-        -2 | -3 | -4 => (ColPlan { ctype: SQL_C_BINARY, elem: 0, lob: true }, ColKind::Binary),
+        -2 | -3 if size > 0 && size <= 8000 => (
+            ColPlan {
+                ctype: SQL_C_BINARY,
+                elem: size,
+                lob: false,
+            },
+            ColKind::Binary,
+        ),
+        -2 | -3 | -4 => (
+            ColPlan {
+                ctype: SQL_C_BINARY,
+                elem: 0,
+                lob: true,
+            },
+            ColKind::Binary,
+        ),
         -1 | -10 => (wlob, ColKind::Text),
         9 | 10 | 11 | 91 | 92 | 93 => (wchar(size.clamp(1, 60) + 4), ColKind::Date),
         -11 => (wchar(40), ColKind::Other),
         1 | 12 | -8 | -9 => {
-            if size == 0 || size > 8000 { (wlob, ColKind::Text) } else { (wchar(size), ColKind::Text) }
+            if size == 0 || size > 8000 {
+                (wlob, ColKind::Text)
+            } else {
+                (wchar(size), ColKind::Text)
+            }
         }
         _ => {
-            if size == 0 || size > 8000 { (wlob, ColKind::Other) } else { (wchar(size.max(32)), ColKind::Other) }
+            if size == 0 || size > 8000 {
+                (wlob, ColKind::Other)
+            } else {
+                (wchar(size.max(32)), ColKind::Other)
+            }
         }
     }
 }
@@ -723,13 +962,24 @@ fn decode(p: &ColPlan, data: &[u8], ind: isize) -> Cell {
         SQL_C_DOUBLE => Cell::num(f64::from_le_bytes(data[..8].try_into().unwrap())),
         SQL_C_BIT => Cell::Bool(data[0] != 0),
         SQL_C_BINARY => {
-            let n = if ind == SQL_NO_TOTAL || ind as usize > data.len() { data.len() } else { ind as usize };
+            let n = if ind == SQL_NO_TOTAL || ind as usize > data.len() {
+                data.len()
+            } else {
+                ind as usize
+            };
             Cell::hex(&data[..n], BINARY_PREVIEW)
         }
         _ => {
             let cap = data.len() / 2 - 1;
-            let (n, trunc) = if ind == SQL_NO_TOTAL || ind as usize / 2 > cap { (cap, true) } else { (ind as usize / 2, false) };
-            let u: Vec<u16> = data[..n * 2].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let (n, trunc) = if ind == SQL_NO_TOTAL || ind as usize / 2 > cap {
+                (cap, true)
+            } else {
+                (ind as usize / 2, false)
+            };
+            let u: Vec<u16> = data[..n * 2]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
             let mut s = String::from_utf16_lossy(&u);
             if trunc {
                 s.push('…');
@@ -742,14 +992,18 @@ fn decode(p: &ColPlan, data: &[u8], ind: isize) -> Cell {
 /// Drivers ODBC instalados en el sistema (requiere el gestor ODBC).
 pub fn list_drivers() -> Result<Vec<String>> {
     let api = Api::load(system_manager())?;
-    let f = api.drivers.ok_or_else(|| anyhow!("El gestor ODBC no permite listar drivers"))?;
+    let f = api
+        .drivers
+        .ok_or_else(|| anyhow!("El gestor ODBC no permite listar drivers"))?;
     enumerate(&api, f)
 }
 
 /// DSN configurados en el sistema.
 pub fn list_dsns() -> Result<Vec<String>> {
     let api = Api::load(system_manager())?;
-    let f = api.data_sources.ok_or_else(|| anyhow!("El gestor ODBC no permite listar DSN"))?;
+    let f = api
+        .data_sources
+        .ok_or_else(|| anyhow!("El gestor ODBC no permite listar DSN"))?;
     enumerate(&api, f)
 }
 
@@ -764,11 +1018,22 @@ fn enumerate(api: &Api, f: FnEnum) -> Result<Vec<String>> {
             let mut a = vec![0u16; 512];
             let mut b = vec![0u16; 2048];
             let (mut la, mut lb) = (0i16, 0i16);
-            let rc = f(env, dir, a.as_mut_ptr(), a.len() as i16, &mut la, b.as_mut_ptr(), b.len() as i16, &mut lb);
+            let rc = f(
+                env,
+                dir,
+                a.as_mut_ptr(),
+                a.len() as i16,
+                &mut la,
+                b.as_mut_ptr(),
+                b.len() as i16,
+                &mut lb,
+            );
             if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
                 break;
             }
-            out.push(String::from_utf16_lossy(&a[..(la.max(0) as usize).min(a.len())]));
+            out.push(String::from_utf16_lossy(
+                &a[..(la.max(0) as usize).min(a.len())],
+            ));
             dir = SQL_FETCH_NEXT;
         }
         (api.free_handle)(SQL_HANDLE_ENV, env);

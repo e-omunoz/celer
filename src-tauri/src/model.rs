@@ -79,7 +79,12 @@ pub struct ResultSet {
 
 impl ResultSet {
     pub fn count(n: i64) -> ResultSet {
-        ResultSet { columns: vec![], rows: vec![], has_more: false, rows_affected: Some(n) }
+        ResultSet {
+            columns: vec![],
+            rows: vec![],
+            has_more: false,
+            rows_affected: Some(n),
+        }
     }
 }
 
@@ -110,6 +115,7 @@ pub enum DbKind {
     Mssql,
     Informix,
     Odbc,
+    Sqlite,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +149,9 @@ pub struct ConnConfig {
     pub production: bool,
     pub read_only: bool,
     pub folder: String,
+    /// SQLite: ruta del fichero, o `:memory:` para una base en memoria.
+    #[serde(default)]
+    pub file_path: String,
 }
 
 impl Default for ConnConfig {
@@ -168,6 +177,7 @@ impl Default for ConnConfig {
             production: false,
             read_only: false,
             folder: String::new(),
+            file_path: String::new(),
         }
     }
 }
@@ -190,10 +200,24 @@ pub struct MetaNode {
 
 impl MetaNode {
     pub fn branch(name: impl Into<String>, kind: &str, path: Vec<String>) -> MetaNode {
-        MetaNode { name: name.into(), kind: kind.into(), detail: None, path, leaf: false, obj: None }
+        MetaNode {
+            name: name.into(),
+            kind: kind.into(),
+            detail: None,
+            path,
+            leaf: false,
+            obj: None,
+        }
     }
     pub fn leaf(name: impl Into<String>, kind: &str, detail: Option<String>) -> MetaNode {
-        MetaNode { name: name.into(), kind: kind.into(), detail, path: vec![], leaf: true, obj: None }
+        MetaNode {
+            name: name.into(),
+            kind: kind.into(),
+            detail,
+            path: vec![],
+            leaf: true,
+            obj: None,
+        }
     }
     pub fn with_obj(mut self, obj: ObjectRef) -> MetaNode {
         self.obj = Some(obj);
@@ -207,7 +231,12 @@ impl MetaNode {
 
 impl ObjectRef {
     pub fn new(database: &str, schema: &str, name: &str, kind: &str) -> ObjectRef {
-        ObjectRef { database: database.into(), schema: schema.into(), name: name.into(), kind: kind.into() }
+        ObjectRef {
+            database: database.into(),
+            schema: schema.into(),
+            name: name.into(),
+            kind: kind.into(),
+        }
     }
 }
 

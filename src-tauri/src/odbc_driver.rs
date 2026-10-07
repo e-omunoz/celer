@@ -32,7 +32,11 @@ pub struct OdbcDriver {
 
 impl OdbcDriver {
     pub fn connect(cfg: ConnConfig, lib_path: String) -> Result<OdbcDriver> {
-        let dialect = if cfg.kind == DbKind::Informix { Dialect::Informix } else { Dialect::Generic };
+        let dialect = if cfg.kind == DbKind::Informix {
+            Dialect::Informix
+        } else {
+            Dialect::Generic
+        };
         let api = Api::load(&lib_path)?;
         let conn = OdbcConn::connect(api, &conn_string(&cfg, None), 20)?;
         let quote = match conn.info(SQL_IDENTIFIER_QUOTE_CHAR).trim() {
@@ -63,7 +67,11 @@ impl OdbcDriver {
 
     /// Prefijo "base:" de Informix para consultar catálogos de otra base de datos.
     fn ifx_db(&self, db: &str) -> String {
-        if db.is_empty() { String::new() } else { format!("{db}:") }
+        if db.is_empty() {
+            String::new()
+        } else {
+            format!("{db}:")
+        }
     }
 
     fn pump(&mut self, fetch: usize, messages: &mut Vec<String>) -> Result<Vec<ResultSet>> {
@@ -74,7 +82,12 @@ impl OdbcDriver {
             if n > 0 {
                 st.begin_result(n)?;
                 let (rows, more) = st.read(fetch)?;
-                results.push(ResultSet { columns: st.columns.clone(), rows, has_more: more, rows_affected: None });
+                results.push(ResultSet {
+                    columns: st.columns.clone(),
+                    rows,
+                    has_more: more,
+                    rows_affected: None,
+                });
                 if more {
                     messages.append(&mut st.messages);
                     return Ok(results);
@@ -107,11 +120,16 @@ impl OdbcDriver {
             lit(&o.name),
             lit(&o.schema)
         ))?;
-        rows.first().map(|r| cell_i64(&r[0])).ok_or_else(|| anyhow!("No se encontró {}", o.name))
+        rows.first()
+            .map(|r| cell_i64(&r[0]))
+            .ok_or_else(|| anyhow!("No se encontró {}", o.name))
     }
 
     /// (nombre, tipo, nullable, pk, serial, default)
-    fn ifx_columns(&self, o: &ObjectRef) -> Result<Vec<(String, String, bool, bool, bool, Option<String>)>> {
+    fn ifx_columns(
+        &self,
+        o: &ObjectRef,
+    ) -> Result<Vec<(String, String, bool, bool, bool, Option<String>)>> {
         let db = self.ifx_db(&o.database);
         let tabid = self.ifx_tabid(o)?;
         let cols = self.q(&format!(
@@ -131,7 +149,11 @@ impl OdbcDriver {
                     "L" => {
                         let v = cell_str(&r[6]);
                         // El literal se guarda con el tipo delante en algunos casos ("123 ").
-                        Some(if matches!(base, 0 | 13 | 15 | 16 | 40) { lit(v.trim_end()) } else { v.trim().to_string() })
+                        Some(if matches!(base, 0 | 13 | 15 | 16 | 40) {
+                            lit(v.trim_end())
+                        } else {
+                            v.trim().to_string()
+                        })
                     }
                     "U" => Some("USER".into()),
                     "C" => Some("CURRENT".into()),
@@ -140,28 +162,48 @@ impl OdbcDriver {
                     "S" => Some("DBSERVERNAME".into()),
                     _ => None,
                 };
-                (cell_str(&r[0]), ty, coltype & 0x100 == 0, pk.contains(&colno), matches!(base, 6 | 18 | 53), default)
+                (
+                    cell_str(&r[0]),
+                    ty,
+                    coltype & 0x100 == 0,
+                    pk.contains(&colno),
+                    matches!(base, 6 | 18 | 53),
+                    default,
+                )
             })
             .collect())
     }
 
     fn ifx_pk_colnos(&self, db: &str, tabid: i64) -> Result<Vec<i64>> {
-        let parts = (1..=16).map(|i| format!("i.part{i}")).collect::<Vec<_>>().join(", ");
+        let parts = (1..=16)
+            .map(|i| format!("i.part{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         let rows = self.q(&format!(
             "SELECT {parts} FROM {db}sysconstraints c, {db}sysindexes i \
              WHERE c.tabid = {tabid} AND c.constrtype = 'P' AND i.idxname = c.idxname AND i.tabid = c.tabid"
         ))?;
         Ok(rows
             .first()
-            .map(|r| r.iter().map(|c| cell_i64(c).abs()).filter(|n| *n > 0).collect())
+            .map(|r| {
+                r.iter()
+                    .map(|c| cell_i64(c).abs())
+                    .filter(|n| *n > 0)
+                    .collect()
+            })
             .unwrap_or_default())
     }
 
     fn ifx_indexes(&self, o: &ObjectRef) -> Result<Vec<(String, bool, String, bool)>> {
         let db = self.ifx_db(&o.database);
         let tabid = self.ifx_tabid(o)?;
-        let parts = (1..=16).map(|i| format!("part{i}")).collect::<Vec<_>>().join(", ");
-        let cols = self.q(&format!("SELECT colno, colname FROM {db}syscolumns WHERE tabid = {tabid}"))?;
+        let parts = (1..=16)
+            .map(|i| format!("part{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cols = self.q(&format!(
+            "SELECT colno, colname FROM {db}syscolumns WHERE tabid = {tabid}"
+        ))?;
         let name_of = |n: i64| {
             cols.iter()
                 .find(|r| cell_i64(&r[0]) == n.abs())
@@ -185,7 +227,12 @@ impl OdbcDriver {
             .map(|r| {
                 let name = cell_str(&r[0]).trim().to_string();
                 let unique = cell_str(&r[1]).trim() == "U";
-                let colnames: Vec<String> = r[2..].iter().map(cell_i64).filter(|n| *n != 0).map(name_of).collect();
+                let colnames: Vec<String> = r[2..]
+                    .iter()
+                    .map(cell_i64)
+                    .filter(|n| *n != 0)
+                    .map(name_of)
+                    .collect();
                 let constraint = pk_idx.contains(&name);
                 (name, unique, colnames.join(", "), constraint)
             })
@@ -207,7 +254,12 @@ impl OdbcDriver {
                 let ty = cell_str(&r[5]).to_lowercase();
                 let size = cell_i64(&r[6]);
                 let name = cell_str(&r[3]);
-                let type_name = if matches!(ty.as_str(), "varchar" | "char" | "nvarchar" | "nchar") { format!("{ty}({size})") } else { ty.clone() };
+                let type_name = if matches!(ty.as_str(), "varchar" | "char" | "nvarchar" | "nchar")
+                {
+                    format!("{ty}({size})")
+                } else {
+                    ty.clone()
+                };
                 TableColumn {
                     primary_key: pks.contains(&name),
                     name,
@@ -241,7 +293,13 @@ impl OdbcDriver {
 pub fn conn_string(cfg: &ConnConfig, database: Option<&str>) -> String {
     let db = database.unwrap_or(&cfg.database);
     let pwd = cfg.password.clone().unwrap_or_default();
-    let esc = |s: &str| if s.contains(';') || s.contains('}') { format!("{{{}}}", s.replace('}', "}}")) } else { s.to_string() };
+    let esc = |s: &str| {
+        if s.contains(';') || s.contains('}') {
+            format!("{{{}}}", s.replace('}', "}}"))
+        } else {
+            s.to_string()
+        }
+    };
     let mut s = match (cfg.kind, cfg.informix_mode.as_str()) {
         (DbKind::Informix, "sqli") => format!(
             "DRIVER={{IBM INFORMIX ODBC DRIVER (64-bit)}};HOST={};SERVICE={};SERVER={};DATABASE={};PROTOCOL=onsoctcp;UID={};PWD={};",
@@ -294,7 +352,22 @@ fn lit(s: &str) -> String {
 /// Traduce coltype/collength de syscolumns de Informix a un nombre de tipo legible.
 pub fn ifx_type(coltype: i64, len: i64, extended_id: i64) -> String {
     const QUAL: [&str; 16] = [
-        "YEAR", "", "MONTH", "", "DAY", "", "HOUR", "", "MINUTE", "", "SECOND", "FRACTION(1)", "FRACTION(2)", "FRACTION(3)", "FRACTION(4)", "FRACTION(5)",
+        "YEAR",
+        "",
+        "MONTH",
+        "",
+        "DAY",
+        "",
+        "HOUR",
+        "",
+        "MINUTE",
+        "",
+        "SECOND",
+        "FRACTION(1)",
+        "FRACTION(2)",
+        "FRACTION(3)",
+        "FRACTION(4)",
+        "FRACTION(5)",
     ];
     let q = |n: i64| QUAL.get(n as usize).copied().unwrap_or("");
     let qual_range = |len: i64| {
@@ -310,9 +383,17 @@ pub fn ifx_type(coltype: i64, len: i64, extended_id: i64) -> String {
         3 => "FLOAT".into(),
         4 => "SMALLFLOAT".into(),
         5 | 8 => {
-            let name = if coltype & 0xFF == 5 { "DECIMAL" } else { "MONEY" };
+            let name = if coltype & 0xFF == 5 {
+                "DECIMAL"
+            } else {
+                "MONEY"
+            };
             let (p, s) = (len / 256, len % 256);
-            if s == 255 { format!("{name}({p})") } else { format!("{name}({p},{s})") }
+            if s == 255 {
+                format!("{name}({p})")
+            } else {
+                format!("{name}({p},{s})")
+            }
         }
         6 => "SERIAL".into(),
         7 => "DATE".into(),
@@ -321,9 +402,17 @@ pub fn ifx_type(coltype: i64, len: i64, extended_id: i64) -> String {
         11 => "BYTE".into(),
         12 => "TEXT".into(),
         13 | 16 => {
-            let name = if coltype & 0xFF == 13 { "VARCHAR" } else { "NVARCHAR" };
+            let name = if coltype & 0xFF == 13 {
+                "VARCHAR"
+            } else {
+                "NVARCHAR"
+            };
             let (max, min) = (len % 256, len / 256);
-            if min > 0 { format!("{name}({max},{min})") } else { format!("{name}({max})") }
+            if min > 0 {
+                format!("{name}({max},{min})")
+            } else {
+                format!("{name}({max})")
+            }
         }
         14 => format!("INTERVAL {}", qual_range(len)),
         15 => format!("NCHAR({len})"),
@@ -334,7 +423,11 @@ pub fn ifx_type(coltype: i64, len: i64, extended_id: i64) -> String {
         21 => "LIST".into(),
         22 => "ROW".into(),
         40 => {
-            if extended_id == 1 { format!("LVARCHAR({len})") } else { "LVARCHAR".into() }
+            if extended_id == 1 {
+                format!("LVARCHAR({len})")
+            } else {
+                "LVARCHAR".into()
+            }
         }
         41 => match extended_id {
             5 => "BOOLEAN".into(),
@@ -350,7 +443,14 @@ pub fn ifx_type(coltype: i64, len: i64, extended_id: i64) -> String {
     }
 }
 
-const IFX_SYSTEM_DBS: [&str; 6] = ["sysmaster", "sysutils", "sysuser", "sysadmin", "sysha", "syscdcv1"];
+const IFX_SYSTEM_DBS: [&str; 6] = [
+    "sysmaster",
+    "sysutils",
+    "sysuser",
+    "sysadmin",
+    "sysha",
+    "syscdcv1",
+];
 
 impl Driver for OdbcDriver {
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
@@ -375,7 +475,9 @@ impl Driver for OdbcDriver {
 
     fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
         let mut out = FetchOutput::default();
-        let Some(st) = self.stmt.as_mut() else { return Ok(out) };
+        let Some(st) = self.stmt.as_mut() else {
+            return Ok(out);
+        };
         if st.in_result {
             match st.read(n.max(1)) {
                 Ok((rows, more)) => {
@@ -445,10 +547,19 @@ impl Driver for OdbcDriver {
                         .iter()
                         .take(20000)
                         .map(|r| {
-                            let (cat, sch, name) = (cell_str(&r[0]), cell_str(&r[1]), cell_str(&r[2]));
-                            let label = if sch.is_empty() { name.clone() } else { format!("{sch}.{name}") };
-                            MetaNode::branch(label, kind, vec![ty.to_string(), cat.clone(), sch.clone(), name.clone()])
-                                .with_obj(ObjectRef::new(&cat, &sch, &name, kind))
+                            let (cat, sch, name) =
+                                (cell_str(&r[0]), cell_str(&r[1]), cell_str(&r[2]));
+                            let label = if sch.is_empty() {
+                                name.clone()
+                            } else {
+                                format!("{sch}.{name}")
+                            };
+                            MetaNode::branch(
+                                label,
+                                kind,
+                                vec![ty.to_string(), cat.clone(), sch.clone(), name.clone()],
+                            )
+                            .with_obj(ObjectRef::new(&cat, &sch, &name, kind))
                         })
                         .collect())
                 }
@@ -464,7 +575,11 @@ impl Driver for OdbcDriver {
                             if !c.nullable {
                                 d.push_str(" · not null");
                             }
-                            MetaNode::leaf(c.name, if c.primary_key { "pkcolumn" } else { "column" }, Some(d))
+                            MetaNode::leaf(
+                                c.name,
+                                if c.primary_key { "pkcolumn" } else { "column" },
+                                Some(d),
+                            )
                         })
                         .collect())
                 }
@@ -478,7 +593,11 @@ impl Driver for OdbcDriver {
                     .iter()
                     .map(|r| {
                         let n = cell_str(&r[0]);
-                        let detail = if IFX_SYSTEM_DBS.contains(&n.as_str()) { Some("sistema".to_string()) } else { None };
+                        let detail = if IFX_SYSTEM_DBS.contains(&n.as_str()) {
+                            Some("sistema".to_string())
+                        } else {
+                            None
+                        };
                         MetaNode::branch(n.clone(), "database", vec![n]).with_detail(detail)
                     })
                     .collect())
@@ -524,7 +643,11 @@ impl Driver for OdbcDriver {
                             _ => None,
                         };
                         let node = if branch {
-                            MetaNode::branch(n.clone(), kind, vec![db.to_string(), folder.to_string(), owner, n])
+                            MetaNode::branch(
+                                n.clone(),
+                                kind,
+                                vec![db.to_string(), folder.to_string(), owner, n],
+                            )
                         } else {
                             MetaNode::leaf(n, kind, None)
                         };
@@ -533,7 +656,12 @@ impl Driver for OdbcDriver {
                     .collect())
             }
             [db, folder, owner, name] => {
-                let o = ObjectRef::new(db, owner, name, if *folder == "views" { "view" } else { "table" });
+                let o = ObjectRef::new(
+                    db,
+                    owner,
+                    name,
+                    if *folder == "views" { "view" } else { "table" },
+                );
                 let cols = self.ifx_columns(&o)?;
                 let mut nodes: Vec<MetaNode> = cols
                     .into_iter()
@@ -601,9 +729,20 @@ impl Driver for OdbcDriver {
             let cols = self.generic_columns(obj)?;
             let mut lines: Vec<String> = cols
                 .iter()
-                .map(|c| format!("    {} {}{}", self.quote_ident(&c.name), c.type_name.to_uppercase(), if c.nullable { "" } else { " NOT NULL" }))
+                .map(|c| {
+                    format!(
+                        "    {} {}{}",
+                        self.quote_ident(&c.name),
+                        c.type_name.to_uppercase(),
+                        if c.nullable { "" } else { " NOT NULL" }
+                    )
+                })
                 .collect();
-            let pk: Vec<String> = cols.iter().filter(|c| c.primary_key).map(|c| self.quote_ident(&c.name)).collect();
+            let pk: Vec<String> = cols
+                .iter()
+                .filter(|c| c.primary_key)
+                .map(|c| self.quote_ident(&c.name))
+                .collect();
             if !pk.is_empty() {
                 lines.push(format!("    PRIMARY KEY ({})", pk.join(", ")));
             }
@@ -630,7 +769,12 @@ impl Driver for OdbcDriver {
                 if !pk.is_empty() {
                     lines.push(format!("    PRIMARY KEY ({})", pk.join(", ")));
                 }
-                let mut out = format!("CREATE TABLE {}.{} (\n{}\n);\n", obj.schema, obj.name, lines.join(",\n"));
+                let mut out = format!(
+                    "CREATE TABLE {}.{} (\n{}\n);\n",
+                    obj.schema,
+                    obj.name,
+                    lines.join(",\n")
+                );
                 for (n, unique, cols, constraint) in self.ifx_indexes(obj)? {
                     if constraint {
                         continue;
@@ -648,8 +792,15 @@ impl Driver for OdbcDriver {
             }
             "view" => {
                 let tabid = self.ifx_tabid(obj)?;
-                let rows = self.q(&format!("SELECT viewtext FROM {db}sysviews WHERE tabid = {tabid} ORDER BY seqno"))?;
-                Ok(rows.iter().map(|r| cell_str(&r[0])).collect::<String>().trim().to_string())
+                let rows = self.q(&format!(
+                    "SELECT viewtext FROM {db}sysviews WHERE tabid = {tabid} ORDER BY seqno"
+                ))?;
+                Ok(rows
+                    .iter()
+                    .map(|r| cell_str(&r[0]))
+                    .collect::<String>()
+                    .trim()
+                    .to_string())
             }
             "procedure" | "function" => {
                 let rows = self.q(&format!(
@@ -661,7 +812,12 @@ impl Driver for OdbcDriver {
                 if rows.is_empty() {
                     bail!("No hay definición disponible");
                 }
-                Ok(rows.iter().map(|r| cell_str(&r[0])).collect::<String>().trim().to_string())
+                Ok(rows
+                    .iter()
+                    .map(|r| cell_str(&r[0]))
+                    .collect::<String>()
+                    .trim()
+                    .to_string())
             }
             "synonym" => {
                 let tabid = self.ifx_tabid(obj)?;
@@ -669,7 +825,9 @@ impl Driver for OdbcDriver {
                     "SELECT TRIM(NVL(s.servername,'')), TRIM(NVL(s.dbname,'')), TRIM(NVL(s.owner,'')), TRIM(NVL(s.tabname,'')), TRIM(NVL(t.owner,'')), TRIM(NVL(t.tabname,'')) \
                      FROM {db}syssyntable s, OUTER {db}systables t WHERE s.tabid = {tabid} AND t.tabid = s.btabid"
                 ))?;
-                let r = rows.first().ok_or_else(|| anyhow!("Sinónimo no encontrado"))?;
+                let r = rows
+                    .first()
+                    .ok_or_else(|| anyhow!("Sinónimo no encontrado"))?;
                 let target = if !cell_str(&r[3]).is_empty() {
                     let mut t = String::new();
                     if !cell_str(&r[1]).is_empty() {
@@ -683,12 +841,17 @@ impl Driver for OdbcDriver {
                 } else {
                     format!("{}.{}", cell_str(&r[4]), cell_str(&r[5]))
                 };
-                Ok(format!("CREATE SYNONYM {}.{} FOR {};", obj.schema, obj.name, target))
+                Ok(format!(
+                    "CREATE SYNONYM {}.{} FOR {};",
+                    obj.schema, obj.name, target
+                ))
             }
             "sequence" => {
                 let tabid = self.ifx_tabid(obj)?;
                 let rows = self.q(&format!("SELECT start_val, inc_val, min_val, max_val, cycle FROM {db}syssequences WHERE tabid = {tabid}"))?;
-                let r = rows.first().ok_or_else(|| anyhow!("Secuencia no encontrada"))?;
+                let r = rows
+                    .first()
+                    .ok_or_else(|| anyhow!("Secuencia no encontrada"))?;
                 Ok(format!(
                     "CREATE SEQUENCE {}.{}\n    START WITH {}\n    INCREMENT BY {}\n    MINVALUE {}\n    MAXVALUE {}\n    {};",
                     obj.schema,
@@ -707,9 +870,15 @@ impl Driver for OdbcDriver {
     fn completion(&mut self, database: &str) -> Result<CompletionSchema> {
         let mut out = CompletionSchema::default();
         if self.dialect == Dialect::Generic {
-            let rows = self.conn.catalog_tables(None, None, Some("%"), Some("TABLE,VIEW"))?;
+            let rows = self
+                .conn
+                .catalog_tables(None, None, Some("%"), Some("TABLE,VIEW"))?;
             for r in rows.iter().take(3000) {
-                out.tables.push(CompletionTable { schema: cell_str(&r[1]), name: cell_str(&r[2]), columns: vec![] });
+                out.tables.push(CompletionTable {
+                    schema: cell_str(&r[1]),
+                    name: cell_str(&r[2]),
+                    columns: vec![],
+                });
             }
             return Ok(out);
         }
@@ -722,7 +891,11 @@ impl Driver for OdbcDriver {
             let (s, t, c) = (cell_str(&r[0]), cell_str(&r[1]), cell_str(&r[2]));
             match out.tables.last_mut() {
                 Some(last) if last.schema == s && last.name == t => last.columns.push(c),
-                _ => out.tables.push(CompletionTable { schema: s, name: t, columns: vec![c] }),
+                _ => out.tables.push(CompletionTable {
+                    schema: s,
+                    name: t,
+                    columns: vec![c],
+                }),
             }
         }
         Ok(out)
@@ -730,8 +903,15 @@ impl Driver for OdbcDriver {
 
     fn databases(&mut self) -> Result<Vec<String>> {
         if self.dialect == Dialect::Generic {
-            let rows = self.conn.catalog_tables(Some("%"), Some(""), Some(""), None).unwrap_or_default();
-            let mut v: Vec<String> = rows.iter().map(|r| cell_str(&r[0])).filter(|s| !s.is_empty()).collect();
+            let rows = self
+                .conn
+                .catalog_tables(Some("%"), Some(""), Some(""), None)
+                .unwrap_or_default();
+            let mut v: Vec<String> = rows
+                .iter()
+                .map(|r| cell_str(&r[0]))
+                .filter(|s| !s.is_empty())
+                .collect();
             v.dedup();
             return Ok(v);
         }
@@ -760,7 +940,11 @@ impl Driver for OdbcDriver {
 
     fn qualified_name(&self, o: &ObjectRef) -> String {
         if self.dialect == Dialect::Informix {
-            let owner = if o.schema.is_empty() { String::new() } else { format!("{}.", o.schema) };
+            let owner = if o.schema.is_empty() {
+                String::new()
+            } else {
+                format!("{}.", o.schema)
+            };
             if o.database.is_empty() || o.database == self.database {
                 return format!("{owner}{}", o.name);
             }
@@ -787,7 +971,13 @@ impl Driver for OdbcDriver {
     }
 
     fn server_info(&mut self) -> Result<String> {
-        Ok(format!("{} {}", self.conn.info(SQL_DBMS_NAME), self.conn.info(SQL_DBMS_VER)).trim().to_string())
+        Ok(format!(
+            "{} {}",
+            self.conn.info(SQL_DBMS_NAME),
+            self.conn.info(SQL_DBMS_VER)
+        )
+        .trim()
+        .to_string())
     }
 
     fn canceller(&self) -> Canceller {
@@ -807,7 +997,10 @@ mod tests {
         assert_eq!(ifx_type(5, 12 * 256 + 2, 0), "DECIMAL(12,2)");
         assert_eq!(ifx_type(13, 150, 0), "VARCHAR(150)");
         assert_eq!(ifx_type(10, 19 * 256 + 0x0A, 0), "DATETIME YEAR TO SECOND");
-        assert_eq!(ifx_type(10, 23 * 256 + 0x0D, 0), "DATETIME YEAR TO FRACTION(3)");
+        assert_eq!(
+            ifx_type(10, 23 * 256 + 0x0D, 0),
+            "DATETIME YEAR TO FRACTION(3)"
+        );
         assert_eq!(ifx_type(41, 1, 5), "BOOLEAN");
     }
 }

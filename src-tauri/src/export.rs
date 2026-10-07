@@ -40,12 +40,24 @@ impl Default for ExportOptions {
 }
 
 enum Sink {
-    Text { w: BufWriter<File>, first: bool },
-    Xlsx { wb: rust_xlsxwriter::Workbook, row: u32 },
+    Text {
+        w: BufWriter<File>,
+        first: bool,
+    },
+    Xlsx {
+        wb: rust_xlsxwriter::Workbook,
+        row: u32,
+    },
 }
 
 /// Ejecuta `sql` y escribe todas las filas del primer resultado en el fichero.
-pub fn export(d: &mut dyn Driver, sql: &str, o: &ExportOptions, mssql: bool, progress: &dyn Fn(u64)) -> Result<u64> {
+pub fn export(
+    d: &mut dyn Driver,
+    sql: &str,
+    o: &ExportOptions,
+    mssql: bool,
+    progress: &dyn Fn(u64),
+) -> Result<u64> {
     let out = d.execute(sql, PAGE)?;
     let Some(first) = out.results.into_iter().find(|r| !r.columns.is_empty()) else {
         bail!("La consulta no devuelve filas para exportar");
@@ -53,7 +65,10 @@ pub fn export(d: &mut dyn Driver, sql: &str, o: &ExportOptions, mssql: bool, pro
     let cols = first.columns;
     let mut has_more = first.has_more;
     let mut sink = match o.format.as_str() {
-        "xlsx" => Sink::Xlsx { wb: rust_xlsxwriter::Workbook::new(), row: 0 },
+        "xlsx" => Sink::Xlsx {
+            wb: rust_xlsxwriter::Workbook::new(),
+            row: 0,
+        },
         _ => {
             let mut w = BufWriter::with_capacity(1 << 20, File::create(&o.path)?);
             if o.bom && matches!(o.format.as_str(), "csv" | "tsv") {
@@ -62,7 +77,11 @@ pub fn export(d: &mut dyn Driver, sql: &str, o: &ExportOptions, mssql: bool, pro
             Sink::Text { w, first: true }
         }
     };
-    let sql_cols = cols.iter().map(|c| d.quote_ident(&c.name)).collect::<Vec<_>>().join(", ");
+    let sql_cols = cols
+        .iter()
+        .map(|c| d.quote_ident(&c.name))
+        .collect::<Vec<_>>()
+        .join(", ");
     write_header(&mut sink, &cols, o)?;
     let mut total = 0u64;
     let mut rows = first.rows;
@@ -120,7 +139,9 @@ fn json_value(c: &Cell) -> serde_json::Value {
         Cell::Null => serde_json::Value::Null,
         Cell::Bool(b) => (*b).into(),
         Cell::Int(i) => (*i).into(),
-        Cell::Num(f) => serde_json::Number::from_f64(*f).map(Into::into).unwrap_or(serde_json::Value::Null),
+        Cell::Num(f) => serde_json::Number::from_f64(*f)
+            .map(Into::into)
+            .unwrap_or(serde_json::Value::Null),
         Cell::Text(s) => s.clone().into(),
     }
 }
@@ -133,7 +154,11 @@ fn sql_literal(c: &Cell, kind: ColKind, mssql: bool) -> String {
         Cell::Num(f) => f.to_string(),
         Cell::Text(s) if kind == ColKind::Number && s.parse::<f64>().is_ok() => s.clone(),
         Cell::Text(s) if kind == ColKind::Binary && s.starts_with("0x") && mssql => s.clone(),
-        Cell::Text(s) => format!("{}'{}'", if mssql { "N" } else { "" }, s.replace('\'', "''")),
+        Cell::Text(s) => format!(
+            "{}'{}'",
+            if mssql { "N" } else { "" },
+            s.replace('\'', "''")
+        ),
     }
 }
 
@@ -142,8 +167,16 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
         Sink::Text { w, .. } => match o.format.as_str() {
             "csv" | "tsv" => {
                 if o.header {
-                    let delim = if o.format == "tsv" { "\t" } else { o.delimiter.as_str() };
-                    let line = cols.iter().map(|c| csv_field(&c.name, delim)).collect::<Vec<_>>().join(delim);
+                    let delim = if o.format == "tsv" {
+                        "\t"
+                    } else {
+                        o.delimiter.as_str()
+                    };
+                    let line = cols
+                        .iter()
+                        .map(|c| csv_field(&c.name, delim))
+                        .collect::<Vec<_>>()
+                        .join(delim);
                     w.write_all(line.as_bytes())?;
                     w.write_all(b"\r\n")?;
                 }
@@ -164,12 +197,27 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
     Ok(())
 }
 
-fn write_row(sink: &mut Sink, cols: &[ColumnInfo], r: &[Cell], o: &ExportOptions, sql_cols: &str, mssql: bool) -> Result<()> {
+fn write_row(
+    sink: &mut Sink,
+    cols: &[ColumnInfo],
+    r: &[Cell],
+    o: &ExportOptions,
+    sql_cols: &str,
+    mssql: bool,
+) -> Result<()> {
     match sink {
         Sink::Text { w, first } => match o.format.as_str() {
             "csv" | "tsv" => {
-                let delim = if o.format == "tsv" { "\t" } else { o.delimiter.as_str() };
-                let line = r.iter().map(|c| csv_field(&text_of(c, &o.null_text), delim)).collect::<Vec<_>>().join(delim);
+                let delim = if o.format == "tsv" {
+                    "\t"
+                } else {
+                    o.delimiter.as_str()
+                };
+                let line = r
+                    .iter()
+                    .map(|c| csv_field(&text_of(c, &o.null_text), delim))
+                    .collect::<Vec<_>>()
+                    .join(delim);
                 w.write_all(line.as_bytes())?;
                 w.write_all(b"\r\n")?;
             }
@@ -183,8 +231,17 @@ fn write_row(sink: &mut Sink, cols: &[ColumnInfo], r: &[Cell], o: &ExportOptions
                 *first = false;
             }
             "sql" => {
-                let vals = r.iter().zip(cols).map(|(c, col)| sql_literal(c, col.kind, mssql)).collect::<Vec<_>>().join(", ");
-                writeln!(w, "INSERT INTO {} ({}) VALUES ({});", o.table_name, sql_cols, vals)?;
+                let vals = r
+                    .iter()
+                    .zip(cols)
+                    .map(|(c, col)| sql_literal(c, col.kind, mssql))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(
+                    w,
+                    "INSERT INTO {} ({}) VALUES ({});",
+                    o.table_name, sql_cols, vals
+                )?;
             }
             _ => {}
         },
@@ -213,7 +270,11 @@ fn write_row(sink: &mut Sink, cols: &[ColumnInfo], r: &[Cell], o: &ExportOptions
                                 continue;
                             }
                         }
-                        let s = if s.len() > 32_000 { &s[..s.char_indices().nth(32_000).map(|x| x.0).unwrap_or(s.len())] } else { s.as_str() };
+                        let s = if s.len() > 32_000 {
+                            &s[..s.char_indices().nth(32_000).map(|x| x.0).unwrap_or(s.len())]
+                        } else {
+                            s.as_str()
+                        };
                         ws.write_string(*row, col, s)?;
                     }
                 }

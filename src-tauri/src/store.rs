@@ -1,6 +1,7 @@
 //! Persistencia local: conexiones, ajustes, espacio de trabajo e historial.
 //! Las contraseñas se guardan en el almacén de credenciales del sistema operativo.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -59,25 +60,65 @@ impl Store {
     }
 
     pub fn save_connections(&self, conns: &[ConnConfig]) -> Result<()> {
-        let clean: Vec<ConnConfig> = conns.iter().cloned().map(|mut c| {
-            c.password = None;
-            c
-        }).collect();
+        let clean: Vec<ConnConfig> = conns
+            .iter()
+            .cloned()
+            .map(|mut c| {
+                c.password = None;
+                c
+            })
+            .collect();
         self.write_atomic("connections.json", &serde_json::to_string_pretty(&clean)?)
     }
 
+    fn secrets(&self) -> HashMap<String, String> {
+        self.read("secrets.json")
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_secrets(&self, map: &HashMap<String, String>) -> Result<()> {
+        self.write_atomic("secrets.json", &serde_json::to_string(map)?)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                fs::set_permissions(self.path("secrets.json"), fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+
+    /// El almacén del sistema es la vía principal. Si no hay servicio de secretos
+    /// (sesión sin llavero), se guarda en `secrets.json` con permisos restringidos.
     pub fn get_password(&self, id: &str) -> Option<String> {
-        keyring::Entry::new(KEYRING_SERVICE, id).ok()?.get_password().ok()
+        if let Ok(p) = keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.get_password()) {
+            return Some(p);
+        }
+        self.secrets().get(id).cloned()
     }
 
     pub fn set_password(&self, id: &str, pwd: &str) -> Result<()> {
-        keyring::Entry::new(KEYRING_SERVICE, id)?.set_password(pwd)?;
-        Ok(())
+        if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, id) {
+            if e.set_password(pwd).is_ok() {
+                let mut map = self.secrets();
+                if map.remove(id).is_some() {
+                    let _ = self.write_secrets(&map);
+                }
+                return Ok(());
+            }
+        }
+        let mut map = self.secrets();
+        map.insert(id.to_string(), pwd.to_string());
+        self.write_secrets(&map)
     }
 
     pub fn delete_password(&self, id: &str) {
         if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, id) {
             let _ = e.delete_credential();
+        }
+        let mut map = self.secrets();
+        if map.remove(id).is_some() {
+            let _ = self.write_secrets(&map);
         }
     }
 
@@ -89,7 +130,10 @@ impl Store {
 
     pub fn add_history(&self, e: &HistoryEntry) -> Result<()> {
         let path = self.path("history.jsonl");
-        let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
         writeln!(f, "{}", serde_json::to_string(e)?)?;
         // Compactación ocasional para mantener el fichero acotado.
         if f.metadata().map(|m| m.len()).unwrap_or(0) > 8 * 1024 * 1024 {
@@ -97,14 +141,20 @@ impl Store {
             let mut all = self.history_all();
             let skip = all.len().saturating_sub(HISTORY_MAX);
             all.drain(..skip);
-            let body: String = all.iter().filter_map(|e| serde_json::to_string(e).ok()).map(|s| s + "\n").collect();
+            let body: String = all
+                .iter()
+                .filter_map(|e| serde_json::to_string(e).ok())
+                .map(|s| s + "\n")
+                .collect();
             self.write_atomic("history.jsonl", &body)?;
         }
         Ok(())
     }
 
     fn history_all(&self) -> Vec<HistoryEntry> {
-        let Ok(f) = fs::File::open(self.path("history.jsonl")) else { return vec![] };
+        let Ok(f) = fs::File::open(self.path("history.jsonl")) else {
+            return vec![];
+        };
         std::io::BufReader::new(f)
             .lines()
             .map_while(|l| l.ok())
@@ -117,7 +167,11 @@ impl Store {
         let mut all = self.history_all();
         all.reverse();
         all.into_iter()
-            .filter(|e| f.is_empty() || e.sql.to_lowercase().contains(&f) || e.conn_name.to_lowercase().contains(&f))
+            .filter(|e| {
+                f.is_empty()
+                    || e.sql.to_lowercase().contains(&f)
+                    || e.conn_name.to_lowercase().contains(&f)
+            })
             .take(limit)
             .collect()
     }

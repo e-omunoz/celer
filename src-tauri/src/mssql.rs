@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Result};
 use futures_util::TryStreamExt;
 use parking_lot::Mutex;
-use tiberius::{AuthMethod, Client, ColumnData, ColumnType, Config, EncryptionLevel, FromSql, QueryItem, SqlBrowser};
+use tiberius::{
+    AuthMethod, Client, ColumnData, ColumnType, Config, EncryptionLevel, FromSql, QueryItem,
+    SqlBrowser,
+};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
@@ -45,7 +48,9 @@ pub struct MssqlDriver {
 
 impl MssqlDriver {
     pub fn connect(cfg: ConnConfig) -> Result<MssqlDriver> {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
         let client = rt.block_on(connect_client(&cfg, None))?;
         let mut d = MssqlDriver {
             database: cfg.database.clone(),
@@ -68,10 +73,19 @@ impl MssqlDriver {
         if let Some(c) = self.client.take() {
             return Ok(c);
         }
-        let db = if self.database.is_empty() { None } else { Some(self.database.clone()) };
+        let db = if self.database.is_empty() {
+            None
+        } else {
+            Some(self.database.clone())
+        };
         let mut c = self.rt.block_on(connect_client(&self.cfg, db))?;
         if !self.autocommit {
-            self.rt.block_on(async { c.simple_query("SET IMPLICIT_TRANSACTIONS ON").await?.into_results().await })?;
+            self.rt.block_on(async {
+                c.simple_query("SET IMPLICIT_TRANSACTIONS ON")
+                    .await?
+                    .into_results()
+                    .await
+            })?;
         }
         self.in_tx = false;
         Ok(c)
@@ -88,7 +102,11 @@ impl MssqlDriver {
             let c = run_query(client, sql, dml, tx, token).await;
             let _ = dtx.send(c);
         });
-        self.cursor = Some(Cursor { rx, done: drx, peeked: None });
+        self.cursor = Some(Cursor {
+            rx,
+            done: drx,
+            peeked: None,
+        });
         Ok(())
     }
 
@@ -125,7 +143,12 @@ impl MssqlDriver {
                     if let Some(rs) = current.take() {
                         results.push(rs);
                     }
-                    current = Some(ResultSet { columns: cols, rows: Vec::new(), has_more: false, rows_affected: None });
+                    current = Some(ResultSet {
+                        columns: cols,
+                        rows: Vec::new(),
+                        has_more: false,
+                        rows_affected: None,
+                    });
                 }
                 Some(Item::Row(r)) => {
                     let rs = current.get_or_insert_with(|| ResultSet {
@@ -224,12 +247,21 @@ impl MssqlDriver {
                 lines.push(format!("    {} AS {}", qi(&name), cell_str(&r[10])));
                 continue;
             }
-            let ty = mssql_type(&cell_str(&r[1]), cell_i64(&r[2]), cell_i64(&r[3]), cell_i64(&r[4]));
+            let ty = mssql_type(
+                &cell_str(&r[1]),
+                cell_i64(&r[2]),
+                cell_i64(&r[3]),
+                cell_i64(&r[4]),
+            );
             let mut l = format!("    {} {}", qi(&name), ty);
             if cell_i64(&r[6]) == 1 {
                 l.push_str(" IDENTITY(1,1)");
             }
-            l.push_str(if cell_i64(&r[5]) == 1 { " NULL" } else { " NOT NULL" });
+            l.push_str(if cell_i64(&r[5]) == 1 {
+                " NULL"
+            } else {
+                " NOT NULL"
+            });
             if let Cell::Text(d) = &r[8] {
                 l.push_str(&format!(" DEFAULT {d}"));
             }
@@ -247,8 +279,17 @@ impl MssqlDriver {
              FROM {db}.sys.indexes i WHERE i.object_id = {oid} AND i.type > 0 ORDER BY i.is_primary_key DESC, i.name"
         ))?;
         for r in idx.iter().filter(|r| cell_i64(&r[1]) == 1) {
-            let clustered = if cell_str(&r[3]).starts_with("CLUSTERED") { " CLUSTERED" } else { " NONCLUSTERED" };
-            lines.push(format!("    CONSTRAINT {} PRIMARY KEY{} ({})", qi(&cell_str(&r[0])), clustered, cell_str(&r[4])));
+            let clustered = if cell_str(&r[3]).starts_with("CLUSTERED") {
+                " CLUSTERED"
+            } else {
+                " NONCLUSTERED"
+            };
+            lines.push(format!(
+                "    CONSTRAINT {} PRIMARY KEY{} ({})",
+                qi(&cell_str(&r[0])),
+                clustered,
+                cell_str(&r[4])
+            ));
         }
         let fks = self.query_rows(&format!(
             "SELECT fk.name, \
@@ -277,10 +318,18 @@ impl MssqlDriver {
             }
             lines.push(l);
         }
-        let mut out = format!("CREATE TABLE {} (\n{}\n);\n", self.qualified_name(o), lines.join(",\n"));
+        let mut out = format!(
+            "CREATE TABLE {} (\n{}\n);\n",
+            self.qualified_name(o),
+            lines.join(",\n")
+        );
         for r in idx.iter().filter(|r| cell_i64(&r[1]) == 0) {
             let unique = if cell_i64(&r[2]) == 1 { "UNIQUE " } else { "" };
-            let kind = if cell_str(&r[3]).starts_with("CLUSTERED") { "CLUSTERED " } else { "NONCLUSTERED " };
+            let kind = if cell_str(&r[3]).starts_with("CLUSTERED") {
+                "CLUSTERED "
+            } else {
+                "NONCLUSTERED "
+            };
             out.push_str(&format!(
                 "\nCREATE {unique}{kind}INDEX {} ON {} ({});",
                 qi(&cell_str(&r[0])),
@@ -294,7 +343,11 @@ impl MssqlDriver {
 
 async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cli> {
     let mut config = Config::new();
-    let host = if cfg.host.trim().is_empty() { "localhost" } else { cfg.host.trim() };
+    let host = if cfg.host.trim().is_empty() {
+        "localhost"
+    } else {
+        cfg.host.trim()
+    };
     // Se admite la notación "servidor\instancia" en el campo del host.
     let (host, inst_from_host) = match host.split_once('\\') {
         Some((h, i)) => (h.to_string(), i.to_string()),
@@ -304,7 +357,11 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
     if let Some(p) = cfg.port {
         config.port(p);
     }
-    let instance = if cfg.instance.trim().is_empty() { inst_from_host } else { cfg.instance.trim().to_string() };
+    let instance = if cfg.instance.trim().is_empty() {
+        inst_from_host
+    } else {
+        cfg.instance.trim().to_string()
+    };
     if !instance.is_empty() {
         config.instance_name(&instance);
     }
@@ -319,7 +376,10 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
         #[cfg(not(windows))]
         bail!("La autenticación integrada solo está disponible en Windows");
     } else {
-        config.authentication(AuthMethod::sql_server(&cfg.user, cfg.password.clone().unwrap_or_default()));
+        config.authentication(AuthMethod::sql_server(
+            &cfg.user,
+            cfg.password.clone().unwrap_or_default(),
+        ));
     }
     config.encryption(match cfg.encryption.as_str() {
         "off" => EncryptionLevel::NotSupported,
@@ -358,7 +418,13 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
 
 fn friendly_error(e: &tiberius::error::Error) -> String {
     match e {
-        tiberius::error::Error::Server(t) => format!("Msg {}, nivel {}, línea {}: {}", t.code(), t.class(), t.line(), t.message()),
+        tiberius::error::Error::Server(t) => format!(
+            "Msg {}, nivel {}, línea {}: {}",
+            t.code(),
+            t.class(),
+            t.line(),
+            t.message()
+        ),
         other => other.to_string(),
     }
 }
@@ -373,7 +439,13 @@ enum Outcome {
     Broken,
 }
 
-async fn run_query(mut client: Cli, sql: String, dml: bool, tx: mpsc::Sender<Item>, token: CancellationToken) -> Option<Cli> {
+async fn run_query(
+    mut client: Cli,
+    sql: String,
+    dml: bool,
+    tx: mpsc::Sender<Item>,
+    token: CancellationToken,
+) -> Option<Cli> {
     let outcome = {
         let work = stream_query(&mut client, sql, dml, &tx);
         tokio::select! {
@@ -390,7 +462,12 @@ async fn run_query(mut client: Cli, sql: String, dml: bool, tx: mpsc::Sender<Ite
     }
 }
 
-async fn stream_query(client: &mut Cli, sql: String, dml: bool, tx: &mpsc::Sender<Item>) -> Outcome {
+async fn stream_query(
+    client: &mut Cli,
+    sql: String,
+    dml: bool,
+    tx: &mpsc::Sender<Item>,
+) -> Outcome {
     if dml {
         return match client.execute(sql, &[]).await {
             Ok(r) => {
@@ -400,7 +477,11 @@ async fn stream_query(client: &mut Cli, sql: String, dml: bool, tx: &mpsc::Sende
             Err(e) => {
                 let fatal = is_fatal(&e);
                 let _ = tx.send(Item::Error(friendly_error(&e))).await;
-                if fatal { Outcome::Broken } else { Outcome::Ok }
+                if fatal {
+                    Outcome::Broken
+                } else {
+                    Outcome::Ok
+                }
             }
         };
     }
@@ -474,7 +555,11 @@ fn column_info(c: &tiberius::Column) -> ColumnInfo {
         ColumnType::Udt => ("udt", ColKind::Other),
         ColumnType::SSVariant => ("sql_variant", ColKind::Other),
     };
-    ColumnInfo { name: c.name().to_string(), type_name: t.to_string(), kind: k }
+    ColumnInfo {
+        name: c.name().to_string(),
+        type_name: t.to_string(),
+        kind: k,
+    }
 }
 
 fn fmt_dt(v: Option<chrono::NaiveDateTime>) -> Cell {
@@ -494,10 +579,16 @@ fn convert(cd: ColumnData<'static>) -> Cell {
         ColumnData::F64(v) => v.map(Cell::num).unwrap_or(Cell::Null),
         ColumnData::Bit(v) => v.map(Cell::Bool).unwrap_or(Cell::Null),
         ColumnData::String(v) => v.map(|s| Cell::Text(s.into_owned())).unwrap_or(Cell::Null),
-        ColumnData::Guid(v) => v.map(|g| Cell::Text(g.to_string().to_uppercase())).unwrap_or(Cell::Null),
-        ColumnData::Binary(v) => v.map(|b| Cell::hex(&b, BINARY_PREVIEW)).unwrap_or(Cell::Null),
+        ColumnData::Guid(v) => v
+            .map(|g| Cell::Text(g.to_string().to_uppercase()))
+            .unwrap_or(Cell::Null),
+        ColumnData::Binary(v) => v
+            .map(|b| Cell::hex(&b, BINARY_PREVIEW))
+            .unwrap_or(Cell::Null),
         ColumnData::Numeric(v) => v.map(|n| Cell::Text(n.to_string())).unwrap_or(Cell::Null),
-        ColumnData::Xml(v) => v.map(|x| Cell::Text(x.into_owned().into_string())).unwrap_or(Cell::Null),
+        ColumnData::Xml(v) => v
+            .map(|x| Cell::Text(x.into_owned().into_string()))
+            .unwrap_or(Cell::Null),
         ColumnData::Date(_) => match chrono::NaiveDate::from_sql(&cd) {
             Ok(Some(d)) => Cell::Text(d.format("%Y-%m-%d").to_string()),
             _ => Cell::Null,
@@ -506,10 +597,12 @@ fn convert(cd: ColumnData<'static>) -> Cell {
             Ok(Some(t)) => Cell::Text(t.format("%H:%M:%S%.f").to_string()),
             _ => Cell::Null,
         },
-        ColumnData::DateTimeOffset(_) => match chrono::DateTime::<chrono::FixedOffset>::from_sql(&cd) {
-            Ok(Some(d)) => Cell::Text(d.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()),
-            _ => Cell::Null,
-        },
+        ColumnData::DateTimeOffset(_) => {
+            match chrono::DateTime::<chrono::FixedOffset>::from_sql(&cd) {
+                Ok(Some(d)) => Cell::Text(d.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()),
+                _ => Cell::Null,
+            }
+        }
         ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_) => {
             fmt_dt(chrono::NaiveDateTime::from_sql(&cd).ok().flatten())
         }
@@ -553,10 +646,18 @@ fn ql(s: &str) -> String {
 fn mssql_type(name: &str, max_len: i64, precision: i64, scale: i64) -> String {
     match name {
         "varchar" | "char" | "varbinary" | "binary" => {
-            if max_len == -1 { format!("{name}(max)") } else { format!("{name}({max_len})") }
+            if max_len == -1 {
+                format!("{name}(max)")
+            } else {
+                format!("{name}({max_len})")
+            }
         }
         "nvarchar" | "nchar" => {
-            if max_len == -1 { format!("{name}(max)") } else { format!("{name}({})", max_len / 2) }
+            if max_len == -1 {
+                format!("{name}(max)")
+            } else {
+                format!("{name}({})", max_len / 2)
+            }
         }
         "decimal" | "numeric" => format!("{name}({precision},{scale})"),
         "datetime2" | "time" | "datetimeoffset" => format!("{name}({scale})"),
@@ -569,17 +670,16 @@ pub fn kind_from_type(t: &str) -> ColKind {
     let base = t.split('(').next().unwrap_or("").trim();
     match base {
         "bit" | "boolean" => ColKind::Bool,
-        "tinyint" | "smallint" | "int" | "integer" | "bigint" | "int8" | "serial" | "serial8" | "bigserial" | "decimal"
-        | "numeric" | "money" | "smallmoney" | "float" | "real" | "smallfloat" | "double" | "double precision" => {
-            ColKind::Number
+        "tinyint" | "smallint" | "int" | "integer" | "bigint" | "int8" | "serial" | "serial8"
+        | "bigserial" | "decimal" | "numeric" | "money" | "smallmoney" | "float" | "real"
+        | "smallfloat" | "double" | "double precision" => ColKind::Number,
+        "date" | "datetime" | "datetime2" | "smalldatetime" | "time" | "datetimeoffset"
+        | "timestamp" | "interval" => ColKind::Date,
+        "binary" | "varbinary" | "image" | "byte" | "blob" | "rowversion" | "timestamp_" => {
+            ColKind::Binary
         }
-        "date" | "datetime" | "datetime2" | "smalldatetime" | "time" | "datetimeoffset" | "timestamp" | "interval" => {
-            ColKind::Date
-        }
-        "binary" | "varbinary" | "image" | "byte" | "blob" | "rowversion" | "timestamp_" => ColKind::Binary,
-        "char" | "varchar" | "nchar" | "nvarchar" | "text" | "ntext" | "xml" | "lvarchar" | "clob" | "sysname" => {
-            ColKind::Text
-        }
+        "char" | "varchar" | "nchar" | "nvarchar" | "text" | "ntext" | "xml" | "lvarchar"
+        | "clob" | "sysname" => ColKind::Text,
         _ if base.starts_with("datetime") || base.starts_with("interval") => ColKind::Date,
         _ => ColKind::Other,
     }
@@ -672,7 +772,10 @@ impl Driver for MssqlDriver {
             drop(cur.rx);
             // El hilo de lectura vacía el resto del flujo. Si tarda, se corta la conexión.
             let token = self.cancel.lock().clone();
-            match self.rt.block_on(tokio::time::timeout(Duration::from_secs(3), cur.done)) {
+            match self
+                .rt
+                .block_on(tokio::time::timeout(Duration::from_secs(3), cur.done))
+            {
                 Ok(Ok(c)) => self.client = c,
                 _ => {
                     if let Some(t) = token {
@@ -724,7 +827,11 @@ impl Driver for MssqlDriver {
                     .iter()
                     .map(|r| {
                         let n = cell_str(&r[0]);
-                        let detail = if cell_i64(&r[1]) == 1 { Some("sistema".to_string()) } else { None };
+                        let detail = if cell_i64(&r[1]) == 1 {
+                            Some("sistema".to_string())
+                        } else {
+                            None
+                        };
                         MetaNode::branch(n.clone(), "database", vec![n]).with_detail(detail)
                     })
                     .collect())
@@ -755,7 +862,13 @@ impl Driver for MssqlDriver {
                 ("Secuencias", "sequences"),
             ]
             .iter()
-            .map(|(label, key)| MetaNode::branch(*label, "folder", vec![db.to_string(), schema.to_string(), key.to_string()]))
+            .map(|(label, key)| {
+                MetaNode::branch(
+                    *label,
+                    "folder",
+                    vec![db.to_string(), schema.to_string(), key.to_string()],
+                )
+            })
             .collect()),
             [db, schema, folder] => {
                 let d = qi(db);
@@ -812,7 +925,11 @@ impl Driver for MssqlDriver {
                         };
                         let obj = ObjectRef::new(db, schema, &n, kind);
                         let node = if branch {
-                            MetaNode::branch(n.clone(), kind, vec![db.to_string(), schema.to_string(), folder.to_string(), n])
+                            MetaNode::branch(
+                                n.clone(),
+                                kind,
+                                vec![db.to_string(), schema.to_string(), folder.to_string(), n],
+                            )
                         } else {
                             MetaNode::leaf(n, kind, None)
                         };
@@ -827,7 +944,12 @@ impl Driver for MssqlDriver {
                 let mut nodes: Vec<MetaNode> = cols
                     .iter()
                     .map(|r| {
-                        let ty = mssql_type(&cell_str(&r[1]), cell_i64(&r[2]), cell_i64(&r[3]), cell_i64(&r[4]));
+                        let ty = mssql_type(
+                            &cell_str(&r[1]),
+                            cell_i64(&r[2]),
+                            cell_i64(&r[3]),
+                            cell_i64(&r[4]),
+                        );
                         let mut detail = ty;
                         if cell_i64(&r[7]) == 1 {
                             detail.push_str(" · PK");
@@ -838,13 +960,26 @@ impl Driver for MssqlDriver {
                         if cell_i64(&r[5]) == 0 {
                             detail.push_str(" · not null");
                         }
-                        let k = if cell_i64(&r[7]) == 1 { "pkcolumn" } else { "column" };
+                        let k = if cell_i64(&r[7]) == 1 {
+                            "pkcolumn"
+                        } else {
+                            "column"
+                        };
                         MetaNode::leaf(cell_str(&r[0]), k, Some(detail))
                     })
                     .collect();
                 if kind == "table" {
-                    let base = vec![db.to_string(), schema.to_string(), folder.to_string(), name.to_string()];
-                    for (label, key) in [("Índices", "indexes"), ("Claves foráneas", "fks"), ("Triggers", "triggers")] {
+                    let base = vec![
+                        db.to_string(),
+                        schema.to_string(),
+                        folder.to_string(),
+                        name.to_string(),
+                    ];
+                    for (label, key) in [
+                        ("Índices", "indexes"),
+                        ("Claves foráneas", "fks"),
+                        ("Triggers", "triggers"),
+                    ] {
                         let mut p = base.clone();
                         p.push(key.to_string());
                         nodes.push(MetaNode::branch(label, "folder", p));
@@ -888,7 +1023,13 @@ impl Driver for MssqlDriver {
                         ))?;
                         Ok(rows
                             .iter()
-                            .map(|r| MetaNode::leaf(cell_str(&r[0]), "key", Some(format!("→ {}", cell_str(&r[1])))))
+                            .map(|r| {
+                                MetaNode::leaf(
+                                    cell_str(&r[0]),
+                                    "key",
+                                    Some(format!("→ {}", cell_str(&r[1]))),
+                                )
+                            })
                             .collect())
                     }
                     "triggers" => {
@@ -897,7 +1038,8 @@ impl Driver for MssqlDriver {
                             .iter()
                             .map(|r| {
                                 let n = cell_str(&r[0]);
-                                MetaNode::leaf(n.clone(), "trigger", None).with_obj(ObjectRef::new(db, schema, &n, "trigger"))
+                                MetaNode::leaf(n.clone(), "trigger", None)
+                                    .with_obj(ObjectRef::new(db, schema, &n, "trigger"))
                             })
                             .collect())
                     }
@@ -940,7 +1082,11 @@ impl Driver for MssqlDriver {
                     self.obj_id(obj)
                 ))?;
                 let base = rows.first().map(|r| cell_str(&r[0])).unwrap_or_default();
-                Ok(format!("CREATE SYNONYM {} FOR {};", self.qualified_name(obj), base))
+                Ok(format!(
+                    "CREATE SYNONYM {} FOR {};",
+                    self.qualified_name(obj),
+                    base
+                ))
             }
             "sequence" => {
                 let rows = self.query_rows(&format!(
@@ -950,7 +1096,9 @@ impl Driver for MssqlDriver {
                     qi(&obj.database),
                     self.obj_id(obj)
                 ))?;
-                let r = rows.first().ok_or_else(|| anyhow!("Secuencia no encontrada"))?;
+                let r = rows
+                    .first()
+                    .ok_or_else(|| anyhow!("Secuencia no encontrada"))?;
                 Ok(format!(
                     "CREATE SEQUENCE {} AS {}\n    START WITH {}\n    INCREMENT BY {}\n    MINVALUE {}\n    MAXVALUE {}\n    {};\n-- valor actual: {}",
                     self.qualified_name(obj),
@@ -989,14 +1137,20 @@ impl Driver for MssqlDriver {
             let (s, t, c) = (cell_str(&r[0]), cell_str(&r[1]), cell_str(&r[2]));
             match out.tables.last_mut() {
                 Some(last) if last.schema == s && last.name == t => last.columns.push(c),
-                _ => out.tables.push(CompletionTable { schema: s, name: t, columns: vec![c] }),
+                _ => out.tables.push(CompletionTable {
+                    schema: s,
+                    name: t,
+                    columns: vec![c],
+                }),
             }
         }
         Ok(out)
     }
 
     fn databases(&mut self) -> Result<Vec<String>> {
-        let rows = self.query_rows("SELECT name FROM sys.databases WHERE HAS_DBACCESS(name) = 1 ORDER BY name")?;
+        let rows = self.query_rows(
+            "SELECT name FROM sys.databases WHERE HAS_DBACCESS(name) = 1 ORDER BY name",
+        )?;
         Ok(rows.iter().map(|r| cell_str(&r[0])).collect())
     }
 
@@ -1034,8 +1188,18 @@ impl Driver for MssqlDriver {
             "SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(50)), CAST(SERVERPROPERTY('Edition') AS nvarchar(100)), @@VERSION",
         )?;
         let r = rows.first().ok_or_else(|| anyhow!("sin datos"))?;
-        let first = cell_str(&r[2]).lines().next().unwrap_or("").trim().to_string();
-        Ok(format!("{} — {} ({})", first, cell_str(&r[1]), cell_str(&r[0])))
+        let first = cell_str(&r[2])
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        Ok(format!(
+            "{} — {} ({})",
+            first,
+            cell_str(&r[1]),
+            cell_str(&r[0])
+        ))
     }
 
     fn canceller(&self) -> Canceller {

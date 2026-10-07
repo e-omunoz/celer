@@ -61,17 +61,18 @@ impl SessionHandle {
             .name(format!("celer-session-{conn_id}"))
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
-                let mut driver = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(connect)) {
-                    Ok(Ok(d)) => d,
-                    Ok(Err(e)) => {
-                        let _ = ready_tx.send(Err(e));
-                        return;
-                    }
-                    Err(_) => {
-                        let _ = ready_tx.send(Err(anyhow!("Error interno al conectar")));
-                        return;
-                    }
-                };
+                let mut driver =
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(connect)) {
+                        Ok(Ok(d)) => d,
+                        Ok(Err(e)) => {
+                            let _ = ready_tx.send(Err(e));
+                            return;
+                        }
+                        Err(_) => {
+                            let _ = ready_tx.send(Err(anyhow!("Error interno al conectar")));
+                            return;
+                        }
+                    };
                 let _ = ready_tx.send(Ok(driver.canceller()));
                 while let Ok(job) = rx.recv() {
                     let d: &mut dyn Driver = driver.as_mut();
@@ -80,8 +81,14 @@ impl SessionHandle {
                 }
                 // Al cerrarse el canal se libera el driver (y la conexión) en este hilo.
             })?;
-        let canceller = ready_rx.await.map_err(|_| anyhow!("La sesión terminó inesperadamente"))??;
-        Ok(SessionHandle { tx, canceller, conn_id })
+        let canceller = ready_rx
+            .await
+            .map_err(|_| anyhow!("La sesión terminó inesperadamente"))??;
+        Ok(SessionHandle {
+            tx,
+            canceller,
+            conn_id,
+        })
     }
 
     /// Ejecuta `f` en el hilo de la sesión y devuelve su resultado.
@@ -94,10 +101,14 @@ impl SessionHandle {
         let job: Job = Box::new(move |d| {
             let _ = tx.send(f(d));
         });
-        self.tx.send(job).map_err(|_| anyhow!("La sesión está cerrada"))?;
+        self.tx
+            .send(job)
+            .map_err(|_| anyhow!("La sesión está cerrada"))?;
         match rx.await {
             Ok(r) => r,
-            Err(_) => Err(anyhow!("Error interno en la sesión (la operación se interrumpió)")),
+            Err(_) => Err(anyhow!(
+                "Error interno en la sesión (la operación se interrumpió)"
+            )),
         }
     }
 
@@ -128,7 +139,11 @@ impl Sessions {
     }
     pub fn remove_for_conn(&self, conn_id: &str) -> Vec<Arc<SessionHandle>> {
         let mut m = self.map.lock();
-        let ids: Vec<String> = m.iter().filter(|(_, h)| h.conn_id == conn_id).map(|(k, _)| k.clone()).collect();
+        let ids: Vec<String> = m
+            .iter()
+            .filter(|(_, h)| h.conn_id == conn_id)
+            .map(|(k, _)| k.clone())
+            .collect();
         ids.into_iter().filter_map(|k| m.remove(&k)).collect()
     }
 }
@@ -173,8 +188,24 @@ pub fn first_keyword(sql: &str) -> String {
 pub fn is_mutating(sql: &str) -> bool {
     matches!(
         first_keyword(sql).as_str(),
-        "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "TRUNCATE" | "CREATE" | "ALTER" | "DROP" | "GRANT" | "REVOKE"
-            | "EXEC" | "EXECUTE" | "CALL" | "RENAME" | "LOAD" | "UNLOAD" | "BULK" | "DENY"
+        "INSERT"
+            | "UPDATE"
+            | "DELETE"
+            | "MERGE"
+            | "TRUNCATE"
+            | "CREATE"
+            | "ALTER"
+            | "DROP"
+            | "GRANT"
+            | "REVOKE"
+            | "EXEC"
+            | "EXECUTE"
+            | "CALL"
+            | "RENAME"
+            | "LOAD"
+            | "UNLOAD"
+            | "BULK"
+            | "DENY"
     )
 }
 
