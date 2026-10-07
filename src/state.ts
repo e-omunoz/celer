@@ -1,7 +1,9 @@
 import { createSignal } from "solid-js";
-import { createStore, unwrap } from "solid-js/store";
+import { createStore } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
-import { formatSql, isMutating, needsProductionConfirm, sqlLiteral, statementAt } from "./sql";
+import { raw } from "./raw";
+import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
+import { formatSql, isMutating, needsProductionConfirm, sqlLiteral, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -80,6 +82,8 @@ export interface TableTab {
   keys: MetaNode[];
   loading: boolean;
   error: string;
+  /** Where the error points inside the user's WHERE text (null when it is elsewhere or unknown). */
+  errorAt: number | null;
   where: string;
   orderBy: string;
   filters: ColumnFilter[];
@@ -979,25 +983,74 @@ export async function fetchMore(tabId: string, n = state.settings.pageSize): Pro
   }
 }
 
-export async function fetchAll(tabId: string) {
-  const limit = 1_000_000;
-  for (let guard = 0; guard < 10_000; guard++) {
-    const tab = state.tabs[tabIndex(tabId)];
-    if (!tab) return;
-    const pending = tab.kind === "sql" ? tab.results.find((result) => result.hasMore) : tab.hasMore ? tab : null;
-    if (!pending) return;
-    const loaded = tab.kind === "sql" ? (pending as ResultSet).rows.length : tab.rows.length;
-    if (loaded >= limit) {
-      notify(`Se cargaron ${limit.toLocaleString()} filas; exporta para obtener el resto`, "warning");
-      return;
+/** The explorer's row estimate for a table ("~200000 filas"), to show real progress while loading it. */
+function estimatedRows(tab: TableTab): number | null {
+  const prefix = `${tab.connId}\u0000`;
+  for (const [key, entry] of Object.entries(state.tree)) {
+    if (!key.startsWith(prefix) || !entry?.nodes) continue;
+    for (const node of entry.nodes) {
+      if (node.name !== tab.obj.name || (node.kind !== "table" && node.kind !== "view")) continue;
+      if (tab.obj.schema && !node.path.includes(tab.obj.schema)) continue;
+      const match = /~?\s*([\d.,]+)\s*filas/.exec(node.detail ?? "");
+      const n = match ? Number(match[1].replace(/[.,]/g, "")) : NaN;
+      if (Number.isFinite(n) && n > 0) return n;
     }
-    // Large chunks: few IPC round trips and few array copies. Stop at the first failure.
-    if (!(await fetchMore(tabId, Math.min(50_000, Math.max(5_000, loaded))))) return;
+  }
+  return null;
+}
+
+/** Rows kept in memory by "Cargar todo"; beyond this, exporting streams to disk instead. */
+export const LOAD_ALL_LIMIT = 1_000_000;
+
+/**
+ * Loads every remaining row in large chunks behind the busy overlay. Cancel stops after the chunk in
+ * flight and keeps what was loaded; the UI stays responsive between chunks.
+ */
+export async function fetchAll(tabId: string) {
+  if (busy[tabId]) return;
+  let stop = false;
+  const first = state.tabs[tabIndex(tabId)];
+  // Exact count when known; otherwise the explorer's estimate (only without filters: they change the total).
+  const total =
+    first?.kind !== "table" ? null : first.totalCount ?? (!first.where.trim() && !first.filters.some((f) => f.enabled) ? estimatedRows(first) : null);
+  startBusy(tabId, "Cargando todas las filas", () => (stop = true), total);
+  const started = performance.now();
+  try {
+    for (let guard = 0; guard < 10_000 && !stop; guard++) {
+      const tab = state.tabs[tabIndex(tabId)];
+      if (!tab) return;
+      const pending = tab.kind === "sql" ? tab.results.find((result) => result.hasMore) : tab.hasMore ? tab : null;
+      if (!pending) break;
+      const loaded = tab.kind === "sql" ? (pending as ResultSet).rows.length : tab.rows.length;
+      updateBusy(tabId, { done: loaded });
+      if (loaded >= LOAD_ALL_LIMIT) {
+        notify(`Se han cargado ${LOAD_ALL_LIMIT.toLocaleString()} filas, el máximo en pantalla`, "warning", "Filtra para acotar o exporta el resultado completo: la exportación va directa a disco.");
+        break;
+      }
+      // Large chunks: few IPC round trips and few array copies. Stop at the first failure.
+      if (!(await fetchMore(tabId, Math.min(50_000, Math.max(5_000, loaded))))) break;
+      // Give the window a frame between chunks so it never looks frozen.
+      await nextPaint();
+    }
+  } finally {
+    const tab = state.tabs[tabIndex(tabId)];
+    const rows = !tab ? 0 : tab.kind === "sql" ? tab.results.reduce((sum, result) => sum + result.rows.length, 0) : tab.rows.length;
+    endBusy(tabId);
+    if (stop) notify(`Carga detenida con ${rows.toLocaleString()} filas`, "info", "Puedes seguir cargando más tarde con «Cargar todo».");
+    else if (rows >= 100_000 && performance.now() - started > 800) {
+      notify(
+        `${rows.toLocaleString()} filas en memoria`,
+        "info",
+        tab?.kind === "table"
+          ? "Ordenar y filtrar se hacen en el servidor; para análisis más grandes, exporta."
+          : "Ordenar por columna se hace en local y puede tardar un momento; para más, añade ORDER BY o exporta.",
+      );
+    }
   }
 }
 /** Appends without going through the store proxies (fast for 100k+ rows). */
 function concatRows(current: Cell[][], extra: Cell[][]): Cell[][] {
-  const base = unwrap(current);
+  const base = raw(current);
   const out = new Array<Cell[]>(base.length + extra.length);
   for (let i = 0; i < base.length; i++) out[i] = base[i];
   for (let i = 0; i < extra.length; i++) out[base.length + i] = extra[i];
@@ -1091,6 +1144,7 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
     keys: [],
     loading: true,
     error: "",
+    errorAt: null,
     where: "",
     orderBy: "",
     filters: [],
@@ -1111,7 +1165,8 @@ export async function reloadTable(tabId: string, full = false) {
   const index = tabIndex(tabId);
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "table") return;
-  patchTab(tabId, { loading: true, error: "", edits: {}, deleted: [], inserts: [] });
+  patchTab(tabId, { loading: true, error: "", errorAt: null, edits: {}, deleted: [], inserts: [] });
+  let select = "";
   try {
     // After a disconnect the tab has no session: open a new one (connecting first if needed).
     if (!tab.sessionId) {
@@ -1140,13 +1195,21 @@ export async function reloadTable(tabId: string, full = false) {
       patchTab(tabId, { columnsMeta, quoted, qualified: sqlInfo.qualified, baseSelect: sqlInfo.select, ddl, indexes, keys });
       current = state.tabs[tabIndex(tabId)] as TableTab;
     }
-    let select = current.baseSelect;
+    select = current.baseSelect;
     const where = tableWhere(current);
     if (where) select += ` WHERE ${where}`;
     const order = tableOrderBy(current);
     if (order) select += ` ORDER BY ${order}`;
     if (current.totalCount !== null) patchTab(tabId, { totalCount: null });
-    const output = await api().execute(sid, select, state.settings.pageSize);
+    // Slow filters or sorts on big tables: the overlay (after a short delay) offers to cancel on the server.
+    let cancelled = false;
+    startBusy(tabId, where || order ? "Filtrando y ordenando en el servidor" : "Consultando el servidor", () => {
+      cancelled = true;
+      void api().cancel(sid).catch(() => {});
+    });
+    const output = await api().execute(sid, select, state.settings.pageSize).catch((err) => {
+      throw cancelled ? new Error("Consulta cancelada. La tabla muestra los datos anteriores.") : err;
+    }).finally(() => endBusy(tabId));
     const result = output.results.find((item) => item.columns.length) ?? { columns: [], rows: [], hasMore: false, rowsAffected: null };
     if (tabIndex(tabId) < 0) return;
     patchTab(tabId, {
@@ -1157,9 +1220,13 @@ export async function reloadTable(tabId: string, full = false) {
       hasMore: result.hasMore,
     });
   } catch (err) {
-    const message = errorText(err);
+    let message = errorText(err);
+    // The engine's position counts over the generated SELECT: translate it to the WHERE the user typed.
+    const typed = (state.tabs[tabIndex(tabId)] as TableTab | undefined)?.where.trim() ?? "";
+    const errorAt = select ? wherePosition(message, select, typed) : null;
+    if (errorAt !== null) message = message.replace(/Posici[oó]n:\s*l[ií]nea\s+\d+,\s*columna\s+\d+/i, `En tu WHERE, carácter ${errorAt + 1}`);
     // A session closed behind our back (disconnect, server restart): drop it so Reintentar reopens one.
-    patchTab(tabId, { loading: false, error: message, ...(/sesi[oó]n (no encontrada|cerrada)/i.test(message) ? { sessionId: "" } : {}) });
+    patchTab(tabId, { loading: false, error: message, errorAt, ...(/sesi[oó]n (no encontrada|cerrada)/i.test(message) ? { sessionId: "" } : {}) });
   }
 }
 
@@ -1328,7 +1395,7 @@ export function tableDirty(tab: TableTab) {
 }
 
 export function displayRows(tab: TableTab): Cell[][] {
-  const base = unwrap(tab.rows);
+  const base = raw(tab.rows);
   const editKeys = Object.keys(tab.edits);
   if (!editKeys.length && !tab.inserts.length) return base;
   // Copy only the rows that have edits; the rest are shared with the loaded data (fast with 200k rows).
@@ -1340,7 +1407,7 @@ export function displayRows(tab: TableTab): Cell[][] {
     if (out[row] === base[row]) out[row] = base[row].slice();
     out[row][Number(colText)] = tab.edits[key];
   }
-  for (const insert of unwrap(tab.inserts)) out.push(insert);
+  for (const insert of raw(tab.inserts)) out.push(insert);
   return out;
 }
 export function editCell(tabId: string, row: number, col: number, value: string | null) {

@@ -10,6 +10,7 @@ import {
   Filter,
   FolderOpen,
   Gauge,
+  Lightbulb,
   Minus,
   PanelRight,
   Play,
@@ -23,10 +24,10 @@ import {
   Upload,
   X,
 } from "lucide-solid";
-import { createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
-import { cellText, isNullCell } from "../sql";
+import { cellText, isNullCell, whereHints } from "../sql";
 import {
   activeSql,
   canEdit,
@@ -420,6 +421,7 @@ function SqlPane(props: { tab: SqlTab }) {
               columns={result()!.columns}
               rows={result()!.rows}
               resetKey={`${props.tab.runId}:${props.tab.activeResult}`}
+              busyKey={props.tab.id}
               hasMore={result()!.hasMore}
               loading={props.tab.running}
               dialect={kindOf(props.tab.connId)}
@@ -487,6 +489,28 @@ function TablePane(props: { tab: TableTab }) {
   const [where, setWhere] = createSignal(props.tab.where);
   const [orderBy, setOrderBy] = createSignal(props.tab.orderBy);
   const apply = () => setTableFilter(props.tab.id, where(), orderBy());
+  let whereInput: HTMLInputElement | undefined;
+  // Checked while typing: "click" on engines where double quotes name columns, LIKE without wildcards.
+  const hints = createMemo(() => whereHints(where(), props.tab.columnsMeta.map((col) => col.name), kindOf(props.tab.connId)));
+  const useFix = (fixed: string, run = false) => {
+    setWhere(fixed);
+    if (run || props.tab.where.trim()) apply();
+    else whereInput?.focus();
+  };
+  // When the engine's error points inside the WHERE, select that spot in the box.
+  createEffect(() => {
+    const at = props.tab.errorAt;
+    if (at === null || !whereInput) return;
+    const text = whereInput.value;
+    let from = at;
+    let to = at;
+    while (from > 0 && /[\w"'$]/.test(text[from - 1])) from--;
+    while (to < text.length && /[\w"'$]/.test(text[to])) to++;
+    queueMicrotask(() => {
+      whereInput?.focus();
+      whereInput?.setSelectionRange(from, Math.max(to, from + 1));
+    });
+  });
   let gridApi: GridApi | undefined;
   const [draft, setDraft] = createSignal<FilterDraft | null>(null);
   const openFilter = (filter: ColumnFilter, el?: HTMLElement) => {
@@ -522,7 +546,18 @@ function TablePane(props: { tab: TableTab }) {
       <Show when={props.tab.error}>
         <div class="banner error">
           <CircleAlert size={15} />
-          <span>{props.tab.error}</span>
+          <span class="banner-text">
+            {props.tab.error}
+            <Show when={hints().find((hint) => hint.kind === "dquote")}>
+              {(hint) => <small class="banner-hint">{hint().message}</small>}
+            </Show>
+            <Show when={props.tab.rows.length}>
+              <small class="banner-hint muted">La tabla muestra los datos de la consulta anterior.</small>
+            </Show>
+          </span>
+          <Show when={hints().find((hint) => hint.kind === "dquote")}>
+            {(hint) => <button type="button" class="btn tiny primary" onClick={() => useFix(hint().fixed, true)}>Corregir y reintentar</button>}
+          </Show>
           <button type="button" class="btn tiny" onClick={() => void reloadTable(props.tab.id, true)}>Reintentar</button>
         </div>
       </Show>
@@ -543,9 +578,10 @@ function TablePane(props: { tab: TableTab }) {
             <button type="button" class="tb-btn filter" classList={{ on: props.tab.filters.some((item) => item.enabled) }} title="Añadir un filtro por columna" disabled={!props.tab.columnsMeta.length} onClick={(event) => openFilter(newFilter(props.tab), event.currentTarget)}>
               <Filter size={13} /> <span>Filtro{props.tab.filters.length ? ` (${props.tab.filters.filter((item) => item.enabled).length})` : ""}</span>
             </button>
-            <div class="filter-field">
+            <div class="filter-field" classList={{ warn: hints().length > 0, err: props.tab.errorAt !== null }}>
               <span>WHERE</span>
               <input
+                ref={whereInput}
                 value={where()}
                 placeholder="id > 100 AND estado = 'ok'"
                 spellcheck={false}
@@ -580,6 +616,19 @@ function TablePane(props: { tab: TableTab }) {
             <button type="button" class="tb-icon" title="Exportar con los filtros actuales…" disabled={!props.tab.baseSelect} onClick={() => startTableExport(props.tab.id)}><Download size={15} /></button>
             <button type="button" class="tb-icon" title="Panel de valor / registro" classList={{ on: state.inspectorOpen && state.inspectorMode !== "history" }} onClick={() => toggleInspector("record")}><PanelRight size={15} /></button>
           </div>
+          <Show when={hints().length && !props.tab.error}>
+            <div class="where-hints">
+              <For each={hints()}>
+                {(hint) => (
+                  <div class="where-hint" classList={{ info: hint.kind === "like" }}>
+                    <Lightbulb size={13} />
+                    <span>{hint.message}</span>
+                    <button type="button" class="btn tiny" onClick={() => useFix(hint.fixed)}>{hint.fixLabel}</button>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
           <FilterChips tab={props.tab} onEdit={(filter, el) => openFilter(filter, el)} onAdd={(el) => openFilter(newFilter(props.tab), el)} />
           <Show when={draft()}>{(d) => <FilterEditor tab={props.tab} draft={d()} onClose={() => setDraft(null)} />}</Show>
           <Show when={props.tab.loading && !props.tab.rows.length}><div class="progress-bar" /></Show>
@@ -587,6 +636,7 @@ function TablePane(props: { tab: TableTab }) {
             columns={props.tab.gridCols}
             rows={rows()}
             resetKey={props.tab.gridCols}
+            busyKey={props.tab.id}
             pkCols={pkCols()}
             deleted={props.tab.deleted}
             edits={props.tab.edits}

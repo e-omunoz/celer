@@ -132,6 +132,114 @@ export function needsProductionConfirm(sql: string, dialect?: string): boolean {
   });
 }
 
+export interface WhereHint {
+  kind: "dquote" | "like";
+  /** Span in the WHERE text the hint is about. */
+  from: number;
+  to: number;
+  message: string;
+  /** Label of the quick fix and the WHERE text after applying it. */
+  fixLabel: string;
+  fixed: string;
+}
+
+/** Engines where "…" names a column (SQL standard). MySQL and SQLite accept "…" as text instead. */
+const DQUOTE_IDENT = new Set(["postgres", "mssql", "informix", "odbc"]);
+const ENGINE_NAME: Record<string, string> = { postgres: "PostgreSQL", mssql: "SQL Server", informix: "Informix", odbc: "este motor" };
+
+/** Quoted spans of a short SQL fragment, with their quote character and contents. */
+function quotedSpans(sql: string, dialect?: string) {
+  const spans: { quote: string; start: number; end: number; inner: string }[] = [];
+  let i = 0;
+  while (i < sql.length) {
+    const c = sql[i];
+    if (c === "-" && sql[i + 1] === "-") break;
+    if (c === "'" || c === '"' || c === "`") {
+      const start = i;
+      i++;
+      let inner = "";
+      while (i < sql.length) {
+        if (dialect === "mysql" && sql[i] === "\\" && c !== "`") {
+          inner += sql.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
+        if (sql[i] === c) {
+          if (sql[i + 1] === c) {
+            inner += c;
+            i += 2;
+            continue;
+          }
+          break;
+        }
+        inner += sql[i++];
+      }
+      spans.push({ quote: c, start, end: Math.min(sql.length, i + 1), inner });
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return spans;
+}
+
+/**
+ * Friendly checks for the table viewer's WHERE box, before the engine complains:
+ * - `kind = "click"` on engines where double quotes name columns, when no column has that name;
+ * - `LIKE 'text'` without % or _, which only matches the exact text.
+ */
+export function whereHints(where: string, columns: string[], dialect?: string): WhereHint[] {
+  const hints: WhereHint[] = [];
+  const names = new Set(columns.map((name) => name.toLowerCase()));
+  const spans = quotedSpans(where, dialect);
+  if (dialect && DQUOTE_IDENT.has(dialect)) {
+    for (const span of spans) {
+      if (span.quote !== '"' || names.has(span.inner.toLowerCase())) continue;
+      const literal = `'${span.inner.replace(/'/g, "''")}'`;
+      hints.push({
+        kind: "dquote",
+        from: span.start,
+        to: span.end,
+        message: `"${span.inner}" no es una columna: en ${ENGINE_NAME[dialect]} las comillas dobles nombran columnas y los textos van entre comillas simples.`,
+        fixLabel: `Usar ${literal}`,
+        fixed: where.slice(0, span.start) + literal + where.slice(span.end),
+      });
+    }
+  }
+  // LIKE / ILIKE followed by a text without wildcards.
+  for (const span of spans) {
+    if (span.quote !== "'" && !(span.quote === '"' && !DQUOTE_IDENT.has(dialect ?? ""))) continue;
+    if (/[%_]/.test(span.inner) || !span.inner) continue;
+    if (!/\b(I?LIKE)\s*$/i.test(where.slice(0, span.start))) continue;
+    const pattern = `'%${span.inner.replace(/'/g, "''")}%'`;
+    hints.push({
+      kind: "like",
+      from: span.start,
+      to: span.end,
+      message: `LIKE sin % ni _ solo encuentra el texto exacto (como =). Para "contiene" usa ${pattern}.`,
+      fixLabel: `Usar ${pattern}`,
+      fixed: where.slice(0, span.start) + pattern + where.slice(span.end),
+    });
+  }
+  return hints;
+}
+
+/**
+ * Maps an engine error position ("Posición: línea L, columna C" over the generated SELECT) to the WHERE
+ * text the user typed. Returns the offset inside `where`, or null when the error is elsewhere.
+ */
+export function wherePosition(message: string, select: string, where: string): number | null {
+  const match = /l[ií]nea\s+(\d+),\s*columna\s+(\d+)/i.exec(message);
+  if (!match || !where) return null;
+  const lines = select.split("\n");
+  const line = Number(match[1]);
+  if (line < 1 || line > lines.length) return null;
+  const absolute = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0) + Number(match[2]) - 1;
+  const at = select.indexOf(where);
+  if (at < 0 || absolute < at || absolute > at + where.length) return null;
+  return absolute - at;
+}
+
 /** Quotes an identifier the way the engine expects. */
 export function quoteIdentFor(name: string, dialect?: string): string {
   if (dialect === "mysql") return `\`${name.replace(/`/g, "``")}\``;

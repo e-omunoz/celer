@@ -6,7 +6,19 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Busy overlay with Gib over the grid for long operations. It shows live progress and has **Cancelar**:
+  - "Cargar todo" stops after the chunk in flight and keeps the rows loaded so far;
+  - server reloads with filters or sorting are cancelled on the server.
+- WHERE box help in the table viewer:
+  - warns while you type when `"text"` would be read as a column name (PostgreSQL, SQL Server, Informix), with a one-click fix to `'text'`;
+  - suggests `'%text%'` for `LIKE` without wildcards;
+  - points engine errors at the right spot of your WHERE instead of the generated query.
+
 ### Fixed
+- The window froze with 100k+ rows loaded: select all, copy, column selection and search did quadratic work
+  (`unwrap` walked every row on each call). With 200k rows, select all now takes ~40 ms and copying ~250 ms.
+- Local sorting of big console results is several times faster (sort keys are computed once).
 - Release notes in the update dialog: wrapped list items were shown as loose paragraphs.
 
 ## [1.1.0] - 2026-10-07

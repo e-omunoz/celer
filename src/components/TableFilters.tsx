@@ -1,6 +1,6 @@
 import { Filter, Plus, Search, X } from "lucide-solid";
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { unwrap } from "solid-js/store";
+import { raw } from "../raw";
 import { cellText, isNullCell } from "../sql";
 import { FILTER_OPS, filterLabel, removeTableFilter, toggleTableFilter, upsertTableFilter, type ColumnFilter, type FilterOp, type TableTab } from "../state";
 import { ObjIcon } from "../icons";
@@ -67,7 +67,7 @@ export function FilterEditor(props: { tab: TableTab; draft: FilterDraft; onClose
     const index = props.tab.gridCols.findIndex((col) => col.name === filter().col);
     if (index < 0) return [] as { key: string; label: string; count: number }[];
     const counts = new Map<string, number>();
-    for (const row of unwrap(props.tab.rows)) {
+    for (const row of raw(props.tab.rows)) {
       const cell = row[index];
       const key = isNullCell(cell) ? NULL_KEY : cellText(cell);
       counts.set(key, (counts.get(key) ?? 0) + 1);

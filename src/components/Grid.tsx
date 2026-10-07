@@ -1,5 +1,7 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
-import { unwrap } from "solid-js/store";
+import { raw } from "../raw";
+import { endBusy, nextPaint, startBusy } from "../busy";
+import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, sqlLiteral } from "../sql";
 import { copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
@@ -20,6 +22,8 @@ export interface GridProps {
   rows: Cell[][];
   /** Stable identity for the data set; changing it resets sort, widths and selection. */
   resetKey?: unknown;
+  /** Tab id: long operations show the busy overlay (Gib + Cancel) over this grid. */
+  busyKey?: string;
   pkCols?: number[];
   deleted?: number[];
   edits?: Record<string, string | null>;
@@ -146,34 +150,58 @@ export function DataGrid(props: GridProps) {
   const rowH = () => (state.settings.density === "comfortable" ? 28 : 24);
   const gutter = () => Math.max(44, String(props.rows.length).length * 8 + 22);
 
-  const order = () => {
-    const current = props.onSortChange ? null : sort();
-    const data = unwrap(props.rows);
-    props.rows.length;
+  function computeOrder(data: Cell[][], current: { col: number; dir: 1 | -1 } | null) {
     const indexes = Array.from({ length: data.length }, (_, index) => index);
     if (!current) return indexes;
     const { col, dir } = current;
-    const numeric = props.columns[col]?.kind === "number";
+    // Keys are computed once (not inside the comparator): 200k rows sort in a fraction of the time.
+    if (props.columns[col]?.kind === "number") {
+      const keys = new Float64Array(data.length);
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i]?.[col];
+        keys[i] = isNullCell(v) ? NaN : typeof v === "number" ? v : Number(v);
+      }
+      indexes.sort((a, b) => {
+        const l = keys[a];
+        const r = keys[b];
+        if (Number.isNaN(l)) return Number.isNaN(r) ? 0 : 1;
+        if (Number.isNaN(r)) return -1;
+        return (l - r) * dir;
+      });
+      return indexes;
+    }
+    const keys = data.map((row) => (isNullCell(row?.[col]) ? null : cellText(row[col])));
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
     indexes.sort((a, b) => {
-      const left = data[a]?.[col];
-      const right = data[b]?.[col];
-      if (isNullCell(left) && isNullCell(right)) return 0;
-      if (isNullCell(left)) return 1;
-      if (isNullCell(right)) return -1;
-      if (numeric) {
-        const l = typeof left === "number" ? left : Number(left);
-        const r = typeof right === "number" ? right : Number(right);
-        if (!Number.isNaN(l) && !Number.isNaN(r)) return (l - r) * dir;
-      }
-      return collator.compare(cellText(left), cellText(right)) * dir;
+      const l = keys[a];
+      const r = keys[b];
+      if (l === null) return r === null ? 0 : 1;
+      if (r === null) return -1;
+      return collator.compare(l, r) * dir;
     });
     return indexes;
-  };
+  }
 
-  // Cached ordering so painting does not re-sort.
+  // Cached ordering so painting does not re-sort. Big local sorts first paint the busy overlay, then sort.
   const [ordered, setOrdered] = createSignal<number[]>([]);
-  createEffect(() => setOrdered(order()));
+  let sortRun = 0;
+  createEffect(() => {
+    const current = props.onSortChange ? null : sort();
+    const data = raw(props.rows);
+    props.rows.length;
+    props.columns;
+    const run = ++sortRun;
+    if (!current || data.length < 20_000) {
+      setOrdered(computeOrder(data, current));
+      return;
+    }
+    const key = props.busyKey;
+    if (key) startBusy(key, `Ordenando ${data.length.toLocaleString()} filas`, null);
+    void nextPaint().then(() => {
+      if (run === sortRun) setOrdered(computeOrder(data, current));
+      if (key) endBusy(key);
+    });
+  });
 
   const colX = () => {
     const xs: number[] = [];
@@ -205,7 +233,7 @@ export function DataGrid(props: GridProps) {
     const heads = props.columns.map((col, index) => names[index] + (col.typeName ? Math.min(150, ctx.measureText(col.typeName.toLowerCase()).width + 6) : 0) + 40 + ((props.pkCols ?? []).includes(index) ? 15 : 0));
     ctx.font = `12.5px ${palette?.mono ?? "monospace"}`;
     charW = ctx.measureText("M").width || 7.5;
-    const sample = unwrap(props.rows).slice(0, 300);
+    const sample = raw(props.rows).slice(0, 300);
     return props.columns.map((_, index) => {
       let longest = 4;
       for (const row of sample) {
@@ -252,7 +280,7 @@ export function DataGrid(props: GridProps) {
     const cols = widths();
     const xs = colX();
     const rows = ordered();
-    const data = unwrap(props.rows);
+    const data = raw(props.rows);
     const view = scroll();
     const start = Math.max(0, Math.floor(view.y / RH));
     const end = Math.min(rows.length, start + Math.ceil((height - HEAD_H) / RH) + 2);
@@ -655,9 +683,9 @@ export function DataGrid(props: GridProps) {
     if (!props.editable || !props.onEdit) return;
     const source = ordered()[pos.row];
     if (source === undefined || props.deleted?.includes(source)) return;
-    const raw = unwrap(props.rows)[source]?.[pos.col];
+    const current = raw(props.rows)[source]?.[pos.col];
     scrollIntoView(pos);
-    setEditor({ row: pos.row, col: pos.col, value: initial ?? (isNullCell(raw) ? "" : cellText(raw)) });
+    setEditor({ row: pos.row, col: pos.col, value: initial ?? (isNullCell(current) ? "" : cellText(current)) });
     queueMicrotask(() => {
       const input = root?.querySelector<HTMLInputElement>(".cell-editor input");
       input?.focus();
@@ -678,8 +706,9 @@ export function DataGrid(props: GridProps) {
     const s = sel();
     if (!s) return [] as number[];
     const rows: number[] = [];
+    const order = ordered();
     for (let vr = s.r1; vr <= s.r2; vr++) {
-      const source = ordered()[vr];
+      const source = order[vr];
       if (source !== undefined) rows.push(source);
     }
     return rows;
@@ -694,7 +723,8 @@ export function DataGrid(props: GridProps) {
   }
 
   function formatSelection(format: CopyFormat) {
-    const rows = selectedRows().map((source) => unwrap(props.rows)[source] ?? []);
+    const data = raw(props.rows);
+    const rows = selectedRows().map((source) => data[source] ?? []);
     const cols = selectedCols();
     const names = cols.map((c) => props.columns[c].name);
     const val = (row: Cell[], c: number) => row[c];
@@ -751,7 +781,7 @@ export function DataGrid(props: GridProps) {
     const f = focus();
     if (!f || !props.onFilter) return;
     const source = ordered()[f.row];
-    const cell = unwrap(props.rows)[source]?.[f.col];
+    const cell = raw(props.rows)[source]?.[f.col];
     const isNull = isNullCell(cell);
     const op = isNull && mode === "eq" ? "null" : isNull && mode === "ne" ? "not-null" : mode;
     props.onFilter({ col: f.col, op, value: isNull ? "" : cellText(cell) });
@@ -831,11 +861,12 @@ export function DataGrid(props: GridProps) {
     const total = rows.length * cols;
     const f = focus() ?? { row: 0, col: -1 };
     let index = f.row * cols + f.col;
+    const data = raw(props.rows);
     for (let i = 0; i < total; i++) {
       index = (index + step + total) % total;
       const vr = Math.floor(index / cols);
       const col = index % cols;
-      const cell = unwrap(props.rows)[rows[vr]]?.[col];
+      const cell = data[rows[vr]]?.[col];
       if (!isNullCell(cell) && cellText(cell).toLowerCase().includes(query)) {
         setCursor({ row: vr, col });
         return;
@@ -1041,8 +1072,9 @@ export function DataGrid(props: GridProps) {
     let max: number | null = null;
     const distinct = new Set<string>();
     const budget = 250_000;
+    const data = raw(props.rows);
     outer: for (let vr = s.r1; vr <= s.r2; vr++) {
-      const row = unwrap(props.rows)[rows[vr]];
+      const row = data[rows[vr]];
       for (let c = s.c1; c <= s.c2; c++) {
         if (cells++ > budget) break outer;
         const cell = row?.[c];
@@ -1068,8 +1100,8 @@ export function DataGrid(props: GridProps) {
     const col = props.columns[f.col];
     if (source === undefined || !col) return;
     if (state.inspectorOpen && (state.inspectorMode === "value" || state.inspectorMode === "record")) {
-      setState("inspect", { column: col.name, typeName: col.typeName, value: unwrap(props.rows)[source]?.[f.col] ?? null });
-      setState("record", { columns: props.columns, row: unwrap(props.rows)[source] ?? [], index: source });
+      setState("inspect", { column: col.name, typeName: col.typeName, value: raw(props.rows)[source]?.[f.col] ?? null });
+      setState("record", { columns: props.columns, row: raw(props.rows)[source] ?? [], index: source });
     }
   });
 
@@ -1159,6 +1191,7 @@ export function DataGrid(props: GridProps) {
       <Show when={!props.rows.length && !props.loading}>
         <div class="grid-empty">Sin filas</div>
       </Show>
+      <Show when={props.busyKey}>{(key) => <BusyOverlay tabId={key()} />}</Show>
     </div>
   );
 }
