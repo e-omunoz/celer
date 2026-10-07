@@ -116,6 +116,8 @@ pub enum DbKind {
     Informix,
     Odbc,
     Sqlite,
+    Postgres,
+    Mysql,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

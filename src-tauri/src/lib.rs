@@ -1,9 +1,12 @@
 mod drivers;
 mod export;
+mod mcp;
 mod model;
 mod mssql;
+mod mysql;
 mod odbc;
 mod odbc_driver;
+mod postgres;
 mod session;
 mod sqlite;
 mod store;
@@ -28,6 +31,8 @@ struct AppState {
     store: Store,
     conns: Mutex<Vec<ConnConfig>>,
     sessions: Sessions,
+    /// Servidor MCP en modo vista previa (para que la interfaz muestre lo que vería la IA).
+    mcp: mcp::McpServer,
 }
 
 impl AppState {
@@ -41,43 +46,58 @@ impl AppState {
     }
 
     fn ibm_driver_setting(&self) -> Option<String> {
-        self.store
-            .load_json("settings.json")
-            .get("ibmDriverPath")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+        ibm_driver_setting(&self.store)
     }
 
     fn make_connector(
         &self,
-        mut cfg: ConnConfig,
+        cfg: ConnConfig,
     ) -> CmdResult<impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static> {
-        if cfg.password.is_none() && !cfg.integrated_auth {
-            cfg.password = self.store.get_password(&cfg.id);
-        }
-        let kind = cfg.kind;
-        let odbc_lib = match kind {
-            DbKind::Mssql | DbKind::Sqlite => None,
-            DbKind::Informix if cfg.informix_mode == "drda" => {
-                let dll = drivers::find_cli(self.ibm_driver_setting().as_deref(), &self.store.dir).ok_or_else(|| {
-                    "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
-                })?;
-                drivers::prepare_env(&dll);
-                Some(dll.to_string_lossy().to_string())
-            }
-            DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
-        };
-        Ok(move || -> anyhow::Result<Box<dyn Driver>> {
-            match kind {
-                DbKind::Sqlite => Ok(Box::new(sqlite::SqliteDriver::connect(cfg)?)),
-                DbKind::Mssql => Ok(Box::new(mssql::MssqlDriver::connect(cfg)?)),
-                DbKind::Informix | DbKind::Odbc => {
-                    let path = odbc_lib.unwrap_or_else(|| odbc::system_manager().to_string());
-                    Ok(Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?))
-                }
-            }
-        })
+        make_connector(&self.store, cfg)
     }
+}
+
+fn ibm_driver_setting(store: &Store) -> Option<String> {
+    store
+        .load_json("settings.json")
+        .get("ibmDriverPath")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Prepara la conexión (contraseña del almacén, driver IBM/ODBC). La usan la interfaz y el
+/// servidor MCP, que no tiene `State` de Tauri.
+pub(crate) fn make_connector(
+    store: &Store,
+    mut cfg: ConnConfig,
+) -> CmdResult<impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static> {
+    if cfg.password.is_none() && !cfg.integrated_auth {
+        cfg.password = store.get_password(&cfg.id);
+    }
+    let kind = cfg.kind;
+    let odbc_lib = match kind {
+        DbKind::Mssql | DbKind::Sqlite | DbKind::Postgres | DbKind::Mysql => None,
+        DbKind::Informix if cfg.informix_mode == "drda" => {
+            let dll = drivers::find_cli(ibm_driver_setting(store).as_deref(), &store.dir).ok_or_else(|| {
+                "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
+            })?;
+            drivers::prepare_env(&dll);
+            Some(dll.to_string_lossy().to_string())
+        }
+        DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
+    };
+    Ok(move || -> anyhow::Result<Box<dyn Driver>> {
+        match kind {
+            DbKind::Sqlite => Ok(Box::new(sqlite::SqliteDriver::connect(cfg)?)),
+            DbKind::Mssql => Ok(Box::new(mssql::MssqlDriver::connect(cfg)?)),
+            DbKind::Postgres => Ok(Box::new(postgres::PostgresDriver::connect(cfg)?)),
+            DbKind::Mysql => Ok(Box::new(mysql::MysqlDriver::connect(cfg)?)),
+            DbKind::Informix | DbKind::Odbc => {
+                let path = odbc_lib.unwrap_or_else(|| odbc::system_manager().to_string());
+                Ok(Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?))
+            }
+        }
+    })
 }
 
 #[derive(Serialize)]
@@ -145,14 +165,16 @@ fn delete_connection(state: State<'_, Arc<AppState>>, id: String) -> CmdResult<(
 #[tauri::command]
 async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<String> {
     let connector = state.make_connector(cfg)?;
+    let t0 = std::time::Instant::now();
     let h = SessionHandle::open("test".into(), connector)
         .await
         .map_err(err)?;
-    let t0 = std::time::Instant::now();
+    let connect_ms = t0.elapsed().as_millis();
+    let t1 = std::time::Instant::now();
     let info = h.run(|d| d.server_info()).await.map_err(err)?;
     Ok(format!(
-        "{info}\nTiempo de respuesta: {} ms",
-        t0.elapsed().as_millis()
+        "{info}\nConexión: {connect_ms} ms · ida y vuelta: {} ms",
+        t1.elapsed().as_millis()
     ))
 }
 
@@ -210,7 +232,8 @@ async fn execute(
 ) -> CmdResult<ExecOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     let cfg = state.conn(&h.conn_id)?;
-    if cfg.read_only && session::is_mutating(&sql) {
+    // Every statement of the batch is checked (a leading SELECT must not hide a later DELETE).
+    if cfg.read_only && (session::is_mutating(&sql) || mcp::batch_writes(&sql, cfg.kind)) {
         return Err(
             "La conexión es de solo lectura: no se permiten sentencias que modifiquen datos".into(),
         );
@@ -517,6 +540,95 @@ fn app_info(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     })
 }
 
+// ───────────── MCP (asistentes de IA externos) ─────────────
+
+#[tauri::command]
+fn mcp_config_get(state: State<'_, Arc<AppState>>) -> mcp::McpConfig {
+    mcp::load_config(&state.store)
+}
+
+#[tauri::command]
+fn mcp_config_set(state: State<'_, Arc<AppState>>, config: mcp::McpConfig) -> CmdResult<()> {
+    mcp::save_config(&state.store, config).map_err(err)
+}
+
+#[tauri::command]
+fn mcp_audit(state: State<'_, Arc<AppState>>, limit: usize) -> Vec<mcp::AuditEntry> {
+    mcp::read_audit(&state.store, limit)
+}
+
+#[tauri::command]
+fn mcp_clear_audit(state: State<'_, Arc<AppState>>) -> CmdResult<()> {
+    mcp::clear_audit(&state.store).map_err(err)
+}
+
+#[tauri::command]
+fn mcp_client_info() -> mcp::ClientInfo {
+    mcp::client_info()
+}
+
+#[tauri::command]
+fn mcp_install_claude_desktop() -> CmdResult<String> {
+    mcp::install_claude_desktop()
+}
+
+/// Ejecuta una herramienta MCP con los permisos actuales (sin exigir `enabled` y sin auditar).
+/// Devuelve `{ isError, text, json }`: `text` es exactamente lo que recibiría el asistente.
+#[tauri::command]
+async fn mcp_test_tool(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    args: serde_json::Value,
+) -> CmdResult<serde_json::Value> {
+    if !mcp::TOOL_NAMES.contains(&name.as_str()) {
+        return Err(format!("Herramienta desconocida: {name}"));
+    }
+    Ok(state.mcp.call_tool(&name, &args).await.to_preview())
+}
+
+// ───────────── Clave de la API del asistente integrado ─────────────
+
+const AI_KEY_ID: &str = "celer-ai-anthropic-key";
+
+/// Solo en el almacén de credenciales del sistema: nunca se escribe en un fichero JSON
+/// (a diferencia de `Store::set_password`, que tiene `secrets.json` como alternativa).
+fn ai_key_entry() -> CmdResult<keyring::Entry> {
+    keyring::Entry::new("Celer", AI_KEY_ID).map_err(err)
+}
+
+#[tauri::command]
+fn ai_key_get() -> Option<String> {
+    ai_key_entry()
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|k| !k.is_empty())
+}
+
+#[tauri::command]
+fn ai_key_status() -> bool {
+    ai_key_get().is_some()
+}
+
+#[tauri::command]
+fn ai_key_set(key: String) -> CmdResult<()> {
+    let entry = ai_key_entry()?;
+    let key = key.trim();
+    if key.is_empty() {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(err(e)),
+        }
+    } else {
+        entry.set_password(key).map_err(err)
+    }
+}
+
+/// `celer --mcp`: servidor MCP por stdio, sin ventana. Devuelve el código de salida.
+pub fn run_mcp() -> i32 {
+    mcp::serve_stdio()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -527,12 +639,24 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::env::temp_dir().join("celer"));
-            let store = Store::new(dir);
+            let store = Store::new(dir.clone());
             let conns = store.load_connections();
+            let mcp = mcp::McpServer::new(dir, true);
+            // The window starts hidden and the UI shows it after its first paint (no white flash).
+            // Safety net: show it anyway if the UI has not done so shortly after start.
+            if let Some(window) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(2500));
+                    if !window.is_visible().unwrap_or(true) {
+                        let _ = window.show();
+                    }
+                });
+            }
             app.manage(Arc::new(AppState {
                 store,
                 conns: Mutex::new(conns),
                 sessions: Sessions::default(),
+                mcp,
             }));
             Ok(())
         })
@@ -572,6 +696,16 @@ pub fn run() {
             ibm_driver_status,
             ibm_driver_download,
             app_info,
+            mcp_config_get,
+            mcp_config_set,
+            mcp_audit,
+            mcp_clear_audit,
+            mcp_client_info,
+            mcp_install_claude_desktop,
+            mcp_test_tool,
+            ai_key_status,
+            ai_key_set,
+            ai_key_get,
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Celer");

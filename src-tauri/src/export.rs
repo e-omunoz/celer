@@ -1,4 +1,4 @@
-//! Exportación de resultados a CSV, JSON, SQL (INSERT) y Excel, en streaming.
+//! Exportación de resultados a CSV, TSV, JSON, SQL (INSERT), Markdown, HTML y Excel, en streaming.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -15,7 +15,7 @@ const XLSX_MAX_ROWS: u32 = 1_048_575;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExportOptions {
-    /// csv | json | sql | xlsx | tsv
+    /// csv | tsv | json | sql | markdown | html | xlsx
     pub format: String,
     pub path: String,
     pub delimiter: String,
@@ -23,6 +23,8 @@ pub struct ExportOptions {
     pub bom: bool,
     pub table_name: String,
     pub null_text: String,
+    /// SQL: rows per INSERT statement (1 = one statement per row).
+    pub sql_batch: usize,
 }
 
 impl Default for ExportOptions {
@@ -35,6 +37,7 @@ impl Default for ExportOptions {
             bom: true,
             table_name: "tabla".into(),
             null_text: String::new(),
+            sql_batch: 1,
         }
     }
 }
@@ -43,6 +46,8 @@ enum Sink {
     Text {
         w: BufWriter<File>,
         first: bool,
+        /// Rows written in the current multi-row INSERT.
+        batch: usize,
     },
     Xlsx {
         wb: rust_xlsxwriter::Workbook,
@@ -74,7 +79,7 @@ pub fn export(
             if o.bom && matches!(o.format.as_str(), "csv" | "tsv") {
                 w.write_all("\u{feff}".as_bytes())?;
             }
-            Sink::Text { w, first: true }
+            Sink::Text { w, first: true, batch: 0 }
         }
     };
     let sql_cols = cols
@@ -100,15 +105,21 @@ pub fn export(
     }
     let _ = d.close_cursor();
     match sink {
-        Sink::Text { mut w, .. } => {
-            if o.format == "json" {
-                w.write_all(b"\n]\n")?;
+        Sink::Text { mut w, batch, .. } => {
+            match o.format.as_str() {
+                "json" => w.write_all(b"\n]\n")?,
+                "html" => w.write_all(b"</tbody>\n</table>\n</body>\n</html>\n")?,
+                "sql" if batch > 0 => w.write_all(b";\n")?,
+                _ => {}
             }
             w.flush()?;
         }
         Sink::Xlsx { mut wb, row } => {
             if row > XLSX_MAX_ROWS {
                 bail!("Excel admite como máximo {XLSX_MAX_ROWS} filas");
+            }
+            if let Ok(ws) = wb.worksheet_from_index(0) {
+                ws.autofit();
             }
             wb.save(&o.path)?;
         }
@@ -149,7 +160,8 @@ fn json_value(c: &Cell) -> serde_json::Value {
 fn sql_literal(c: &Cell, kind: ColKind, mssql: bool) -> String {
     match c {
         Cell::Null => "NULL".into(),
-        Cell::Bool(b) => (if *b { "1" } else { "0" }).into(),
+        Cell::Bool(b) if mssql => (if *b { "1" } else { "0" }).into(),
+        Cell::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).into(),
         Cell::Int(i) => i.to_string(),
         Cell::Num(f) => f.to_string(),
         Cell::Text(s) if kind == ColKind::Number && s.parse::<f64>().is_ok() => s.clone(),
@@ -182,6 +194,23 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
                 }
             }
             "json" => w.write_all(b"[")?,
+            "markdown" => {
+                let head = cols.iter().map(|c| md_cell(&c.name)).collect::<Vec<_>>().join(" | ");
+                let rule = cols
+                    .iter()
+                    .map(|c| if c.kind == ColKind::Number { "---:" } else { "---" })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                writeln!(w, "| {head} |\n| {rule} |")?;
+            }
+            "html" => {
+                w.write_all(HTML_HEAD.as_bytes())?;
+                w.write_all(b"<thead><tr>")?;
+                for c in cols {
+                    write!(w, "<th>{}</th>", html_escape(&c.name))?;
+                }
+                w.write_all(b"</tr></thead>\n<tbody>\n")?;
+            }
             _ => {}
         },
         Sink::Xlsx { wb, row } => {
@@ -206,7 +235,7 @@ fn write_row(
     mssql: bool,
 ) -> Result<()> {
     match sink {
-        Sink::Text { w, first } => match o.format.as_str() {
+        Sink::Text { w, first, batch } => match o.format.as_str() {
             "csv" | "tsv" => {
                 let delim = if o.format == "tsv" {
                     "\t"
@@ -237,11 +266,36 @@ fn write_row(
                     .map(|(c, col)| sql_literal(c, col.kind, mssql))
                     .collect::<Vec<_>>()
                     .join(", ");
-                writeln!(
-                    w,
-                    "INSERT INTO {} ({}) VALUES ({});",
-                    o.table_name, sql_cols, vals
-                )?;
+                let per = o.sql_batch.clamp(1, 1000);
+                if per == 1 {
+                    writeln!(w, "INSERT INTO {} ({}) VALUES ({});", o.table_name, sql_cols, vals)?;
+                } else {
+                    if *batch == 0 {
+                        write!(w, "INSERT INTO {} ({}) VALUES\n  ({})", o.table_name, sql_cols, vals)?;
+                    } else {
+                        write!(w, ",\n  ({})", vals)?;
+                    }
+                    *batch += 1;
+                    if *batch >= per {
+                        w.write_all(b";\n")?;
+                        *batch = 0;
+                    }
+                }
+            }
+            "markdown" => {
+                let line = r.iter().map(|c| md_cell(&text_of(c, if o.null_text.is_empty() { "NULL" } else { &o.null_text }))).collect::<Vec<_>>().join(" | ");
+                writeln!(w, "| {line} |")?;
+            }
+            "html" => {
+                w.write_all(b"<tr>")?;
+                for (c, col) in r.iter().zip(cols) {
+                    match c {
+                        Cell::Null => w.write_all(b"<td class=\"null\">NULL</td>")?,
+                        _ if col.kind == ColKind::Number => write!(w, "<td class=\"num\">{}</td>", html_escape(&text_of(c, "")))?,
+                        _ => write!(w, "<td>{}</td>", html_escape(&text_of(c, "")))?,
+                    }
+                }
+                w.write_all(b"</tr>\n")?;
             }
             _ => {}
         },
@@ -283,4 +337,28 @@ fn write_row(
         }
     }
     Ok(())
+}
+
+fn md_cell(s: &str) -> String {
+    s.replace('|', "\\|").replace(['\r', '\n'], " ")
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+const HTML_HEAD: &str = "<!doctype html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n<title>Celer export</title>\n<style>\nbody{font:13px/1.45 system-ui,sans-serif;margin:24px;color:#1f1e1c;background:#faf9f5}\ntable{border-collapse:collapse;font-size:12.5px}\nth,td{border:1px solid #e5e2d8;padding:5px 9px;text-align:left;vertical-align:top}\nth{background:#f1efe8;font-weight:600;position:sticky;top:0}\ntd.num{text-align:right;font-variant-numeric:tabular-nums}\ntd.null{color:#9f9b8f;font-style:italic}\ntr:nth-child(even) td{background:#f8f7f3}\n</style>\n</head>\n<body>\n<table>\n";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literals_and_escaping() {
+        assert_eq!(sql_literal(&Cell::Bool(true), ColKind::Bool, false), "TRUE");
+        assert_eq!(sql_literal(&Cell::Bool(false), ColKind::Bool, true), "0");
+        assert_eq!(sql_literal(&Cell::Text("O'Hara".into()), ColKind::Text, false), "'O''Hara'");
+        assert_eq!(md_cell("a|b\nc"), "a\\|b c");
+        assert_eq!(html_escape("<b>&\"</b>"), "&lt;b&gt;&amp;&quot;&lt;/b&gt;");
+    }
 }
