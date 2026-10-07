@@ -28,7 +28,7 @@ parking_lot = "0.12"
 anyhow = "1"
 keyring = { version = "3", features = ["windows-native", "apple-native"] }
 uuid = { version = "1", features = ["v4"] }
-rust_xlsxwriter = { version = "0.80", default-features = false }
+rust_xlsxwriter = { version = "0.99", default-features = false }
 ureq = "2"
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
