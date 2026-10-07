@@ -1,6 +1,7 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { isTauri } from "../api";
 import { beforeClose } from "../state";
+import { installOnClose } from "../update";
 
 type AppWindow = Awaited<ReturnType<typeof getWindow>>;
 
@@ -25,6 +26,7 @@ export function WindowControls() {
       // Covers our button, Alt+F4 and the taskbar: unsaved work is confirmed and the workspace flushed.
       unlistenClose = await w.onCloseRequested(async (event) => {
         if (!(await beforeClose())) event.preventDefault();
+        else await installOnClose();
       });
     });
     onCleanup(() => {

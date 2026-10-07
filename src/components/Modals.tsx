@@ -25,6 +25,7 @@ import { ExportDialog } from "./ExportDialog";
 import { AiSettings } from "./AiSettings";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
+import { checkForUpdates, openReleasePage } from "../update";
 
 export function Modals() {
   return (
@@ -463,6 +464,10 @@ function AboutDialog() {
         <h3>Celer</h3>
         <p>SQL rápido para cualquier base de datos.</p>
         <p class="muted small">Versión {state.appInfo.version || "dev"} · Tauri 2 · Rust · SolidJS</p>
+        <div class="about-actions">
+          <button type="button" class="btn tiny primary" onClick={() => { setState("aboutOpen", false); void checkForUpdates(true); }}>Buscar actualizaciones</button>
+          <button type="button" class="btn tiny" onClick={() => void openReleasePage()}>Novedades en GitHub</button>
+        </div>
       </div>
     </Dialog>
   );

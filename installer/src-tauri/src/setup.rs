@@ -464,7 +464,7 @@ fn remove_old_install(dir: &Path) {
 
 // ---------------------------------------------------------------- instalar
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallOptions {
     pub dir: String,
@@ -479,6 +479,34 @@ pub struct InstallOptions {
 }
 
 fn yes() -> bool {
+    true
+}
+
+/// Opciones que reproducen la instalación actual: al actualizar desde la app solo cambia la versión
+/// (mismos accesos directos, misma asociación .sql) y Celer se vuelve a abrir al terminar.
+pub fn current_options(layout: &Layout, dir: &Path) -> InstallOptions {
+    let _com = win::Com::init();
+    let ours = |lnk: &Path| lnk.is_file() && win::shortcut_target(lnk).map(|t| is_within(&t, dir)).unwrap_or(false);
+    InstallOptions {
+        dir: dir.display().to_string(),
+        desktop_shortcut: ours(&layout.desktop_lnk),
+        start_menu: ours(&layout.start_menu_lnk),
+        associate_sql: assoc_points_into(layout, dir),
+        launch_after: true,
+    }
+}
+
+/// Espera a que Celer termine de cerrarse en `dir` (la app lanza el instalador y sale).
+/// Devuelve `false` si sigue abierto pasado `timeout`.
+pub fn wait_until_closed(dir: &Path, timeout: std::time::Duration) -> bool {
+    let exe = exe_path(dir);
+    let started = std::time::Instant::now();
+    while win::is_running(&exe) {
+        if started.elapsed() > timeout {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
     true
 }
 

@@ -11,7 +11,7 @@ import type {
   SessionInfo,
   TableColumn,
 } from "./types";
-import type { McpAuditEntry, McpClientInfo, McpConfig } from "./types";
+import type { McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
 import { createDemoBackend } from "./demo";
 
 export interface Backend {
@@ -50,6 +50,10 @@ export interface Backend {
   ibmDriverStatus(): Promise<string | null>;
   ibmDriverDownload(): Promise<string>;
   appInfo(): Promise<{ version: string; dataDir: string }>;
+  updateCheck(): Promise<UpdateInfo>;
+  updateDownload(url: string, name: string, sumsUrl: string): Promise<string>;
+  updateInstall(path: string, relaunch: boolean): Promise<void>;
+  onUpdateDownload(cb: (progress: { done: number; total: number }) => void): Promise<() => void>;
   aiKeyStatus(): Promise<boolean>;
   aiKeySet(key: string): Promise<void>;
   aiKeyGet(): Promise<string | null>;
@@ -113,6 +117,13 @@ function tauriBackend(): Backend {
     ibmDriverStatus: () => invoke("ibm_driver_status"),
     ibmDriverDownload: () => invoke("ibm_driver_download"),
     appInfo: () => invoke("app_info"),
+    updateCheck: () => invoke("update_check"),
+    updateDownload: (url, name, sumsUrl) => invoke("update_download", { url, name, sumsUrl }),
+    updateInstall: (path, relaunch) => invoke("update_install", { path, relaunch }),
+    onUpdateDownload: async (cb) => {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<{ done: number; total: number }>("update-download", (e) => cb(e.payload));
+    },
     aiKeyStatus: () => invoke("ai_key_status"),
     aiKeySet: (key) => invoke("ai_key_set", { key }),
     aiKeyGet: () => invoke("ai_key_get"),

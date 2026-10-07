@@ -27,7 +27,12 @@ All notable changes to Celer are documented here. The format follows
   **MCP server** (`celer.exe --mcp`) with per-connection permission levels, row limits, sensitive-column masking
   and an audit log.
 - Official engine logos (PostgreSQL, MySQL, MariaDB, SQLite) and a redesigned app logo and icon.
-- **Celer Setup**: a custom installer and uninstaller in the app's style (per-user, no admin).
+- **Celer Setup**: a custom installer and uninstaller in the app's style (per-user, no admin), with a silent mode.
+- **Automatic updates**: Celer looks for new releases on start-up, shows what's new and updates itself in one click.
+  - The download is verified against the release's SHA-256 sums.
+  - The installer keeps your options and reopens Celer.
+  - Closing Celer with an update downloaded installs it quietly.
+- Gib has articulated arms and full-body animations: hand on chin while thinking, finger up on an idea, a real wave.
 - End-to-end test harness over CDP (`dev/e2e.mjs`) and live database integration tests.
 
 ### Fixed

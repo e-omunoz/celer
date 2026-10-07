@@ -37,16 +37,15 @@ $tag = "v$Version"
 Check (-not (& $git tag --list $tag)) "La etiqueta $tag ya existe"
 Step "Celer $current -> $Version"
 
-if ($Version -ne $current) {
-  foreach ($file in "package.json", "src-tauri\tauri.conf.json") {
+# Every manifest gets the release version (also when it is not a bump: keeps the installer in sync).
+foreach ($file in "package.json", "src-tauri\tauri.conf.json", "installer\src-tauri\tauri.conf.json") {
+  $text = [IO.File]::ReadAllText("$root\$file")
+  [IO.File]::WriteAllText("$root\$file", [regex]::Replace($text, '"version": "[^"]+"', "`"version`": `"$Version`"", 1))
+}
+foreach ($file in "src-tauri\Cargo.toml", "installer\src-tauri\Cargo.toml") {
+  if (Test-Path "$root\$file") {
     $text = [IO.File]::ReadAllText("$root\$file")
-    [IO.File]::WriteAllText("$root\$file", $text.Replace("`"version`": `"$current`"", "`"version`": `"$Version`""))
-  }
-  foreach ($file in "src-tauri\Cargo.toml", "installer\src-tauri\Cargo.toml") {
-    if (Test-Path "$root\$file") {
-      $text = [IO.File]::ReadAllText("$root\$file")
-      [IO.File]::WriteAllText("$root\$file", [regex]::Replace($text, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1))
-    }
+    [IO.File]::WriteAllText("$root\$file", [regex]::Replace($text, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1))
   }
 }
 

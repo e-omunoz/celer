@@ -165,6 +165,25 @@ export interface Settings {
   aiModel: string;
   /** The start-up guide was completed or skipped. */
   onboarded: boolean;
+  /** Look for a new release on start-up (and every few hours). */
+  checkUpdates: boolean;
+  /** A release the user chose to skip: no reminders until a newer one appears. */
+  skippedVersion: string;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  available: boolean;
+  notes: string;
+  publishedAt: string;
+  htmlUrl: string;
+  assetUrl: string;
+  assetName: string;
+  assetSize: number;
+  sumsUrl: string;
+  /** Installed with Celer Setup: the update installs itself and reopens Celer. */
+  installed: boolean;
 }
 
 export const defaultSettings: Settings = {
@@ -183,6 +202,8 @@ export const defaultSettings: Settings = {
   confirmMutations: true,
   aiModel: "claude-opus-5-5",
   onboarded: false,
+  checkUpdates: true,
+  skippedVersion: "",
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

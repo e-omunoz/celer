@@ -8,6 +8,8 @@ export interface SetupInfo {
   freeMb: number;
   webview2: boolean;
   isUninstall: boolean;
+  /** Started by Celer to update itself: the current install's options, applied without questions. */
+  update: InstallOptions | null;
 }
 
 export interface InstallOptions {
@@ -67,6 +69,9 @@ export const setup = {
           freeMb: 1520,
           webview2: true,
           isUninstall: new URLSearchParams(location.search).has("uninstall"),
+          update: new URLSearchParams(location.search).has("autoupdate")
+            ? { dir: "C:\\Users\\oscar\\AppData\\Local\\Programs\\Celer", desktopShortcut: true, startMenu: true, associateSql: true, launchAfter: true }
+            : null,
         }),
   driveFree: (dir: string): Promise<number> => (isTauri() ? invoke("drive_free", { dir }) : Promise.resolve(dir.toUpperCase().startsWith("D:") ? 1_714_000 : 1520)),
   pickDir: (current: string): Promise<string | null> => (isTauri() ? invoke("pick_dir", { current }) : Promise.resolve("D:\\Apps\\Celer")),

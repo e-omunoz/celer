@@ -650,6 +650,30 @@ export function createDemoBackend(): Backend {
     async appInfo() {
       return { version: "dev", dataDir: "navegador (localStorage)" };
     },
+    // Browser demo: "?update" in the URL simulates a new release to design the update flow.
+    async updateCheck() {
+      const simulate = new URLSearchParams(location.search).has("update");
+      return {
+        current: "1.1.0",
+        latest: simulate ? "1.2.0" : "1.1.0",
+        available: simulate,
+        notes: "### Added\n- Celer se actualiza solo desde la barra de estado.\n- Gib tiene brazos y anima todo el cuerpo.\n\n### Fixed\n- El filtro *entre* acepta fechas.",
+        publishedAt: new Date().toISOString(),
+        htmlUrl: "https://github.com/e-omunoz/celer/releases",
+        assetUrl: "",
+        assetName: "Celer-Setup-1.2.0.exe",
+        assetSize: 12_538_880,
+        sumsUrl: "",
+        installed: true,
+      };
+    },
+    async updateDownload() {
+      throw new Error("En el navegador no se pueden instalar actualizaciones.");
+    },
+    async updateInstall() {},
+    async onUpdateDownload() {
+      return () => {};
+    },
     async pickSavePath() {
       return null;
     },

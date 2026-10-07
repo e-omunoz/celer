@@ -1,4 +1,4 @@
-import { Database, History, Moon, PanelLeft, PanelRight, Plus, Search, Settings2, Sparkles, Sun } from "lucide-solid";
+import { ArrowDownToLine, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
 import { onCleanup, onMount, Show } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
@@ -30,10 +30,12 @@ import {
   toggleInspector,
 } from "./state";
 import { engineOf } from "./types";
+import { UpdateDialog } from "./components/UpdateDialog";
+import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
 
 export default function App() {
   onMount(() => {
-    void boot();
+    void boot().then(startUpdateChecks);
     revealWindow();
     let lastShift = 0;
     const onKey = (event: KeyboardEvent) => {
@@ -101,6 +103,7 @@ export default function App() {
       <ContextMenu />
       <Palette />
       <Modals />
+      <Show when={update.dialogOpen}><UpdateDialog /></Show>
       <Splash />
       <Show when={state.onboardingOpen}><Onboarding /></Show>
     </div>
@@ -190,6 +193,24 @@ function StatusBar() {
       </Show>
       <Show when={conn()}><span class="st-item muted">{engineOf(conn()!.kind).label}</span></Show>
       <span class="st-item muted">{isTauri() ? "" : "demo navegador · "}UTF-8</span>
+      <Show when={updateChipVisible()}>
+        <button
+          type="button"
+          class="st-update"
+          classList={{ ready: update.status === "ready", busy: update.status === "downloading" }}
+          title={update.status === "ready" ? "Instalar la actualización y reiniciar Celer" : "Ver la nueva versión"}
+          onClick={() => setUpdate({ dialogOpen: true })}
+        >
+          <Show when={update.status === "ready"} fallback={<ArrowDownToLine size={12} />}><RotateCcw size={12} /></Show>
+          <span>
+            {update.status === "downloading"
+              ? `Descargando ${update.total ? Math.round((update.done / update.total) * 100) : 0}%`
+              : update.status === "ready"
+                ? "Reiniciar para actualizar"
+                : `Celer ${update.info?.latest}`}
+          </span>
+        </button>
+      </Show>
       <Companion />
     </footer>
   );

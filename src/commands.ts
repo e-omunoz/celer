@@ -25,6 +25,7 @@ import {
 } from "./state";
 import type { ThemeName } from "./types";
 import { askAi } from "./ai";
+import { checkForUpdates } from "./update";
 
 export interface Command {
   id: string;
@@ -85,6 +86,7 @@ export function commands(): Command[] {
     { id: "font-down", label: "Reducir tamaño del editor", group: "Preferencias", keys: "Ctrl+-", run: () => void saveSettings({ editorFontSize: Math.max(10, state.settings.editorFontSize - 1) }) },
     { id: "guide", label: "Guía de inicio", group: "Ayuda", run: () => setState("onboardingOpen", true) },
     { id: "about", label: "Acerca de Celer", group: "Ayuda", run: () => setState("aboutOpen", true) },
+    { id: "update", label: "Buscar actualizaciones", group: "Ayuda", run: () => void checkForUpdates(true) },
   ];
   for (const theme of THEMES) {
     list.push({ id: `theme-${theme.id}`, label: `Tema: ${theme.label}`, group: "Tema", run: () => void saveSettings({ theme: theme.id }) });

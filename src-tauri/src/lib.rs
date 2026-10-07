@@ -10,6 +10,7 @@ mod postgres;
 mod session;
 mod sqlite;
 mod store;
+mod update;
 
 use std::sync::Arc;
 
@@ -540,6 +541,46 @@ fn app_info(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     })
 }
 
+// ───────────── Actualizaciones ─────────────
+
+#[tauri::command]
+async fn update_check() -> CmdResult<update::UpdateInfo> {
+    tauri::async_runtime::spawn_blocking(update::check).await.map_err(err)?.map_err(err)
+}
+
+#[tauri::command]
+async fn update_download(app: tauri::AppHandle, url: String, name: String, sums_url: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let last = std::cell::Cell::new(0u64);
+        update::download(&url, &name, &sums_url, |done, total| {
+            if done - last.get() > 256 * 1024 || done == total {
+                last.set(done);
+                let _ = app.emit("update-download", DownloadProgress { done, total });
+            }
+        })
+        .map(|p| p.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+/// Lanza el instalador descargado y cierra Celer (el instalador espera a que termine de cerrarse).
+/// El front ya ha pasado por la guarda de cierre (transacciones abiertas, ediciones sin guardar).
+#[tauri::command]
+fn update_install(app: tauri::AppHandle, path: String, relaunch: bool) -> CmdResult<()> {
+    update::launch_installer(std::path::Path::new(&path), relaunch).map_err(err)?;
+    if !relaunch {
+        // The window is already closing on its own.
+        return Ok(());
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        app.exit(0);
+    });
+    Ok(())
+}
+
 // ───────────── MCP (asistentes de IA externos) ─────────────
 
 #[tauri::command]
@@ -696,6 +737,9 @@ pub fn run() {
             ibm_driver_status,
             ibm_driver_download,
             app_info,
+            update_check,
+            update_download,
+            update_install,
             mcp_config_get,
             mcp_config_set,
             mcp_audit,

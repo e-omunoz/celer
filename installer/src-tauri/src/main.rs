@@ -27,6 +27,14 @@ fn is_uninstall() -> bool {
     has_flag("--uninstall")
 }
 
+/// `--update`: lanzado por Celer al actualizarse. Sin preguntas: mismas opciones, espera a que la app
+/// se cierre, instala y vuelve a abrirla.
+fn is_update() -> bool {
+    has_flag("--update") && !is_uninstall()
+}
+
+const CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn mb(bytes: u64) -> f64 {
     (bytes as f64 / 1_048_576.0 * 10.0).round() / 10.0
 }
@@ -59,6 +67,8 @@ struct SetupInfo {
     free_mb: f64,
     webview2: bool,
     is_uninstall: bool,
+    /// Modo actualización: las opciones de la instalación actual (la UI instala sin preguntar).
+    update: Option<InstallOptions>,
 }
 
 #[tauri::command]
@@ -82,7 +92,9 @@ fn setup_info() -> SetupInfo {
         .unwrap_or_else(setup::default_dir);
     // defaultDir: la instalación existente si la hay (actualizar in situ); si no, %LOCALAPPDATA%\Programs\Celer.
     let free_mb = win::free_bytes(&default_dir).map(mb).unwrap_or(0.0);
+    let update = (is_update() && existing.is_some()).then(|| setup::current_options(&layout, &default_dir));
     SetupInfo {
+        update,
         version: payload.version.to_string(),
         default_dir: default_dir.display().to_string(),
         payload_mb: mb(payload.size),
@@ -135,6 +147,12 @@ async fn install(app: AppHandle, options: InstallOptions) -> Result<String, Stri
         let mut emit = |p: Progress| {
             let _ = handle.emit(PROGRESS_EVENT, p);
         };
+        if is_update() {
+            emit(Progress { step: setup::Step::Prepare, pct: 0.0, detail: "Esperando a que Celer se cierre".into() });
+            if !setup::wait_until_closed(Path::new(&options.dir), CLOSE_TIMEOUT) {
+                return Err("Celer sigue abierto. Ciérralo y pulsa Reintentar.".to_string());
+            }
+        }
         setup::install(&layout, &payload, &options, &setup_exe, &mut emit)
     })
     .await
@@ -236,12 +254,23 @@ fn run_silent() -> i32 {
         .and_then(|i| args.get(i + 1).cloned())
         .or_else(|| setup::read_existing(&layout).map(|e| e.dir))
         .unwrap_or_else(|| setup::default_dir().display().to_string());
-    let opts = InstallOptions {
-        dir,
-        desktop_shortcut: has_flag("--desktop"),
-        start_menu: !has_flag("--no-start-menu"),
-        associate_sql: has_flag("--associate-sql"),
-        launch_after: has_flag("--launch"),
+    let opts = if is_update() && setup::read_existing(&layout).is_some() {
+        // --silent --update: same options as the current install, after the app has closed
+        // (Celer reopens only with --launch: the user closed it on purpose).
+        let mut opts = setup::current_options(&layout, Path::new(&dir));
+        opts.launch_after = has_flag("--launch");
+        if !setup::wait_until_closed(Path::new(&opts.dir), CLOSE_TIMEOUT) {
+            return log_exit(Err("Celer sigue abierto; no se ha actualizado.".into()));
+        }
+        opts
+    } else {
+        InstallOptions {
+            dir,
+            desktop_shortcut: has_flag("--desktop"),
+            start_menu: !has_flag("--no-start-menu"),
+            associate_sql: has_flag("--associate-sql"),
+            launch_after: has_flag("--launch"),
+        }
     };
     let res = setup::install(&layout, &Payload::embedded(), &opts, &me, &mut noop);
     if let (Ok(exe), true) = (&res, opts.launch_after) {

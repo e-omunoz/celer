@@ -47,6 +47,20 @@ function App() {
     const off = await setup.onProgress((p) => setProgress(p));
     onCleanup(off);
     requestAnimationFrame(() => requestAnimationFrame(() => void setup.showWindow()));
+    // Update started from Celer: same options, no questions; Celer reopens on its own when done.
+    if (data.update) {
+      setOpts(data.update);
+      void install();
+    }
+  });
+
+  const autoUpdate = () => Boolean(info()?.update);
+  // After an automatic update, reopen Celer by itself unless the user touches something.
+  let reopenTimer = 0;
+  createEffect(() => {
+    if (step() !== "done" || !autoUpdate()) return;
+    reopenTimer = window.setTimeout(() => void finish(), 2200);
+    onCleanup(() => window.clearTimeout(reopenTimer));
   });
 
   // Live free-space check while the path is edited.
@@ -136,7 +150,13 @@ function App() {
   };
 
   const tracker = () =>
-    info()?.isUninstall
+    autoUpdate()
+      ? [
+          { id: "downloaded", label: "Descargada" },
+          { id: "installing", label: "Actualizando" },
+          { id: "done", label: "Listo" },
+        ]
+      : info()?.isUninstall
       ? [
           { id: "confirm-uninstall", label: "Confirmar" },
           { id: "uninstalling", label: "Desinstalando" },
@@ -271,7 +291,13 @@ function App() {
               <section class="screen">
                 <div class="burst" aria-hidden="true"><For each={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]}>{(i) => <i style={{ "--i": i }} />}</For></div>
                 <h1>Celer está listo.</h1>
-                <p class="lead">{isUpdate() ? `Actualizado a la versión ${info()?.version}.` : "Todo instalado. Cuando lo abras te enseñaré lo esencial en un minuto."}</p>
+                <p class="lead">
+                  {autoUpdate()
+                    ? `Actualizado a la versión ${info()?.version}. Vuelvo a abrir Celer en un momento…`
+                    : isUpdate()
+                      ? `Actualizado a la versión ${info()?.version}.`
+                      : "Todo instalado. Cuando lo abras te enseñaré lo esencial en un minuto."}
+                </p>
                 <ul class="checks-done">
                   <li><Check size={14} /> Celer {info()?.version} en <code>{opts().dir}</code></li>
                   <Show when={opts().startMenu}><li><Check size={14} /> Acceso en el menú Inicio</li></Show>
@@ -279,7 +305,9 @@ function App() {
                   <Show when={opts().associateSql}><li><Check size={14} /> Ficheros .sql asociados</li></Show>
                   <li><Check size={14} /> Registrado en Configuración › Aplicaciones</li>
                 </ul>
-                <Toggle label="Abrir Celer ahora" value={opts().launchAfter} onChange={(v) => setOpts({ ...opts(), launchAfter: v })} />
+                <Show when={!autoUpdate()}>
+                  <Toggle label="Abrir Celer ahora" value={opts().launchAfter} onChange={(v) => setOpts({ ...opts(), launchAfter: v })} />
+                </Show>
               </section>
             </Match>
 
