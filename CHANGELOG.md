@@ -6,6 +6,10 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Dependencies: ureq 3 (update checks and driver downloads), sha2 0.11, mysql 26.
+- macOS and Linux packages are built on demand (manual workflow) instead of on every release.
+
 ## [1.2.0] - 2026-10-08
 
 ### Added

@@ -90,10 +90,12 @@ pub fn download(app_dir: &Path, progress: impl Fn(u64, u64)) -> Result<PathBuf> 
         .call()
         .map_err(|e| anyhow!("No se pudo descargar el driver: {e}"))?;
     let total: u64 = resp
-        .header("Content-Length")
+        .headers()
+        .get("Content-Length")
+        .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let mut reader = resp.into_reader();
+    let mut reader = resp.into_body().into_reader();
     let mut data = Vec::with_capacity(total as usize);
     let mut buf = vec![0u8; 256 * 1024];
     loop {

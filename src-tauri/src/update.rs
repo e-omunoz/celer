@@ -77,11 +77,16 @@ struct Asset {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(8))
-        .timeout_read(Duration::from_secs(30))
-        .user_agent(&format!("Celer/{} (+https://github.com/{REPO})", env!("CARGO_PKG_VERSION")))
-        .build()
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(8)))
+        .timeout_recv_response(Some(Duration::from_secs(20)))
+        .user_agent(format!("Celer/{} (+https://github.com/{REPO})", env!("CARGO_PKG_VERSION")))
+        .build();
+    ureq::Agent::new_with_config(config)
+}
+
+fn content_length<B>(resp: &ureq::http::Response<B>) -> u64 {
+    resp.headers().get("Content-Length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(0)
 }
 
 /// "v1.2.3" / "1.2.3-beta" → (1, 2, 3). Lo que no se entiende cuenta como 0.
@@ -116,18 +121,16 @@ fn current_version() -> String {
 pub fn check() -> Result<UpdateInfo> {
     let resp = agent()
         .get(API_LATEST)
-        .set("Accept", "application/vnd.github+json")
-        .set("X-GitHub-Api-Version", "2022-11-28")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
         .call()
         .map_err(|e| match e {
-            ureq::Error::Status(404, _) => anyhow!("Todavía no hay versiones publicadas."),
-            ureq::Error::Status(403, _) | ureq::Error::Status(429, _) => {
-                anyhow!("GitHub ha limitado las consultas por ahora; inténtalo más tarde.")
-            }
-            ureq::Error::Status(code, _) => anyhow!("GitHub respondió con el código {code}."),
-            ureq::Error::Transport(t) => anyhow!("Sin conexión con GitHub ({t})."),
+            ureq::Error::StatusCode(404) => anyhow!("Todavía no hay versiones publicadas."),
+            ureq::Error::StatusCode(403 | 429) => anyhow!("GitHub ha limitado las consultas por ahora; inténtalo más tarde."),
+            ureq::Error::StatusCode(code) => anyhow!("GitHub respondió con el código {code}."),
+            other => anyhow!("Sin conexión con GitHub ({other})."),
         })?;
-    let release: Release = serde_json::from_reader(resp.into_reader()).context("Respuesta de GitHub no válida")?;
+    let release: Release = serde_json::from_reader(resp.into_body().into_reader()).context("Respuesta de GitHub no válida")?;
     if release.draft || release.prerelease {
         bail!("El último release no es estable.");
     }
@@ -198,7 +201,13 @@ pub fn download(url: &str, name: &str, sums_url: &str, progress: impl Fn(u64, u6
         None
     } else {
         check_url(sums_url)?;
-        let sums = agent().get(sums_url).call().map_err(|e| anyhow!("No se pudo leer {SUMS_NAME}: {e}"))?.into_string()?;
+        let sums = agent()
+            .get(sums_url)
+            .call()
+            .map_err(|e| anyhow!("No se pudo leer {SUMS_NAME}: {e}"))?
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| anyhow!("No se pudo leer {SUMS_NAME}: {e}"))?;
         Some(expected_hash(&sums, name).ok_or_else(|| anyhow!("{SUMS_NAME} no incluye {name}."))?)
     };
 
@@ -207,8 +216,8 @@ pub fn download(url: &str, name: &str, sums_url: &str, progress: impl Fn(u64, u6
     let dest = dir.join(name);
     let partial = dir.join(format!("{name}.partial"));
     let resp = agent().get(url).call().map_err(|e| anyhow!("No se pudo descargar la actualización: {e}"))?;
-    let total: u64 = resp.header("Content-Length").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let mut reader = resp.into_reader();
+    let total = content_length(&resp);
+    let mut reader = resp.into_body().into_reader();
     let mut file = std::fs::File::create(&partial).with_context(|| format!("No se pudo crear {}", partial.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 256 * 1024];

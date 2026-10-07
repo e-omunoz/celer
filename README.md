@@ -47,8 +47,8 @@ Everything is on the [latest release](https://github.com/e-omunoz/celer/releases
 | **Windows** | `Celer-Setup-x.y.z.exe` | Recommended. Installs for your user only (no administrator rights) and updates itself in one click. |
 | Windows (IT) | `Celer-x.y.z-x64.msi` | Per-machine package for managed deployments (GPO, Intune). |
 | Windows | `Celer-x.y.z-portable.exe` · `…-nsis-setup.exe` | Runs without installing · classic installer. |
-| **macOS** 11+ | `Celer-x.y.z-macos-universal.dmg` | Apple Silicon and Intel. The app is not notarised yet: the first time, right-click → *Open*. |
-| **Linux** | `.AppImage` · `.deb` · `.rpm` | x86_64. Credentials are stored in the Secret Service (GNOME Keyring, KWallet). |
+| **macOS** 11+ | `Celer-x.y.z-macos-universal.dmg` | Apple Silicon and Intel. Built on demand, so not every release has it. Not notarised yet: the first time, right-click → *Open*. |
+| **Linux** | `.AppImage` · `.deb` · `.rpm` | x86_64, built on demand. Credentials are stored in the Secret Service (GNOME Keyring, KWallet). |
 
 Open Celer and a short guide shows you around; it can create a sample database for you to play with. Every release
 also carries `SHA256SUMS` files to verify the downloads, and Celer checks for new versions on start-up.

@@ -1,11 +1,9 @@
-# macOS and Linux packages. Windows installers are built locally by dev/release.ps1; this attaches the
-# other platforms to the same GitHub Release. It runs only when a release is published (or by hand), so
-# it costs no Actions minutes on everyday pushes.
+# macOS and Linux packages, on demand. Windows installers are built locally by dev/release.ps1; this
+# attaches the other platforms to an existing GitHub Release. Manual only (Actions → Run workflow, or
+# `gh workflow run release-desktop.yml -f tag=vX.Y.Z`): the macOS and Linux builds take ~15 minutes.
 name: Release (macOS, Linux)
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:

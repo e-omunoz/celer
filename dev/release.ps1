@@ -111,9 +111,8 @@ Step "GitHub Release"
 $notesFile = "$out\NOTES.md"
 [IO.File]::WriteAllText($notesFile, "$notes`n`n---`n**Install**`n" +
   "- **Windows:** ``Celer-Setup-$Version.exe`` (per user, no administrator rights, updates itself). Also ``Celer-$Version-x64.msi`` (per machine, for IT deployments), ``Celer-$Version-nsis-setup.exe`` and ``Celer-$Version-portable.exe``.`n" +
-  "- **macOS:** ``Celer-$Version-macos-universal.dmg`` (Apple Silicon and Intel; first launch: right-click → Open).`n" +
-  "- **Linux:** ``.AppImage``, ``.deb`` or ``.rpm`` (x86_64).`n`n" +
-  "macOS and Linux packages are attached by CI a few minutes after the release is published. Verify downloads with the ``SHA256SUMS`` files.", [Text.UTF8Encoding]::new($false))
+  "- **macOS / Linux:** packages are built on demand and attached here when available.`n`n" +
+  "Verify the downloads with ``SHA256SUMS.txt``.", [Text.UTF8Encoding]::new($false))
 $assets = Get-ChildItem $out -File | Where-Object { $_.Name -notin "NOTES.md", "COMMIT_MSG.txt" } | ForEach-Object { $_.FullName }
 $args = @("release", "create", $tag) + $assets + @("--title", "Celer $Version", "--notes-file", $notesFile, "--target", $branch)
 if ($Draft) { $args += "--draft" }
