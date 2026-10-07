@@ -6,7 +6,7 @@
   <a href="https://github.com/e-omunoz/celer/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/e-omunoz/celer?style=flat-square&color=F26B2A&label=release"></a>
   <a href="https://github.com/e-omunoz/celer/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/e-omunoz/celer/ci.yml?branch=main&style=flat-square&label=CI"></a>
   <a href="https://github.com/e-omunoz/celer/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/e-omunoz/celer/total?style=flat-square&color=4C88B8"></a>
-  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%7C%2011-2B2724?style=flat-square&logo=windows11&logoColor=white">
+  <img alt="Windows, macOS, Linux" src="https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-2B2724?style=flat-square">
   <img alt="Built with Tauri, Rust and SolidJS" src="https://img.shields.io/badge/Tauri%202%20·%20Rust%20·%20SolidJS-2B2724?style=flat-square&logo=tauri&logoColor=FFC131">
 </p>
 
@@ -40,12 +40,18 @@
 
 ## Install
 
-1. Download **`Celer-Setup-x.y.z.exe`** from the [latest release](https://github.com/e-omunoz/celer/releases/latest).
-2. Run it: it installs for your user only, so it doesn't need administrator rights. It also offers a desktop shortcut and lets you open `.sql` files with Celer.
-3. Open Celer. A short guide shows you around and can create a sample database for you to play with.
+Everything is on the [latest release](https://github.com/e-omunoz/celer/releases/latest).
 
-Also in every release: a classic NSIS installer, a **portable** `.exe` that runs without installing, and
-`SHA256SUMS.txt` to verify the downloads. Celer checks for new versions on start-up and updates itself with one click.
+| System | Download | Notes |
+|---|---|---|
+| **Windows** | `Celer-Setup-x.y.z.exe` | Recommended. Installs for your user only (no administrator rights) and updates itself in one click. |
+| Windows (IT) | `Celer-x.y.z-x64.msi` | Per-machine package for managed deployments (GPO, Intune). |
+| Windows | `Celer-x.y.z-portable.exe` · `…-nsis-setup.exe` | Runs without installing · classic installer. |
+| **macOS** 11+ | `Celer-x.y.z-macos-universal.dmg` | Apple Silicon and Intel. The app is not notarised yet: the first time, right-click → *Open*. |
+| **Linux** | `.AppImage` · `.deb` · `.rpm` | x86_64. Credentials are stored in the Secret Service (GNOME Keyring, KWallet). |
+
+Open Celer and a short guide shows you around; it can create a sample database for you to play with. Every release
+also carries `SHA256SUMS` files to verify the downloads, and Celer checks for new versions on start-up.
 
 ## Features
 

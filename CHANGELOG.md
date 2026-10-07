@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-08
+
 ### Added
 - Busy overlay with Gib over the grid for long operations. It shows live progress and has **Cancelar**:
   - "Cargar todo" stops after the chunk in flight and keeps the rows loaded so far;
@@ -64,6 +66,7 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/e-omunoz/celer/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/e-omunoz/celer/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/e-omunoz/celer/releases/tag/v1.0.0
