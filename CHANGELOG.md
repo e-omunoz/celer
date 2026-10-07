@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-08
+
 ### Added
 - **Import connections from DBeaver and DbVisualizer** ("Nuevo" menu, command palette or the start-up guide).
   - Shows a checklist of what was found and maps each driver to Celer's.
@@ -100,7 +102,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/e-omunoz/celer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/e-omunoz/celer/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/e-omunoz/celer/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/e-omunoz/celer/releases/tag/v1.0.0
