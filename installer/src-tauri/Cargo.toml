@@ -1,6 +1,6 @@
 [package]
 name = "celer-setup"
-version = "1.0.0"
+version = "1.1.0"
 description = "Celer Setup - instalador de Celer"
 authors = ["Celer"]
 edition = "2021"
@@ -11,6 +11,12 @@ edition = "2021"
 [[bin]]
 name = "celer-setup"
 path = "src/main.rs"
+
+# Built with plain `cargo build` (dev/release.ps1), not the Tauri CLI: custom-protocol must be on by
+# default so the UI is served from the embedded ../dist, never from the dev server on localhost:1430.
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -14,7 +14,8 @@ $root = Split-Path $PSScriptRoot -Parent
 $tools = "$env:LOCALAPPDATA\celer-tools"
 $git = "$tools\git\cmd\git.exe"
 $gh = "$tools\gh\bin\gh.exe"
-$env:Path = "$env:USERPROFILE\.cargo\bin;$tools\node-v22.20.0-win-x64;" + $env:Path
+# gh shells out to git, so the portable git must be on PATH too.
+$env:Path = "$env:USERPROFILE\.cargo\bin;$tools\node-v22.20.0-win-x64;$tools\git\cmd;" + $env:Path
 if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = "D:\celer-target" }
 Set-Location $root
 
@@ -91,8 +92,11 @@ Get-ChildItem $out | ForEach-Object { "{0,-34} {1,8:N1} MB" -f $_.Name, ($_.Leng
 # ---------------------------------------------------------------- git + GitHub
 Step "Commit y etiqueta $tag"
 & $git add -A
-& $git commit -q -m "chore(release): $tag" -m $notes
-& $git tag -a $tag -m "Celer $Version"
+# Message through a file: PowerShell 5 mangles quotes in native arguments (the notes have them).
+$msgFile = "$out\COMMIT_MSG.txt"
+[IO.File]::WriteAllText($msgFile, "chore(release): $tag`n`n$notes`n", [Text.UTF8Encoding]::new($false))
+& $git commit -q -F $msgFile; Check ($LASTEXITCODE -eq 0) "git commit falló"
+& $git tag -a $tag -m "Celer $Version"; Check ($LASTEXITCODE -eq 0) "git tag falló"
 if ($NoPublish) { Write-Host "Etiquetado localmente (sin publicar)."; exit 0 }
 
 $branch = & $git rev-parse --abbrev-ref HEAD
@@ -103,7 +107,7 @@ Step "GitHub Release"
 $notesFile = "$out\NOTES.md"
 Set-Content $notesFile ("$notes`n`n---`n**Instalación:** descarga ``Celer-Setup-$Version.exe`` (instalador de Celer, sin permisos de administrador). " +
   "Alternativas: ``Celer-$Version-nsis-setup.exe`` (instalador clásico) o ``Celer-$Version-portable.exe`` (sin instalar).") -Encoding utf8
-$assets = Get-ChildItem $out -File | Where-Object { $_.Name -ne "NOTES.md" } | ForEach-Object { $_.FullName }
+$assets = Get-ChildItem $out -File | Where-Object { $_.Name -notin "NOTES.md", "COMMIT_MSG.txt" } | ForEach-Object { $_.FullName }
 $args = @("release", "create", $tag) + $assets + @("--title", "Celer $Version", "--notes-file", $notesFile, "--target", $branch)
 if ($Draft) { $args += "--draft" }
 & $gh @args; Check ($LASTEXITCODE -eq 0) "gh release create falló"
