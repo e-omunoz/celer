@@ -6,28 +6,29 @@
 - [x] Drivers: SQL Server (native), Informix (IBM CLI / CSDK), generic ODBC
 - [x] Export: CSV, TSV, JSON, SQL, Excel
 - [x] Persistence: connections, OS credential store, history
-- [ ] Switch the Windows build to the MSVC toolchain and get the core compiling
+- [x] Core compiles on Linux (`cargo test --lib`)
+- [ ] Switch the Windows build to the MSVC toolchain
 - [ ] Core integration tests against SQL Server and Informix containers
 
 ## Phase 1 — Usable client (MVP)
-- [ ] Connection manager: folders, colours, production / read-only flags, test connection
-- [ ] Object tree with lazy loading and filtering
-- [ ] SQL editor (CodeMirror 6): syntax highlighting per dialect, schema-aware autocompletion,
+- [x] Connection manager: folders, colours, production / read-only flags, test connection
+- [x] Object tree with lazy loading and filtering
+- [x] SQL editor (CodeMirror 6): syntax highlighting per dialect, schema-aware autocompletion,
       run statement at cursor (Ctrl+Enter), run script (Alt+X), cancel, format SQL
-- [ ] Canvas result grid: virtualized rows and columns, resize, sort, selection, copy as TSV/CSV/SQL,
+- [x] Canvas result grid: virtualized rows and columns, resize, sort, selection, copy as TSV/CSV/SQL,
       value viewer for long text / JSON / binary
-- [ ] Multiple results and messages per execution
-- [ ] Table viewer: data, columns, indexes, keys, DDL
-- [ ] Data editing with primary keys: edit cells, insert / delete rows, SQL preview before saving
-- [ ] Export dialog with progress and cancellation
-- [ ] Query history panel with search
-- [ ] Themes: light, dark, high contrast and accent colours; font size; follows the OS theme
-- [ ] Workspace restore: open tabs and their content survive restarts
+- [x] Multiple results and messages per execution
+- [x] Table viewer: data, columns, indexes, keys, DDL
+- [x] Data editing with primary keys: edit cells, insert / delete rows, SQL preview before saving
+- [x] Export dialog with progress and cancellation
+- [x] Query history panel with search
+- [x] Themes: light, dark, high contrast and accent colours; font size; follows the OS theme
+- [x] Workspace restore: open tabs and their content survive restarts
 
 ## Phase 2 — Tier 1 drivers
 - [ ] PostgreSQL family (PostgreSQL, CockroachDB, YugabyteDB, TimescaleDB, Redshift)
 - [ ] MySQL / MariaDB family
-- [ ] SQLite (and libSQL / Turso)
+- [x] SQLite (embedded). libSQL / Turso still planned
 - [ ] Oracle (Instant Client, downloaded on demand)
 - [ ] IBM Db2 (LUW, i, z/OS) via the IBM CLI driver
 - [ ] Generic connection form driven by each driver's field description

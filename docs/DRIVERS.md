@@ -32,7 +32,7 @@ Legend: ✅ done · 🟡 planned · ⚪ via generic layer only
 | Informix | — | IBM CLI (DRDA) or Informix CSDK (SQLI, via ODBC) | `db2cli64.dll` / ODBC | ✅ written |
 | PostgreSQL | CockroachDB, YugabyteDB, TimescaleDB, Citus, Neon, Supabase, AlloyDB, Greenplum | Native | `tokio-postgres` | 🟡 |
 | MySQL / MariaDB | Aurora MySQL, TiDB, SingleStore, PlanetScale, Percona | Native | `mysql_async` | 🟡 |
-| SQLite | libSQL / Turso (remote) | Native (embedded) | `rusqlite` (bundled), `libsql` | 🟡 |
+| SQLite | libSQL / Turso (remote, still planned) | Native (embedded) | `rusqlite` (bundled) | ✅ embedded |
 | Oracle | Oracle Autonomous DB | Vendor library | `oracle` crate (ODPI-C + Oracle Instant Client) | 🟡 |
 | IBM Db2 | Db2 LUW, Db2 for i (AS/400), Db2 for z/OS | IBM CLI (same driver as Informix DRDA) | `db2cli64.dll` | 🟡 |
 

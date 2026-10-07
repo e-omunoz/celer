@@ -3,7 +3,8 @@
 A fast, lightweight desktop SQL client, built as an alternative to DBeaver.
 Powered by **Tauri 2**, a **Rust** core and a **SolidJS** interface.
 
-> **Status:** early development. The Rust core is written; the user interface is being built.
+> **Status:** phase 1 client is usable. The Rust core compiles on Linux, SQLite is embedded,
+> and the SolidJS interface covers connections, the object tree, the SQL editor and the data grid.
 > See [STATUS.md](STATUS.md) and the [roadmap](docs/ROADMAP.md).
 
 ## Goals
@@ -20,8 +21,8 @@ app never depends on a driver just to start. Full matrix and plan: [docs/DRIVERS
 
 | Group | Engines | Status |
 |---|---|---|
-| Done | SQL Server (native), Informix (IBM CLI / Client SDK), any ODBC source | ✅ written |
-| Tier 1 | PostgreSQL family (CockroachDB, YugabyteDB, TimescaleDB…), MySQL / MariaDB family, SQLite / libSQL, Oracle, IBM Db2 (LUW, i, z/OS) | 🟡 planned |
+| Done | SQL Server (native), Informix (IBM CLI / Client SDK), SQLite (embedded), any ODBC source | ✅ written |
+| Tier 1 | PostgreSQL family (CockroachDB, YugabyteDB, TimescaleDB…), MySQL / MariaDB family, libSQL / Turso, Oracle, IBM Db2 (LUW, i, z/OS) | 🟡 planned |
 | Tier 2 | Redshift, DuckDB, ClickHouse, Snowflake, BigQuery, Trino / Presto, Databricks, SAP HANA, Firebird, Athena, Flight SQL | 🟡 planned |
 | Tier 3 (NoSQL) | MongoDB, Redis / Valkey, Cassandra / ScyllaDB, Elasticsearch / OpenSearch | 🟡 planned |
 | Via ODBC | Teradata, Vertica, SAP ASE (Sybase), Access, Progress OpenEdge, and more | ⚪ generic |
@@ -61,6 +62,7 @@ src-tauri/src/
   lib.rs             Commands exposed to the UI
   session.rs         Driver trait and sessions on dedicated threads
   mssql.rs           SQL Server driver
+  sqlite.rs          Embedded SQLite driver
   odbc.rs            ODBC/CLI layer with dynamic loading
   odbc_driver.rs     Informix and generic ODBC
   export.rs          Result export
@@ -78,6 +80,9 @@ Requirements: [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 20+ and, 
 npm install
 npm run tauri dev
 ```
+
+The same interface runs in a browser (`npm run dev`) against an in-memory SQLite demo
+(`sql.js`). Desktop commands use the Rust drivers.
 
 To build the installer:
 
