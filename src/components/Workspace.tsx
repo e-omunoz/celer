@@ -1,6 +1,7 @@
 import {
   AlignLeft,
   ArrowDownToLine,
+  ArrowRight,
   Check,
   ChevronDown,
   CircleAlert,
@@ -27,7 +28,7 @@ import {
 import { createEffect, createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
-import { cellText, isNullCell, whereHints } from "../sql";
+import { cellText, isNullCell, rowsLabel, whereHints } from "../sql";
 import {
   activeSql,
   canEdit,
@@ -64,7 +65,11 @@ import {
   saveScript,
   saveSettings,
   saveTable,
-  schemaMap,
+  completionTables,
+  openTableFromSql,
+  followForeignKey,
+  foreignKeyOf,
+  foreignKeys,
   selectTab,
   serverOf,
   setActiveResult,
@@ -89,7 +94,7 @@ import {
   type Tab,
   type TableTab,
 } from "../state";
-import { engineOf } from "../types";
+import { engineOf, type Cell } from "../types";
 import { CodeView, SqlEditor } from "./Editor";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
@@ -346,8 +351,9 @@ function SqlPane(props: { tab: SqlTab }) {
           revision={props.tab.revision}
           cursor={props.tab.cursor}
           kind={kindOf(props.tab.connId)}
-          schema={schemaMap(props.tab)}
+          tables={completionTables(props.tab)}
           defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
+          onOpenTable={(table) => openTableFromSql(props.tab, table)}
           fontSize={state.settings.editorFontSize}
           onDoc={(sql, cursor, selection) => updateSql(props.tab.id, sql, cursor, selection)}
           onCursor={(line, col) => props.tab.id === state.activeTabId && setState("cursorPos", { line, col })}
@@ -389,7 +395,7 @@ function SqlPane(props: { tab: SqlTab }) {
           </Show>
           <Show when={!props.tab.running && result()?.columns.length}>
             <span class="muted small">
-              {result()!.rows.length.toLocaleString()}{result()!.hasMore ? "+" : ""} filas · {formatMs(props.tab.elapsedMs)}
+              {rowsLabel(result()!.rows.length, result()!.hasMore)} · {formatMs(props.tab.elapsedMs)}
             </span>
             <Show when={result()!.hasMore}>
               <button type="button" class="tb-icon" title="Cargar la siguiente página" onClick={() => void fetchMore(props.tab.id)}><ArrowDownToLine size={15} /></button>
@@ -411,7 +417,7 @@ function SqlPane(props: { tab: SqlTab }) {
             <div class="affected">
               <CircleCheck size={28} />
               <div>
-                <strong>{(result()!.rowsAffected ?? 0).toLocaleString()} filas afectadas</strong>
+                <strong>{rowsLabel(result()!.rowsAffected ?? 0)} {(result()!.rowsAffected ?? 0) === 1 ? "afectada" : "afectadas"}</strong>
                 <span>{formatMs(props.tab.elapsedMs)}{props.tab.inTransaction ? " · pendiente de commit" : ""}</span>
               </div>
             </div>
@@ -485,6 +491,11 @@ function TablePane(props: { tab: TableTab }) {
   const conn = () => connectionById(props.tab.connId);
   const rows = createMemo(() => displayRows(props.tab));
   const pkCols = createMemo(() => props.tab.columnsMeta.map((col, index) => (col.primaryKey ? index : -1)).filter((index) => index >= 0));
+  // Grid columns that belong to a foreign key (Ctrl+click jumps to the referenced row).
+  const linkCols = createMemo(() => {
+    const fkCols = new Set(foreignKeys(props.tab).flatMap((fk) => fk.columns));
+    return props.tab.gridCols.map((col, index) => (fkCols.has(col.name) ? index : -1)).filter((index) => index >= 0);
+  });
   const changes = () => Object.keys(props.tab.edits).length + props.tab.deleted.length + props.tab.inserts.length;
   const [where, setWhere] = createSignal(props.tab.where);
   const [orderBy, setOrderBy] = createSignal(props.tab.orderBy);
@@ -596,7 +607,7 @@ function TablePane(props: { tab: TableTab }) {
             </div>
             <span class="spacer" />
             <span class="muted small">
-              {props.tab.loading && !props.tab.rows.length ? "Cargando…" : `${props.tab.rows.length.toLocaleString()}${props.tab.hasMore ? "+" : ""} filas`}
+              {props.tab.loading && !props.tab.rows.length ? "Cargando…" : rowsLabel(props.tab.rows.length, props.tab.hasMore)}
               <Show when={props.tab.elapsedMs !== null}> · {formatMs(props.tab.elapsedMs)}</Show>
             </span>
             <Show when={props.tab.totalCount !== null} fallback={
@@ -637,6 +648,19 @@ function TablePane(props: { tab: TableTab }) {
             rows={rows()}
             resetKey={props.tab.gridCols}
             busyKey={props.tab.id}
+            linkCols={linkCols()}
+            linkLabel={(col) => {
+              const fk = foreignKeyOf(props.tab, props.tab.gridCols[col]?.name ?? "");
+              return fk ? fk.target.name : "";
+            }}
+            onFollow={(source, col) => {
+              const fk = foreignKeyOf(props.tab, props.tab.gridCols[col]?.name ?? "");
+              if (!fk) return;
+              const row: Record<string, Cell> = {};
+              const data = rows()[source] ?? [];
+              props.tab.gridCols.forEach((c, i) => (row[c.name] = data[i] ?? null));
+              void followForeignKey(props.tab, fk, row);
+            }}
             pkCols={pkCols()}
             deleted={props.tab.deleted}
             edits={props.tab.edits}
@@ -702,15 +726,27 @@ function TablePane(props: { tab: TableTab }) {
           <div class="meta-scroll">
             <Show when={(props.tab.section === "indexes" ? props.tab.indexes : props.tab.keys).length} fallback={<p class="meta-empty">{props.tab.section === "indexes" ? "Sin índices" : "Sin claves foráneas"}</p>}>
               <table class="meta">
-                <thead><tr><th>Nombre</th><th>Definición</th></tr></thead>
+                <thead><tr><th>Nombre</th><th>Definición</th><Show when={props.tab.section === "keys"}><th /></Show></tr></thead>
                 <tbody>
                   <For each={props.tab.section === "indexes" ? props.tab.indexes : props.tab.keys}>
-                    {(node) => (
-                      <tr>
-                        <td><span class="cell-icon"><ObjIcon kind={node.kind} size={14} /> <b>{node.name}</b></span></td>
-                        <td><code>{node.detail}</code></td>
-                      </tr>
-                    )}
+                    {(node) => {
+                      const fk = () => (props.tab.section === "keys" ? foreignKeys(props.tab).find((item) => item.name === node.name) : undefined);
+                      return (
+                        <tr classList={{ "fk-row": Boolean(fk()) }} onDblClick={() => fk() && void followForeignKey(props.tab, fk()!)}>
+                          <td><span class="cell-icon"><ObjIcon kind={node.kind} size={14} /> <b>{node.name}</b></span></td>
+                          <td><code>{node.detail}</code></td>
+                          <Show when={props.tab.section === "keys"}>
+                            <td class="fk-action">
+                              <Show when={fk()}>
+                                <button type="button" class="btn tiny" title="Abrir la tabla referenciada (doble clic en la fila)" onClick={() => void followForeignKey(props.tab, fk()!)}>
+                                  Abrir {fk()!.target.name} <ArrowRight size={12} />
+                                </button>
+                              </Show>
+                            </td>
+                          </Show>
+                        </tr>
+                      );
+                    }}
                   </For>
                 </tbody>
               </table>

@@ -1015,20 +1015,31 @@ impl Driver for MssqlDriver {
                             .collect())
                     }
                     "fks" => {
+                        // Column lists through FOR XML PATH (works on every SQL Server version, unlike STRING_AGG).
                         let rows = self.query_rows(&format!(
-                            "SELECT fk.name, OBJECT_SCHEMA_NAME(fk.referenced_object_id, DB_ID({})) + '.' + OBJECT_NAME(fk.referenced_object_id, DB_ID({})) \
+                            "SELECT fk.name, \
+                               OBJECT_SCHEMA_NAME(fk.referenced_object_id, DB_ID({q})), \
+                               OBJECT_NAME(fk.referenced_object_id, DB_ID({q})), \
+                               STUFF((SELECT ', ' + pc.name FROM {d}.sys.foreign_key_columns fkc \
+                                      JOIN {d}.sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id \
+                                      WHERE fkc.constraint_object_id = fk.object_id ORDER BY fkc.constraint_column_id FOR XML PATH('')), 1, 2, ''), \
+                               STUFF((SELECT ', ' + rc.name FROM {d}.sys.foreign_key_columns fkc \
+                                      JOIN {d}.sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id \
+                                      WHERE fkc.constraint_object_id = fk.object_id ORDER BY fkc.constraint_column_id FOR XML PATH('')), 1, 2, '') \
                              FROM {d}.sys.foreign_keys fk WHERE fk.parent_object_id = {oid} ORDER BY fk.name",
-                            ql(db),
-                            ql(db)
+                            q = ql(db),
                         ))?;
+                        // Same "cols → schema.table(cols)" shape on every engine; `obj` is the referenced table.
                         Ok(rows
                             .iter()
                             .map(|r| {
+                                let (ref_schema, ref_table) = (cell_str(&r[1]), cell_str(&r[2]));
                                 MetaNode::leaf(
                                     cell_str(&r[0]),
                                     "key",
-                                    Some(format!("→ {}", cell_str(&r[1]))),
+                                    Some(format!("{} → {}.{}({})", cell_str(&r[3]), ref_schema, ref_table, cell_str(&r[4]))),
                                 )
+                                .with_obj(ObjectRef::new(db, &ref_schema, &ref_table, "table"))
                             })
                             .collect())
                     }

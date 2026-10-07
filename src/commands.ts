@@ -26,6 +26,7 @@ import {
 import type { ThemeName } from "./types";
 import { askAi } from "./ai";
 import { checkForUpdates } from "./update";
+import { openMigration } from "./migrate";
 
 export interface Command {
   id: string;
@@ -63,6 +64,7 @@ export function commands(): Command[] {
     { id: "export", label: "Exportar resultado…", group: "Consulta", run: () => void startExport(), enabled: sqlOnly },
     { id: "new-console", label: "Nueva consola", group: "Archivo", keys: "Ctrl+Mayús+L", run: () => openQuery(contextConnId()) },
     { id: "new-conn", label: "Nueva conexión…", group: "Archivo", keys: "Ctrl+Alt+N", run: () => openConnDialog() },
+    { id: "import-conns", label: "Importar conexiones de DBeaver o DbVisualizer…", group: "Archivo", run: () => void openMigration() },
     { id: "open", label: "Abrir script…", group: "Archivo", keys: "Ctrl+O", run: () => void openScript() },
     { id: "save", label: "Guardar script…", group: "Archivo", keys: "Ctrl+S", run: () => void saveScript(), enabled: sqlOnly },
     { id: "close-tab", label: "Cerrar pestaña", group: "Ventana", keys: "Ctrl+W", run: () => state.activeTabId && void closeTab(state.activeTabId) },

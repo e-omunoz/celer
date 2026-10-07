@@ -1379,21 +1379,16 @@ impl Driver for MysqlDriver {
                             .iter()
                             .map(|r| {
                                 let ref_db = cell_str(&r[2]);
-                                let target = if ref_db.is_empty() || ref_db == **db {
-                                    cell_str(&r[3])
-                                } else {
-                                    format!("{ref_db}.{}", cell_str(&r[3]))
-                                };
+                                let ref_db = if ref_db.is_empty() { db.to_string() } else { ref_db };
+                                let ref_table = cell_str(&r[3]);
+                                let target = if ref_db == **db { ref_table.clone() } else { format!("{ref_db}.{ref_table}") };
+                                // Same "cols → table(cols)" shape on every engine; `obj` is the referenced table.
                                 MetaNode::leaf(
                                     cell_str(&r[0]),
                                     "key",
-                                    Some(format!(
-                                        "{} → {}.{}",
-                                        cell_str(&r[1]),
-                                        target,
-                                        cell_str(&r[4])
-                                    )),
+                                    Some(format!("{} → {}({})", cell_str(&r[1]), target, cell_str(&r[4]))),
                                 )
+                                .with_obj(ObjectRef::new(&ref_db, &ref_db, &ref_table, "table"))
                             })
                             .collect())
                     }
@@ -1979,7 +1974,8 @@ mod tests {
         assert!(uq.iter().any(|n| n.name == "uq_customers_email" && n.detail.as_deref().unwrap().contains("único")));
         let fks = d.children(&p(&["celer", "celer", "tables", "order_items", "fks"])).unwrap();
         assert_eq!(fks.len(), 2);
-        assert!(fks.iter().any(|n| n.detail.as_deref() == Some("order_id → orders.id")));
+        assert!(fks.iter().any(|n| n.detail.as_deref() == Some("order_id → orders(id)")));
+        assert!(fks.iter().any(|n| n.obj.as_ref().is_some_and(|o| o.name == "orders" && o.kind == "table")));
 
         let obj = ObjectRef::new("celer", "celer", "customers", "table");
         assert_eq!(d.qualified_name(&obj), "`celer`.`customers`");

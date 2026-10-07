@@ -1,90 +1,128 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 210" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 232" fill="none">
   <defs>
     <radialGradient id="laptop-fur" cx="32%" cy="28%" r="78%">
       <stop stop-color="#8B6246"/>
       <stop offset="1" stop-color="#56392A"/>
     </radialGradient>
-    <linearGradient id="laptop-shirt" x1="100" y1="150" x2="100" y2="210" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#F7F7F4"/>
-      <stop offset="1" stop-color="#DCDEE3"/>
+    <linearGradient id="laptop-shirt" x1="100" y1="150" x2="100" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FAFAF7"/>
+      <stop offset="1" stop-color="#D5D8DE"/>
     </linearGradient>
+    <linearGradient id="laptop-sleeve" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#F4F4F0"/>
+      <stop offset="1" stop-color="#D9DCE2"/>
+    </linearGradient>
+    <linearGradient id="laptop-lid" x1="100" y1="176" x2="100" y2="228" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#454B56"/>
+      <stop offset="1" stop-color="#2A2E35"/>
+    </linearGradient>
+    <radialGradient id="laptop-glow" cx="50%" cy="100%" r="70%">
+      <stop stop-color="#9FD0FF" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#9FD0FF" stop-opacity="0"/>
+    </radialGradient>
     <clipPath id="laptop-eye-l"><ellipse cx="79" cy="84" rx="15" ry="16"/></clipPath>
     <clipPath id="laptop-eye-r"><ellipse cx="121" cy="84" rx="15" ry="16"/></clipPath>
+    <clipPath id="laptop-lenses"><circle cx="79" cy="85" r="16"/><circle cx="121" cy="85" r="16"/></clipPath>
   </defs>
-  <g id="laptop-body">
-    <path fill="url(#laptop-shirt)" d="M50 210c0-34 14-52 32-56h36c18 4 32 22 32 56H50z"/>
-    <ellipse cx="100" cy="150" rx="19" ry="8" fill="url(#laptop-fur)"/>
-    <path fill="#F7F7F4" stroke="#DCDEE3" d="M100 157 85 147 80 166z"/>
-    <path fill="#F7F7F4" stroke="#DCDEE3" d="M100 157 115 147 120 166z"/>
-    <g class="tie">
-      <path fill="#16171B" d="M95 158h10l2 8.5H93z"/>
-      <path fill="#16171B" d="M93 166.5h14L110 197 100 206 90 197z"/>
+  <!-- Typing at the laptop: arms reach behind the lid to the keyboard; the face is lit by the screen. -->
+  <g class="g-all">
+    <g id="laptop-body">
+      <path fill="url(#laptop-shirt)" stroke="#C9CDD4" stroke-width="1.2" d="M46 232v-24c0-33 15-50 35-54h38c20 4 35 21 35 54v24z"/>
+      <ellipse cx="100" cy="150" rx="19" ry="8" fill="url(#laptop-fur)"/>
+      <path fill="#FAFAF7" stroke="#C9CDD4" d="M100 157 84 146 79 167z"/>
+      <path fill="#FAFAF7" stroke="#C9CDD4" d="M100 157 116 146 121 167z"/>
+      <path fill="#1B1C21" d="M95 158h10l2 8.5H93z"/>
+      <path fill="#1B1C21" d="M93 166.5h14L110 199 100 209 89 199z"/>
     </g>
-  </g>
-  <g class="arms" fill="url(#laptop-fur)">
-    <path d="M18 210c12-28 24-42 42-48l8 12c-16 6-26 18-36 36H18z"/>
-    <path d="M182 210c-12-28-24-42-42-48l-8 12c16 6 26 18 36 36h14z"/>
-  </g>
-  <g id="laptop-ears">
-    <circle cx="36" cy="94" r="22" fill="url(#laptop-fur)"/>
-    <circle cx="164" cy="94" r="22" fill="url(#laptop-fur)"/>
-    <circle cx="44" cy="96" r="13.5" fill="#E2B38B"/>
-    <circle cx="156" cy="96" r="13.5" fill="#E2B38B"/>
-  </g>
-  <ellipse cx="100" cy="88" rx="64" ry="58" fill="url(#laptop-fur)"/>
-  <g class="tufts" fill="url(#laptop-fur)">
-    <path class="tuft" d="M76 50c-6-18 8-30 16-12-4 6-10 12-16 12z"/>
-    <path class="tuft" d="M94 42c2-22 18-24 20-2-6 4-14 6-20 2z"/>
-    <path class="tuft" d="M124 50c8-20 22-14 12 2-6 2-12 2-12-2z"/>
-  </g>
-  <g fill="#F2D0AC">
-    <circle cx="79" cy="86" r="27"/>
-    <circle cx="121" cy="86" r="27"/>
-    <ellipse cx="100" cy="118" rx="37" ry="25"/>
-    <ellipse class="blush" cx="62" cy="108" rx="11" ry="6" fill="#F4A6A0" opacity=".35"/>
-    <ellipse class="blush" cx="138" cy="108" rx="11" ry="6" fill="#F4A6A0" opacity=".35"/>
-  </g>
-  <ellipse cx="79" cy="84" rx="15" ry="16" fill="#fff"/>
-  <ellipse cx="121" cy="84" rx="15" ry="16" fill="#fff"/>
-  <g class="pupils">
-    <circle cx="79" cy="93" r="6.6" fill="#24170F"/>
-    <circle cx="121" cy="93" r="6.6" fill="#24170F"/>
-    <circle cx="81.6" cy="90.4" r="2.1" fill="#fff"/>
-    <circle cx="123.6" cy="90.4" r="2.1" fill="#fff"/>
-  </g>
-  <g class="lids" clip-path="url(#laptop-eye-l)">
-    <rect class="lid" x="62" y="68" width="34" height="14" fill="#E7BE96"/>
-    <path d="M65 82q14 3 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
-  </g>
-  <g class="lids" clip-path="url(#laptop-eye-r)">
-    <rect class="lid" x="104" y="68" width="34" height="14" fill="#E7BE96"/>
-    <path d="M107 82q14 3 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
-  </g>
-  <g class="brows" stroke="#56392A" stroke-width="5" stroke-linecap="round">
-    <path d="M66 62c8 6 18 8 26 4"/>
-    <path d="M108 66c8-4 18-6 26-2"/>
-  </g>
-  <g class="glasses" stroke="#2A2B30" stroke-width="3" fill="none">
-    <circle cx="79" cy="84" r="18"/>
-    <circle cx="121" cy="84" r="18"/>
-    <path d="M97 84h6" stroke-linecap="round"/>
-  </g>
-  <g fill="#9A6A49">
-    <ellipse cx="94" cy="111" rx="2.2" ry="1.5"/>
-    <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
-  </g>
-  <path class="mouth" d="M96 127h14" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
-  <path d="M110 127c4 6 10 8 12 4 1-3-2-5-6-4" fill="#EE7C8E"/>
-  <g class="laptop">
-    <rect x="62" y="168" width="76" height="34" rx="3" fill="#2B2F36"/>
-    <rect x="58" y="162" width="84" height="8" rx="2" fill="#3A404A"/>
-    <path d="M96 176a8 8 0 1 0 8 8" stroke="#F26B1D" stroke-width="2.4" stroke-linecap="round"/>
-    <rect x="100" y="177" width="8" height="1.6" rx=".8" fill="#E7EBF2"/>
-    <rect x="98" y="180.5" width="12" height="1.6" rx=".8" fill="#E7EBF2"/>
-    <rect x="100" y="184" width="8" height="1.6" rx=".8" fill="#E7EBF2"/>
-  </g>
-  <g fill="#F2D0AC">
-    <ellipse cx="70" cy="166" rx="8" ry="5"/>
-    <ellipse cx="130" cy="166" rx="8" ry="5"/>
+    <!-- Arms: shoulder → elbow → hands on the keyboard (hidden behind the lid). -->
+    <g class="type-l">
+      <g transform="rotate(-24 60 170)">
+        <rect x="51" y="162" width="18" height="30" rx="9" fill="url(#laptop-sleeve)" stroke="#C9CDD4" stroke-width="1.2"/>
+        <rect x="53.5" y="188" width="13" height="30" rx="6.5" fill="url(#laptop-fur)"/>
+      </g>
+    </g>
+    <g class="type-r">
+      <g transform="rotate(24 140 170)">
+        <rect x="131" y="162" width="18" height="30" rx="9" fill="url(#laptop-sleeve)" stroke="#C9CDD4" stroke-width="1.2"/>
+        <rect x="133.5" y="188" width="13" height="30" rx="6.5" fill="url(#laptop-fur)"/>
+      </g>
+    </g>
+    <!-- Laptop seen from behind: lid with the Celer mark, base resting at the bottom. -->
+    <g class="laptop">
+      <rect x="44" y="176" width="112" height="52" rx="7" fill="url(#laptop-lid)" stroke="#5A616D" stroke-width="1.2"/>
+      <rect x="47" y="179" width="106" height="2" rx="1" fill="#FFFFFF" opacity=".08"/>
+      <g class="laptop-mark" transform="translate(100 202)">
+        <path d="M6.2 -6.5A9 9 0 1 0 6.2 6.5" stroke="#F26B2A" stroke-width="3.6" stroke-linecap="round"/>
+        <rect x="-1.5" y="-4.2" width="10" height="2" rx="1" fill="#E7EBF2"/>
+        <rect x="-3.5" y="-1" width="14" height="2" rx="1" fill="#E7EBF2"/>
+        <rect x="-1.5" y="2.2" width="10" height="2" rx="1" fill="#E7EBF2"/>
+      </g>
+      <rect x="38" y="226" width="124" height="6" rx="3" fill="#6A717D"/>
+    </g>
+    <!-- Bits of code floating up from the keyboard. -->
+    <g class="bits" stroke="#F26B2A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path class="bit b1" d="M30 186l-5 5 5 5M38 186l5 5-5 5"/>
+      <path class="bit b2" d="M168 182c-3 0-4 1.5-4 4v2c0 1.5-1 2.5-2.5 2.5 1.5 0 2.5 1 2.5 2.5v2c0 2.5 1 4 4 4"/>
+      <circle class="bit b3" cx="172" cy="200" r="1.6" fill="#F26B2A" stroke="none"/>
+    </g>
+    <g class="g-head">
+      <g>
+        <circle cx="36" cy="94" r="22" fill="url(#laptop-fur)"/>
+        <circle cx="164" cy="94" r="22" fill="url(#laptop-fur)"/>
+        <circle cx="44" cy="96" r="13.5" fill="#E2B38B"/>
+        <circle cx="156" cy="96" r="13.5" fill="#E2B38B"/>
+      </g>
+      <ellipse cx="100" cy="88" rx="64" ry="58" fill="url(#laptop-fur)"/>
+      <g class="tufts" fill="url(#laptop-fur)">
+        <path class="tuft" d="M76 50c-6-18 8-30 16-12-4 6-10 12-16 12z"/>
+        <path class="tuft" d="M94 42c2-22 18-24 20-2-6 4-14 6-20 2z"/>
+        <path class="tuft" d="M124 50c8-20 22-14 12 2-6 2-12 2-12-2z"/>
+      </g>
+      <g fill="#F2D0AC">
+        <circle cx="79" cy="86" r="27"/>
+        <circle cx="121" cy="86" r="27"/>
+        <ellipse cx="100" cy="118" rx="37" ry="25"/>
+      </g>
+      <ellipse class="blush" cx="62" cy="108" rx="11" ry="6" fill="#F4A6A0" opacity=".35"/>
+      <ellipse class="blush" cx="138" cy="108" rx="11" ry="6" fill="#F4A6A0" opacity=".35"/>
+      <!-- Light from the screen on the lower face. -->
+      <ellipse class="screen-glow" cx="100" cy="128" rx="32" ry="14" fill="url(#laptop-glow)"/>
+      <ellipse cx="79" cy="84" rx="15" ry="16" fill="#fff"/>
+      <ellipse cx="121" cy="84" rx="15" ry="16" fill="#fff"/>
+      <g class="pupils">
+        <circle cx="79" cy="93" r="6.4" fill="#24170F"/>
+        <circle cx="121" cy="93" r="6.4" fill="#24170F"/>
+        <circle cx="81.4" cy="90.6" r="2" fill="#fff"/>
+        <circle cx="123.4" cy="90.6" r="2" fill="#fff"/>
+      </g>
+      <g clip-path="url(#laptop-eye-l)">
+        <rect class="lid" x="62" y="68" width="34" height="13" fill="#E7BE96"/>
+        <path d="M65 81q14 3 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
+      </g>
+      <g clip-path="url(#laptop-eye-r)">
+        <rect class="lid" x="104" y="68" width="34" height="13" fill="#E7BE96"/>
+        <path d="M107 81q14 3 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
+      </g>
+      <!-- Focused, not cross: brows level, slightly lowered towards the middle. -->
+      <g class="brows" stroke="#56392A" stroke-width="5" stroke-linecap="round">
+        <path d="M65 64c8-2 17-1 25 2"/>
+        <path d="M110 66c8-3 17-4 25-2"/>
+      </g>
+      <g class="glasses">
+        <circle cx="79" cy="85" r="16.5" fill="#BFE0FF" fill-opacity=".14" stroke="#2A2B30" stroke-width="2.6"/>
+        <circle cx="121" cy="85" r="16.5" fill="#BFE0FF" fill-opacity=".14" stroke="#2A2B30" stroke-width="2.6"/>
+        <path d="M95.5 84q4.5-3 9 0" stroke="#2A2B30" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M62.5 82l-8-3M137.5 82l8-3" stroke="#2A2B30" stroke-width="2.4" stroke-linecap="round"/>
+        <g clip-path="url(#laptop-lenses)">
+          <rect class="glint" x="56" y="62" width="9" height="48" fill="#FFFFFF" opacity=".55" transform="rotate(24 79 85)"/>
+        </g>
+      </g>
+      <g fill="#9A6A49">
+        <ellipse cx="94" cy="111" rx="2.2" ry="1.5"/>
+        <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
+      </g>
+      <path class="mouth" d="M95 127q6 2 12 0" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
+      <path class="tongue" d="M107 127.5c3 4 7 5.5 9 3 1.2-1.8-.8-3.6-4-3.2" fill="#EE7C8E"/>
+    </g>
   </g>
 </svg>

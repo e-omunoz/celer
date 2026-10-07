@@ -133,17 +133,19 @@ function App() {
     if (loveBurst()) return "love";
     switch (step()) {
       case "welcome":
-      case "confirm-uninstall":
         return "wave";
-      case "installing":
+      // Being uninstalled makes Gib sad (he gets over it if you keep your data).
+      case "confirm-uninstall":
       case "uninstalling":
+        return "sad";
+      case "installing":
         return progress().pct > 97 ? "idea" : "think";
       case "done":
         return "happy";
       case "error":
         return "error";
       case "uninstalled":
-        return "wave";
+        return "sad";
       default:
         return "idle";
     }
@@ -322,7 +324,7 @@ function App() {
             <Match when={step() === "confirm-uninstall"}>
               <section class="screen">
                 <h1>¿Desinstalar Celer?</h1>
-                <p class="lead">Se quitarán el programa, sus accesos directos y su registro en Windows.</p>
+                <p class="lead">Se quitarán el programa, sus accesos directos y su registro en Windows. Gib se queda un poco triste, pero lo entiende.</p>
                 <Toggle label="Conservar mis conexiones, consultas y ajustes" value={keepData()} onChange={setKeepData} />
                 <p class="fine">
                   <KeyRound size={12} /> Las contraseñas guardadas en el almacén de credenciales de Windows no se tocan.

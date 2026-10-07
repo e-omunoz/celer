@@ -132,6 +132,11 @@ export function needsProductionConfirm(sql: string, dialect?: string): boolean {
   });
 }
 
+/** "1 fila", "2 filas", "500+ filas" (localised thousands). */
+export function rowsLabel(n: number, more = false, word = "fila") {
+  return `${n.toLocaleString()}${more ? "+" : ""} ${n === 1 && !more ? word : `${word}s`}`;
+}
+
 export interface WhereHint {
   kind: "dquote" | "like";
   /** Span in the WHERE text the hint is about. */

@@ -579,16 +579,13 @@ impl Driver for SqliteDriver {
                         Ok(grouped
                             .into_iter()
                             .map(|(id, table, from, to)| {
+                                // Same "cols → table(cols)" shape on every engine; `obj` is the referenced table.
                                 MetaNode::leaf(
                                     format!("fk{id}"),
                                     "key",
-                                    Some(format!(
-                                        "{} → {}.{}",
-                                        from.join(", "),
-                                        table,
-                                        to.join(", ")
-                                    )),
+                                    Some(format!("{} → {}({})", from.join(", "), table, to.join(", "))),
                                 )
+                                .with_obj(ObjectRef::new(db, sch, &table, "table"))
                             })
                             .collect())
                     }

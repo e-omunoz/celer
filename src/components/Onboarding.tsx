@@ -16,6 +16,7 @@ import {
   setState,
   state,
 } from "../state";
+import { openMigration } from "../migrate";
 import { ACCENTS, emptyConn, ENGINES, type ThemeName } from "../types";
 import { errorText } from "../api";
 
@@ -44,7 +45,7 @@ const TOUR: Spot[] = [
   { selector: ".pane-host.active .results", title: "Resultados", body: "Millones de filas sin bloquear nada: se leen por páginas. Selecciona celdas para ver suma y media abajo, Ctrl+F para buscar, clic derecho para copiar como CSV, JSON, INSERT…" },
   { selector: ".search-trigger", title: "Buscar en todo", body: "Pulsa Mayús dos veces (o Ctrl+K) para saltar a cualquier tabla, pestaña o acción. Ctrl+N va directo a una tabla." },
   { selector: ".stripe-btn[title^='Asistente']", title: "Asistente de IA", body: "Genera, explica, corrige y optimiza SQL con Claude usando tu esquema real, nunca tus filas. Y desde Ajustes › IA, un servidor MCP con permisos por conexión." },
-  { selector: ".companion", title: "Gib", body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan. Haz clic para un consejo; doble clic si te caigo bien." },
+  { selector: ".companion .gib", title: "Gib", body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan. Haz clic para un consejo; doble clic si te caigo bien." },
 ];
 
 const KEYS: [string, string][] = [
@@ -82,8 +83,25 @@ export function Onboarding() {
   function measure() {
     const target = TOUR[spot()];
     const el = document.querySelector<HTMLElement>(target.selector);
-    setRect(el ? el.getBoundingClientRect() : null);
+    if (!el) return setRect(null);
+    // Gib's art overflows its box (he rises above the status bar): spotlight what is actually painted.
+    const rects = [el.getBoundingClientRect(), ...[...el.querySelectorAll("svg")].map((s) => s.getBoundingClientRect())].filter((r) => r.width && r.height);
+    const left = Math.min(...rects.map((r) => r.left));
+    const top = Math.min(...rects.map((r) => r.top));
+    const right = Math.max(...rects.map((r) => r.right));
+    const bottom = Math.max(...rects.map((r) => r.bottom));
+    setRect(new DOMRect(left, top, right - left, bottom - top));
   }
+  // The bubble's real height (its text varies per step) drives where it fits.
+  const [bubbleH, setBubbleH] = createSignal(220);
+  const bubbleObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) setBubbleH((entry.target as HTMLElement).offsetHeight);
+  });
+  onCleanup(() => bubbleObserver.disconnect());
+  const bubbleRef = (el: HTMLDivElement) => {
+    bubbleObserver.observe(el);
+    setBubbleH(el.offsetHeight || 220);
+  };
 
   createEffect(() => {
     if (step() !== "tour") return;
@@ -122,22 +140,41 @@ export function Onboarding() {
     else setStep("connect");
   }
 
-  const bubbleStyle = () => {
+  /** Spotlight box: the target plus a margin, kept inside the window. */
+  const spotBox = () => {
     const r = rect();
-    const w = 330;
-    if (!r) return { left: `calc(50% - ${w / 2}px)`, top: "40%" };
+    if (!r) return null;
+    const m = 8;
+    // May touch the window edge (Gib sits in the corner) but never crops the target.
+    const left = Math.max(0, r.left - m);
+    const top = Math.max(0, r.top - m);
+    const right = Math.min(window.innerWidth, r.right + m);
+    const bottom = Math.min(window.innerHeight, r.bottom + m);
+    return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+  };
+
+  /** Places the bubble where it fits entirely (right, left, below, above), using its real height. */
+  const bubbleStyle = () => {
+    const r = spotBox();
+    const w = Math.min(330, window.innerWidth - 24);
+    const h = bubbleH();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    // Prefer the right side, then left, then below, then above.
-    let left = r.right + 18;
-    let top = r.top + Math.min(40, r.height / 2 - 60);
-    if (left + w > vw - 12) left = r.left - w - 18;
-    if (left < 12) {
-      left = Math.min(Math.max(12, r.left + r.width / 2 - w / 2), vw - w - 12);
-      top = r.bottom + 16;
-      if (top + 190 > vh) top = r.top - 206;
-    }
-    return { left: `${left}px`, top: `${Math.max(12, Math.min(top, vh - 210))}px` };
+    const pad = 12;
+    const gap = 14;
+    if (!r) return { left: `${(vw - w) / 2}px`, top: `${Math.max(pad, (vh - h) / 2)}px`, width: `${w}px` };
+    const clampTop = (t: number) => Math.max(pad, Math.min(t, vh - h - pad));
+    const clampLeft = (l: number) => Math.max(pad, Math.min(l, vw - w - pad));
+    const midTop = clampTop(r.top + r.height / 2 - h / 2);
+    const midLeft = clampLeft(r.left + r.width / 2 - w / 2);
+    const candidates = [
+      { left: r.left + r.width + gap, top: midTop, fits: r.left + r.width + gap + w <= vw - pad },
+      { left: r.left - gap - w, top: midTop, fits: r.left - gap - w >= pad },
+      { left: midLeft, top: r.top + r.height + gap, fits: r.top + r.height + gap + h <= vh - pad },
+      { left: midLeft, top: r.top - gap - h, fits: r.top - gap - h >= pad },
+    ];
+    const chosen = candidates.find((c) => c.fits) ?? { left: clampLeft(r.left), top: clampTop(r.top) };
+    return { left: `${clampLeft(chosen.left)}px`, top: `${clampTop(chosen.top)}px`, width: `${w}px` };
   };
 
   const mood = (): GibMood => {
@@ -268,6 +305,9 @@ export function Onboarding() {
                           )}
                         </For>
                       </div>
+                      <button type="button" class="link small onb-import" onClick={() => { setState("onboardingOpen", false); void saveSettings({ onboarded: true }); void openMigration(); }}>
+                        ¿Vienes de DBeaver o DbVisualizer? Importa tus conexiones
+                      </button>
                       <Show when={state.connections.length}>
                         <p class="onb-note">Ya tienes {state.connections.length} {state.connections.length === 1 ? "conexión" : "conexiones"}: puedes pasar directamente al recorrido.</p>
                       </Show>
@@ -326,12 +366,12 @@ export function Onboarding() {
       <div
         class="tour-spot"
         style={
-          rect()
-            ? { left: `${rect()!.left - 6}px`, top: `${rect()!.top - 6}px`, width: `${rect()!.width + 12}px`, height: `${rect()!.height + 12}px` }
+          spotBox()
+            ? { left: `${spotBox()!.left}px`, top: `${spotBox()!.top}px`, width: `${spotBox()!.width}px`, height: `${spotBox()!.height}px` }
             : { left: "50%", top: "50%", width: "0px", height: "0px" }
         }
       />
-      <div class="tour-bubble" style={bubbleStyle()}>
+      <div class="tour-bubble" ref={bubbleRef} style={bubbleStyle()}>
         <div class="tour-head">
           <Gib size={34} pose="poker" mood="idle" plain />
           <div>

@@ -1,6 +1,7 @@
 mod drivers;
 mod export;
 mod mcp;
+mod migrate;
 mod model;
 mod mssql;
 mod mysql;
@@ -541,6 +542,14 @@ fn app_info(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     })
 }
 
+// ───────────── Migración desde otras herramientas ─────────────
+
+/// Connection files of DBeaver and DbVisualizer found on this machine (read-only).
+#[tauri::command]
+async fn migration_sources() -> Vec<migrate::SourceFile> {
+    tauri::async_runtime::spawn_blocking(migrate::find_sources).await.unwrap_or_default()
+}
+
 // ───────────── Actualizaciones ─────────────
 
 #[tauri::command]
@@ -737,6 +746,7 @@ pub fn run() {
             ibm_driver_status,
             ibm_driver_download,
             app_info,
+            migration_sources,
             update_check,
             update_download,
             update_install,

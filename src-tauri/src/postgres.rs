@@ -1027,14 +1027,18 @@ impl Driver for PostgresDriver {
                                co.confrelid::regclass::text, \
                                (SELECT string_agg(pg_catalog.quote_ident(a.attname), ', ' ORDER BY k.ord) \
                                   FROM unnest(co.confkey) WITH ORDINALITY k(attnum, ord) \
-                                  JOIN pg_catalog.pg_attribute a ON a.attrelid = co.confrelid AND a.attnum = k.attnum) \
+                                  JOIN pg_catalog.pg_attribute a ON a.attrelid = co.confrelid AND a.attnum = k.attnum), \
+                               rn.nspname::text, rc.relname::text \
                              FROM pg_catalog.pg_constraint co \
                              JOIN pg_catalog.pg_class c ON c.oid = co.conrelid \
                              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                             JOIN pg_catalog.pg_class rc ON rc.oid = co.confrelid \
+                             JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace \
                              WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relname = $2::text \
                              ORDER BY co.conname",
                             &args,
                         )?;
+                        // `obj` is the referenced table, so the UI can jump to it.
                         Ok(rows
                             .iter()
                             .map(|r| {
@@ -1043,6 +1047,7 @@ impl Driver for PostgresDriver {
                                     "key",
                                     Some(format!("{} → {}({})", s(r, 1), s(r, 2), s(r, 3))),
                                 )
+                                .with_obj(ObjectRef::new(db, &s(r, 4), &s(r, 5), "table"))
                             })
                             .collect())
                     }
@@ -2294,6 +2299,7 @@ mod tests {
             .unwrap();
         assert_eq!(fks.len(), 2);
         assert!(fks.iter().any(|n| n.detail.as_deref().unwrap().contains("sales.products(sku)")));
+        assert!(fks.iter().any(|n| n.obj.as_ref().is_some_and(|o| o.schema == "sales" && o.name == "products")));
         let trg = d
             .children(&p(&["celer", "public", "tables", "customers", "triggers"]))
             .unwrap();

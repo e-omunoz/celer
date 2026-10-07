@@ -6,6 +6,36 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Import connections from DBeaver and DbVisualizer** ("Nuevo" menu, command palette or the start-up guide).
+  - Shows a checklist of what was found and maps each driver to Celer's.
+  - Flags connections that already exist and lists unsupported drivers explicitly.
+  - Keeps folders, production flags and SQL Server instances.
+  - Optionally imports DBeaver's saved passwords into the OS credential store.
+  - Never modifies the source tools.
+- **Ctrl+click / F4 / Ctrl+B on a table name** (or an alias) in the SQL opens the table. Holding Ctrl underlines it like a link.
+- **Foreign keys you can follow**:
+  - Ctrl+click on an FK value (or "Ir a la fila referenciada") opens the referenced row;
+  - FK columns are marked with ↗ in the header;
+  - the "Claves" tab opens the referenced table.
+- Gib is sad while being uninstalled (and a tear falls).
+
+### Fixed
+- Completion offered only keywords and functions before a console's first run, and never unqualified
+  columns. It now uses the real catalog from the moment the connection opens, with context:
+  - tables after FROM/JOIN/UPDATE/INTO;
+  - the statement's columns (with their table or alias) everywhere else;
+  - alias./table. → columns, schema. → tables.
+- Gib lost his shirt, sleeves and fur when another Gib was hidden in an inactive tab (shared SVG ids).
+  His left arm is now drawn in front of the torso.
+- Gib at the laptop (busy) was redrawn:
+  - real arms and a big laptop;
+  - a focused face instead of a cross one;
+  - typing animation with a glint on the glasses.
+- The start-up tour's bubble could be cut at the window edges, and the last step cropped Gib.
+  The bubble now uses its real height and always fits; the spotlight covers Gib entirely.
+- "1 filas" → "1 fila".
+
 ### Changed
 - Dependencies: ureq 3 (update checks and driver downloads), sha2 0.11, mysql 26.
 - macOS and Linux packages are built on demand (manual workflow) instead of on every release.

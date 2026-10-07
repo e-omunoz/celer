@@ -31,6 +31,8 @@ import {
 } from "./state";
 import { engineOf } from "./types";
 import { UpdateDialog } from "./components/UpdateDialog";
+import { MigrateDialog } from "./components/MigrateDialog";
+import { migration, openMigration } from "./migrate";
 import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
 
 export default function App() {
@@ -104,6 +106,7 @@ export default function App() {
       <Palette />
       <Modals />
       <Show when={update.dialogOpen}><UpdateDialog /></Show>
+      <Show when={migration.open}><MigrateDialog /></Show>
       <Splash />
       <Show when={state.onboardingOpen}><Onboarding /></Show>
     </div>
@@ -125,6 +128,8 @@ function TopBar() {
           openMenu(event, [
             { label: "Nueva conexión…", hint: "Ctrl+Alt+N", run: () => openConnDialog() },
             { label: "Nueva consola", hint: "Ctrl+Mayús+L", run: () => openQuery(activeTab()?.connId ?? state.connections[0]?.id ?? null) },
+            { separator: true },
+            { label: "Importar conexiones de DBeaver o DbVisualizer…", run: () => void openMigration() },
           ])
         }
       >

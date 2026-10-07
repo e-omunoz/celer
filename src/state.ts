@@ -3,7 +3,7 @@ import { createStore } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { formatSql, isMutating, needsProductionConfirm, sqlLiteral, statementAt, wherePosition } from "./sql";
+import { cellText, formatSql, rowsLabel, isMutating, needsProductionConfirm, sqlLiteral, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -826,8 +826,8 @@ function pushOutput(tabId: string, entry: OutputEntry) {
 export function describeResults(results: ResultSet[], elapsedMs: number) {
   const parts = results.map((result) =>
     result.columns.length
-      ? `${result.rows.length.toLocaleString()}${result.hasMore ? "+" : ""} filas`
-      : `${(result.rowsAffected ?? 0).toLocaleString()} filas afectadas`,
+      ? rowsLabel(result.rows.length, result.hasMore)
+      : `${rowsLabel(result.rowsAffected ?? 0)} ${(result.rowsAffected ?? 0) === 1 ? "afectada" : "afectadas"}`,
   );
   return `${parts.join(", ") || "Hecho"} en ${formatMs(elapsedMs)}`;
 }
@@ -1110,11 +1110,61 @@ async function openSessionFor(connId: string) {
   return api().openSession(connId, state.passwords[connId]);
 }
 
-export async function openTable(connId: string, obj: ObjectRef, section: TableTab["section"] = "data") {
+// ---------------------------------------------------------------- foreign keys
+
+export interface ForeignKey {
+  name: string;
+  /** Columns of this table, and the referenced table and columns (same order). */
+  columns: string[];
+  target: ObjectRef;
+  targetColumns: string[];
+}
+
+const unquote = (name: string) => name.trim().replace(/^["`[]|["`\]]$/g, "");
+
+/** FK nodes of the "Claves" section: the core sends "cols → table(cols)" and the referenced table in `obj`. */
+export function foreignKeys(tab: TableTab): ForeignKey[] {
+  const out: ForeignKey[] = [];
+  for (const node of tab.keys) {
+    if (node.kind !== "key" || !node.obj) continue;
+    const match = /^(.*?)\s*→\s*.*?\(([^()]*)\)\s*$/.exec(node.detail ?? "");
+    const columns = match ? match[1].split(",").map(unquote).filter(Boolean) : [];
+    const targetColumns = match ? match[2].split(",").map(unquote).filter(Boolean) : [];
+    out.push({ name: node.name, columns, target: { ...node.obj, database: node.obj.database || tab.obj.database }, targetColumns });
+  }
+  return out;
+}
+
+/** The FK a column belongs to (single-column keys first). */
+export function foreignKeyOf(tab: TableTab, column: string): ForeignKey | undefined {
+  const fks = foreignKeys(tab).filter((fk) => fk.columns.includes(column));
+  return fks.find((fk) => fk.columns.length === 1) ?? fks[0];
+}
+
+/**
+ * Opens the table an FK points to. With `row` (values of this table's columns), opens it filtered to the
+ * referenced row(s), like "go to referenced row" in DataGrip.
+ */
+export async function followForeignKey(tab: TableTab, fk: ForeignKey, row?: Record<string, Cell>) {
+  const filters: ColumnFilter[] = [];
+  if (row && fk.targetColumns.length === fk.columns.length) {
+    fk.columns.forEach((col, i) => {
+      const value = row[col];
+      filters.push({ id: uid(), col: fk.targetColumns[i], op: value === null || value === undefined ? "null" : "eq", value: value === null || value === undefined ? "" : cellText(value), value2: "", values: [], enabled: true });
+    });
+  }
+  await openTable(tab.connId, fk.target, "data", filters);
+}
+
+export async function openTable(connId: string, obj: ObjectRef, section: TableTab["section"] = "data", filters: ColumnFilter[] = []) {
   const existing = state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
   if (existing) {
     selectTab(existing.id);
     if (section !== "data") patchTab(existing.id, { section });
+    if (filters.length && (await guardDirty(existing.id))) {
+      patchTab(existing.id, { filters, where: "", section: "data" });
+      void reloadTable(existing.id);
+    }
     return;
   }
   const opened = await openSessionFor(connId).catch((err) => {
@@ -1147,7 +1197,7 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
     errorAt: null,
     where: "",
     orderBy: "",
-    filters: [],
+    filters,
     sort: null,
     totalCount: null,
     counting: false,
@@ -1512,7 +1562,7 @@ export async function saveTable(tabId: string) {
       }
       setState({ previewSql: "", previewRun: null });
       const affected = output.results.reduce((sum, result) => sum + (result.rowsAffected ?? 0), 0);
-      notify(`Cambios guardados · ${affected} filas afectadas`, "success");
+      notify(`Cambios guardados · ${rowsLabel(affected)} ${affected === 1 ? "afectada" : "afectadas"}`, "success");
       gib("saved");
       await reloadTable(tabId);
     },
@@ -1929,6 +1979,25 @@ export async function downloadDriver() {
 }
 
 // ---------------------------------------------------------------- completion
+
+/**
+ * Tables and columns for a console's completion and Ctrl+click. Before the console runs anything it has no
+ * session of its own: fall back to the catalog loaded when the connection was opened (same database).
+ */
+export function completionTables(tab: SqlTab | undefined): CompletionSchema["tables"] {
+  if (!tab?.connId) return [];
+  if (tab.completion?.tables.length) return tab.completion.tables;
+  const catalog = state.catalog[tab.connId];
+  if (!catalog || (tab.database && catalog.database && tab.database !== catalog.database)) return [];
+  return catalog.tables;
+}
+
+/** Opens the table a console refers to (Ctrl+click / F4 on its name in the SQL). */
+export function openTableFromSql(tab: SqlTab, table: CompletionSchema["tables"][number]) {
+  if (!tab.connId) return;
+  const database = tab.database || state.catalog[tab.connId]?.database || "";
+  void openTable(tab.connId, { database, schema: table.schema, name: table.name, kind: "table" });
+}
 
 export function schemaMap(tab: SqlTab | undefined) {
   const map: Record<string, string[]> = {};

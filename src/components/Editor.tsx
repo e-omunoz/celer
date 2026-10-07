@@ -1,9 +1,18 @@
-import { acceptCompletion, autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
+import {
+  acceptCompletion,
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completionKeymap,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+} from "@codemirror/autocomplete";
 import { copyLineDown, defaultKeymap, deleteLine, history, historyKeymap, indentWithTab, moveLineDown, moveLineUp, toggleComment } from "@codemirror/commands";
 import { MariaSQL, MSSQL, MySQL, PostgreSQL, sql, SQLite, StandardSQL } from "@codemirror/lang-sql";
-import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, RangeSetBuilder, StateEffect, StateField, type Extension } from "@codemirror/state";
 import {
   crosshairCursor,
   Decoration,
@@ -22,7 +31,8 @@ import {
 import { tags } from "@lezer/highlight";
 import { createEffect, on, onCleanup, onMount, untrack } from "solid-js";
 import { splitSql } from "../sql";
-import type { DbKind } from "../types";
+import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
+import type { CompletionTable, DbKind } from "../types";
 
 const language = new Compartment();
 const theme = new Compartment();
@@ -87,12 +97,117 @@ const statementBand = (dialect: () => string) => ViewPlugin.fromClass(
   { decorations: (plugin) => plugin.decorations },
 );
 
+/** The statement (text and start offset) that contains `pos`. */
+function statementAround(text: string, pos: number, dialect: string) {
+  const parts = splitSql(text, dialect);
+  let chosen = parts[0] ?? { sql: text, start: 0, end: text.length };
+  for (const part of parts) {
+    if (pos < part.start) break;
+    chosen = part;
+    if (pos <= part.end + 1) break;
+  }
+  return { start: chosen.start, text: text.slice(chosen.start, Math.max(chosen.end, pos)) };
+}
+
+const quoteIfNeeded = (name: string) => (/^[a-z_][a-z0-9_$]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`);
+
+/**
+ * Context-aware completion over the real catalog (replaces lang-sql's schema completion, which only offers
+ * columns after "table."): tables after FROM/JOIN/UPDATE/INTO, the statement's columns everywhere else,
+ * alias./table. → that table's columns, schema. → its tables. Ranked above keywords and functions.
+ */
+function catalogCompletion(get: () => { tables: CompletionTable[]; defaultSchema?: string; dialect: string }) {
+  const source = catalogSource(get);
+  return (ctx: CompletionContext): CompletionResult | null => {
+    try {
+      return source(ctx);
+    } catch (err) {
+      console.error("catalog completion failed", err);
+      return null;
+    }
+  };
+}
+
+function catalogSource(get: () => { tables: CompletionTable[]; defaultSchema?: string; dialect: string }) {
+  return (ctx: CompletionContext): CompletionResult | null => {
+    const { tables, defaultSchema, dialect } = get();
+    if (!tables.length) return null;
+    const word = ctx.matchBefore(/[\w$]*/);
+    if (!word || (word.from === word.to && !ctx.explicit && ctx.state.sliceDoc(word.from - 1, word.from) !== ".")) return null;
+    const node = syntaxTree(ctx.state).resolveInner(ctx.pos, -1);
+    if (/String|Comment|QuotedIdentifier/.test(node.name)) return null;
+    const text = ctx.state.doc.toString();
+    const stmt = statementAround(text, ctx.pos, dialect);
+    const refs = referencedTables(stmt.text, tables, defaultSchema);
+    const before = text.slice(stmt.start, word.from);
+    const cols = (ref: TableRef, boost: number): Completion[] =>
+      ref.table.columns.map((col) => ({ label: col, type: "property", detail: ref.alias, boost, apply: quoteIfNeeded(col) }));
+    const tableOption = (t: CompletionTable, boost: number): Completion => ({
+      label: t.name,
+      type: "class",
+      detail: t.schema || undefined,
+      boost,
+      apply: !t.schema || !defaultSchema || t.schema.toLowerCase() === defaultSchema.toLowerCase() ? quoteIfNeeded(t.name) : `${quoteIfNeeded(t.schema)}.${quoteIfNeeded(t.name)}`,
+    });
+
+    // Qualified: "x." → columns of alias/table x, or the tables of schema x.
+    const qualifier = /((?:[A-Za-z_$][\w$]*|"(?:[^"]|"")+"|`[^`]+`|\[[^\]]+\]))\s*\.\s*$/.exec(before);
+    if (qualifier) {
+      const q = splitQualified(qualifier[1])[0]?.toLowerCase() ?? "";
+      const ref = refs.find((r) => r.alias.toLowerCase() === q) ?? refs.find((r) => r.table.name.toLowerCase() === q);
+      const table = ref?.table ?? findTable(tables, [q], defaultSchema);
+      if (table) return { from: word.from, options: cols(ref ?? { table, alias: table.name }, 10), validFor: /^[\w$]*$/ };
+      const inSchema = tables.filter((t) => t.schema.toLowerCase() === q);
+      if (inSchema.length) return { from: word.from, options: inSchema.map((t) => ({ ...tableOption(t, 10), apply: quoteIfNeeded(t.name) })), validFor: /^[\w$]*$/ };
+      return null;
+    }
+
+    if (expectAt(before) === "table") {
+      const schemas = [...new Set(tables.map((t) => t.schema).filter(Boolean))];
+      return {
+        from: word.from,
+        options: [
+          ...tables.map((t) => tableOption(t, 6)),
+          ...schemas.map((s) => ({ label: s, type: "namespace", boost: 1, apply: quoteIfNeeded(s) })),
+        ],
+        validFor: /^[\w$]*$/,
+      };
+    }
+
+    const options: Completion[] = [];
+    if (refs.length) {
+      refs.forEach((ref, i) => options.push(...cols(ref, 8 - Math.min(i, 3))));
+      refs.forEach((ref) => ref.alias !== ref.table.name && options.push({ label: ref.alias, type: "variable", detail: ref.table.name, boost: 5 }));
+    } else {
+      // No FROM yet (e.g. "SELECT |"): every column of the catalog when it is a reasonable list.
+      const total = tables.reduce((n, t) => n + t.columns.length, 0);
+      if (total <= 3000) tables.forEach((t) => options.push(...cols({ table: t, alias: t.name }, 2)));
+    }
+    tables.forEach((t) => options.push(tableOption(t, 1)));
+    return { from: word.from, options, validFor: /^[\w$]*$/ };
+  };
+}
+
+/** Ctrl/Cmd + hover over a table name: underline it like a link (Ctrl+click opens it). */
+const setLink = StateEffect.define<{ from: number; to: number } | null>();
+const linkField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setLink)) value = e.value ? Decoration.set([Decoration.mark({ class: "cm-table-link" }).range(e.value.from, e.value.to)]) : Decoration.none;
+    return tr.docChanged ? Decoration.none : value;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
 export function SqlEditor(props: {
   doc: string;
   revision: number;
   kind: DbKind;
-  schema: Record<string, string[]>;
+  /** Catalog for completion and Ctrl+click (tables with their columns). */
+  tables: CompletionTable[];
   defaultSchema?: string;
+  /** Ctrl+click / F4 / Ctrl+B on a table (or an alias of one) in the SQL. */
+  onOpenTable?: (table: CompletionTable) => void;
   /** Where to put the caret after an external text change. */
   cursor?: number;
   fontSize: number;
@@ -137,11 +252,44 @@ export function SqlEditor(props: {
       ".cm-panel.cm-search input, .cm-panel.cm-search button": { fontFamily: "var(--sans)", fontSize: "12px", borderRadius: "5px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", padding: "2px 6px" },
       ".cm-panel.cm-search label": { fontSize: "12px" },
       ".cm-stmt": { background: "var(--editor-stmt)" },
+      ".cm-table-link": { textDecoration: "underline", textUnderlineOffset: "3px", color: "var(--accent)", cursor: "pointer" },
     });
   }
 
+  // Keywords and functions come from lang-sql; tables and columns from catalogCompletion (always current).
   function languageExtension() {
-    return sql({ dialect: dialectOf(props.kind), schema: props.schema, defaultSchema: props.defaultSchema, upperCaseKeywords: true });
+    return sql({ dialect: dialectOf(props.kind), upperCaseKeywords: true });
+  }
+
+  /** The catalog table an identifier at `pos` refers to: schema.table, table, or an alias of the statement. */
+  function tableAt(state: EditorState, pos: number): { table: CompletionTable; from: number; to: number } | null {
+    const text = state.doc.toString();
+    const ident = identifierAt(text, pos);
+    if (!ident || !props.tables.length) return null;
+    const stmt = statementAround(text, pos, props.kind);
+    const refs = referencedTables(stmt.text, props.tables, props.defaultSchema);
+    const [first] = ident.parts;
+    const byAlias = (name: string) => refs.find((r) => r.alias.toLowerCase() === name.toLowerCase())?.table;
+    const table =
+      findTable(props.tables, ident.parts, props.defaultSchema) ??
+      (ident.parts.length === 1 ? byAlias(first) : byAlias(first) ?? findTable(props.tables, ident.parts.slice(0, -1), props.defaultSchema));
+    return table ? { table, from: ident.from, to: ident.to } : null;
+  }
+
+  function openTableAt(state: EditorState, pos: number) {
+    const hit = tableAt(state, pos);
+    if (!hit || !props.onOpenTable) return false;
+    props.onOpenTable(hit.table);
+    return true;
+  }
+
+  const completionSource = catalogCompletion(() => ({ tables: props.tables, defaultSchema: props.defaultSchema, dialect: props.kind }));
+
+  let linked: { from: number; to: number } | null = null;
+  function setLinked(v: EditorView, next: { from: number; to: number } | null) {
+    if (linked?.from === next?.from && linked?.to === next?.to) return;
+    linked = next;
+    v.dispatch({ effects: setLink.of(next) });
   }
 
   onMount(() => {
@@ -168,6 +316,10 @@ export function SqlEditor(props: {
           syntaxHighlighting(sqlHighlight),
           statementBand(() => props.kind),
           language.of(languageExtension()),
+          // One stable source: CodeMirror matches results to sources by identity (a new function per call
+          // would leave every result "pending" and never shown).
+          EditorState.languageData.of(() => [{ autocomplete: completionSource }]),
+          linkField,
           theme.of(themeExtension()),
           keymap.of([
             { key: "Mod-Enter", preventDefault: true, run: () => { props.onRun(); return true; } },
@@ -176,6 +328,9 @@ export function SqlEditor(props: {
             { key: "Mod-Shift-e", preventDefault: true, run: () => { props.onExplain(); return true; } },
             { key: "Mod-F2", preventDefault: true, run: () => { props.onCancel(); return true; } },
             { key: "Mod-Alt-l", preventDefault: true, run: () => { props.onFormat(); return true; } },
+            // Go to the table under the caret (DataGrip: F4 / Ctrl+B).
+            { key: "F4", preventDefault: true, run: (v) => openTableAt(v.state, v.state.selection.main.head) },
+            { key: "Mod-b", preventDefault: true, run: (v) => openTableAt(v.state, v.state.selection.main.head) },
             { key: "Mod-/", run: toggleComment },
             { key: "Mod-d", run: copyLineDown, preventDefault: true },
             { key: "Mod-y", run: deleteLine, preventDefault: true },
@@ -206,6 +361,25 @@ export function SqlEditor(props: {
               const head = v.state.selection.main.head;
               const line = v.state.doc.lineAt(head);
               props.onCursor?.(line.number, head - line.from + 1);
+            },
+            // Ctrl/Cmd+click on a table name or alias opens the table.
+            mousedown: (event, v) => {
+              if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false;
+              const pos = v.posAtCoords({ x: event.clientX, y: event.clientY });
+              if (pos === null || !openTableAt(v.state, pos)) return false;
+              event.preventDefault();
+              setLinked(v, null);
+              return true;
+            },
+            mousemove: (event, v) => {
+              if (!(event.ctrlKey || event.metaKey)) return setLinked(v, null);
+              const pos = v.posAtCoords({ x: event.clientX, y: event.clientY });
+              const hit = pos === null ? null : tableAt(v.state, pos);
+              setLinked(v, hit ? { from: hit.from, to: hit.to } : null);
+            },
+            mouseleave: (_event, v) => setLinked(v, null),
+            keyup: (event, v) => {
+              if (event.key === "Control" || event.key === "Meta") setLinked(v, null);
             },
           }),
         ],
@@ -239,7 +413,7 @@ export function SqlEditor(props: {
   // Completion schema and dialect: reconfigure only when they actually change (compared by reference).
   createEffect(
     on(
-      () => [props.schema, props.kind, props.defaultSchema] as const,
+      () => props.kind,
       () => view?.dispatch({ effects: language.reconfigure(languageExtension()) }),
       { defer: true },
     ),

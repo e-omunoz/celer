@@ -24,6 +24,10 @@ export interface GridProps {
   resetKey?: unknown;
   /** Tab id: long operations show the busy overlay (Gib + Cancel) over this grid. */
   busyKey?: string;
+  /** Foreign-key columns: Ctrl+click or the context menu jump to the referenced row. */
+  linkCols?: number[];
+  linkLabel?: (col: number) => string;
+  onFollow?: (row: number, col: number) => void;
   pkCols?: number[];
   deleted?: number[];
   edits?: Record<string, string | null>;
@@ -396,6 +400,7 @@ export function DataGrid(props: GridProps) {
     ctx.fillStyle = p.head;
     ctx.fillRect(0, 0, width, HEAD_H);
     const pk = new Set(props.pkCols ?? []);
+    const links = new Set(props.linkCols ?? []);
     for (let col = c0; col < cols.length; col++) {
       const x = xs[col] - view.x;
       const w = cols[col];
@@ -426,7 +431,13 @@ export function DataGrid(props: GridProps) {
       ctx.fillStyle = p.headFg;
       const name = props.columns[col].name;
       ctx.fillText(name, tx, HEAD_H / 2 + 0.5);
-      const nameW = ctx.measureText(name).width;
+      let nameW = ctx.measureText(name).width;
+      if (links.has(col)) {
+        // Foreign key: a small arrow after the name (Ctrl+click a value to follow it).
+        ctx.fillStyle = p.key;
+        ctx.fillText("↗", tx + nameW + 4, HEAD_H / 2 + 0.5);
+        nameW += 14;
+      }
       const type = props.columns[col].typeName;
       if (type) {
         ctx.font = `11px ${p.sans}`;
@@ -599,6 +610,14 @@ export function DataGrid(props: GridProps) {
     }
     if (target.type === "more") {
       props.onNeedMore?.();
+      return;
+    }
+    if (target.type === "cell" && (event.ctrlKey || event.metaKey) && props.onFollow && props.linkCols?.includes(target.col)) {
+      // Ctrl+click on a foreign-key value: jump to the referenced row.
+      event.preventDefault();
+      setCursor({ row: target.row, col: target.col });
+      const source = ordered()[target.row];
+      if (source !== undefined) props.onFollow(source, target.col);
       return;
     }
     if (target.type === "cell") {
@@ -822,6 +841,14 @@ export function DataGrid(props: GridProps) {
       { separator: true },
       { label: "Ver valor", hint: "Mayús+Intro", icon: "eye", run: () => activate() },
     ];
+    const f = focus();
+    if (f && props.onFollow && props.linkCols?.includes(f.col)) {
+      const source = ordered()[f.row];
+      items.unshift(
+        { label: `Ir a la fila referenciada${props.linkLabel ? ` (${props.linkLabel(f.col)})` : ""}`, hint: "Ctrl+clic", icon: "link", run: () => source !== undefined && props.onFollow?.(source, f.col) },
+        { separator: true },
+      );
+    }
     if (props.onFilter) {
       items.push(
         { separator: true },
@@ -1043,6 +1070,7 @@ export function DataGrid(props: GridProps) {
     props.edits && Object.keys(props.edits).length;
     props.hasMore;
     props.loading;
+    props.linkCols;
     ordered();
     scroll();
     viewport();

@@ -4,10 +4,20 @@ import laptop from "../../docs/brand/mascot/gib-laptop.svg?raw";
 import monday from "../../docs/brand/mascot/gib-monday.svg?raw";
 import poker from "../../docs/brand/mascot/gib-poker.svg?raw";
 
-export type GibMood = "idle" | "wave" | "busy" | "think" | "idea" | "ok" | "happy" | "love" | "error" | "offline" | "sleep";
+export type GibMood = "idle" | "wave" | "busy" | "think" | "idea" | "ok" | "happy" | "love" | "error" | "offline" | "sleep" | "sad";
 export type GibPose = "poker" | "laptop" | "monday" | "icon";
 
 const ART: Record<GibPose, string> = { poker, laptop, monday, icon };
+
+let instances = 0;
+/**
+ * Each Gib gets its own SVG ids. Inline SVGs share one id space: url(#poker-shirt) resolves to the first
+ * element with that id in the document, and if that Gib is hidden (an inactive tab) the gradient is not
+ * painted, so every other Gib lost its shirt, sleeves and fur.
+ */
+function uniqueIds(svg: string, prefix: string) {
+  return svg.replace(/\bid="([^"]+)"/g, `id="${prefix}-$1"`).replace(/url\(#([^)]+)\)/g, `url(#${prefix}-$1)`).replace(/href="#([^"]+)"/g, `href="#${prefix}-$1"`);
+}
 
 export function Gib(props: {
   mood?: GibMood;
@@ -22,6 +32,7 @@ export function Gib(props: {
   ref?: (el: HTMLSpanElement) => void;
 }) {
   let root: HTMLSpanElement | undefined;
+  const idPrefix = `gib${++instances}`;
   const [blink, setBlink] = createSignal(false);
   const mood = () => props.mood ?? "idle";
   const pose = (): GibPose => {
@@ -87,7 +98,7 @@ export function Gib(props: {
         if (event.key === "Enter" || event.key === " ") props.onClick?.();
       }}
     >
-      <span class="gib-art" innerHTML={ART[pose()]} />
+      <span class="gib-art" innerHTML={uniqueIds(ART[pose()], idPrefix)} />
       <Show when={!props.plain}>
         <span class="gib-fx" aria-hidden="true">
           <Show when={mood() === "think"}>
@@ -124,6 +135,9 @@ export function Gib(props: {
           </Show>
           <Show when={mood() === "error"}>
             <span class="fx-mark">?</span>
+          </Show>
+          <Show when={mood() === "sad"}>
+            <span class="fx-tear" />
           </Show>
           <Show when={mood() === "ok" || mood() === "happy"}>
             <span class="fx-sparkle"><i /><i /><i /></span>

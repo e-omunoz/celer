@@ -650,6 +650,9 @@ export function createDemoBackend(): Backend {
     async appInfo() {
       return { version: "dev", dataDir: "navegador (localStorage)" };
     },
+    async migrationSources() {
+      return [];
+    },
     // Browser demo: "?update" in the URL simulates a new release to design the update flow.
     async updateCheck() {
       const simulate = new URLSearchParams(location.search).has("update");

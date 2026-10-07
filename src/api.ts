@@ -12,6 +12,7 @@ import type {
   TableColumn,
 } from "./types";
 import type { McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
+import type { MigrationSource } from "./migrate";
 import { createDemoBackend } from "./demo";
 
 export interface Backend {
@@ -50,6 +51,7 @@ export interface Backend {
   ibmDriverStatus(): Promise<string | null>;
   ibmDriverDownload(): Promise<string>;
   appInfo(): Promise<{ version: string; dataDir: string }>;
+  migrationSources(): Promise<MigrationSource[]>;
   updateCheck(): Promise<UpdateInfo>;
   updateDownload(url: string, name: string, sumsUrl: string): Promise<string>;
   updateInstall(path: string, relaunch: boolean): Promise<void>;
@@ -117,6 +119,7 @@ function tauriBackend(): Backend {
     ibmDriverStatus: () => invoke("ibm_driver_status"),
     ibmDriverDownload: () => invoke("ibm_driver_download"),
     appInfo: () => invoke("app_info"),
+    migrationSources: () => invoke("migration_sources"),
     updateCheck: () => invoke("update_check"),
     updateDownload: (url, name, sumsUrl) => invoke("update_download", { url, name, sumsUrl }),
     updateInstall: (path, relaunch) => invoke("update_install", { path, relaunch }),
