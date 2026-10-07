@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Celer Setup",
+  "version": "1.0.0",
+  "identifier": "es.celer.setup",
+  "build": {
+    "devUrl": "http://localhost:1430",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Instalar Celer",
+        "width": 780,
+        "height": 520,
+        "resizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true,
+        "visible": false,
+        "create": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "publisher": "Celer",
+    "icon": ["icons/icon.ico"]
+  }
+}
