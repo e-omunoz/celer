@@ -1,9 +1,14 @@
 name: CI
 
+# Kept lean on Actions minutes: docs/media changes don't run it, auto-commits carry [skip ci]
+# (dev/autocommit.ps1), and a newer push cancels the run in progress.
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE", ".github/ISSUE_TEMPLATE/**", ".github/*.md", ".claude/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE", ".github/ISSUE_TEMPLATE/**", ".github/*.md", ".claude/**"]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -12,10 +17,11 @@ concurrency:
 jobs:
   check:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

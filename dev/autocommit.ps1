@@ -29,7 +29,8 @@ if (-not $Message) {
   } | Group-Object | Sort-Object Count -Descending | Select-Object -ExpandProperty Name
   $head = ($areas | Select-Object -First 4) -join ', '
   $more = if ($areas.Count -gt 4) { " (+$($areas.Count - 4))" } else { "" }
-  $Message = "chore(auto): $head$more"
+  # [skip ci]: auto-commits are frequent work-in-progress; CI runs on real commits and releases.
+  $Message = "chore(auto): $head$more [skip ci]"
 }
 $body = "Archivos ($($changed.Count)):`n" + (($changed | Select-Object -First 40 | ForEach-Object { "- $_" }) -join "`n")
 if ($changed.Count -gt 40) { $body += "`n- … y $($changed.Count - 40) más" }

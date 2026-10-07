@@ -1,18 +1,22 @@
+# Monthly, and one grouped pull request per ecosystem: each PR runs CI, so fewer PRs means fewer
+# Actions minutes. Security updates still arrive as soon as they are published.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
     groups:
-      codemirror: { patterns: ["@codemirror/*", "@lezer/*"] }
-      tauri: { patterns: ["@tauri-apps/*"] }
-    open-pull-requests-limit: 5
+      npm: { patterns: ["*"] }
+    open-pull-requests-limit: 2
   - package-ecosystem: cargo
     directory: /src-tauri
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
     groups:
-      tauri: { patterns: ["tauri*"] }
-    open-pull-requests-limit: 5
+      cargo: { patterns: ["*"] }
+    open-pull-requests-limit: 2
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
+    groups:
+      actions: { patterns: ["*"] }
+    open-pull-requests-limit: 1
