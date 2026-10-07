@@ -8,6 +8,8 @@ $git = "$env:LOCALAPPDATA\celer-tools\git\cmd\git.exe"
 if (-not (Test-Path $git)) { $git = "git" }
 Set-Location $root
 if (-not (Test-Path "$root\.git")) { exit 0 }
+# A ".autocommit-pause" file in the repo root holds auto-commits (e.g. while an agent is mid-write).
+if (Test-Path "$root\.autocommit-pause") { Write-Host "autocommit en pausa"; exit 0 }
 
 & $git add -A
 $changed = @(& $git diff --cached --name-only)

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "celer-web",
+      "runtimeExecutable": "C:\\Users\\oscar\\AppData\\Local\\celer-tools\\node-v22.20.0-win-x64\\node.exe",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "1420", "--strictPort"],
+      "port": 1420
+    },
+    {
+      "name": "celer-setup",
+      "runtimeExecutable": "C:\\Users\\oscar\\AppData\\Local\\celer-tools\\node-v22.20.0-win-x64\\node.exe",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--config", "installer/vite.config.ts"],
+      "port": 1430
+    }
+  ]
+}

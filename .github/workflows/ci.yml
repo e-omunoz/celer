@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            installer/src-tauri
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck and build the app UI
+        run: npm run build
+
+      - name: Typecheck the installer UI
+        if: hashFiles('installer/tsconfig.json') != ''
+        run: npx tsc --noEmit -p installer
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --lib

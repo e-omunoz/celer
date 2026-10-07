@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\oscar\\Projects\\celer\\dev\\autocommit.ps1\"",
+            "shell": "powershell",
+            "timeout": 120,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
