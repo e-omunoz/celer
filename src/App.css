@@ -924,14 +924,35 @@ table.meta code { font-size: 12px; }
 .gib .brow-l, .gib .brow-r { transform-box: fill-box; transform-origin: center; transition: transform 240ms var(--ease-spring); }
 .gib .mouth { transition: d 260ms var(--ease-out), stroke-width 200ms; }
 .gib .blush { transition: opacity 300ms; }
-.gib .hand { opacity: 0; transform-box: fill-box; transform-origin: 20% 90%; transition: opacity 160ms; }
+/* Rig (poker pose): body pivots at the feet, head at the neck, arms at shoulder and elbow (SVG user units). */
+.gib .g-all { transform-origin: 100px 232px; transition: transform 320ms var(--ease-out); }
+.gib .g-head { transform-origin: 100px 148px; transition: transform 340ms var(--ease-spring); }
+.gib .ear-l { transform-origin: 36px 94px; }
+.gib .ear-r { transform-origin: 164px 94px; }
+.gib .arm-r { transform-origin: 140px 170px; transform: rotate(-14deg); transition: transform 460ms cubic-bezier(.45, .05, .35, 1); }
+.gib .fore-r { transform-origin: 140px 196px; transform: rotate(8deg); transition: transform 420ms cubic-bezier(.45, .05, .35, 1); }
+.gib .arm-l { transform-origin: 60px 170px; transform: rotate(14deg); transition: transform 460ms cubic-bezier(.45, .05, .35, 1); }
+.gib .finger { opacity: 0; transition: opacity 120ms; }
 .gib.is-blink .lid { transform: scaleY(2); }
 
-/* wave: hand up, a little wiggle */
-.gib.mood-wave .hand { opacity: 1; animation: gib-wave 0.9s ease-in-out 2; }
+/* wave: the arm rises from the shoulder and waves from the elbow while the body sways, the head
+   follows the beat, the ears wiggle and the eyes smile — never just a hand moving on its own */
+.gib.mood-wave .arm-r { transform: rotate(-120deg); }
+.gib.mood-wave .fore-r { animation: gib-wave 0.56s cubic-bezier(.45, .05, .35, 1) 260ms 4 alternate both; }
+.gib.mood-wave .arm-l { transform: rotate(18deg); }
+.gib.mood-wave .g-all { animation: gib-sway 1.12s ease-in-out 260ms 2 both; }
+.gib.mood-wave .g-head { animation: gib-nod 1.12s ease-in-out 260ms 2 both; }
+.gib.mood-wave .ear-l { animation: gib-ear-l 0.56s ease-in-out 260ms 4 alternate both; }
+.gib.mood-wave .ear-r { animation: gib-ear-r 0.56s ease-in-out 260ms 4 alternate both; }
 .gib.mood-wave .brow-l, .gib.mood-wave .brow-r { transform: translateY(-3px); }
-/* thinking: eyes up and to the side, one brow raised, head tilted, pursed mouth */
-.gib.mood-think .gib-art svg { transform: rotate(-5deg); animation: gib-ponder 2.4s ease-in-out infinite; }
+.gib.mood-wave .lid { transform: scaleY(1.2); }
+.gib.mood-wave .mouth { d: path("M92 123q11 11 24 0"); stroke-width: 2.8; }
+.gib.mood-wave .blush { opacity: 0.65; }
+/* thinking: hand on the chin (tapping), head tilted, eyes up and to the side, one brow raised */
+.gib.mood-think .g-head { transform: rotate(-8deg); }
+.gib.mood-think .g-all { animation: gib-ponder 2.4s ease-in-out infinite; }
+.gib.mood-think .arm-r { transform: rotate(101deg); }
+.gib.mood-think .fore-r { transform: rotate(63deg); animation: gib-tap 1.3s ease-in-out 500ms infinite alternate; }
 .gib.mood-think .pupils { transform: translate(4px, -5px); }
 .gib.mood-think .brow-r { transform: translateY(-5px) rotate(-8deg); }
 .gib.mood-think .brow-l { transform: translateY(1px); }
@@ -941,7 +962,26 @@ table.meta code { font-size: 12px; }
 .gib.mood-idea .lid, .gib.mood-ok .lid, .gib.mood-happy .lid { transform: scaleY(0.35); }
 .gib.mood-idea .brow-l, .gib.mood-idea .brow-r { transform: translateY(-6px); }
 .gib.mood-idea .pupils { transform: translate(0, -3px) scale(1.05); }
-.gib.mood-idea .gib-art svg { animation: gib-hop 0.5s var(--ease-spring) 1; }
+.gib.mood-idea .g-all { animation: gib-hop 0.62s cubic-bezier(.3, .7, .4, 1) both; }
+.gib.mood-idea .arm-r { transform: rotate(-164deg); transition-duration: 300ms; }
+.gib.mood-idea .fore-r { transform: rotate(-10deg); transition-duration: 300ms; }
+.gib.mood-idea .finger { opacity: 1; }
+/* happy: arms up and a little hop; ok: a nod with the arm half raised; love: hand on the heart */
+.gib.mood-happy .arm-r { transform: rotate(-150deg); }
+.gib.mood-happy .fore-r { transform: rotate(-20deg); }
+.gib.mood-happy .arm-l { transform: rotate(150deg); }
+.gib.mood-happy .g-all { animation: gib-hop 0.62s cubic-bezier(.3, .7, .4, 1) both; }
+.gib.mood-ok .arm-r { transform: rotate(-60deg); }
+.gib.mood-ok .fore-r { transform: rotate(-70deg); }
+.gib.mood-ok .g-head { animation: gib-nod 0.8s ease-in-out 1 both; }
+.gib.mood-love .g-head { transform: rotate(6deg); }
+.gib.mood-love .arm-r { transform: rotate(70deg); }
+.gib.mood-love .fore-r { transform: rotate(80deg); }
+/* error: a small shrug */
+.gib.mood-error .arm-r { transform: rotate(-38deg); }
+.gib.mood-error .fore-r { transform: rotate(-40deg); }
+.gib.mood-error .arm-l { transform: rotate(38deg); }
+.gib.mood-error .g-head { transform: rotate(-4deg); }
 .gib.mood-idea .mouth, .gib.mood-ok .mouth, .gib.mood-happy .mouth, .gib.mood-love .mouth { d: path("M92 123q11 11 24 0"); stroke-width: 2.8; }
 .gib.mood-ok .brow-l, .gib.mood-ok .brow-r, .gib.mood-happy .brow-l, .gib.mood-happy .brow-r { transform: translateY(-3px); }
 .gib.mood-ok .blush, .gib.mood-happy .blush, .gib.mood-idea .blush { opacity: 0.6; }
@@ -980,7 +1020,7 @@ table.meta code { font-size: 12px; }
 .fx-sparkle i:nth-child(3) { right: 0.2em; top: 2.6em; animation-delay: 240ms; width: 0.7em; height: 0.7em; }
 
 /* Status bar companion: rises above the bar, never clipped */
-.companion { position: relative; width: 48px; height: 26px; flex: none; margin-left: 4px; opacity: 0; }
+.companion { position: relative; width: 56px; height: 26px; flex: none; margin-left: 4px; opacity: 0; }
 .companion.landed { opacity: 1; }
 .companion > .gib { position: absolute; left: 5px; bottom: 0; z-index: 40; }
 .tip {
@@ -1020,9 +1060,20 @@ table.meta code { font-size: 12px; }
    Motion
    ========================================================================== */
 
-@keyframes gib-wave { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-14deg); } 65% { transform: rotate(10deg); } }
-@keyframes gib-ponder { 0%, 100% { transform: rotate(-5deg) translateY(0); } 50% { transform: rotate(-3deg) translateY(-1.5px); } }
-@keyframes gib-hop { 0% { transform: translateY(0); } 40% { transform: translateY(-7%) scale(1.03, 0.98); } 100% { transform: translateY(0); } }
+@keyframes gib-wave { from { transform: rotate(-72deg); } to { transform: rotate(-22deg); } }
+@keyframes gib-sway { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-3deg); } 75% { transform: translateY(-2px) rotate(3deg); } }
+@keyframes gib-nod { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(5deg); } 75% { transform: rotate(-4deg); } }
+@keyframes gib-ear-l { from { transform: rotate(4deg); } to { transform: rotate(-9deg); } }
+@keyframes gib-ear-r { from { transform: rotate(-4deg); } to { transform: rotate(9deg); } }
+@keyframes gib-tap { from { transform: rotate(63deg); } to { transform: rotate(55deg); } }
+@keyframes gib-ponder { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+@keyframes gib-hop {
+  0% { transform: translateY(0) scale(1, 1); }
+  18% { transform: translateY(3px) scale(1.04, 0.95); }
+  50% { transform: translateY(-16px) scale(0.97, 1.04); }
+  80% { transform: translateY(2px) scale(1.03, 0.97); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
 @keyframes fx-pop { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: scale(1); } }
 @keyframes fx-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-35%); opacity: 1; } }
 @keyframes fx-bulb { 0% { opacity: 0; transform: translateY(0.8em) scale(0.2) rotate(-20deg); } 70% { opacity: 1; transform: translateY(-0.2em) scale(1.12) rotate(6deg); } 100% { transform: none; } }

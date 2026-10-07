@@ -194,7 +194,7 @@ export function Companion() {
           )}
         </Show>
         <Gib
-          size={38}
+          size={46}
           pose={mood() === "sleep" ? "monday" : "poker"}
           mood={mood()}
           label="Gib: consejos"
