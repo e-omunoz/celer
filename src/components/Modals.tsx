@@ -1,14 +1,17 @@
-import { For, Show } from "solid-js";
+import { CircleAlert, CircleCheck, FolderOpen, LoaderCircle, X } from "lucide-solid";
+import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { isTauri } from "../api";
-import { ACCENTS, type ThemeName } from "../types";
+import { Mark } from "../brand/Mark";
+import { themeChoices } from "../commands";
+import { EngineIcon } from "../icons";
 import {
   answerPassword,
   applyTheme,
   browseSqlite,
+  connect,
   dismissConfirm,
   downloadDriver,
-  refreshConnections,
-  runExport,
+  kindOf,
   runPreview,
   saveSettings,
   setState,
@@ -16,8 +19,12 @@ import {
   submitConnection,
   testConnection,
 } from "../state";
-import type { ConnConfig, DbKind } from "../types";
-import { prettyJson } from "../sql";
+import { ACCENTS, ENGINES, emptyConn, engineOf, type ConnConfig, type DbKind, type ThemeName } from "../types";
+import { CodeView } from "./Editor";
+import { ExportDialog } from "./ExportDialog";
+import { AiSettings } from "./AiSettings";
+import { ImportDialog } from "./ImportDialog";
+import { importer } from "../importer";
 
 export function Modals() {
   return (
@@ -25,237 +32,438 @@ export function Modals() {
       <Show when={state.connDialog}>{(cfg) => <ConnectionDialog cfg={cfg()} />}</Show>
       <Show when={state.settingsOpen}><SettingsDialog /></Show>
       <Show when={state.exportOpen}><ExportDialog /></Show>
-      <Show when={state.valueText !== null}>
-        <dialog class="modal" open>
-          <header><h2>Valor</h2><button type="button" onClick={() => setState("valueText", null)}>✕</button></header>
-          <pre class="code">{prettyJson(state.valueText ?? "") ?? state.valueText}</pre>
-        </dialog>
-      </Show>
+      <Show when={importer.open}><ImportDialog /></Show>
+      <Show when={state.aboutOpen}><AboutDialog /></Show>
       <Show when={state.previewSql}>
-        <dialog class="modal wide" open>
-          <header><h2>SQL antes de guardar</h2><button type="button" onClick={() => setState({ previewSql: "", previewRun: null })}>✕</button></header>
-          <pre class="code">{state.previewSql}</pre>
+        <Dialog title="Revisar cambios antes de guardar" wide onClose={() => setState({ previewSql: "", previewRun: null })}>
+          <p class="dialog-lead">Se ejecutarán estas sentencias en una sola operación.</p>
+          <div class="preview-code"><CodeView doc={state.previewSql} kind={kindOf(state.tabs.find((tab) => tab.id === state.activeTabId)?.connId)} /></div>
           <footer>
             <button type="button" class="btn" onClick={() => setState({ previewSql: "", previewRun: null })}>Cancelar</button>
-            <button type="button" class="btn primary" onClick={() => void runPreview()}>Ejecutar</button>
+            <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void runPreview()}>Ejecutar y guardar</button>
           </footer>
-        </dialog>
+        </Dialog>
       </Show>
       <Show when={state.confirm}>
         {(ask) => (
-          <dialog class="modal" open>
-            <header><h2>{ask().title}</h2></header>
-            <p>{ask().body}</p>
+          <Dialog title={ask().title} onClose={dismissConfirm} small>
+            <p class="dialog-lead">{ask().body}</p>
             <footer>
               <button type="button" class="btn" onClick={dismissConfirm}>Cancelar</button>
-              <button type="button" class="btn danger" onClick={() => ask().run()}>{ask().confirmLabel}</button>
+              <button type="button" class="btn" classList={{ danger: ask().danger, primary: !ask().danger }} ref={(el) => queueMicrotask(() => el.focus())} onClick={() => ask().run()}>{ask().confirmLabel}</button>
             </footer>
-          </dialog>
+          </Dialog>
         )}
       </Show>
       <Show when={state.passwordAsk}>
         {(ask) => (
-          <form class="modal dialog" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); answerPassword(String(data.get("password") ?? "")); }}>
-            <header><h2>Contraseña</h2></header>
-            <p>Contraseña para {ask().name}</p>
-            <input name="password" type="password" autofocus />
-            <footer>
-              <button type="button" class="btn" onClick={() => answerPassword(null)}>Cancelar</button>
-              <button type="submit" class="btn primary">Conectar</button>
-            </footer>
-          </form>
+          <Dialog title={`Conectar a ${ask().name}`} onClose={() => answerPassword(null)} small>
+            <form onSubmit={(event) => { event.preventDefault(); answerPassword(String(new FormData(event.currentTarget).get("password") ?? "")); }}>
+              <label class="field">
+                <span>Contraseña</span>
+                <input name="password" type="password" ref={(el) => queueMicrotask(() => el.focus())} />
+              </label>
+              <footer>
+                <button type="button" class="btn" onClick={() => answerPassword(null)}>Cancelar</button>
+                <button type="submit" class="btn primary">Conectar</button>
+              </footer>
+            </form>
+          </Dialog>
         )}
       </Show>
     </>
   );
 }
 
-function ConnectionDialog(props: { cfg: ConnConfig }) {
+export function Dialog(props: { title: string; onClose: () => void; children: JSX.Element; wide?: boolean; small?: boolean; class?: string }) {
+  onMount(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        props.onClose();
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    onCleanup(() => window.removeEventListener("keydown", key, true));
+  });
   return (
-    <form
-      class="modal dialog wide"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const data = readForm(event.currentTarget);
-        void submitConnection(data).catch((err) => setState("testOutput", String(err)));
-      }}
-    >
-      <header><h2>{props.cfg.id ? "Editar conexión" : "Nueva conexión"}</h2><button type="button" onClick={() => setState("connDialog", null)}>✕</button></header>
-      <div class="form-grid">
-        <label>Nombre<input name="name" required value={props.cfg.name} /></label>
-        <label>Motor
-          <select name="kind" value={props.cfg.kind} onChange={(event) => { const data = readForm(event.currentTarget.form!); setState("connDialog", { ...data, kind: event.currentTarget.value as DbKind }); }}>
-            <option value="sqlite">SQLite</option>
-            <option value="mssql">SQL Server</option>
-            <option value="informix">Informix</option>
-            <option value="odbc">ODBC</option>
-          </select>
-        </label>
-        <label>Carpeta<input name="folder" value={props.cfg.folder} list="folders" /></label>
-        <label>Color<input name="color" type="color" value={props.cfg.color || "#c2410c"} /></label>
-        <Show when={props.cfg.kind === "sqlite"}>
-          <label class="span">Fichero
-            <span class="row">
-              <input name="filePath" value={props.cfg.filePath} placeholder="ruta, o :memory:" />
-              <button type="button" class="btn" onClick={(event) => { const data = readForm(event.currentTarget.form!); void browseSqlite(data, (filePath) => setState("connDialog", { ...data, filePath })); }}>Examinar</button>
-              <button type="button" class="btn" onClick={(event) => { const data = readForm(event.currentTarget.form!); setState("connDialog", { ...data, filePath: ":memory:" }); }}>Memoria</button>
-            </span>
-          </label>
-        </Show>
-        <Show when={props.cfg.kind === "odbc"}>
-          <label class="span">Cadena de conexión<textarea name="odbcConnStr" rows="3">{props.cfg.odbcConnStr}</textarea></label>
-        </Show>
-        <Show when={props.cfg.kind === "mssql" || props.cfg.kind === "informix"}>
-          <label>Servidor<input name="host" value={props.cfg.host} /></label>
-          <label>Puerto<input name="port" type="number" value={props.cfg.port ?? ""} /></label>
-          <label>Base de datos<input name="database" value={props.cfg.database} /></label>
-          <label>{props.cfg.kind === "informix" ? "INFORMIXSERVER" : "Instancia"}<input name="instance" value={props.cfg.instance} /></label>
-          <label>Usuario<input name="user" value={props.cfg.user} /></label>
-          <label>Contraseña<input name="password" type="password" placeholder={props.cfg.id ? "dejar vacío para no cambiar" : ""} /></label>
-        </Show>
-        <Show when={props.cfg.kind === "mssql"}>
-          <label>Cifrado
-            <select name="encryption" value={props.cfg.encryption}>
-              <option value="required">required</option>
-              <option value="login">login</option>
-              <option value="off">off</option>
-            </select>
-          </label>
-          <label class="check"><input name="integratedAuth" type="checkbox" checked={props.cfg.integratedAuth} /> Autenticación de Windows</label>
-          <label class="check"><input name="trustCert" type="checkbox" checked={props.cfg.trustCert} /> Confiar en el certificado</label>
-        </Show>
-        <Show when={props.cfg.kind === "informix"}>
-          <label>Modo
-            <select name="informixMode" value={props.cfg.informixMode}>
-              <option value="drda">DRDA (IBM CLI)</option>
-              <option value="sqli">SQLI (CSDK / ODBC)</option>
-            </select>
-          </label>
-        </Show>
-        <label class="span">Parámetros extra<input name="extra" value={props.cfg.extra} /></label>
-        <label class="check"><input name="savePassword" type="checkbox" checked={props.cfg.savePassword} /> Recordar contraseña</label>
-        <label class="check"><input name="readOnly" type="checkbox" checked={props.cfg.readOnly} /> Solo lectura</label>
-        <label class="check"><input name="production" type="checkbox" checked={props.cfg.production} /> Producción</label>
+    <>
+      <div class="scrim" onMouseDown={props.onClose} />
+      <div class={`dialog ${props.class ?? ""}`} classList={{ wide: props.wide, small: props.small }} role="dialog" aria-label={props.title}>
+        <header>
+          <h2>{props.title}</h2>
+          <button type="button" class="icon-btn" title="Cerrar (Esc)" onClick={props.onClose}><X size={15} /></button>
+        </header>
+        {props.children}
       </div>
-      <datalist id="folders">
-        <For each={[...new Set(state.connections.map((conn) => conn.folder).filter(Boolean))]}>{(folder) => <option value={folder} />}</For>
-      </datalist>
-      <Show when={state.testOutput}><pre class="code">{state.testOutput}</pre></Show>
-      <footer>
-        <button type="button" class="btn" onClick={(event) => void testConnection(readForm(event.currentTarget.form!))}>Probar</button>
-        <button type="button" class="btn" onClick={() => setState("connDialog", null)}>Cancelar</button>
-        <button type="submit" class="btn primary">Guardar</button>
-      </footer>
-    </form>
+    </>
   );
 }
 
-function readForm(form: HTMLFormElement): ConnConfig {
-  const data = new FormData(form);
-  const current = state.connDialog ?? ({} as ConnConfig);
-  const kind = String(data.get("kind") ?? current.kind) as DbKind;
-  const port = String(data.get("port") ?? "");
-  return {
-    ...current,
-    name: String(data.get("name") ?? current.name),
-    kind,
-    folder: String(data.get("folder") ?? ""),
-    color: String(data.get("color") ?? current.color),
-    filePath: String(data.get("filePath") ?? current.filePath ?? ""),
-    odbcConnStr: String(data.get("odbcConnStr") ?? current.odbcConnStr ?? ""),
-    host: String(data.get("host") ?? current.host ?? ""),
-    port: port ? Number(port) : null,
-    database: String(data.get("database") ?? ""),
-    instance: String(data.get("instance") ?? ""),
-    user: String(data.get("user") ?? ""),
-    password: String(data.get("password") ?? ""),
-    encryption: String(data.get("encryption") ?? current.encryption ?? "required"),
-    informixMode: String(data.get("informixMode") ?? current.informixMode ?? "drda"),
-    extra: String(data.get("extra") ?? ""),
-    integratedAuth: data.get("integratedAuth") === "on",
-    trustCert: data.get("trustCert") === "on",
-    savePassword: data.get("savePassword") === "on",
-    readOnly: data.get("readOnly") === "on",
-    production: data.get("production") === "on",
-  };
+// ---------------------------------------------------------------- connection
+
+function ConnectionDialog(props: { cfg: ConnConfig }) {
+  const [cfg, setCfg] = createSignal<ConnConfig>({ ...props.cfg });
+  const [advanced, setAdvanced] = createSignal(false);
+  const set = <K extends keyof ConnConfig>(key: K, value: ConnConfig[K]) => setCfg({ ...cfg(), [key]: value });
+  const kind = () => cfg().kind;
+  const network = () => kind() === "postgres" || kind() === "mysql" || kind() === "mssql" || kind() === "informix";
+  const editing = () => Boolean(props.cfg.id);
+
+  function pickEngine(next: DbKind) {
+    const base = emptyConn(next);
+    const current = cfg();
+    setCfg({
+      ...base,
+      id: current.id,
+      name: current.name,
+      folder: current.folder,
+      color: current.color,
+      production: current.production,
+      readOnly: current.readOnly,
+      host: next === "sqlite" || next === "odbc" ? "" : current.host || "localhost",
+      database: current.database,
+    });
+    setState({ testOutput: "", testOk: null });
+  }
+
+  function autoName(c: ConnConfig) {
+    if (c.name.trim()) return c.name.trim();
+    if (c.kind === "sqlite") return c.filePath ? c.filePath.split(/[\\/]/).pop() || "SQLite" : "SQLite";
+    return `${c.database ? `${c.database}@` : ""}${c.host || engineOf(c.kind).label}`;
+  }
+
+  async function save(andConnect: boolean) {
+    const c = { ...cfg(), name: autoName(cfg()) };
+    try {
+      const saved = await submitConnection(c);
+      if (andConnect) void connect(saved.id, c.password || undefined);
+    } catch (err) {
+      setState({ testOutput: String(err), testOk: false });
+    }
+  }
+
+  return (
+    <Dialog title={editing() ? `Propiedades de ${props.cfg.name}` : "Nueva conexión"} wide class="conn-dialog" onClose={() => setState("connDialog", null)}>
+      <div class="conn-layout">
+        <nav class="engine-list">
+          <For each={ENGINES}>
+            {(engine) => (
+              <button type="button" classList={{ on: kind() === engine.kind }} onClick={() => pickEngine(engine.kind)}>
+                <EngineIcon kind={engine.kind} size={20} />
+                <span>
+                  <b>{engine.label}</b>
+                  <small>{engine.hint}</small>
+                </span>
+              </button>
+            )}
+          </For>
+        </nav>
+        <form
+          class="conn-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save(!editing());
+          }}
+        >
+          <div class="form-row">
+            <label class="field grow">
+              <span>Nombre</span>
+              <input value={cfg().name} placeholder={autoName({ ...cfg(), name: "" })} onInput={(event) => set("name", event.currentTarget.value)} ref={(el) => queueMicrotask(() => el.focus())} />
+            </label>
+            <label class="field" style={{ width: "150px" }}>
+              <span>Carpeta</span>
+              <input value={cfg().folder} list="conn-folders" placeholder="—" onInput={(event) => set("folder", event.currentTarget.value)} />
+            </label>
+          </div>
+          <datalist id="conn-folders">
+            <For each={[...new Set(state.connections.map((conn) => conn.folder).filter(Boolean))]}>{(folder) => <option value={folder} />}</For>
+          </datalist>
+
+          <Show when={kind() === "sqlite"}>
+            <label class="field">
+              <span>Fichero</span>
+              <div class="input-group">
+                <input value={cfg().filePath} placeholder="C:\datos\app.db  ·  :memory:" onInput={(event) => set("filePath", event.currentTarget.value)} />
+                <button type="button" class="btn" onClick={() => void browseSqlite((path) => set("filePath", path))}><FolderOpen size={14} /> Examinar</button>
+                <button type="button" class="btn" onClick={() => set("filePath", ":memory:")}>Memoria</button>
+              </div>
+              <small class="field-hint">Si el fichero no existe se crea al conectar.</small>
+            </label>
+          </Show>
+
+          <Show when={kind() === "odbc"}>
+            <label class="field">
+              <span>Cadena de conexión</span>
+              <textarea rows="3" spellcheck={false} value={cfg().odbcConnStr} placeholder="DSN=mi_origen;UID=usuario;PWD=…  o  DRIVER={…};SERVER=…" onInput={(event) => set("odbcConnStr", event.currentTarget.value)} />
+            </label>
+          </Show>
+
+          <Show when={network()}>
+            <div class="form-row">
+              <label class="field grow">
+                <span>Servidor</span>
+                <input value={cfg().host} placeholder="localhost" spellcheck={false} onInput={(event) => set("host", event.currentTarget.value)} />
+              </label>
+              <label class="field" style={{ width: "96px" }}>
+                <span>Puerto</span>
+                <input type="number" value={cfg().port ?? ""} placeholder={String(engineOf(kind()).port ?? "")} onInput={(event) => set("port", event.currentTarget.value ? Number(event.currentTarget.value) : null)} />
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="field grow">
+                <span>Usuario</span>
+                <input value={cfg().user} spellcheck={false} disabled={cfg().integratedAuth} onInput={(event) => set("user", event.currentTarget.value)} />
+              </label>
+              <label class="field grow">
+                <span>Contraseña</span>
+                <input type="password" value={cfg().password ?? ""} disabled={cfg().integratedAuth} placeholder={editing() ? "sin cambios" : ""} onInput={(event) => set("password", event.currentTarget.value)} />
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="field grow">
+                <span>Base de datos</span>
+                <input value={cfg().database} spellcheck={false} placeholder={kind() === "postgres" ? "postgres" : "opcional"} onInput={(event) => set("database", event.currentTarget.value)} />
+              </label>
+              <Show when={kind() === "mssql" || kind() === "informix"}>
+                <label class="field grow">
+                  <span>{kind() === "informix" ? "INFORMIXSERVER" : "Instancia"}</span>
+                  <input value={cfg().instance} spellcheck={false} onInput={(event) => set("instance", event.currentTarget.value)} />
+                </label>
+              </Show>
+            </div>
+            <div class="checks">
+              <label class="check"><input type="checkbox" checked={cfg().savePassword} onChange={(event) => set("savePassword", event.currentTarget.checked)} /> Recordar contraseña</label>
+              <Show when={kind() === "mssql"}>
+                <label class="check"><input type="checkbox" checked={cfg().integratedAuth} onChange={(event) => set("integratedAuth", event.currentTarget.checked)} /> Autenticación de Windows</label>
+              </Show>
+            </div>
+          </Show>
+
+          <div class="checks">
+            <label class="check"><input type="checkbox" checked={cfg().readOnly} onChange={(event) => set("readOnly", event.currentTarget.checked)} /> Solo lectura</label>
+            <label class="check danger"><input type="checkbox" checked={cfg().production} onChange={(event) => set("production", event.currentTarget.checked)} /> Producción <small>(confirma cambios peligrosos)</small></label>
+          </div>
+
+          <div class="field">
+            <span>Color</span>
+            <div class="swatches">
+              <button type="button" class="swatch none" classList={{ on: !cfg().color }} title="Automático" onClick={() => set("color", "")} />
+              <For each={["#E5534B", "#E8833A", "#D4A72C", "#57AB5A", "#4A9BD9", "#986EE2", "#8B949E"]}>
+                {(color) => <button type="button" class="swatch" classList={{ on: cfg().color.toLowerCase() === color.toLowerCase() }} style={{ background: color }} onClick={() => set("color", color)} />}
+              </For>
+            </div>
+          </div>
+
+          <Show when={network() || kind() === "sqlite"}>
+            <button type="button" class="disclosure" onClick={() => setAdvanced(!advanced())}>{advanced() ? "▾" : "▸"} Opciones avanzadas</button>
+            <Show when={advanced()}>
+              <div class="advanced">
+                <Show when={network() && kind() !== "informix"}>
+                  <div class="form-row">
+                    <label class="field grow">
+                      <span>Cifrado SSL/TLS</span>
+                      <select value={cfg().encryption} onChange={(event) => set("encryption", event.currentTarget.value)}>
+                        <option value="required">Obligatorio</option>
+                        <option value="login">Preferido</option>
+                        <option value="off">Desactivado</option>
+                      </select>
+                    </label>
+                    <label class="check" style={{ "align-self": "end", "padding-bottom": "6px" }}><input type="checkbox" checked={cfg().trustCert} onChange={(event) => set("trustCert", event.currentTarget.checked)} /> Confiar en el certificado</label>
+                  </div>
+                </Show>
+                <Show when={kind() === "informix"}>
+                  <label class="field">
+                    <span>Protocolo</span>
+                    <select value={cfg().informixMode} onChange={(event) => set("informixMode", event.currentTarget.value)}>
+                      <option value="drda">DRDA (IBM CLI)</option>
+                      <option value="sqli">SQLI (Client SDK / ODBC)</option>
+                    </select>
+                  </label>
+                </Show>
+                <label class="field">
+                  <span>Parámetros extra</span>
+                  <input value={cfg().extra} spellcheck={false} placeholder="clave=valor;clave2=valor2" onInput={(event) => set("extra", event.currentTarget.value)} />
+                </label>
+              </div>
+            </Show>
+          </Show>
+
+          <Show when={state.testing || state.testOutput}>
+            <div class="test-result" classList={{ ok: state.testOk === true, bad: state.testOk === false }}>
+              <Show when={!state.testing} fallback={<><LoaderCircle size={15} class="spin" /> Probando conexión…</>}>
+                {state.testOk ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
+                <pre>{state.testOutput}</pre>
+              </Show>
+            </div>
+          </Show>
+
+          <footer>
+            <button type="button" class="btn" disabled={state.testing} onClick={() => void testConnection({ ...cfg(), name: autoName(cfg()) })}>Probar conexión</button>
+            <span class="spacer" />
+            <button type="button" class="btn" onClick={() => setState("connDialog", null)}>Cancelar</button>
+            <Show when={!editing()}><button type="button" class="btn" onClick={() => void save(false)}>Guardar</button></Show>
+            <button type="submit" class="btn primary">{editing() ? "Guardar" : "Guardar y conectar"}</button>
+          </footer>
+        </form>
+      </div>
+    </Dialog>
+  );
 }
+
+// ---------------------------------------------------------------- settings
+
+const SECTIONS = [
+  ["appearance", "Apariencia"],
+  ["editor", "Editor y resultados"],
+  ["safety", "Seguridad"],
+  ["ai", "IA y MCP"],
+  ["drivers", "Drivers"],
+] as const;
 
 function SettingsDialog() {
+  const [section, setSection] = createSignal<(typeof SECTIONS)[number][0]>("appearance");
+  const s = () => state.settings;
+  const close = () => {
+    applyTheme();
+    setState("settingsOpen", false);
+  };
   return (
-    <form class="modal dialog" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void saveSettings({
-      theme: String(data.get("theme")) as ThemeName,
-      accent: String(data.get("accent")),
-      fontSize: Number(data.get("fontSize")),
-      editorFontSize: Number(data.get("editorFontSize")),
-      pageSize: Number(data.get("pageSize")),
-      ibmDriverPath: String(data.get("ibmDriverPath") ?? ""),
-      companion: String(data.get("companion")) as "off" | "quiet" | "normal",
-    }); setState("settingsOpen", false); }}>
-      <header><h2>Ajustes</h2><button type="button" onClick={() => { applyTheme(); setState("settingsOpen", false); }}>✕</button></header>
-      <div class="form-grid">
-        <label class="span">Tema
-          <select name="theme" value={state.settings.theme} onChange={(event) => { document.documentElement.dataset.theme = event.currentTarget.value === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : event.currentTarget.value; }}>
-            <option value="dark">Celer Dark</option>
-            <option value="light">Celer Light</option>
-            <option value="contrast">Alto contraste oscuro</option>
-            <option value="contrast-light">Alto contraste claro</option>
-            <option value="fjord">Fjord</option>
-            <option value="sand">Sand</option>
-            <option value="system">Sistema</option>
-          </select>
-        </label>
-        <label class="span">Acento
-          <div class="swatches">
-            <For each={ACCENTS}>
-              {(item) => <button type="button" classList={{ on: state.settings.accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => { const input = document.querySelector<HTMLInputElement>("input[name=accent]"); if (input) input.value = item.value; }} />}
-            </For>
-            <input name="accent" type="color" value={state.settings.accent} />
-          </div>
-        </label>
-        <label>Compañero
-          <select name="companion" value={state.settings.companion}>
-            <option value="normal">Normal</option>
-            <option value="quiet">Silencioso</option>
-            <option value="off">Apagado</option>
-          </select>
-        </label>
-        <label>Tamaño de interfaz<input name="fontSize" type="number" min="11" max="20" value={state.settings.fontSize} /></label>
-        <label>Tamaño del editor<input name="editorFontSize" type="number" min="11" max="22" value={state.settings.editorFontSize} /></label>
-        <label>Filas por página<input name="pageSize" type="number" min="50" max="5000" value={state.settings.pageSize} /></label>
-        <label class="span">Ruta del driver IBM<input name="ibmDriverPath" value={state.settings.ibmDriverPath} placeholder="opcional" /></label>
+    <Dialog title="Ajustes" wide class="settings" onClose={close}>
+      <div class="settings-layout">
+        <nav class="settings-nav">
+          <For each={SECTIONS}>{([id, label]) => <button type="button" classList={{ on: section() === id }} onClick={() => setSection(id)}>{label}</button>}</For>
+        </nav>
+        <div class="settings-body">
+          <Show when={section() === "appearance"}>
+            <h4>Tema</h4>
+            <div class="theme-grid">
+              <For each={themeChoices}>
+                {(theme) => (
+                  <button
+                    type="button"
+                    class="theme-card"
+                    classList={{ on: s().theme === theme.id }}
+                    onMouseEnter={() => applyTheme(state.settings, theme.id)}
+                    onMouseLeave={() => applyTheme()}
+                    onClick={() => void saveSettings({ theme: theme.id as ThemeName })}
+                  >
+                    <ThemePreview theme={theme.id} />
+                    <span>{theme.label}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+            <h4>Color de acento</h4>
+            <div class="swatches">
+              <For each={ACCENTS}>
+                {(item) => <button type="button" class="swatch big" classList={{ on: s().accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void saveSettings({ accent: item.value })} />}
+              </For>
+              <label class="swatch big custom" title="Personalizado">
+                <input type="color" value={s().accent} onChange={(event) => void saveSettings({ accent: event.currentTarget.value })} />
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="field">
+                <span>Densidad</span>
+                <div class="seg">
+                  <button type="button" classList={{ on: s().density === "compact" }} onClick={() => void saveSettings({ density: "compact" })}>Compacta</button>
+                  <button type="button" classList={{ on: s().density === "comfortable" }} onClick={() => void saveSettings({ density: "comfortable" })}>Cómoda</button>
+                </div>
+              </label>
+              <label class="field">
+                <span>Tamaño de la interfaz</span>
+                <NumberStepper value={s().fontSize} min={11} max={18} onChange={(value) => void saveSettings({ fontSize: value })} />
+              </label>
+              <label class="field">
+                <span>Compañero (Gib)</span>
+                <select value={s().companion} onChange={(event) => void saveSettings({ companion: event.currentTarget.value as "off" | "quiet" | "normal" })}>
+                  <option value="normal">Normal</option>
+                  <option value="quiet">Silencioso</option>
+                  <option value="off">Apagado</option>
+                </select>
+              </label>
+            </div>
+          </Show>
+          <Show when={section() === "editor"}>
+            <div class="form-row">
+              <label class="field">
+                <span>Tamaño del editor</span>
+                <NumberStepper value={s().editorFontSize} min={10} max={24} onChange={(value) => void saveSettings({ editorFontSize: value })} />
+              </label>
+              <label class="field">
+                <span>Filas por página</span>
+                <select value={String(s().pageSize)} onChange={(event) => void saveSettings({ pageSize: Number(event.currentTarget.value) })}>
+                  <For each={[100, 200, 500, 1000, 2000, 5000, 10000]}>{(n) => <option value={n}>{n.toLocaleString()}</option>}</For>
+                </select>
+              </label>
+            </div>
+            <label class="check"><input type="checkbox" checked={s().zebra} onChange={(event) => void saveSettings({ zebra: event.currentTarget.checked })} /> Filas alternas en la tabla de resultados</label>
+            <p class="settings-note">Los resultados se leen por páginas con un cursor abierto: aunque la consulta devuelva millones de filas, sólo se traen las que ves. «Cargar todo» lee el resto bajo demanda.</p>
+          </Show>
+          <Show when={section() === "safety"}>
+            <label class="check"><input type="checkbox" checked={s().confirmMutations} onChange={(event) => void saveSettings({ confirmMutations: event.currentTarget.checked })} /> En conexiones de producción, confirmar UPDATE/DELETE sin WHERE, DROP, TRUNCATE y ALTER</label>
+            <p class="settings-note">Las conexiones de solo lectura rechazan cualquier sentencia que modifique datos, también desde el núcleo en Rust. Las contraseñas se guardan en el almacén de credenciales del sistema operativo.</p>
+          </Show>
+          <Show when={section() === "ai"}>
+            <AiSettings />
+          </Show>
+          <Show when={section() === "drivers"}>
+            <p class="settings-note">PostgreSQL, MySQL/MariaDB, SQL Server y SQLite son nativos: no hace falta instalar nada. Informix (DRDA) usa el driver IBM Data Server, que Celer puede descargar.</p>
+            <label class="field">
+              <span>Ruta del driver IBM (opcional)</span>
+              <input value={s().ibmDriverPath} placeholder="detección automática" onChange={(event) => void saveSettings({ ibmDriverPath: event.currentTarget.value })} />
+            </label>
+            <p class="settings-note">Estado: {state.driverPath || "no encontrado"} {state.driverProgress}</p>
+            <button type="button" class="btn" disabled={!isTauri()} onClick={() => void downloadDriver()}>Descargar driver IBM</button>
+          </Show>
+          <p class="settings-foot">{isTauri() ? "Aplicación de escritorio" : "Modo navegador: SQLite en memoria (demo)."} · Celer {state.appInfo.version} · {state.appInfo.dataDir}</p>
+        </div>
       </div>
-      <p class="hint">Driver IBM: {state.driverPath || "no encontrado"} {state.driverProgress}</p>
-      <footer>
-        <button type="button" class="btn" onClick={() => void downloadDriver()}>Descargar driver IBM</button>
-        <button type="button" class="btn" onClick={() => void refreshConnections()}>Recargar</button>
-        <button type="submit" class="btn primary">Guardar</button>
-      </footer>
-      <p class="hint">{isTauri() ? "Aplicación de escritorio" : "Modo navegador: SQLite en memoria. SQL Server, Informix y ODBC usan la aplicación de escritorio."} · {state.appInfo.version} · {state.appInfo.dataDir}</p>
-    </form>
+    </Dialog>
   );
 }
 
-function ExportDialog() {
+function NumberStepper(props: { value: number; min: number; max: number; onChange: (value: number) => void }) {
   return (
-    <form class="modal dialog" onSubmit={(event) => { event.preventDefault(); void runExport(); }}>
-      <header><h2>Exportar</h2><button type="button" onClick={() => setState("exportOpen", false)}>✕</button></header>
-      <div class="form-grid">
-        <label>Formato
-          <select value={state.exportFormat} onChange={(event) => setState("exportFormat", event.currentTarget.value as never)}>
-            <option value="csv">CSV</option>
-            <option value="tsv">TSV</option>
-            <option value="json">JSON</option>
-            <option value="sql">SQL INSERT</option>
-            <option value="xlsx" disabled={!isTauri()}>Excel</option>
-          </select>
-        </label>
-        <label>Fichero<input value={state.exportPath} onInput={(event) => setState("exportPath", event.currentTarget.value)} /></label>
+    <div class="stepper">
+      <button type="button" disabled={props.value <= props.min} onClick={() => props.onChange(props.value - 1)}>−</button>
+      <span>{props.value}px</span>
+      <button type="button" disabled={props.value >= props.max} onClick={() => props.onChange(props.value + 1)}>+</button>
+    </div>
+  );
+}
+
+/** A miniature of the real workspace rendered with a theme's tokens. */
+function ThemePreview(props: { theme: string }) {
+  const theme = () => (props.theme === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : props.theme);
+  return (
+    <div class="theme-preview" data-theme-preview={theme()}>
+      <div class="tp-side">
+        <i /><i /><i class="t" /><i class="t" /><i />
       </div>
-      <Show when={state.exportRunning}><p class="hint">Exportando… {state.exportRows} filas</p></Show>
-      <footer>
-        <button type="button" class="btn" onClick={() => setState("exportOpen", false)}>Cancelar</button>
-        <button type="submit" class="btn primary" disabled={state.exportRunning}>Exportar</button>
-      </footer>
-    </form>
+      <div class="tp-main">
+        <div class="tp-code">
+          <span class="k">SELECT</span> <span class="n">id</span>, <span class="f">count</span>(*)<br />
+          <span class="k">FROM</span> <span class="t">orders</span> <span class="k">WHERE</span> <span class="s">'ok'</span>
+        </div>
+        <div class="tp-grid"><i /><i /><i /></div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- export
+
+function AboutDialog() {
+  return (
+    <Dialog title="Acerca de Celer" small onClose={() => setState("aboutOpen", false)}>
+      <div class="about">
+        <Mark size={56} />
+        <h3>Celer</h3>
+        <p>SQL rápido para cualquier base de datos.</p>
+        <p class="muted small">Versión {state.appInfo.version || "dev"} · Tauri 2 · Rust · SolidJS</p>
+      </div>
+    </Dialog>
   );
 }

@@ -28,7 +28,20 @@ export interface FetchOutput {
   extra: ResultSet[];
 }
 
-export type DbKind = "mssql" | "informix" | "odbc" | "sqlite";
+export type DbKind = "postgres" | "mysql" | "mssql" | "sqlite" | "informix" | "odbc";
+
+export const ENGINES: { kind: DbKind; label: string; hint: string; port: number | null; user: string; color: string }[] = [
+  { kind: "postgres", label: "PostgreSQL", hint: "Nativo · también CockroachDB, Timescale, Supabase", port: 5432, user: "postgres", color: "#336791" },
+  { kind: "mysql", label: "MySQL / MariaDB", hint: "Nativo · también TiDB, PlanetScale", port: 3306, user: "root", color: "#C0765A" },
+  { kind: "mssql", label: "SQL Server", hint: "TDS nativo · autenticación SQL y Windows", port: 1433, user: "sa", color: "#CC2927" },
+  { kind: "sqlite", label: "SQLite", hint: "Embebido · un fichero o en memoria", port: null, user: "", color: "#4F8FBF" },
+  { kind: "informix", label: "Informix", hint: "IBM CLI (DRDA) o Client SDK", port: 9088, user: "informix", color: "#4B6EAF" },
+  { kind: "odbc", label: "ODBC", hint: "Cualquier origen de datos ODBC", port: null, user: "", color: "#7C8796" },
+];
+
+export function engineOf(kind: DbKind | undefined) {
+  return ENGINES.find((engine) => engine.kind === kind) ?? ENGINES[ENGINES.length - 1];
+}
 
 export interface ConnConfig {
   id: string;
@@ -112,7 +125,8 @@ export interface SessionInfo {
 }
 
 export interface ExportOptions {
-  format: "csv" | "tsv" | "json" | "sql" | "xlsx";
+  format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xlsx";
+  sqlBatch?: number;
   path: string;
   delimiter: string;
   header: boolean;
@@ -121,11 +135,12 @@ export interface ExportOptions {
   nullText: string;
 }
 
-export type ThemeName = "system" | "light" | "dark" | "contrast" | "contrast-light" | "fjord" | "sand";
+export type ThemeName = "system" | "light" | "dark" | "darcula" | "contrast" | "contrast-light" | "fjord" | "sand";
 
 export type CompanionMode = "off" | "quiet" | "normal";
 
 export const ACCENTS = [
+  { name: "Clay", value: "#D97757" },
   { name: "Ember", value: "#F26B1D" },
   { name: "Blue", value: "#3B82F6" },
   { name: "Teal", value: "#14B8A6" },
@@ -141,22 +156,38 @@ export interface Settings {
   pageSize: number;
   ibmDriverPath: string;
   sidebarWidth: number;
+  inspectorWidth: number;
+  editorRatio: number;
   companion: CompanionMode;
+  density: "compact" | "comfortable";
+  zebra: boolean;
+  confirmMutations: boolean;
+  aiModel: string;
+  /** The start-up guide was completed or skipped. */
+  onboarded: boolean;
 }
 
 export const defaultSettings: Settings = {
   theme: "dark",
-  accent: "#F26B1D",
+  accent: "#D97757",
   fontSize: 13,
   editorFontSize: 13,
-  pageSize: 200,
+  pageSize: 500,
   ibmDriverPath: "",
   sidebarWidth: 280,
+  inspectorWidth: 320,
+  editorRatio: 0.45,
   companion: "normal",
+  density: "compact",
+  zebra: true,
+  confirmMutations: true,
+  aiModel: "claude-opus-5-5",
+  onboarded: false,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
-  const port = kind === "mssql" ? 1433 : kind === "informix" ? 9088 : null;
+  const engine = engineOf(kind);
+  const port = engine.port;
   return {
     id: "",
     name: "",
@@ -165,19 +196,49 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     port,
     instance: "",
     database: "",
-    user: kind === "mssql" ? "sa" : "",
+    user: engine.user,
     password: "",
     savePassword: true,
     integratedAuth: false,
-    encryption: "required",
+    encryption: kind === "mssql" ? "required" : "login",
     trustCert: true,
     informixMode: "drda",
     odbcConnStr: "",
     extra: "",
-    color: "#F26B1D",
+    color: "",
     production: false,
     readOnly: false,
     folder: "",
     filePath: kind === "sqlite" ? "" : "",
   };
+}
+
+export type McpLevel = "none" | "schema" | "read" | "write";
+
+export interface McpConfig {
+  enabled: boolean;
+  maxRows: number;
+  timeoutSecs: number;
+  redactPattern: string;
+  connections: Record<string, { level: McpLevel; maxRows?: number | null }>;
+}
+
+export interface McpAuditEntry {
+  at: number;
+  tool: string;
+  connId?: string | null;
+  connName?: string | null;
+  detail?: string | null;
+  ok: boolean;
+  rows?: number | null;
+  ms?: number | null;
+  error?: string | null;
+}
+
+export interface McpClientInfo {
+  exePath: string;
+  args: string[];
+  claudeDesktopConfigPath: string;
+  claudeDesktopConfigured: boolean;
+  claudeCodeCommand: string;
 }

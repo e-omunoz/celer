@@ -1,126 +1,211 @@
-import { onMount, Show } from "solid-js";
+import { Database, History, Moon, PanelLeft, PanelRight, Plus, Search, Settings2, Sparkles, Sun } from "lucide-solid";
+import { onCleanup, onMount, Show } from "solid-js";
+import { isTauri } from "./api";
+import { Mark } from "./brand/Mark";
+import { handleGlobalKey } from "./commands";
+import { Inspector } from "./components/Inspector";
 import { Modals } from "./components/Modals";
+import { ContextMenu, Palette, Toasts } from "./components/Overlays";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
 import { Companion } from "./gib/Companion";
-import { Mark } from "./brand/Mark";
-import { isTauri } from "./api";
+import { Splash } from "./gib/Splash";
+import { Onboarding } from "./components/Onboarding";
+import { revealWindow, WindowControls } from "./components/WindowControls";
+import { EngineIcon } from "./icons";
 import {
   activeTab,
   boot,
-  cancelActive,
-  commitActive,
-  connect,
+  connColor,
   connectionById,
-  formatActive,
+  formatMs,
+  isLightTheme,
   openConnDialog,
+  openMenu,
+  openPalette,
   openQuery,
-  refreshHistory,
-  runActive,
   saveSettings,
   setState,
   state,
-  switchDatabase,
+  toggleInspector,
 } from "./state";
+import { engineOf } from "./types";
 
 export default function App() {
-  onMount(() => void boot());
-  const tab = () => activeTab();
-  const sqlTab = () => {
-    const current = tab();
-    return current?.kind === "sql" ? current : undefined;
-  };
-  const session = () => {
-    const connId = tab()?.connId;
-    return connId ? state.sessions[connId] : undefined;
-  };
+  onMount(() => {
+    void boot();
+    revealWindow();
+    let lastShift = 0;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "F5" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r")) {
+        // A page reload would drop results, edits and open transactions.
+        if (state.paletteOpen || state.connDialog || state.settingsOpen) event.preventDefault();
+      }
+      if (state.paletteOpen || state.connDialog || state.settingsOpen) return;
+      if (event.key === "Shift" && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        const t = performance.now();
+        if (t - lastShift < 350) {
+          lastShift = 0;
+          openPalette("all");
+          return;
+        }
+        lastShift = t;
+        return;
+      }
+      lastShift = 0;
+      handleGlobalKey(event);
+    };
+    window.addEventListener("keydown", onKey);
+    const blockMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest("input, textarea, .cm-editor")) event.preventDefault();
+    };
+    window.addEventListener("contextmenu", blockMenu);
+    onCleanup(() => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("contextmenu", blockMenu);
+    });
+  });
 
   return (
-    <div class="app">
-      <header class="toolbar">
-        <div class="brand"><Mark /><span>Celer</span></div>
-        <Show when={connectionById(tab()?.connId)?.production}><span class="pill prod">PROD</span></Show>
-        <button type="button" class="btn" title="Nueva conexión" onClick={() => openConnDialog()}>Conexión</button>
-        <button type="button" class="btn" title="Nueva consulta" onClick={() => openQuery(session() ? tab()?.connId ?? null : null)}>Consulta</button>
-        <span class="sep" />
-        <button type="button" class="btn run" title="Ejecutar sentencia (Ctrl+Enter)" onClick={() => void runActive("statement")}>Ejecutar</button>
-        <button type="button" class="btn" title="Ejecutar script (Alt+X)" onClick={() => void runActive("script")}>Script</button>
-        <button type="button" class="btn" title="Cancelar" onClick={() => void cancelActive()} disabled={!sqlTab()?.running}>Cancelar</button>
-        <button type="button" class="btn" title="Formatear SQL" onClick={formatActive}>Formatear</button>
-        <span class="sep" />
-        <button type="button" class="btn" disabled={!sqlTab()?.inTransaction} onClick={() => void commitActive(false)}>Commit</button>
-        <button type="button" class="btn" disabled={!sqlTab()?.inTransaction} onClick={() => void commitActive(true)}>Rollback</button>
-        <span class="spacer" />
-        <button type="button" class="btn" onClick={() => { const open = !state.historyOpen; setState("historyOpen", open); if (open) void refreshHistory(); }}>Historial</button>
-        <button type="button" class="btn" onClick={() => void cycleTheme()}>{themeLabel()}</button>
-        <button type="button" class="btn" onClick={() => setState("settingsOpen", true)}>Ajustes</button>
-      </header>
-      <div class="body">
-        <Sidebar />
-        <div class="splitter" onMouseDown={resizeSidebar} />
+    <div class="app" classList={{ ready: state.ready }}>
+      <TopBar />
+      <div class="main">
+        <nav class="stripe">
+          <button type="button" class="stripe-btn" classList={{ on: state.explorerOpen }} title="Explorador (Alt+1)" onClick={() => setState("explorerOpen", !state.explorerOpen)}>
+            <Database size={17} />
+          </button>
+          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "history" }} title="Historial (Ctrl+Alt+E)" onClick={() => toggleInspector("history")}>
+            <History size={17} />
+          </button>
+          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "ai" }} title="Asistente IA (Ctrl+Alt+I)" onClick={() => toggleInspector("ai")}>
+            <Sparkles size={17} />
+          </button>
+          <span class="spacer" />
+          <button type="button" class="stripe-btn" title="Ajustes (Ctrl+Alt+S)" onClick={() => setState("settingsOpen", true)}>
+            <Settings2 size={17} />
+          </button>
+        </nav>
+        <Show when={state.explorerOpen}>
+          <Sidebar />
+          <div class="vsplit" onMouseDown={(event) => resize(event, "sidebarWidth", 1)} />
+        </Show>
         <Workspace />
+        <Show when={state.inspectorOpen}>
+          <div class="vsplit" onMouseDown={(event) => resize(event, "inspectorWidth", -1)} />
+          <Inspector />
+        </Show>
       </div>
-      <footer class="status">
-        <span>{isTauri() ? "Escritorio" : "Navegador"}</span>
-        <Show when={session()} fallback={<span>Sin conexión</span>}>
-          <span>{session()!.serverInfo}</span>
-          <label>
-            Base
-            <select value={session()!.database} onChange={(event) => void switchDatabase(event.currentTarget.value)}>
-              <ForDatabases names={session()!.databases} current={session()!.database} />
-            </select>
-          </label>
-        </Show>
-        <Show when={sqlTab()?.elapsedMs !== null && sqlTab()?.elapsedMs !== undefined}>
-          <span>{sqlTab()?.elapsedMs} ms</span>
-        </Show>
-        <Show when={sqlTab()?.inTransaction}><span class="pill warn">transacción</span></Show>
-        <span class="spacer" />
-        <Show when={tab()?.connId && !state.sessions[tab()!.connId!]}>
-          <button type="button" class="btn tiny" onClick={() => void connect(tab()!.connId!)}>Conectar</button>
-        </Show>
-        <span>v{state.appInfo.version || "…"}</span>
-        <Companion />
-      </footer>
-      <Show when={state.toast}><div class="toast" onClick={() => setState("toast", "")}>{state.toast}</div></Show>
+      <StatusBar />
+      <Toasts />
+      <ContextMenu />
+      <Palette />
       <Modals />
+      <Splash />
+      <Show when={state.onboardingOpen}><Onboarding /></Show>
     </div>
   );
 }
 
-function ForDatabases(props: { names: string[]; current: string }) {
-  const names = () => (props.names.length ? props.names : props.current ? [props.current] : []);
-  return names().map((name) => <option value={name}>{name}</option>);
+function TopBar() {
+  return (
+    <header class="topbar" data-tauri-drag-region>
+      <div class="brand" title="Celer" data-tauri-drag-region>
+        <Mark size={18} />
+        <span>Celer</span>
+      </div>
+      <button
+        type="button"
+        class="top-btn"
+        title="Nuevo"
+        onClick={(event) =>
+          openMenu(event, [
+            { label: "Nueva conexión…", hint: "Ctrl+Alt+N", run: () => openConnDialog() },
+            { label: "Nueva consola", hint: "Ctrl+Mayús+L", run: () => openQuery(activeTab()?.connId ?? state.connections[0]?.id ?? null) },
+          ])
+        }
+      >
+        <Plus size={15} /> <span>Nuevo</span>
+      </button>
+      <span class="spacer" data-tauri-drag-region />
+      <button type="button" class="search-trigger" onClick={() => openPalette("all")} title="Buscar en todo (Mayús Mayús)">
+        <Search size={14} />
+        <span>Buscar tablas, acciones…</span>
+        <kbd>⇧⇧</kbd>
+      </button>
+      <span class="spacer" data-tauri-drag-region />
+      <button type="button" class="top-icon" title={isLightTheme() ? "Tema oscuro" : "Tema claro"} onClick={() => void saveSettings({ theme: isLightTheme() ? "dark" : "light" })}>
+        <Show when={isLightTheme()} fallback={<Sun size={16} />}><Moon size={16} /></Show>
+      </button>
+      <button type="button" class="top-icon" classList={{ on: state.explorerOpen }} title="Explorador (Alt+1)" onClick={() => setState("explorerOpen", !state.explorerOpen)}>
+        <PanelLeft size={16} />
+      </button>
+      <button type="button" class="top-icon" classList={{ on: state.inspectorOpen }} title="Panel derecho (Alt+7)" onClick={() => (state.inspectorOpen ? setState("inspectorOpen", false) : toggleInspector("value"))}>
+        <PanelRight size={16} />
+      </button>
+      <WindowControls />
+    </header>
+  );
 }
 
-function themeLabel() {
-  const labels: Record<string, string> = {
-    dark: "Oscuro",
-    light: "Claro",
-    contrast: "Contraste",
-    "contrast-light": "Contraste claro",
-    fjord: "Fjord",
-    sand: "Sand",
-    system: "Sistema",
-  };
-  return labels[state.settings.theme] ?? "Tema";
+function StatusBar() {
+  const tab = () => activeTab();
+  const conn = () => connectionById(tab()?.connId);
+  const session = () => (tab()?.connId ? state.sessions[tab()!.connId!] : undefined);
+  const stats = () => state.gridStats;
+  const fmt = (n: number) => (Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 4 }));
+  return (
+    <footer class="statusbar">
+      <Show when={conn()} fallback={<span class="st-item muted">{state.connections.length ? "Sin conexión" : "Celer"}</span>}>
+        <span class="st-item">
+          <EngineIcon kind={conn()!.kind} size={12} server={session()?.serverInfo} />
+          <i class="st-dot" style={{ background: session() ? connColor(conn()) : "var(--text-faint)" }} />
+          {conn()!.name}
+          <Show when={tab()?.database}><span class="muted"> · {tab()!.database}</span></Show>
+        </span>
+        <Show when={conn()!.production}><span class="tag prod tiny">PROD</span></Show>
+        <Show when={session()?.serverInfo}><span class="st-item muted st-server" title={session()!.serverInfo}>{session()!.serverInfo.split("\n")[0]}</span></Show>
+      </Show>
+      <Show when={tab()?.kind === "sql" && (tab() as { inTransaction: boolean }).inTransaction}>
+        <span class="tag warn tiny">TX pendiente</span>
+      </Show>
+      <span class="spacer" />
+      <Show when={stats()}>
+        <span class="st-item stats" title="Agregados de la selección">
+          {stats()!.cells.toLocaleString()} celdas
+          <Show when={stats()!.numeric}>
+            <span> · Σ {fmt(stats()!.sum)}</span>
+            <span> · x̄ {fmt(stats()!.sum / stats()!.numeric)}</span>
+            <span> · mín {fmt(stats()!.min!)}</span>
+            <span> · máx {fmt(stats()!.max!)}</span>
+          </Show>
+          <span> · {stats()!.distinct.toLocaleString()} distintos</span>
+        </span>
+      </Show>
+      <Show when={tab()?.kind === "sql"}>
+        <span class="st-item muted">Ln {state.cursorPos.line}, Col {state.cursorPos.col}</span>
+      </Show>
+      <Show when={tab()?.kind === "sql" && (tab() as { elapsedMs: number | null }).elapsedMs !== null}>
+        <span class="st-item muted">{formatMs((tab() as { elapsedMs: number | null }).elapsedMs)}</span>
+      </Show>
+      <Show when={conn()}><span class="st-item muted">{engineOf(conn()!.kind).label}</span></Show>
+      <span class="st-item muted">{isTauri() ? "" : "demo navegador · "}UTF-8</span>
+      <Companion />
+    </footer>
+  );
 }
 
-async function cycleTheme() {
-  const order = ["dark", "light", "contrast", "contrast-light", "fjord", "sand", "system"] as const;
-  const next = order[(order.indexOf(state.settings.theme) + 1) % order.length];
-  await saveSettings({ theme: next });
-}
-
-function resizeSidebar(event: MouseEvent) {
+function resize(event: MouseEvent, key: "sidebarWidth" | "inspectorWidth", dir: 1 | -1) {
   event.preventDefault();
   const startX = event.clientX;
-  const startW = state.settings.sidebarWidth;
-  const move = (ev: MouseEvent) => setState("settings", "sidebarWidth", Math.min(560, Math.max(200, startW + ev.clientX - startX)));
+  const startW = state.settings[key];
+  document.body.classList.add("resizing");
+  const move = (ev: MouseEvent) => setState("settings", key, Math.min(640, Math.max(200, startW + (ev.clientX - startX) * dir)));
   const up = () => {
+    document.body.classList.remove("resizing");
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", up);
-    void saveSettings({ sidebarWidth: state.settings.sidebarWidth });
+    void saveSettings({ [key]: state.settings[key] });
   };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);

@@ -1,232 +1,758 @@
-import { createSignal, For, onMount, Show } from "solid-js";
-import { DataGrid } from "./Grid";
-import { Gib } from "../gib/Gib";
-import { Mark } from "../brand/Mark";
-import { SqlEditor } from "./Editor";
 import {
+  AlignLeft,
+  ArrowDownToLine,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  CircleCheck,
+  Download,
+  FileCode2,
+  Filter,
+  FolderOpen,
+  Gauge,
+  Minus,
+  PanelRight,
+  Play,
+  PlayCircle,
+  Plus,
+  RefreshCw,
+  Rows3,
+  Save,
+  Square,
+  Undo2,
+  Upload,
+  X,
+} from "lucide-solid";
+import { createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import { EngineIcon, ObjIcon } from "../icons";
+import { Gib } from "../gib/Gib";
+import { cellText, isNullCell } from "../sql";
+import {
+  activeSql,
   canEdit,
   cancelActive,
   changeAutocommit,
-  clearHistory,
+  closeOtherTabs,
   closeTab,
   commitActive,
+  connColor,
+  connect,
   connectionById,
+  copyText,
   deleteTableRows,
   displayRows,
   editCell,
+  fetchAll,
   fetchMore,
   formatActive,
+  formatMs,
+  gib,
   insertTableRow,
+  kindOf,
+  moveTab,
+  now,
   openConnDialog,
+  openInspector,
+  openMenu,
+  openQuery,
   openScript,
-  refreshHistory,
   reloadTable,
+  renameTab,
+  revertTable,
   runActive,
   saveScript,
+  saveSettings,
   saveTable,
   schemaMap,
   selectTab,
+  serverOf,
+  setActiveResult,
   setState,
+  setTabConnection,
+  setTableFilter,
+  setTableSection,
   startExport,
   state,
+  switchDatabase,
   tableDirty,
+  toggleInspector,
   updateSql,
-  useHistory,
+  countTable,
+  reloadTableSafe,
+  rerunActive,
+  startTableExport,
+  setTableSort,
+  upsertTableFilter,
+  type ColumnFilter,
+  type SqlTab,
+  type Tab,
+  type TableTab,
 } from "../state";
-import type { SqlTab, TableTab } from "../state";
-
-function Welcome() {
-  const [mood, setMood] = createSignal<"wave" | "idle" | "love">("wave");
-  onMount(() => {
-    const timer = window.setTimeout(() => setMood("idle"), 1600);
-    return () => window.clearTimeout(timer);
-  });
-  return (
-    <div class="empty">
-      <Gib size={150} mood={mood()} onClick={() => { setMood("love"); window.setTimeout(() => setMood("idle"), 1200); }} />
-      <div class="brand"><Mark size={28} /><h2>Celer</h2></div>
-      <p>SQL rápido para cualquier base de datos.</p>
-      <button type="button" class="btn primary" onClick={() => openConnDialog()}>Nueva conexión</button>
-    </div>
-  );
-}
+import { engineOf } from "../types";
+import { CodeView, SqlEditor } from "./Editor";
+import { DataGrid, type GridApi } from "./Grid";
+import { askAi } from "../ai";
+import { startImport } from "../importer";
+import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 
 export function Workspace() {
   return (
-    <section class="workspace">
-      <div class="tabbar">
+    <section class="center">
+      <TabBar />
+      <div class="panes">
         <For each={state.tabs}>
-          {(item) => (
-            <button type="button" class="tab" classList={{ on: item.id === state.activeTabId }} onClick={() => selectTab(item.id)}>
-              <span class="tab-strip" style={{ background: connectionById(item.connId)?.production ? "var(--danger)" : (connectionById(item.connId)?.color || "var(--accent)") }} />
-              <span>{item.title}</span>
-              <i onClick={(event) => { event.stopPropagation(); void closeTab(item.id); }}>✕</i>
-            </button>
+          {(tab) => (
+            <div class="pane-host" classList={{ active: tab.id === state.activeTabId }}>
+              <Show when={tab.kind === "sql"} fallback={<TablePane tab={tab as TableTab} />}>
+                <SqlPane tab={tab as SqlTab} />
+              </Show>
+            </div>
           )}
         </For>
+        <Show when={!state.tabs.length && state.ready}>
+          <Welcome />
+        </Show>
       </div>
-      <Show when={state.tabs.find((tab) => tab.id === state.activeTabId)} keyed fallback={<Welcome />}>
-        {(tab) => <ActivePane id={tab.id} />}
-      </Show>
-      <Show when={state.historyOpen}>
-        <div class="history">
-          <header>
-            <strong>Historial</strong>
-            <input placeholder="Buscar" value={state.historyQuery} onInput={(event) => { setState("historyQuery", event.currentTarget.value); void refreshHistory(); }} />
-            <button type="button" class="btn tiny" onClick={() => void clearHistory()}>Vaciar</button>
-            <button type="button" onClick={() => setState("historyOpen", false)}>✕</button>
-          </header>
-          <For each={state.history}>
-            {(entry) => (
-              <button type="button" class="history-item" onClick={() => void useHistory(entry.sql)}>
-                <code>{entry.sql.replace(/\s+/g, " ").slice(0, 180)}</code>
-                <small>{entry.connName} · {entry.ok ? "ok" : "error"} · {entry.elapsedMs} ms · {new Date(entry.at).toLocaleString()}</small>
-              </button>
-            )}
-          </For>
-        </div>
-      </Show>
     </section>
   );
 }
 
-function ActivePane(props: { id: string }) {
-  const item = () => state.tabs.find((tab) => tab.id === props.id);
+// ---------------------------------------------------------------- tabs
+
+function TabBar() {
+  const [dragFrom, setDragFrom] = createSignal(-1);
+  const [renaming, setRenaming] = createSignal("");
+
+  function menu(event: MouseEvent, tab: Tab) {
+    openMenu(event, [
+      { label: "Cerrar", hint: "Ctrl+W", run: () => void closeTab(tab.id) },
+      { label: "Cerrar las demás", run: () => void closeOtherTabs(tab.id) },
+      { separator: true },
+      { label: "Renombrar", disabled: tab.kind !== "sql", run: () => setRenaming(tab.id) },
+      { label: "Duplicar consola", disabled: tab.kind !== "sql", run: () => tab.kind === "sql" && openQuery(tab.connId, tab.sql, `${tab.title} (2)`) },
+    ]);
+  }
+
   return (
-    <>
-      <Show when={item()?.kind === "sql"}>
-        <SqlPane tab={item() as SqlTab} />
+    <div class="tabbar" role="tablist" onDblClick={(event) => event.target === event.currentTarget && openQuery(activeSql()?.connId ?? null)}>
+      <For each={state.tabs}>
+        {(tab, index) => {
+          const conn = () => connectionById(tab.connId);
+          const dirty = () => (tab.kind === "table" ? tableDirty(tab) : tab.inTransaction);
+          const busy = () => (tab.kind === "sql" ? tab.running : tab.loading);
+          return (
+            <div
+              class="tab"
+              role="tab"
+              aria-selected={tab.id === state.activeTabId}
+              classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index() }}
+              draggable={renaming() !== tab.id}
+              onDragStart={(event) => {
+                setDragFrom(index());
+                event.dataTransfer?.setData("application/x-celer-tab", tab.id);
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (dragFrom() >= 0) moveTab(dragFrom(), index());
+                setDragFrom(-1);
+              }}
+              onDragEnd={() => setDragFrom(-1)}
+              onMouseDown={(event) => {
+                if (event.button === 1) {
+                  event.preventDefault();
+                  void closeTab(tab.id);
+                } else if (event.button === 0) selectTab(tab.id);
+              }}
+              onDblClick={() => tab.kind === "sql" && setRenaming(tab.id)}
+              onContextMenu={(event) => menu(event, tab)}
+              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${tab.database ? ` · ${tab.database}` : ""}`}
+            >
+              <span class="tab-strip" style={{ background: tab.connId ? connColor(conn()) : "transparent" }} />
+              <ObjIcon kind={tab.kind === "table" ? (tab.obj.kind === "view" ? "view" : "table") : tab.title.endsWith(".sql") ? "file" : "console"} size={14} />
+              <Show when={renaming() === tab.id} fallback={<span class="tab-title">{tab.title}</span>}>
+                <input
+                  class="tab-rename"
+                  value={tab.title}
+                  ref={(el) => queueMicrotask(() => el.select())}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    if (event.key === "Enter") {
+                      renameTab(tab.id, event.currentTarget.value);
+                      setRenaming("");
+                    }
+                    if (event.key === "Escape") setRenaming("");
+                  }}
+                  onBlur={(event) => {
+                    renameTab(tab.id, event.currentTarget.value);
+                    setRenaming("");
+                  }}
+                />
+              </Show>
+              <Show when={busy()}><span class="tab-spinner" /></Show>
+              <Show when={dirty() && !busy()}><span class="tab-dirty" title={tab.kind === "table" ? "Cambios sin guardar" : "Transacción abierta"} /></Show>
+              <button
+                type="button"
+                class="tab-close"
+                title="Cerrar (Ctrl+W)"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void closeTab(tab.id);
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          );
+        }}
+      </For>
+      <button type="button" class="tab-new" title="Nueva consola (Ctrl+Mayús+L)" onClick={() => openQuery(activeSql()?.connId ?? null)}>
+        <Plus size={14} />
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- console
+
+function ConnectionPicker(props: { tab: SqlTab }) {
+  const conn = () => connectionById(props.tab.connId);
+  const session = () => (props.tab.connId ? state.sessions[props.tab.connId] : undefined);
+  return (
+    <div class="ctx-pickers">
+      <button
+        type="button"
+        class="picker"
+        title="Conexión de esta consola"
+        onClick={(event) =>
+          openMenu(
+            event,
+            state.connections.length
+              ? [
+                  ...state.connections.map((item) => ({
+                    label: `${item.id === props.tab.connId ? "● " : ""}${item.name}`,
+                    hint: engineOf(item.kind).label,
+                    run: () => setTabConnection(props.tab.id, item.id),
+                  })),
+                  { separator: true },
+                  { label: "Nueva conexión…", run: () => openConnDialog() },
+                ]
+              : [{ label: "Nueva conexión…", run: () => openConnDialog() }],
+          )
+        }
+      >
+        <Show when={conn()} fallback={<span class="muted">Sin conexión</span>}>
+          <EngineIcon kind={conn()!.kind} size={14} server={serverOf(conn()!.id)} />
+          <span class="picker-dot" style={{ background: session() ? connColor(conn()) : "var(--text-faint)" }} />
+          <span>{conn()!.name}</span>
+        </Show>
+        <ChevronDown size={12} />
+      </button>
+      <Show when={conn()}>
+        <button
+          type="button"
+          class="picker"
+          title="Base de datos"
+          disabled={!session()}
+          onClick={(event) => {
+            const dbs = session()?.databases ?? [];
+            openMenu(event, dbs.length ? dbs.map((name) => ({ label: `${name === props.tab.database ? "● " : ""}${name}`, run: () => void switchDatabase(name) })) : [{ label: "Sin bases de datos", disabled: true }]);
+          }}
+        >
+          <ObjIcon kind="database" size={13} />
+          <span>{props.tab.database || session()?.database || "—"}</span>
+          <ChevronDown size={12} />
+        </button>
       </Show>
-      <Show when={item()?.kind === "table"}>
-        <TablePane tab={item() as TableTab} />
+      <Show when={conn()?.production}><span class="tag prod">PROD</span></Show>
+      <Show when={conn()?.readOnly}><span class="tag">Solo lectura</span></Show>
+      <Show when={conn() && !session() && !state.connecting[conn()!.id]}>
+        <button type="button" class="btn tiny" onClick={() => void connect(conn()!.id)}>Conectar</button>
       </Show>
-    </>
+    </div>
   );
 }
 
 function SqlPane(props: { tab: SqlTab }) {
-  const result = () => props.tab.results[props.tab.activeResult];
-  const conn = () => connectionById(props.tab.connId);
+  let paneRef: HTMLDivElement | undefined;
+  const result = () => (props.tab.activeResult >= 0 ? props.tab.results[props.tab.activeResult] : undefined);
+  const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
+  const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
+
+  function resize(event: MouseEvent) {
+    event.preventDefault();
+    const rect = paneRef!.getBoundingClientRect();
+    const move = (ev: MouseEvent) => setState("settings", "editorRatio", Math.min(0.85, Math.max(0.12, (ev.clientY - rect.top) / rect.height)));
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      void saveSettings({ editorRatio: state.settings.editorRatio });
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
   return (
-    <div class="pane">
-      <div class="pane-bar">
-        <span class="badge" style={{ background: conn()?.production ? "var(--danger)" : (conn()?.color || "var(--accent)") }} />
-        <b>{conn()?.name ?? "Sin conexión"}</b>
-        <Show when={props.tab.database}><span class="muted">{props.tab.database}</span></Show>
-        <Show when={conn()?.readOnly}><span class="pill">solo lectura</span></Show>
-        <Show when={conn()?.production}><span class="pill prod">PROD</span></Show>
+    <div class="pane" ref={paneRef}>
+      <div class="pane-toolbar">
+        <Show
+          when={!props.tab.running}
+          fallback={
+            <button type="button" class="tb-btn stop" title="Detener (Ctrl+F2)" onClick={() => void cancelActive()}>
+              <Square size={13} fill="currentColor" /> <span>Detener</span>
+            </button>
+          }
+        >
+          <button type="button" class="tb-btn run" title="Ejecutar sentencia o selección (Ctrl+Intro)" onClick={() => { gib("mouse-run"); void runActive("statement"); }}>
+            <Play size={14} fill="currentColor" /> <span>Ejecutar</span>
+          </button>
+        </Show>
+        <button type="button" class="tb-icon" title="Ejecutar script completo (Ctrl+Mayús+Intro)" disabled={props.tab.running} onClick={() => void runActive("script")}>
+          <PlayCircle size={16} />
+        </button>
+        <button type="button" class="tb-icon" title="Plan de ejecución (Ctrl+Mayús+E)" disabled={props.tab.running} onClick={() => void runActive("explain")}>
+          <Gauge size={16} />
+        </button>
+        <span class="tb-sep" />
+        <div class="tx-toggle" title="Modo de transacción">
+          <button type="button" classList={{ on: props.tab.autocommit }} onClick={() => !props.tab.autocommit && void changeAutocommit(true)}>Auto</button>
+          <button type="button" classList={{ on: !props.tab.autocommit }} onClick={() => props.tab.autocommit && void changeAutocommit(false)}>Manual</button>
+        </div>
+        <button type="button" class="tb-icon commit" title="Commit (Ctrl+Alt+Mayús+C)" disabled={!props.tab.inTransaction} onClick={() => void commitActive(false)}>
+          <Check size={16} />
+        </button>
+        <button type="button" class="tb-icon rollback" title="Rollback (Ctrl+Alt+Mayús+R)" disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>
+          <Undo2 size={16} />
+        </button>
+        <Show when={props.tab.inTransaction}><span class="tag warn">Transacción abierta</span></Show>
+        <span class="tb-sep" />
+        <button type="button" class="tb-icon" title="Formatear SQL (Ctrl+Alt+L)" onClick={formatActive}>
+          <AlignLeft size={16} />
+        </button>
+        <button type="button" class="tb-icon" title="Abrir script (Ctrl+O)" onClick={() => void openScript()}>
+          <FolderOpen size={16} />
+        </button>
+        <button type="button" class="tb-icon" title="Guardar script (Ctrl+S)" onClick={() => void saveScript()}>
+          <Save size={16} />
+        </button>
         <span class="spacer" />
-        <button type="button" class="btn tiny" onClick={() => void openScript()}>Abrir</button>
-        <button type="button" class="btn tiny" onClick={() => void saveScript()}>Guardar</button>
-        <button type="button" class="btn tiny" onClick={formatActive}>Formatear</button>
-        <button type="button" class="btn tiny run" onClick={() => void runActive("statement")}>Ejecutar</button>
-        <button type="button" class="btn tiny" onClick={() => void runActive("script")}>Script</button>
-        <button type="button" class="btn tiny" disabled={!props.tab.running} onClick={() => void cancelActive()}>Cancelar</button>
+        <ConnectionPicker tab={props.tab} />
       </div>
-      <SqlEditor
-        doc={props.tab.sql}
-        revision={props.tab.revision}
-        kind={conn()?.kind ?? "sqlite"}
-        schema={schemaMap(props.tab)}
-        fontSize={state.settings.editorFontSize}
-        onDoc={(sql, cursor) => updateSql(props.tab.id, sql, cursor)}
-        onRun={() => void runActive("statement")}
-        onRunAll={() => void runActive("script")}
-        onCancel={() => void cancelActive()}
-      />
-      <Show when={props.tab.error}><div class="banner">{props.tab.error}</div></Show>
+      <div class="editor-wrap" style={{ height: `${state.settings.editorRatio * 100}%` }}>
+        <SqlEditor
+          doc={props.tab.sql}
+          revision={props.tab.revision}
+          cursor={props.tab.cursor}
+          kind={kindOf(props.tab.connId)}
+          schema={schemaMap(props.tab)}
+          defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
+          fontSize={state.settings.editorFontSize}
+          onDoc={(sql, cursor, selection) => updateSql(props.tab.id, sql, cursor, selection)}
+          onCursor={(line, col) => props.tab.id === state.activeTabId && setState("cursorPos", { line, col })}
+          onRun={() => void runActive("statement")}
+          onRunAll={() => void runActive("script")}
+          onExplain={() => void runActive("explain")}
+          onCancel={() => void cancelActive()}
+          onFormat={formatActive}
+        />
+        <Show when={!props.tab.connId && state.connections.length}>
+          <div class="editor-hint">
+            Esta consola no tiene conexión ·{" "}
+            <button type="button" class="link" onClick={(event) => openMenu(event, state.connections.map((item) => ({ label: item.name, hint: engineOf(item.kind).label, run: () => setTabConnection(props.tab.id, item.id) })))}>
+              elegir conexión
+            </button>
+          </div>
+        </Show>
+      </div>
+      <div class="hsplit" onMouseDown={resize} />
       <div class="results">
-        <div class="result-tabs">
-          <For each={props.tab.results}>
-            {(item, index) => (
-              <button type="button" classList={{ on: index() === props.tab.activeResult }} onClick={() => {
-                const current = state.tabs.find((tab) => tab.id === props.tab.id);
-                if (current?.kind === "sql") setState("tabs", state.tabs.indexOf(current), { ...current, activeResult: index() });
-              }}>
-                {item.columns.length ? `Resultado ${index() + 1}` : `${item.rowsAffected ?? 0} filas`}
+        <div class="results-head">
+          <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
+            <Show when={props.tab.error} fallback={<FileCode2 size={13} />}><CircleAlert size={13} /></Show>
+            Salida
+            <Show when={props.tab.output.length}><small>{props.tab.output.length}</small></Show>
+          </button>
+          <For each={gridResults()}>
+            {({ item, index }) => (
+              <button type="button" class="rtab" classList={{ on: index === props.tab.activeResult }} onClick={() => setActiveResult(props.tab.id, index)}>
+                <Show when={item.columns.length} fallback={<Rows3 size={13} />}><ObjIcon kind="table" size={13} /></Show>
+                {item.columns.length ? `Resultado ${gridResults().filter((r) => r.item.columns.length && r.index <= index).length}` : "Actualización"}
+                <small>{item.columns.length ? `${item.rows.length.toLocaleString()}${item.hasMore ? "+" : ""}` : (item.rowsAffected ?? 0).toLocaleString()}</small>
               </button>
             )}
           </For>
-          <Show when={props.tab.messages.length}><span class="muted">{props.tab.messages.join(" · ")}</span></Show>
           <span class="spacer" />
-          <Show when={props.tab.elapsedMs !== null}><span class="muted">{props.tab.elapsedMs} ms</span></Show>
-          <label class="check tiny"><input type="checkbox" checked={props.tab.autocommit} onChange={(event) => void changeAutocommit(event.currentTarget.checked)} /> autocommit</label>
-          <button type="button" class="btn tiny" disabled={!props.tab.inTransaction} onClick={() => void commitActive(false)}>Commit</button>
-          <button type="button" class="btn tiny" disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>Rollback</button>
-          <button type="button" class="btn tiny" onClick={() => void startExport()}>Exportar</button>
+          <Show when={props.tab.running}>
+            <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}</span>
+          </Show>
+          <Show when={!props.tab.running && result()?.columns.length}>
+            <span class="muted small">
+              {result()!.rows.length.toLocaleString()}{result()!.hasMore ? "+" : ""} filas · {formatMs(props.tab.elapsedMs)}
+            </span>
+            <Show when={result()!.hasMore}>
+              <button type="button" class="tb-icon" title="Cargar la siguiente página" onClick={() => void fetchMore(props.tab.id)}><ArrowDownToLine size={15} /></button>
+              <button type="button" class="btn tiny" title="Cargar todas las filas" onClick={() => void fetchAll(props.tab.id)}>Cargar todo</button>
+            </Show>
+          </Show>
+          <button type="button" class="tb-icon" title="Volver a ejecutar" disabled={!props.tab.lastSql || props.tab.running} onClick={() => void rerunActive()}><RefreshCw size={14} /></button>
+          <button type="button" class="tb-icon" title="Exportar…" disabled={!props.tab.connId} onClick={() => void startExport()}><Download size={15} /></button>
+          <button type="button" class="tb-icon" title="Panel de valor / registro" classList={{ on: state.inspectorOpen && state.inspectorMode !== "history" }} onClick={() => toggleInspector("value")}><PanelRight size={15} /></button>
         </div>
-        <Show when={result()?.columns.length} fallback={<div class="empty small">{props.tab.running ? "Ejecutando…" : props.tab.results.length ? "La sentencia no devolvió columnas." : <><Gib size={72} mood="idle" /><span>Ctrl+Enter ejecuta la sentencia del cursor. Alt+X ejecuta el script.</span></>}</div>}>
-          <DataGrid
-            columns={result()!.columns}
-            rows={result()!.rows}
-            hasMore={result()!.hasMore}
-            onNeedMore={() => void fetchMore(props.tab.id)}
-            onView={(text) => setState("valueText", text)}
-          />
+        <Show when={props.tab.running && !props.tab.results.length}>
+          <div class="progress-bar" />
         </Show>
+        <Switch>
+          <Match when={props.tab.activeResult === -1}>
+            <OutputLog tab={props.tab} />
+          </Match>
+          <Match when={result() && !result()!.columns.length}>
+            <div class="affected">
+              <CircleCheck size={28} />
+              <div>
+                <strong>{(result()!.rowsAffected ?? 0).toLocaleString()} filas afectadas</strong>
+                <span>{formatMs(props.tab.elapsedMs)}{props.tab.inTransaction ? " · pendiente de commit" : ""}</span>
+              </div>
+            </div>
+          </Match>
+          <Match when={result()}>
+            <DataGrid
+              columns={result()!.columns}
+              rows={result()!.rows}
+              resetKey={`${props.tab.runId}:${props.tab.activeResult}`}
+              hasMore={result()!.hasMore}
+              loading={props.tab.running}
+              dialect={kindOf(props.tab.connId)}
+              onNeedMore={() => void fetchMore(props.tab.id)}
+              onExport={() => void startExport()}
+              onActivate={(row, col) => {
+                const r = result()!;
+                setState("inspect", { column: r.columns[col].name, typeName: r.columns[col].typeName, value: r.rows[row]?.[col] ?? null });
+                setState("record", { columns: r.columns, row: r.rows[row] ?? [], index: row });
+                openInspector("value");
+              }}
+            />
+          </Match>
+        </Switch>
       </div>
     </div>
   );
 }
 
-function TablePane(props: { tab: TableTab }) {
-  const editable = () => canEdit(props.tab);
+function OutputLog(props: { tab: SqlTab }) {
+  let host: HTMLDivElement | undefined;
+  onMount(() => host && (host.scrollTop = host.scrollHeight));
   return (
-    <div class="pane">
-      <div class="pane-bar">
-        <b>{props.tab.qualified}</b>
-        <span class="pill">{props.tab.obj.kind}</span>
-        <span class="spacer" />
-        <Show when={editable()}>
-          <button type="button" class="btn tiny" onClick={() => insertTableRow(props.tab.id)}>Insertar</button>
-          <button type="button" class="btn tiny" disabled={!tableDirty(props.tab)} onClick={() => void saveTable(props.tab.id)}>Guardar cambios</button>
-        </Show>
-        <button type="button" class="btn tiny" onClick={() => void reloadTable(props.tab.id)}>Recargar</button>
-      </div>
-      <div class="result-tabs">
-        <For each={[["data", "Datos"], ["columns", "Columnas"], ["indexes", "Índices"], ["keys", "Claves"], ["ddl", "DDL"]] as const}>
-          {([id, label]) => <button type="button" classList={{ on: props.tab.section === id }} onClick={() => {
-            const current = state.tabs.find((tab) => tab.id === props.tab.id);
-            if (current?.kind === "table") setState("tabs", state.tabs.indexOf(current), { ...current, section: id });
-          }}>{label}</button>}
-        </For>
-      </div>
-      <Show when={props.tab.error}><div class="banner">{props.tab.error}</div></Show>
-      <Show when={props.tab.loading}><div class="empty small">Cargando…</div></Show>
-      <Show when={!props.tab.loading && props.tab.section === "data"}>
-        <DataGrid
-          columns={props.tab.gridCols}
-          rows={displayRows(props.tab)}
-          deleted={props.tab.deleted}
-          edits={props.tab.edits}
-          insertStart={props.tab.rows.length}
-          hasMore={props.tab.hasMore}
-          editable={editable()}
-          onEdit={(row, col, value) => editCell(props.tab.id, row, col, value)}
-          onNeedMore={() => void fetchMore(props.tab.id)}
-          onView={(text) => setState("valueText", text)}
-          onDelete={(rows) => deleteTableRows(props.tab.id, rows)}
-        />
-        <Show when={editable()}>
-          <div class="pane-bar">
-            <span class="muted">{tableDirty(props.tab) ? "Hay cambios sin guardar" : "Doble clic edita · Supr marca filas para borrar"}</span>
-          </div>
-        </Show>
-      </Show>
-      <Show when={props.tab.section === "columns"}>
-        <div class="meta-table">
-          <For each={props.tab.columnsMeta}>
-            {(col) => <div><b>{col.name}</b><span>{col.typeName}</span><span>{col.nullable ? "null" : "not null"}</span><span>{col.primaryKey ? "PK" : ""}</span><span>{col.default ?? ""}</span></div>}
-          </For>
+    <div class="output" ref={host}>
+      <Show when={!props.tab.output.length}>
+        <div class="output-empty">
+          <Gib size={72} mood="idle" />
+          <p>
+            <kbd>Ctrl</kbd>+<kbd>Intro</kbd> ejecuta la sentencia bajo el cursor o la selección.
+            <br />
+            <kbd>Ctrl</kbd>+<kbd>Mayús</kbd>+<kbd>Intro</kbd> ejecuta el script entero.
+          </p>
         </div>
       </Show>
-      <Show when={props.tab.section === "indexes"}>
-        <ul class="meta-list"><For each={props.tab.indexes}>{(node) => <li><b>{node.name}</b> {node.detail}</li>}</For></ul>
-      </Show>
-      <Show when={props.tab.section === "keys"}>
-        <ul class="meta-list"><For each={props.tab.keys}>{(node) => <li><b>{node.name}</b> {node.detail}</li>}</For></ul>
-      </Show>
-      <Show when={props.tab.section === "ddl"}><pre class="code grow">{props.tab.ddl}</pre></Show>
+      <For each={props.tab.output}>
+        {(entry) => (
+          <div class="out-entry" classList={{ error: !entry.ok }}>
+            <span class="out-icon">{entry.ok ? <CircleCheck size={14} /> : <CircleAlert size={14} />}</span>
+            <div class="out-body">
+              <div class="out-meta">
+                <time>{new Date(entry.at).toLocaleTimeString()}</time>
+                <code title={entry.sql}>{entry.sql.replace(/\s+/g, " ").slice(0, 220)}</code>
+                <button type="button" class="link small" onClick={() => void copyText(entry.sql, "SQL copiado")}>copiar</button>
+                <Show when={!entry.ok && entry === props.tab.output[props.tab.output.length - 1]}>
+                  <button type="button" class="link small ai-link" onClick={() => void askAi("fix")}>✦ Corregir con IA</button>
+                </Show>
+              </div>
+              <pre class="out-text">{entry.text}</pre>
+            </div>
+          </div>
+        )}
+      </For>
     </div>
   );
+}
+
+// ---------------------------------------------------------------- table viewer
+
+function TablePane(props: { tab: TableTab }) {
+  const editable = () => canEdit(props.tab);
+  const conn = () => connectionById(props.tab.connId);
+  const rows = createMemo(() => displayRows(props.tab));
+  const pkCols = createMemo(() => props.tab.columnsMeta.map((col, index) => (col.primaryKey ? index : -1)).filter((index) => index >= 0));
+  const changes = () => Object.keys(props.tab.edits).length + props.tab.deleted.length + props.tab.inserts.length;
+  const [where, setWhere] = createSignal(props.tab.where);
+  const [orderBy, setOrderBy] = createSignal(props.tab.orderBy);
+  const apply = () => setTableFilter(props.tab.id, where(), orderBy());
+  let gridApi: GridApi | undefined;
+  const [draft, setDraft] = createSignal<FilterDraft | null>(null);
+  const openFilter = (filter: ColumnFilter, el?: HTMLElement) => {
+    const rect = el?.getBoundingClientRect();
+    setDraft({ filter, x: rect ? rect.left : window.innerWidth / 2 - 180, y: rect ? rect.bottom + 6 : 160 });
+  };
+
+  return (
+    <div class="pane">
+      <div class="pane-toolbar">
+        <ObjIcon kind={props.tab.obj.kind === "view" ? "view" : "table"} size={16} />
+        <strong class="obj-title">{props.tab.qualified}</strong>
+        <span class="tag">{props.tab.obj.kind === "view" ? "vista" : "tabla"}</span>
+        <Show when={conn()}>
+          <span class="muted small">
+            <span class="picker-dot" style={{ background: connColor(conn()) }} /> {conn()!.name}
+          </span>
+        </Show>
+        <span class="spacer" />
+        <div class="seg">
+          <For each={[["data", "Datos"], ["columns", "Columnas"], ["indexes", "Índices"], ["keys", "Claves"], ["ddl", "DDL"]] as const}>
+            {([id, label]) => (
+              <button type="button" classList={{ on: props.tab.section === id }} onClick={() => setTableSection(props.tab.id, id)}>
+                {label}
+                <Show when={id === "columns" && props.tab.columnsMeta.length}><small>{props.tab.columnsMeta.length}</small></Show>
+                <Show when={id === "indexes" && props.tab.indexes.length}><small>{props.tab.indexes.length}</small></Show>
+                <Show when={id === "keys" && props.tab.keys.length}><small>{props.tab.keys.length}</small></Show>
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
+      <Show when={props.tab.error}>
+        <div class="banner error">
+          <CircleAlert size={15} />
+          <span>{props.tab.error}</span>
+          <button type="button" class="btn tiny" onClick={() => void reloadTable(props.tab.id, true)}>Reintentar</button>
+        </div>
+      </Show>
+      <Switch>
+        <Match when={props.tab.section === "data"}>
+          <div class="data-toolbar">
+            <button type="button" class="tb-icon" title="Recargar (F5)" onClick={() => void reloadTableSafe(props.tab.id)}><RefreshCw size={14} class={props.tab.loading ? "spin" : ""} /></button>
+            <Show when={editable()}>
+              <span class="tb-sep" />
+              <button type="button" class="tb-icon" title="Añadir fila (Alt+Insert)" onClick={() => insertTableRow(props.tab.id)}><Plus size={15} /></button>
+              <button type="button" class="tb-icon" title="Eliminar filas seleccionadas (Supr)" onClick={() => gridApi?.deleteSelected()}><Minus size={15} /></button>
+              <button type="button" class="tb-icon" title="Revertir cambios" disabled={!changes()} onClick={() => revertTable(props.tab.id)}><Undo2 size={14} /></button>
+              <button type="button" class="tb-btn submit" title="Guardar cambios (Ctrl+Intro)" disabled={!changes()} onClick={() => void saveTable(props.tab.id)}>
+                <Check size={14} /> <span>Guardar{changes() ? ` (${changes()})` : ""}</span>
+              </button>
+            </Show>
+            <span class="tb-sep" />
+            <button type="button" class="tb-btn filter" classList={{ on: props.tab.filters.some((item) => item.enabled) }} title="Añadir un filtro por columna" disabled={!props.tab.columnsMeta.length} onClick={(event) => openFilter(newFilter(props.tab), event.currentTarget)}>
+              <Filter size={13} /> <span>Filtro{props.tab.filters.length ? ` (${props.tab.filters.filter((item) => item.enabled).length})` : ""}</span>
+            </button>
+            <div class="filter-field">
+              <span>WHERE</span>
+              <input
+                value={where()}
+                placeholder="id > 100 AND estado = 'ok'"
+                spellcheck={false}
+                onInput={(event) => setWhere(event.currentTarget.value)}
+                onKeyDown={(event) => event.key === "Enter" && apply()}
+              />
+              <Show when={props.tab.where}><button type="button" class="icon-btn tiny" title="Quitar filtro" onClick={() => { setWhere(""); setTableFilter(props.tab.id, "", orderBy()); }}><X size={12} /></button></Show>
+            </div>
+            <div class="filter-field narrow">
+              <span>ORDER BY</span>
+              <input value={orderBy()} placeholder="1 DESC" spellcheck={false} onInput={(event) => setOrderBy(event.currentTarget.value)} onKeyDown={(event) => event.key === "Enter" && apply()} />
+            </div>
+            <span class="spacer" />
+            <span class="muted small">
+              {props.tab.loading && !props.tab.rows.length ? "Cargando…" : `${props.tab.rows.length.toLocaleString()}${props.tab.hasMore ? "+" : ""} filas`}
+              <Show when={props.tab.elapsedMs !== null}> · {formatMs(props.tab.elapsedMs)}</Show>
+            </span>
+            <Show when={props.tab.totalCount !== null} fallback={
+              <button type="button" class="btn tiny" title="Contar todas las filas que cumplen los filtros" disabled={props.tab.counting || !props.tab.columnsMeta.length} onClick={() => void countTable(props.tab.id)}>{props.tab.counting ? "Contando…" : "Contar"}</button>
+            }>
+              <span class="tag count" title="Filas que cumplen los filtros">{props.tab.totalCount!.toLocaleString()} en total</span>
+            </Show>
+            <Show when={props.tab.hasMore}>
+              <button type="button" class="btn tiny" onClick={() => void fetchAll(props.tab.id)}>Cargar todo</button>
+            </Show>
+            <Show when={!editable() && props.tab.columnsMeta.length}>
+              <span class="tag" title={conn()?.readOnly ? "Conexión de solo lectura" : props.tab.obj.kind === "view" ? "Las vistas no se editan" : "Sin clave primaria"}>solo lectura</span>
+            </Show>
+            <Show when={editable()}>
+              <button type="button" class="tb-icon" title="Importar CSV…" onClick={() => void startImport(props.tab.connId, props.tab.obj)}><Upload size={15} /></button>
+            </Show>
+            <button type="button" class="tb-icon" title="Exportar con los filtros actuales…" disabled={!props.tab.baseSelect} onClick={() => startTableExport(props.tab.id)}><Download size={15} /></button>
+            <button type="button" class="tb-icon" title="Panel de valor / registro" classList={{ on: state.inspectorOpen && state.inspectorMode !== "history" }} onClick={() => toggleInspector("record")}><PanelRight size={15} /></button>
+          </div>
+          <FilterChips tab={props.tab} onEdit={(filter, el) => openFilter(filter, el)} onAdd={(el) => openFilter(newFilter(props.tab), el)} />
+          <Show when={draft()}>{(d) => <FilterEditor tab={props.tab} draft={d()} onClose={() => setDraft(null)} />}</Show>
+          <Show when={props.tab.loading && !props.tab.rows.length}><div class="progress-bar" /></Show>
+          <DataGrid
+            columns={props.tab.gridCols}
+            rows={rows()}
+            resetKey={props.tab.gridCols}
+            pkCols={pkCols()}
+            deleted={props.tab.deleted}
+            edits={props.tab.edits}
+            insertStart={props.tab.rows.length}
+            hasMore={props.tab.hasMore}
+            loading={props.tab.loading}
+            editable={editable()}
+            tableName={props.tab.qualified}
+            dialect={kindOf(props.tab.connId)}
+            api={(value) => (gridApi = value)}
+            onEdit={(row, col, value) => editCell(props.tab.id, row, col, value)}
+            onNeedMore={() => void fetchMore(props.tab.id)}
+            onDelete={(list) => deleteTableRows(props.tab.id, list)}
+            onClone={(row) => insertTableRow(props.tab.id, row)}
+            onInsert={() => insertTableRow(props.tab.id)}
+            sortState={props.tab.sort}
+            onSortChange={(sort) => setTableSort(props.tab.id, sort)}
+            onFilter={(quick) => upsertTableFilter(props.tab.id, { ...newFilter(props.tab, props.tab.gridCols[quick.col]?.name, quick.op, quick.value), enabled: true })}
+            onExport={() => startTableExport(props.tab.id)}
+            onSave={() => void saveTable(props.tab.id)}
+            onColumnFilter={(col) => openFilter(newFilter(props.tab, props.tab.gridCols[col]?.name, "in"))}
+            onActivate={(row, col) => {
+              const r = rows();
+              setState("inspect", { column: props.tab.gridCols[col].name, typeName: props.tab.gridCols[col].typeName, value: r[row]?.[col] ?? null });
+              setState("record", { columns: props.tab.gridCols, row: r[row] ?? [], index: row });
+              openInspector("value");
+            }}
+          />
+          <Show when={changes()}>
+            <div class="changes-bar">
+              <span class="tab-dirty" />
+              {changes()} {changes() === 1 ? "cambio pendiente" : "cambios pendientes"}
+              <span class="spacer" />
+              <button type="button" class="btn tiny" onClick={() => revertTable(props.tab.id)}>Revertir</button>
+              <button type="button" class="btn tiny primary" onClick={() => void saveTable(props.tab.id)}>Revisar y guardar</button>
+            </div>
+          </Show>
+        </Match>
+        <Match when={props.tab.section === "columns"}>
+          <div class="meta-scroll">
+            <table class="meta">
+              <thead>
+                <tr><th>#</th><th>Columna</th><th>Tipo</th><th>Nulos</th><th>Por defecto</th><th>Clave</th></tr>
+              </thead>
+              <tbody>
+                <For each={props.tab.columnsMeta}>
+                  {(col, index) => (
+                    <tr>
+                      <td class="num">{index() + 1}</td>
+                      <td><span class="cell-icon"><ObjIcon kind={col.primaryKey ? "pkcolumn" : "column"} size={14} /> <b>{col.name}</b></span></td>
+                      <td><code>{col.typeName}</code></td>
+                      <td>{col.nullable ? <span class="muted">null</span> : <span>not null</span>}</td>
+                      <td><code class="muted">{col.default ?? ""}</code></td>
+                      <td>{col.primaryKey ? <span class="tag key">PK</span> : ""}{col.identity ? <span class="tag">auto</span> : ""}</td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </div>
+        </Match>
+        <Match when={props.tab.section === "indexes" || props.tab.section === "keys"}>
+          <div class="meta-scroll">
+            <Show when={(props.tab.section === "indexes" ? props.tab.indexes : props.tab.keys).length} fallback={<p class="meta-empty">{props.tab.section === "indexes" ? "Sin índices" : "Sin claves foráneas"}</p>}>
+              <table class="meta">
+                <thead><tr><th>Nombre</th><th>Definición</th></tr></thead>
+                <tbody>
+                  <For each={props.tab.section === "indexes" ? props.tab.indexes : props.tab.keys}>
+                    {(node) => (
+                      <tr>
+                        <td><span class="cell-icon"><ObjIcon kind={node.kind} size={14} /> <b>{node.name}</b></span></td>
+                        <td><code>{node.detail}</code></td>
+                      </tr>
+                    )}
+                  </For>
+                </tbody>
+              </table>
+            </Show>
+          </div>
+        </Match>
+        <Match when={props.tab.section === "ddl"}>
+          <div class="ddl-view">
+            <div class="ddl-actions">
+              <button type="button" class="btn tiny" onClick={() => void copyText(props.tab.ddl, "DDL copiado")}>Copiar</button>
+              <button type="button" class="btn tiny" onClick={() => openQuery(props.tab.connId, props.tab.ddl, `${props.tab.obj.name}.sql`)}>Abrir en consola</button>
+            </div>
+            <CodeView doc={props.tab.ddl} kind={kindOf(props.tab.connId)} />
+          </div>
+        </Match>
+      </Switch>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- welcome
+
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour < 6) return "Trabajando tarde";
+  if (hour < 13) return "Buenos días";
+  if (hour < 21) return "Buenas tardes";
+  return "Buenas noches";
+}
+
+function Welcome() {
+  const [mood, setMood] = createSignal<"wave" | "idle" | "love">("wave");
+  onMount(() => {
+    const timer = window.setTimeout(() => setMood("idle"), 1800);
+    return () => window.clearTimeout(timer);
+  });
+  const recent = () => state.connections.slice(0, 6);
+  return (
+    <div class="welcome">
+      <div class="welcome-inner">
+        <div class="welcome-hero">
+          <Gib size={112} mood={mood()} onClick={() => { setMood("love"); window.setTimeout(() => setMood("idle"), 1400); }} />
+          <div>
+            <h1>{greeting()}</h1>
+            <p>SQL rápido para cualquier base de datos.</p>
+          </div>
+        </div>
+        <Show when={recent().length}>
+          <h3>Conexiones</h3>
+          <div class="welcome-conns">
+            <For each={recent()}>
+              {(conn) => (
+                <button type="button" class="conn-card" onClick={() => { const id = openQuery(conn.id); void id; if (!state.sessions[conn.id]) void connect(conn.id); }}>
+                  <EngineIcon kind={conn.kind} size={22} server={serverOf(conn.id)} />
+                  <span>
+                    <b>{conn.name}</b>
+                    <small>{engineOf(conn.kind).label}{conn.host ? ` · ${conn.host}` : ""}</small>
+                  </span>
+                  <Show when={state.sessions[conn.id]}><i class="conn-dot on" style={{ background: connColor(conn) }} /></Show>
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+        <h3>Empezar</h3>
+        <div class="welcome-actions">
+          <button type="button" class="action-card" onClick={() => openConnDialog()}>
+            <Plus size={18} />
+            <span><b>Nueva conexión</b><small>PostgreSQL, MySQL, SQL Server, SQLite…</small></span>
+            <kbd>Ctrl+Alt+N</kbd>
+          </button>
+          <button type="button" class="action-card" onClick={() => openQuery(state.connections[0]?.id ?? null)}>
+            <FileCode2 size={18} />
+            <span><b>Nueva consola</b><small>Escribe y ejecuta SQL</small></span>
+            <kbd>Ctrl+Mayús+L</kbd>
+          </button>
+          <button type="button" class="action-card" onClick={() => void openScript()}>
+            <FolderOpen size={18} />
+            <span><b>Abrir script</b><small>Un fichero .sql del disco</small></span>
+            <kbd>Ctrl+O</kbd>
+          </button>
+          <button type="button" class="action-card" onClick={() => setState({ paletteOpen: true, paletteMode: "all" })}>
+            <span class="kbd-glyph">⇧⇧</span>
+            <span><b>Buscar en todo</b><small>Tablas, acciones y ajustes</small></span>
+            <kbd>Mayús Mayús</kbd>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function inspectText(value: unknown) {
+  return isNullCell(value as never) ? "NULL" : cellText(value as never);
 }

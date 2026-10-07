@@ -19,7 +19,7 @@ import type {
   TableColumn,
 } from "./types";
 
-const SEED = `
+export const SEED = `
 CREATE TABLE customers (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -344,7 +344,7 @@ function pickFile(accept: string): Promise<{ name: string; text?: string; bytes?
         return;
       }
       const reader = new FileReader();
-      if (accept.includes("sql") && !file.name.endsWith(".db") && !file.name.endsWith(".sqlite")) {
+      if (!/\.(db|db3|sqlite|sqlite3)$/i.test(file.name)) {
         reader.onload = () => {
           const textContent = String(reader.result ?? "");
           textFiles.set(file.name, textContent);
@@ -569,8 +569,8 @@ export function createDemoBackend(): Backend {
       if (!sets[0]) throw new Error("La consulta no devuelve filas para exportar");
       const { result } = toResult(sets[0]);
       const format = options.format === "xlsx" ? "csv" : options.format;
-      const body = resultToText(result, format, options.tableName || "tabla");
-      const filename = options.path || `export.${format === "sql" ? "sql" : format === "json" ? "json" : format}`;
+      const body = resultToText(result, format, options.tableName || "tabla", options.delimiter);
+      const filename = options.path || `export.${format === "markdown" ? "md" : format}`;
       download(filename.split(/[\\/]/).pop() || filename, body, "text/plain");
       return result.rows.length;
     },
@@ -616,6 +616,36 @@ export function createDemoBackend(): Backend {
     },
     async ibmDriverDownload() {
       throw new Error("La descarga del driver IBM solo está disponible en la aplicación de escritorio");
+    },
+    async mcpConfigGet() {
+      return { enabled: false, maxRows: 200, timeoutSecs: 30, redactPattern: "", connections: {} };
+    },
+    async mcpConfigSet() {
+      throw new Error("El servidor MCP solo está disponible en la aplicación de escritorio");
+    },
+    async mcpAudit() {
+      return [];
+    },
+    async mcpClearAudit() {},
+    async mcpClientInfo() {
+      return { exePath: "celer.exe", args: ["--mcp"], claudeDesktopConfigPath: "", claudeDesktopConfigured: false, claudeCodeCommand: "claude mcp add celer -- celer.exe --mcp" };
+    },
+    async mcpInstallClaudeDesktop() {
+      throw new Error("Solo en la aplicación de escritorio");
+    },
+    async mcpTestTool() {
+      throw new Error("Solo en la aplicación de escritorio");
+    },
+    async aiKeyStatus() {
+      return Boolean(sessionStorage.getItem("celer.ai-key"));
+    },
+    async aiKeySet(key) {
+      // Browser demo only: kept for this tab session, never persisted.
+      if (key) sessionStorage.setItem("celer.ai-key", key);
+      else sessionStorage.removeItem("celer.ai-key");
+    },
+    async aiKeyGet() {
+      return sessionStorage.getItem("celer.ai-key");
     },
     async appInfo() {
       return { version: "dev", dataDir: "navegador (localStorage)" };

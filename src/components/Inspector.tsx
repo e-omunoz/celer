@@ -1,0 +1,151 @@
+import { Braces, Copy, History, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
+import { AiPanel } from "./AiPanel";
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { cellText, isNullCell, prettyJson } from "../sql";
+import { clearHistory, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory } from "../state";
+
+export function Inspector() {
+  return (
+    <aside class="inspector" style={{ width: `${state.settings.inspectorWidth}px` }}>
+      <div class="toolwin-head">
+        <div class="seg small">
+          <button type="button" classList={{ on: state.inspectorMode === "value" }} onClick={() => openInspector("value")}><Braces size={13} /> Valor</button>
+          <button type="button" classList={{ on: state.inspectorMode === "record" }} onClick={() => openInspector("record")}><Rows3 size={13} /> Registro</button>
+          <button type="button" classList={{ on: state.inspectorMode === "history" }} onClick={() => openInspector("history")}><History size={13} /> Historial</button>
+          <button type="button" classList={{ on: state.inspectorMode === "ai" }} onClick={() => openInspector("ai")}><Sparkles size={13} /> IA</button>
+        </div>
+        <span class="spacer" />
+        <button type="button" class="icon-btn" title="Cerrar panel" onClick={() => setState("inspectorOpen", false)}><X size={14} /></button>
+      </div>
+      <Switch>
+        <Match when={state.inspectorMode === "value"}><ValueView /></Match>
+        <Match when={state.inspectorMode === "record"}><RecordView /></Match>
+        <Match when={state.inspectorMode === "history"}><HistoryView /></Match>
+        <Match when={state.inspectorMode === "ai"}><AiPanel /></Match>
+      </Switch>
+    </aside>
+  );
+}
+
+function ValueView() {
+  const [wrap, setWrap] = createSignal(true);
+  const [formatJson, setFormatJson] = createSignal(true);
+  const value = () => state.inspect;
+  const text = createMemo(() => {
+    const v = value();
+    if (!v || isNullCell(v.value)) return "";
+    const raw = cellText(v.value);
+    return formatJson() ? prettyJson(raw) ?? raw : raw;
+  });
+  const isJson = () => {
+    const v = value();
+    return Boolean(v && !isNullCell(v.value) && prettyJson(cellText(v.value)) !== null);
+  };
+  return (
+    <Show when={value()} fallback={<p class="inspector-empty">Selecciona una celda para ver su valor completo.</p>}>
+      <div class="value-head">
+        <b>{value()!.column}</b>
+        <span class="muted">{value()!.typeName}</span>
+        <span class="spacer" />
+        <Show when={isJson()}>
+          <button type="button" class="icon-btn" classList={{ on: formatJson() }} title="Formatear JSON" onClick={() => setFormatJson(!formatJson())}><Braces size={14} /></button>
+        </Show>
+        <button type="button" class="icon-btn" classList={{ on: wrap() }} title="Ajuste de línea" onClick={() => setWrap(!wrap())}><WrapText size={14} /></button>
+        <button type="button" class="icon-btn" title="Copiar valor" onClick={() => void copyText(text() || "NULL")}><Copy size={14} /></button>
+      </div>
+      <Show when={!isNullCell(value()!.value)} fallback={<div class="value-null">NULL</div>}>
+        <pre class="value-text" classList={{ nowrap: !wrap() }}>{text()}</pre>
+        <div class="value-foot muted">{cellText(value()!.value).length.toLocaleString()} caracteres</div>
+      </Show>
+    </Show>
+  );
+}
+
+function RecordView() {
+  const [filter, setFilter] = createSignal("");
+  const record = () => state.record;
+  const fields = createMemo(() => {
+    const r = record();
+    if (!r) return [];
+    const f = filter().toLowerCase();
+    return r.columns.map((col, index) => ({ col, value: r.row[index] })).filter((item) => !f || item.col.name.toLowerCase().includes(f) || cellText(item.value).toLowerCase().includes(f));
+  });
+  return (
+    <Show when={record()} fallback={<p class="inspector-empty">Selecciona una fila para verla como formulario.</p>}>
+      <div class="record-head">
+        <span class="muted">Fila {(record()!.index + 1).toLocaleString()}</span>
+        <div class="mini-search">
+          <Search size={12} />
+          <input placeholder="Filtrar campos" value={filter()} onInput={(event) => setFilter(event.currentTarget.value)} />
+        </div>
+      </div>
+      <div class="record">
+        <For each={fields()}>
+          {(item) => (
+            <div class="record-field" onClick={() => setState("inspect", { column: item.col.name, typeName: item.col.typeName, value: item.value ?? null })} onDblClick={() => openInspector("value")}>
+              <div class="record-label">
+                <span>{item.col.name}</span>
+                <small>{item.col.typeName}</small>
+              </div>
+              <div class="record-value" classList={{ null: isNullCell(item.value), num: item.col.kind === "number" }}>
+                {isNullCell(item.value) ? "NULL" : cellText(item.value)}
+              </div>
+            </div>
+          )}
+        </For>
+      </div>
+    </Show>
+  );
+}
+
+function HistoryView() {
+  let timer = 0;
+  return (
+    <>
+      <div class="record-head">
+        <div class="mini-search grow">
+          <Search size={12} />
+          <input
+            placeholder="Buscar en el historial"
+            value={state.historyQuery}
+            onInput={(event) => {
+              setState("historyQuery", event.currentTarget.value);
+              window.clearTimeout(timer);
+              timer = window.setTimeout(() => void refreshHistory(), 150);
+            }}
+          />
+        </div>
+        <button type="button" class="icon-btn" title="Vaciar historial" onClick={() => void clearHistory()}><Trash2 size={14} /></button>
+      </div>
+      <div class="history-list">
+        <Show when={!state.history.length}><p class="inspector-empty">Aún no hay consultas en el historial.</p></Show>
+        <For each={state.history}>
+          {(entry) => (
+            <button
+              type="button"
+              class="history-item"
+              title="Clic: pegar en la consola · Doble clic: abrir en una consola nueva"
+              onClick={() => void useHistory(entry.sql, entry.connId)}
+              onDblClick={() => openQuery(connectionById(entry.connId) ? entry.connId : null, entry.sql)}
+            >
+              <code>{entry.sql.replace(/\s+/g, " ").slice(0, 240)}</code>
+              <small>
+                <i classList={{ ok: entry.ok, bad: !entry.ok }} />
+                {entry.connName || "—"} · {relative(entry.at)}
+                {entry.ok ? ` · ${formatMs(entry.elapsedMs)}${entry.rows !== null ? ` · ${entry.rows.toLocaleString()} filas` : ""}` : " · error"}
+              </small>
+            </button>
+          )}
+        </For>
+      </div>
+    </>
+  );
+}
+
+function relative(at: number) {
+  const diff = Date.now() - at;
+  if (diff < 60_000) return "ahora";
+  if (diff < 3_600_000) return `hace ${Math.floor(diff / 60_000)} min`;
+  if (diff < 86_400_000) return `hace ${Math.floor(diff / 3_600_000)} h`;
+  return new Date(at).toLocaleDateString();
+}

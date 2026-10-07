@@ -11,6 +11,7 @@ import type {
   SessionInfo,
   TableColumn,
 } from "./types";
+import type { McpAuditEntry, McpClientInfo, McpConfig } from "./types";
 import { createDemoBackend } from "./demo";
 
 export interface Backend {
@@ -49,6 +50,16 @@ export interface Backend {
   ibmDriverStatus(): Promise<string | null>;
   ibmDriverDownload(): Promise<string>;
   appInfo(): Promise<{ version: string; dataDir: string }>;
+  aiKeyStatus(): Promise<boolean>;
+  aiKeySet(key: string): Promise<void>;
+  aiKeyGet(): Promise<string | null>;
+  mcpConfigGet(): Promise<McpConfig>;
+  mcpConfigSet(config: McpConfig): Promise<void>;
+  mcpAudit(limit: number): Promise<McpAuditEntry[]>;
+  mcpClearAudit(): Promise<void>;
+  mcpClientInfo(): Promise<McpClientInfo>;
+  mcpInstallClaudeDesktop(): Promise<string>;
+  mcpTestTool(name: string, args: Record<string, unknown>): Promise<unknown>;
   pickSavePath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
   pickOpenPath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
   onExportProgress(cb: (progress: { exportId: string; rows: number }) => void): Promise<() => void>;
@@ -71,25 +82,25 @@ function tauriBackend(): Backend {
     reorderConnections: (ids) => invoke("reorder_connections", { ids }),
     deleteConnection: (id) => invoke("delete_connection", { id }),
     testConnection: (cfg) => invoke("test_connection", { cfg }),
-    openSession: (connId, password) => invoke("open_session", { conn_id: connId, password: password ?? null }),
-    closeSession: (sessionId) => invoke("close_session", { session_id: sessionId }),
-    execute: (sessionId, sql, fetch) => invoke("execute", { session_id: sessionId, sql, fetch }),
-    fetch: (sessionId, n) => invoke("fetch", { session_id: sessionId, n }),
-    closeCursor: (sessionId) => invoke("close_cursor", { session_id: sessionId }),
-    cancel: (sessionId) => invoke("cancel", { session_id: sessionId }),
-    setAutocommit: (sessionId, on) => invoke("set_autocommit", { session_id: sessionId, on }),
-    commit: (sessionId) => invoke("commit", { session_id: sessionId }),
-    rollback: (sessionId) => invoke("rollback", { session_id: sessionId }),
-    metaChildren: (sessionId, path) => invoke("meta_children", { session_id: sessionId, path }),
-    tableColumns: (sessionId, obj) => invoke("table_columns", { session_id: sessionId, obj }),
-    objectDdl: (sessionId, obj) => invoke("object_ddl", { session_id: sessionId, obj }),
-    completion: (sessionId, database) => invoke("completion", { session_id: sessionId, database }),
-    listDatabases: (sessionId) => invoke("list_databases", { session_id: sessionId }),
-    useDatabase: (sessionId, database) => invoke("use_database", { session_id: sessionId, database }),
-    objectSql: (sessionId, obj) => invoke("object_sql", { session_id: sessionId, obj }),
-    quoteIdents: (sessionId, names) => invoke("quote_idents", { session_id: sessionId, names }),
+    openSession: (connId, password) => invoke("open_session", { connId: connId, password: password ?? null }),
+    closeSession: (sessionId) => invoke("close_session", { sessionId: sessionId }),
+    execute: (sessionId, sql, fetch) => invoke("execute", { sessionId: sessionId, sql, fetch }),
+    fetch: (sessionId, n) => invoke("fetch", { sessionId: sessionId, n }),
+    closeCursor: (sessionId) => invoke("close_cursor", { sessionId: sessionId }),
+    cancel: (sessionId) => invoke("cancel", { sessionId: sessionId }),
+    setAutocommit: (sessionId, on) => invoke("set_autocommit", { sessionId: sessionId, on }),
+    commit: (sessionId) => invoke("commit", { sessionId: sessionId }),
+    rollback: (sessionId) => invoke("rollback", { sessionId: sessionId }),
+    metaChildren: (sessionId, path) => invoke("meta_children", { sessionId: sessionId, path }),
+    tableColumns: (sessionId, obj) => invoke("table_columns", { sessionId: sessionId, obj }),
+    objectDdl: (sessionId, obj) => invoke("object_ddl", { sessionId: sessionId, obj }),
+    completion: (sessionId, database) => invoke("completion", { sessionId: sessionId, database }),
+    listDatabases: (sessionId) => invoke("list_databases", { sessionId: sessionId }),
+    useDatabase: (sessionId, database) => invoke("use_database", { sessionId: sessionId, database }),
+    objectSql: (sessionId, obj) => invoke("object_sql", { sessionId: sessionId, obj }),
+    quoteIdents: (sessionId, names) => invoke("quote_idents", { sessionId: sessionId, names }),
     exportQuery: (connId, database, sql, exportId, options) =>
-      invoke("export_query", { conn_id: connId, database, sql, export_id: exportId, options }),
+      invoke("export_query", { connId: connId, database, sql, exportId: exportId, options }),
     addHistory: (entry) => invoke("add_history", { entry }),
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
     clearHistory: () => invoke("clear_history"),
@@ -102,6 +113,16 @@ function tauriBackend(): Backend {
     ibmDriverStatus: () => invoke("ibm_driver_status"),
     ibmDriverDownload: () => invoke("ibm_driver_download"),
     appInfo: () => invoke("app_info"),
+    aiKeyStatus: () => invoke("ai_key_status"),
+    aiKeySet: (key) => invoke("ai_key_set", { key }),
+    aiKeyGet: () => invoke("ai_key_get"),
+    mcpConfigGet: () => invoke("mcp_config_get"),
+    mcpConfigSet: (config) => invoke("mcp_config_set", { config }),
+    mcpAudit: (limit) => invoke("mcp_audit", { limit }),
+    mcpClearAudit: () => invoke("mcp_clear_audit"),
+    mcpClientInfo: () => invoke("mcp_client_info"),
+    mcpInstallClaudeDesktop: () => invoke("mcp_install_claude_desktop"),
+    mcpTestTool: (name, args) => invoke("mcp_test_tool", { name, args }),
     pickSavePath: async (filters) => {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const picked = await save({ filters });
