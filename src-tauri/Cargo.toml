@@ -1,0 +1,43 @@
+[package]
+name = "celer"
+version = "1.0.0"
+description = "Celer - cliente SQL rápido"
+authors = ["Celer"]
+edition = "2021"
+
+[lib]
+name = "celer_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tiberius = { version = "0.12", default-features = false, features = ["tds73", "winauth", "native-tls", "chrono", "sql-browser-tokio"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+libloading = "0.8"
+parking_lot = "0.12"
+anyhow = "1"
+keyring = { version = "3", features = ["windows-native", "apple-native"] }
+uuid = { version = "1", features = ["v4"] }
+rust_xlsxwriter = { version = "0.80", default-features = false }
+ureq = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+dirs = "5"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
