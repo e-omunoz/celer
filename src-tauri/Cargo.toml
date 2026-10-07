@@ -31,7 +31,7 @@ uuid = { version = "1", features = ["v4"] }
 rust_xlsxwriter = { version = "0.80", default-features = false }
 ureq = "2"
 sha2 = "0.10"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 dirs = "5"
 # Servidor MCP: patrón de columnas sensibles (src/mcp.rs)
 regex = { version = "1", default-features = false, features = ["std", "unicode-case", "unicode-perl"] }
