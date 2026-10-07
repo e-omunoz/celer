@@ -75,4 +75,4 @@ Measured on every release against the seeded test containers (LAN database, 10-c
 | Grid scrolling, 50 columns | 60 fps |
 | Object tree with 10,000 tables | < 0.7 s |
 
-Each target is compared against DBeaver on the same machine and data.
+Each target is measured on the same machine and data from one release to the next, so regressions show up early.

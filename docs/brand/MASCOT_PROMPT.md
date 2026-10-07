@@ -5,7 +5,7 @@ Copy everything below the line into the other agent. Attach the four reference S
 
 ---
 
-You are drawing **Gib**, the mascot of **Celer**, a fast desktop SQL client (an alternative to DBeaver / DataGrip).
+You are drawing **Gib**, the mascot of **Celer**, a fast desktop SQL client.
 Gib must look exactly like the attached reference SVGs. Reproduce the style precisely; do not reinterpret it.
 
 ## Character

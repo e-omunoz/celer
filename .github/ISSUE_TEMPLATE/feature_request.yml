@@ -1,0 +1,27 @@
+name: Feature request
+description: An idea to make Celer better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the task or the problem, not only the solution. "When I … I have to …"
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Celer to do?
+      description: How it could look or work. Screenshots or examples from other tools are welcome.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Editor, Results grid, Table viewer, Explorer, Connections and drivers, Export and import, AI and MCP, Installer and updates, Themes and interface, Other]
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to work on this myself

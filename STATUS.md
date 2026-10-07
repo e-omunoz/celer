@@ -1,6 +1,6 @@
 # Celer — project status
 
-Desktop SQL client intended to replace DBeaver: Tauri 2 + Rust core + SolidJS interface.
+Fast desktop SQL client: Tauri 2 + Rust core + SolidJS interface.
 Full plan: [docs/ROADMAP.md](docs/ROADMAP.md) · drivers: [docs/DRIVERS.md](docs/DRIVERS.md).
 
 ## Done

@@ -1,0 +1,330 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 420" fill="none" role="img" aria-labelledby="t d">
+  <title id="t">Celer</title>
+  <desc id="d">Celer, a fast desktop SQL client. Gib the mascot thinks with his hand on his chin, gets an idea, hops and waves while a query streams its rows.</desc>
+  <defs>
+    <radialGradient id="bg" cx="30%" cy="20%" r="95%">
+      <stop stop-color="#2E2824"/>
+      <stop offset=".6" stop-color="#1E1C1B"/>
+      <stop offset="1" stop-color="#171615"/>
+    </radialGradient>
+    <linearGradient id="ember" x1="230" y1="250" x2="660" y2="780" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFA15C"/>
+      <stop offset=".55" stop-color="#F26B2A"/>
+      <stop offset="1" stop-color="#D9481C"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#F26B2A" stop-opacity="0"/>
+      <stop offset=".5" stop-color="#F26B2A" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#F26B2A" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0v32" stroke="#FFFFFF" stroke-opacity=".035"/>
+    </pattern>
+    <radialGradient id="fur" cx="32%" cy="28%" r="78%">
+      <stop stop-color="#8B6246"/>
+      <stop offset="1" stop-color="#56392A"/>
+    </radialGradient>
+    <linearGradient id="shirt" x1="100" y1="150" x2="100" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FAFAF7"/>
+      <stop offset="1" stop-color="#D5D8DE"/>
+    </linearGradient>
+    <linearGradient id="sleeve" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#F4F4F0"/>
+      <stop offset="1" stop-color="#D9DCE2"/>
+    </linearGradient>
+    <clipPath id="eye-l"><ellipse cx="79" cy="84" rx="15" ry="16"/></clipPath>
+    <clipPath id="eye-r"><ellipse cx="121" cy="84" rx="15" ry="16"/></clipPath>
+    <clipPath id="card"><rect x="720" y="56" width="452" height="300" rx="14"/></clipPath>
+    <clipPath id="frame"><rect width="1280" height="420" rx="24"/></clipPath>
+  </defs>
+
+  <style>
+    text { font-family: "Segoe UI", Inter, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif; }
+    .mono { font-family: "Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace; }
+
+    /* One 10 s story: think (0–33 %) → idea + hop (34–45 %) → wave (46–80 %) → settle (80–100 %). */
+    .gib * { animation-duration: 10s; animation-iteration-count: infinite; animation-fill-mode: both; animation-timing-function: cubic-bezier(.45, .05, .35, 1); }
+    .all { transform-origin: 100px 240px; animation-name: all; }
+    .head { transform-origin: 100px 148px; animation-name: head; }
+    .ear-l { transform-origin: 36px 94px; animation-name: ear-l; }
+    .ear-r { transform-origin: 164px 94px; animation-name: ear-r; }
+    .pupils { animation-name: look; }
+    .brow-l { transform-origin: 78px 68px; animation-name: brow-l; }
+    .brow-r { transform-origin: 123px 61px; animation-name: brow-r; }
+    .lidpos { animation-name: lidpos; }
+    .lid { transform-box: fill-box; transform-origin: top center; animation-name: blink; animation-timing-function: linear; }
+    .blush { animation-name: blush; }
+    .m-hmm { animation-name: m-hmm; animation-timing-function: linear; }
+    .m-o { animation-name: m-o; animation-timing-function: linear; }
+    .m-smile { animation-name: m-smile; animation-timing-function: linear; }
+    .m-flat { animation-name: m-flat; animation-timing-function: linear; }
+    .arm-r { transform-origin: 140px 170px; animation-name: arm-r; }
+    .fore-r { transform-origin: 140px 196px; animation-name: fore-r; }
+    .finger { animation-name: finger; animation-timing-function: linear; }
+    .arm-l { transform-origin: 60px 170px; animation-name: arm-l; }
+    .thought { transform-origin: -23px 4px; animation-name: thought; }
+    .thought .dot { animation: dot 1.2s ease-in-out infinite; }
+    .thought .dot:nth-child(2) { animation-delay: .2s; }
+    .thought .dot:nth-child(3) { animation-delay: .4s; }
+    .bulb { transform-origin: 140px -16px; animation-name: bulb; }
+    .rays { animation: rays .5s ease-in-out infinite alternate !important; }
+    .spark { transform-box: fill-box; transform-origin: center; animation-name: spark; }
+    .spark:nth-child(2) { animation-delay: .25s; }
+    .spark:nth-child(3) { animation-delay: .5s; }
+    .tuft { transform-box: fill-box; transform-origin: center bottom; animation: tuft 3.6s ease-in-out infinite !important; }
+    .tuft:nth-child(2) { animation-delay: -1.1s !important; }
+    .tuft:nth-child(3) { animation-delay: -2.2s !important; }
+
+    @keyframes all {
+      0%    { transform: translateY(0) rotate(0) scale(1, 1); }
+      16%   { transform: translateY(-1.5px) rotate(0) scale(1, 1); }
+      31%   { transform: translateY(0) rotate(0) scale(1, 1); }
+      34%   { transform: translateY(3px) rotate(0) scale(1.04, .95); }
+      37.5% { transform: translateY(-18px) rotate(0) scale(.97, 1.04); }
+      41%   { transform: translateY(2px) rotate(0) scale(1.04, .96); }
+      44%   { transform: translateY(0) rotate(0) scale(1, 1); }
+      50%   { transform: translateY(0) rotate(-3deg) scale(1, 1); }
+      56%   { transform: translateY(-2px) rotate(3deg) scale(1, 1); }
+      62%   { transform: translateY(0) rotate(-3deg) scale(1, 1); }
+      68%   { transform: translateY(-2px) rotate(3deg) scale(1, 1); }
+      74%   { transform: translateY(0) rotate(-2deg) scale(1, 1); }
+      80%   { transform: translateY(0) rotate(0) scale(1, 1); }
+      90%   { transform: translateY(-1.5px) rotate(0) scale(1, 1); }
+      100%  { transform: translateY(0) rotate(0) scale(1, 1); }
+    }
+    @keyframes head {
+      0%       { transform: translateY(0) rotate(0); }
+      7%, 31%  { transform: translateY(0) rotate(-8deg); }
+      35%      { transform: translateY(1px) rotate(2deg); }
+      38%      { transform: translateY(-3px) rotate(0); }
+      44%      { transform: translateY(0) rotate(0); }
+      50%      { transform: translateY(0) rotate(5deg); }
+      56%      { transform: translateY(0) rotate(-4deg); }
+      62%      { transform: translateY(0) rotate(5deg); }
+      68%      { transform: translateY(0) rotate(-4deg); }
+      74%      { transform: translateY(0) rotate(2deg); }
+      80%, 100% { transform: translateY(0) rotate(0); }
+    }
+    @keyframes ear-l { 0%, 46% { transform: rotate(0); } 52% { transform: rotate(-9deg); } 58% { transform: rotate(4deg); } 64% { transform: rotate(-9deg); } 70% { transform: rotate(4deg); } 78%, 100% { transform: rotate(0); } }
+    @keyframes ear-r { 0%, 46% { transform: rotate(0); } 52% { transform: rotate(9deg); } 58% { transform: rotate(-4deg); } 64% { transform: rotate(9deg); } 70% { transform: rotate(-4deg); } 78%, 100% { transform: rotate(0); } }
+    @keyframes look { 0% { transform: translate(0, 0); } 6%, 31% { transform: translate(-3px, -5px); } 35% { transform: translate(0, -2px); } 40%, 100% { transform: translate(0, 0); } }
+    @keyframes brow-l { 0% { transform: translateY(0); } 6%, 31% { transform: translateY(1.5px); } 35%, 42% { transform: translateY(-6px); } 47%, 100% { transform: translateY(0); } }
+    @keyframes brow-r { 0% { transform: translateY(0) rotate(0); } 6%, 31% { transform: translateY(-4px) rotate(-8deg); } 35%, 42% { transform: translateY(-6px) rotate(0); } 47%, 100% { transform: translateY(0) rotate(0); } }
+    @keyframes lidpos { 0%, 33% { transform: translateY(0); } 36%, 43% { transform: translateY(-15px); } 47%, 78% { transform: translateY(3px); } 84%, 100% { transform: translateY(0); } }
+    @keyframes blink { 0%, 22% { transform: scaleY(1); } 23% { transform: scaleY(2); } 24%, 86% { transform: scaleY(1); } 87% { transform: scaleY(2); } 88%, 95% { transform: scaleY(1); } 96% { transform: scaleY(2); } 97%, 100% { transform: scaleY(1); } }
+    @keyframes blush { 0%, 43% { opacity: .35; } 48%, 80% { opacity: .8; } 88%, 100% { opacity: .35; } }
+    @keyframes m-hmm { 0%, 33.5% { opacity: 1; } 34%, 99.5% { opacity: 0; } 100% { opacity: 1; } }
+    @keyframes m-o { 0%, 33.5% { opacity: 0; } 34%, 43% { opacity: 1; } 43.5%, 100% { opacity: 0; } }
+    @keyframes m-smile { 0%, 43% { opacity: 0; } 43.5%, 83.5% { opacity: 1; } 84%, 100% { opacity: 0; } }
+    @keyframes m-flat { 0%, 83.5% { opacity: 0; } 84%, 99.5% { opacity: 1; } 100% { opacity: 0; } }
+    /* Right arm: rests at the side, hand on the chin while thinking, raised on the idea, waves, settles. */
+    @keyframes arm-r {
+      0%       { transform: rotate(-8deg); }
+      6%, 31%  { transform: rotate(101deg); }
+      37%      { transform: rotate(-172deg); }
+      39.5%    { transform: rotate(-162deg); }
+      45%      { transform: rotate(-164deg); }
+      48%, 76% { transform: rotate(-120deg); }
+      83%      { transform: rotate(-40deg); }
+      88%      { transform: rotate(-4deg); }
+      92%, 100% { transform: rotate(-8deg); }
+    }
+    @keyframes fore-r {
+      0%   { transform: rotate(6deg); }
+      6%   { transform: rotate(63deg); }
+      12%  { transform: rotate(56deg); }
+      18%  { transform: rotate(63deg); }
+      24%  { transform: rotate(56deg); }
+      31%  { transform: rotate(63deg); }
+      37%  { transform: rotate(-24deg); }
+      40%, 45% { transform: rotate(-10deg); }
+      48%  { transform: rotate(-72deg); }
+      52%  { transform: rotate(-22deg); }
+      56%  { transform: rotate(-72deg); }
+      60%  { transform: rotate(-22deg); }
+      64%  { transform: rotate(-72deg); }
+      68%  { transform: rotate(-22deg); }
+      72%  { transform: rotate(-64deg); }
+      76%  { transform: rotate(-20deg); }
+      83%  { transform: rotate(14deg); }
+      90%, 100% { transform: rotate(6deg); }
+    }
+    @keyframes finger { 0%, 34.5% { opacity: 0; } 35.5%, 45% { opacity: 1; } 46%, 100% { opacity: 0; } }
+    @keyframes arm-l { 0%, 33% { transform: rotate(8deg); } 37.5% { transform: rotate(22deg); } 44% { transform: rotate(8deg); } 50% { transform: rotate(12deg); } 56% { transform: rotate(6deg); } 62% { transform: rotate(12deg); } 68% { transform: rotate(6deg); } 76%, 100% { transform: rotate(8deg); } }
+    @keyframes thought { 0% { opacity: 0; transform: scale(.4); } 4% { opacity: 1; transform: scale(1.06); } 6%, 31% { opacity: 1; transform: scale(1); } 34%, 100% { opacity: 0; transform: scale(1.15); } }
+    @keyframes dot { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+    @keyframes bulb { 0%, 33.5% { opacity: 0; transform: translateY(0) scale(.2); } 36% { opacity: 1; transform: translateY(0) scale(1.25); } 38% { transform: translateY(0) scale(.92); } 40%, 54% { opacity: 1; transform: translateY(0) scale(1); } 59%, 100% { opacity: 0; transform: translateY(-10px) scale(.85); } }
+    @keyframes rays { from { opacity: .35; } to { opacity: 1; } }
+    @keyframes spark { 0%, 45% { opacity: 0; transform: scale(.2) rotate(0); } 49% { opacity: 1; transform: scale(1.15) rotate(20deg); } 54% { transform: scale(.75) rotate(35deg); } 59% { transform: scale(1.1) rotate(50deg); } 64% { opacity: 1; transform: scale(.9) rotate(65deg); } 70%, 100% { opacity: 0; transform: scale(.2) rotate(80deg); } }
+    @keyframes tuft { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(5deg); } }
+
+    .row { animation: row 10s infinite both; }
+    .status { animation: row 10s 1.2s infinite both; }
+    .caret { animation: caret 1s steps(1) infinite; }
+    .scan { animation: scan 10s ease-in-out infinite; }
+    @keyframes row { 0%, 39% { opacity: 0; transform: translateY(6px); } 43%, 95% { opacity: 1; transform: translateY(0); } 99%, 100% { opacity: 0; } }
+    @keyframes caret { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+    @keyframes scan { 0%, 35% { transform: translateX(-460px); opacity: 0; } 37% { opacity: 1; } 46%, 100% { transform: translateX(460px); opacity: 0; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, .gib * { animation: none !important; }
+      .thought, .bulb, .spark, .m-hmm, .m-o, .m-flat { opacity: 0; }
+      .row, .status { opacity: 1; }
+    }
+  </style>
+
+  <rect width="1280" height="420" rx="24" fill="url(#bg)"/>
+  <rect width="1280" height="420" rx="24" fill="url(#grid)"/>
+  <rect x="80" y="404" width="1120" height="1.5" fill="url(#glow)"/>
+
+  <!-- Lockup -->
+  <svg x="78" y="98" width="128" height="93" viewBox="150 230 780 564">
+    <path d="M625.8 344.7A250 250 0 1 0 625.8 679.3" stroke="url(#ember)" stroke-width="118" stroke-linecap="round"/>
+    <rect x="470" y="406" width="320" height="56" rx="28" fill="#F3EEE7"/>
+    <rect x="410" y="484" width="490" height="56" rx="28" fill="#F3EEE7"/>
+    <rect x="470" y="562" width="320" height="56" rx="28" fill="#F3EEE7"/>
+  </svg>
+  <text x="222" y="174" fill="#F3EEE7" font-size="88" font-weight="600" letter-spacing="-1.5">Celer</text>
+  <text x="82" y="240" fill="#CFC6BA" font-size="27">Swift SQL for every database.</text>
+  <text x="82" y="274" fill="#8F877D" font-size="18">Native drivers · Rust core · AI with permissions · tiny footprint</text>
+
+  <g font-size="14" font-weight="600">
+    <rect x="82" y="304" width="104" height="30" rx="15" fill="#336791" fill-opacity=".22" stroke="#4C88B8" stroke-opacity=".6"/>
+    <text x="134" y="324" fill="#9CC3E4" text-anchor="middle">PostgreSQL</text>
+    <rect x="194" y="304" width="74" height="30" rx="15" fill="#00758F" fill-opacity=".22" stroke="#2C9AB3" stroke-opacity=".6"/>
+    <text x="231" y="324" fill="#86CFE0" text-anchor="middle">MySQL</text>
+    <rect x="276" y="304" width="88" height="30" rx="15" fill="#C0765A" fill-opacity=".2" stroke="#C99880" stroke-opacity=".6"/>
+    <text x="320" y="324" fill="#E8BBA6" text-anchor="middle">MariaDB</text>
+    <rect x="372" y="304" width="104" height="30" rx="15" fill="#CC2927" fill-opacity=".18" stroke="#D9605E" stroke-opacity=".6"/>
+    <text x="424" y="324" fill="#F0A3A2" text-anchor="middle">SQL Server</text>
+    <rect x="484" y="304" width="74" height="30" rx="15" fill="#0F80CC" fill-opacity=".2" stroke="#4FA3DB" stroke-opacity=".6"/>
+    <text x="521" y="324" fill="#9ACDF0" text-anchor="middle">SQLite</text>
+    <rect x="566" y="304" width="132" height="30" rx="15" fill="#FFFFFF" fill-opacity=".05" stroke="#FFFFFF" stroke-opacity=".18"/>
+    <text x="632" y="324" fill="#BDB5AA" text-anchor="middle">Informix · ODBC</text>
+  </g>
+
+  <!-- Mini Celer window -->
+  <g>
+    <rect x="720" y="56" width="452" height="300" rx="14" fill="#232120" stroke="#3A3532"/>
+    <g clip-path="url(#card)">
+      <rect x="720" y="56" width="452" height="34" fill="#2A2725"/>
+      <circle cx="742" cy="73" r="5" fill="#F26B2A"/>
+      <text x="756" y="78" fill="#BDB5AA" font-size="13">Postgres local · celer</text>
+      <text x="1150" y="78" fill="#6F6862" font-size="13" text-anchor="end">Ctrl+Enter</text>
+
+      <text class="mono" x="740" y="118" font-size="14"><tspan fill="#E8885A">SELECT</tspan><tspan fill="#E6E0D8"> id, kind, customer_id, amount </tspan><tspan fill="#E8885A">FROM</tspan><tspan fill="#E6E0D8"> events</tspan></text>
+      <text class="mono" x="740" y="140" font-size="14"><tspan fill="#E8885A">WHERE</tspan><tspan fill="#E6E0D8"> kind </tspan><tspan fill="#E8885A">IN</tspan><tspan fill="#E6E0D8"> (</tspan><tspan fill="#A7C080">'click'</tspan><tspan fill="#E6E0D8">, </tspan><tspan fill="#A7C080">'purchase'</tspan><tspan fill="#E6E0D8">);</tspan><tspan class="caret" fill="#F26B2A">▍</tspan></text>
+
+      <rect class="scan" x="720" y="152" width="120" height="2" fill="url(#glow)"/>
+      <rect x="720" y="156" width="452" height="26" fill="#2A2725"/>
+      <g class="mono" font-size="12.5" fill="#8F877D" font-weight="600">
+        <text x="740" y="173">id</text><text x="812" y="173">kind</text><text x="910" y="173">customer_id</text><text x="1018" y="173" text-anchor="end">amount</text>
+      </g>
+      <g class="mono" font-size="12.5" fill="#D8D1C8">
+        <g class="row" style="animation-delay:0s"><text x="740" y="200">200000</text><text x="812" y="200">purchase</text><text x="910" y="200">481</text><text x="1018" y="200" text-anchor="end">89.90</text></g>
+        <g class="row" style="animation-delay:.12s"><rect x="720" y="208" width="452" height="24" fill="#FFFFFF" fill-opacity=".025"/><text x="740" y="224">199998</text><text x="812" y="224">click</text><text x="910" y="224">120</text><text x="1018" y="224" text-anchor="end" fill="#7A736C" font-style="italic">NULL</text></g>
+        <g class="row" style="animation-delay:.24s"><text x="740" y="248">199997</text><text x="812" y="248">purchase</text><text x="910" y="248">77</text><text x="1018" y="248" text-anchor="end">249.00</text></g>
+        <g class="row" style="animation-delay:.36s"><rect x="720" y="256" width="452" height="24" fill="#FFFFFF" fill-opacity=".025"/><text x="740" y="272">199995</text><text x="812" y="272">click</text><text x="910" y="272">339</text><text x="1018" y="272" text-anchor="end" fill="#7A736C" font-style="italic">NULL</text></g>
+        <g class="row" style="animation-delay:.48s"><text x="740" y="296">199994</text><text x="812" y="296">purchase</text><text x="910" y="296">256</text><text x="1018" y="296" text-anchor="end">12.50</text></g>
+      </g>
+      <rect x="720" y="326" width="452" height="30" fill="#2A2725"/>
+      <g class="status"><circle cx="742" cy="341" r="4" fill="#7BC47F"/><text x="754" y="346" fill="#BDB5AA" font-size="12.5">500+ rows · 4 ms · streaming</text></g>
+    </g>
+  </g>
+
+  <!-- Gib (rigged: body, head, two-segment arms) -->
+  <g clip-path="url(#frame)">
+  <svg class="gib" x="1052" y="204" width="180" height="216" viewBox="0 0 200 240" overflow="visible">
+    <g class="thought">
+      <circle cx="30" cy="40" r="4.5" fill="#F3EEE7" fill-opacity=".9"/>
+      <circle cx="15" cy="24" r="7" fill="#F3EEE7" fill-opacity=".92"/>
+      <rect x="-60" y="-14" width="74" height="34" rx="17" fill="#F3EEE7"/>
+      <g fill="#8F877D"><circle class="dot" cx="-37" cy="3" r="4"/><circle class="dot" cx="-23" cy="3" r="4"/><circle class="dot" cx="-9" cy="3" r="4"/></g>
+    </g>
+    <g class="bulb">
+      <g transform="translate(120 -42)">
+        <g class="rays" stroke="#F5B83D" stroke-width="2.6" stroke-linecap="round"><path d="M20 3v5M5 10l3.5 3.5M35 10l-3.5 3.5M1 24h5M39 24h-5"/></g>
+        <path d="M20 12a11 11 0 0 0-6.5 19.9c1.4 1.1 2.2 2.6 2.4 4.3h8.2c.2-1.7 1-3.2 2.4-4.3A11 11 0 0 0 20 12z" fill="#FFD25E" stroke="#E2A72E" stroke-width="1.4"/>
+        <path d="M16.5 26.5c1-2.4 2.3-3.4 3.5-3.4s2.5 1 3.5 3.4" stroke="#C98A1C" stroke-width="1.3" stroke-linecap="round"/>
+        <rect x="15.5" y="37.5" width="9" height="3.4" rx="1.2" fill="#9AA0AA"/>
+        <rect x="16.3" y="41.6" width="7.4" height="3" rx="1.2" fill="#7D838E"/>
+      </g>
+    </g>
+    <g fill="#FFD25E">
+      <path class="spark" d="M24 34l2.4 6.6L33 43l-6.6 2.4L24 52l-2.4-6.6L15 43l6.6-2.4z"/>
+      <path class="spark" d="M182 40l1.8 5L189 47l-5.2 1.8L182 54l-1.8-5.2L175 47l5.2-2z"/>
+      <path class="spark" d="M170 4l1.4 3.8 3.8 1.4-3.8 1.4L170 14.4l-1.4-3.8-3.8-1.4 3.8-1.4z"/>
+    </g>
+
+    <g class="all">
+      <!-- left arm (behind the body) -->
+      <g class="arm-l">
+        <rect x="51" y="162" width="18" height="32" rx="9" fill="url(#sleeve)" stroke="#C9CDD4" stroke-width="1.2"/>
+        <rect x="53.5" y="190" width="13" height="26" rx="6.5" fill="url(#fur)"/>
+        <circle cx="60" cy="219" r="8.5" fill="#F2D0AC" stroke="#D4AC86" stroke-width="1.2"/>
+      </g>
+      <!-- body: shirt, collar, tie -->
+      <path fill="url(#shirt)" stroke="#C9CDD4" stroke-width="1.2" d="M46 280v-72c0-33 15-50 35-54h38c20 4 35 21 35 54v72z"/>
+      <path d="M100 160v120" stroke="#CDD0D6" stroke-width="1.2"/>
+      <circle cx="100" cy="212" r="1.8" fill="#BFC3CA"/><circle cx="100" cy="230" r="1.8" fill="#BFC3CA"/>
+      <ellipse cx="100" cy="150" rx="19" ry="8" fill="url(#fur)"/>
+      <path fill="#FAFAF7" stroke="#C9CDD4" d="M100 157 84 146 79 167z"/>
+      <path fill="#FAFAF7" stroke="#C9CDD4" d="M100 157 116 146 121 167z"/>
+      <path fill="#1B1C21" d="M95 158h10l2 8.5H93z"/>
+      <path fill="#1B1C21" d="M93 166.5h14L111 199 100 209 89 199z"/>
+      <path d="M96 170l9 12M95 182l11 13" stroke="#2C2E35" stroke-width="2"/>
+
+      <g class="head">
+        <g class="ear-l"><circle cx="36" cy="94" r="22" fill="url(#fur)"/><circle cx="44" cy="96" r="13.5" fill="#E2B38B"/></g>
+        <g class="ear-r"><circle cx="164" cy="94" r="22" fill="url(#fur)"/><circle cx="156" cy="96" r="13.5" fill="#E2B38B"/></g>
+        <ellipse cx="100" cy="88" rx="64" ry="58" fill="url(#fur)"/>
+        <g fill="url(#fur)">
+          <path class="tuft" d="M76 50c-6-18 8-30 16-12-4 6-10 12-16 12z"/>
+          <path class="tuft" d="M94 42c2-22 18-24 20-2-6 4-14 6-20 2z"/>
+          <path class="tuft" d="M124 50c8-20 22-14 12 2-6 2-12 2-12-2z"/>
+        </g>
+        <g fill="#F2D0AC">
+          <circle cx="79" cy="86" r="27"/>
+          <circle cx="121" cy="86" r="27"/>
+          <ellipse cx="100" cy="118" rx="37" ry="25"/>
+        </g>
+        <ellipse class="blush" cx="62" cy="108" rx="11" ry="6" fill="#F4A6A0" opacity=".35"/>
+        <ellipse class="blush" cx="138" cy="108" rx="11" ry="6" fill="#F4A6A0" opacity=".35"/>
+        <ellipse cx="79" cy="84" rx="15" ry="16" fill="#fff"/>
+        <ellipse cx="121" cy="84" rx="15" ry="16" fill="#fff"/>
+        <g class="pupils">
+          <circle cx="79" cy="89" r="6.6" fill="#24170F"/>
+          <circle cx="121" cy="89" r="6.6" fill="#24170F"/>
+          <circle cx="81.6" cy="86.4" r="2.1" fill="#fff"/>
+          <circle cx="123.6" cy="86.4" r="2.1" fill="#fff"/>
+        </g>
+        <g clip-path="url(#eye-l)"><g class="lidpos"><rect class="lid" x="62" y="68" width="34" height="16" fill="#E7BE96"/><path d="M65 84q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/></g></g>
+        <g clip-path="url(#eye-r)"><g class="lidpos"><rect class="lid" x="104" y="68" width="34" height="16" fill="#E7BE96"/><path d="M107 84q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/></g></g>
+        <g stroke="#56392A" stroke-width="5" stroke-linecap="round">
+          <path class="brow-l" d="M66 68c8-2 16-2 24 1"/>
+          <path class="brow-r" d="M110 60c8-6 18-4 26 2"/>
+        </g>
+        <g fill="#9A6A49"><ellipse cx="94" cy="111" rx="2.2" ry="1.5"/><ellipse cx="106" cy="111" rx="2.2" ry="1.5"/></g>
+        <path class="m-hmm" d="M95 129q7-3.5 15 .5" stroke="#9A6A49" stroke-width="2.4" stroke-linecap="round"/>
+        <ellipse class="m-o" cx="103" cy="128" rx="4.2" ry="5.2" fill="#6E4430" opacity="0"/>
+        <g class="m-smile" opacity="0">
+          <path d="M88 121q15 17 30 0z" fill="#6E4430" stroke="#6E4430" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M96 129q7 4 14 0" fill="#E98A86"/>
+        </g>
+        <path class="m-flat" d="M96 127h16" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round" opacity="0"/>
+      </g>
+
+      <!-- right arm (in front): shoulder → sleeve, elbow → forearm and hand -->
+      <g class="arm-r">
+        <rect x="131" y="162" width="18" height="32" rx="9" fill="url(#sleeve)" stroke="#C9CDD4" stroke-width="1.2"/>
+        <g class="fore-r">
+          <rect x="133.5" y="190" width="13" height="26" rx="6.5" fill="url(#fur)"/>
+          <rect class="finger" x="136.6" y="221" width="6.8" height="15" rx="3.4" fill="#F2D0AC" stroke="#D4AC86" stroke-width="1.2"/>
+          <circle cx="140" cy="219" r="8.5" fill="#F2D0AC" stroke="#D4AC86" stroke-width="1.2"/>
+          <path d="M134.5 214.5q-3.5 2-1.5 5.5" stroke="#D4AC86" stroke-width="1.4" stroke-linecap="round"/>
+        </g>
+      </g>
+    </g>
+  </svg>
+  </g>
+</svg>
