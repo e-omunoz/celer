@@ -6,6 +6,18 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Drag connections between folders in the explorer (drop on a folder, on another connection to place it
+  before it, or on "Sin carpeta" to take it out of its folder).
+
+### Fixed
+- The folder selector in a connection's properties only listed the current folder. It now lists every folder,
+  "Sin carpeta" and "Nueva carpeta…".
+- The guided tour's highlight ring was cut off at the window edges; it is now drawn inside the element.
+
+### Changed
+- New README (English and Spanish) with a screenshot gallery, and a social preview image for the repository.
+
 ## [1.3.0] - 2026-10-08
 
 ### Added

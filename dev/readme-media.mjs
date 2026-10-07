@@ -238,7 +238,7 @@ if (want("ai")) {
   await cmd("Asistente IA: preguntar o generar SQL");
   await js(`await until(() => document.querySelector('.ai-panel, .ai-setup')); await sleep(300);`);
   await still("ai");
-  await cmd("Mostrar u ocultar el panel de valor");
+  await js(`document.querySelector('.inspector .icon-btn[title="Cerrar panel"]')?.click(); await sleep(200);`);
 }
 
 if (want("table")) {
@@ -246,6 +246,45 @@ if (want("table")) {
   if (!(await js(`return !!pane().querySelector('.chip');`))) await filterKind(false);
   await sleep(300);
   await still("table");
+}
+
+// Completion with the statement's columns (typed key by key so the popup opens like for a user).
+if (want("completion")) {
+  await newConsole();
+  await typeSql("SELECT c.first_name, e.kind\nFROM events e\nJOIN customers c ON c.id = e.customer_id\nWHERE c.", 400);
+  for (const ch of "co") {
+    await app.send("Input.insertText", { text: ch });
+    await sleep(120);
+  }
+  await js(`await until(() => document.querySelector('.cm-tooltip-autocomplete li'), 3000); await sleep(250);`);
+  await still("completion");
+  await press("Escape");
+}
+
+// Foreign keys: the Claves tab with the jump to the referenced table.
+if (want("keys")) {
+  await openEvents();
+  await js(`[...pane().querySelectorAll('.seg button')].find((b) => b.textContent.startsWith('Claves')).click(); await sleep(400);`);
+  await still("keys");
+  await js(`[...pane().querySelectorAll('.seg button')].find((b) => b.textContent.startsWith('Datos')).click(); await sleep(200);`);
+}
+
+// Loading every row: Gib at the laptop, live progress and Cancel.
+if (want("busy")) {
+  await js(`[...pane().querySelectorAll('.filter-chips .link')].find((b) => b.textContent === 'Quitar todos')?.click(); await sleep(400);`);
+  await js(`[...pane().querySelectorAll('.tb-icon')].find((b) => b.title.startsWith('Recargar'))?.click(); await until(() => [...pane().querySelectorAll('.data-toolbar .btn')].some((b) => b.textContent.includes('Cargar todo')), 15000);`);
+  // Click and poll from here: the overlay shows after 300 ms and loading 200k rows takes ~2 s.
+  await js(`[...pane().querySelectorAll('.data-toolbar .btn')].find((b) => b.textContent.includes('Cargar todo')).click();`);
+  for (let i = 0; i < 60; i++) {
+    await sleep(60);
+    const shown = await js(`return !!pane().querySelector('.busy-overlay') && /filas/.test(pane().querySelector('.busy-detail')?.textContent ?? '');`);
+    if (shown) {
+      writeFileSync(join(out, "busy.png"), await app.shot());
+      console.log("still busy");
+      break;
+    }
+  }
+  await js(`await until(() => !pane().querySelector('.busy-overlay'), 60000);`);
 }
 
 if (want("mcp")) {

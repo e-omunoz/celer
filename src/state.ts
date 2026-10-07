@@ -499,6 +499,39 @@ export async function refreshConnections() {
   setState("connections", await api().listConnections());
 }
 
+/** Folders in use by the saved connections, in order of first appearance. */
+export function connectionFolders(): string[] {
+  return [...new Set(state.connections.map((conn) => conn.folder).filter(Boolean))];
+}
+
+/**
+ * Moves a connection to `folder` (drag and drop in the explorer), optionally right before another
+ * connection. The saved password is kept: saving with an empty password leaves the stored one untouched.
+ */
+export async function moveConnection(id: string, folder: string, beforeId?: string) {
+  const conn = connectionById(id);
+  if (!conn || id === beforeId) return;
+  try {
+    if ((conn.folder || "") !== folder) {
+      const { hasPassword: _hasPassword, ...cfg } = conn;
+      await api().saveConnection({ ...cfg, folder, password: "" });
+    }
+    const ids = state.connections.map((c) => c.id).filter((x) => x !== id);
+    let at = beforeId ? ids.indexOf(beforeId) : -1;
+    if (at < 0) {
+      // No target connection: after the last one of that folder (or at the end).
+      const last = state.connections.map((c) => (c.id !== id && (c.folder || "") === folder ? c.id : "")).filter(Boolean).pop();
+      at = last ? ids.indexOf(last) + 1 : ids.length;
+    }
+    ids.splice(at, 0, id);
+    await api().reorderConnections(ids);
+    await refreshConnections();
+    if ((conn.folder || "") !== folder) notify(`${conn.name} → ${folder || "Sin carpeta"}`, "success");
+  } catch (err) {
+    notify("No se pudo mover la conexión", "error", errorText(err));
+  }
+}
+
 export function openConnDialog(cfg?: ConnConfig) {
   setState({ testOutput: "", testOk: null, testing: false });
   setState("connDialog", cfg ? { ...cfg, password: "" } : emptyConn(isTauri() ? "postgres" : "sqlite"));

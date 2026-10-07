@@ -1,226 +1,217 @@
 <p align="center">
-  <img src="docs/media/banner.svg" alt="Celer — swift SQL for every database. Gib, the mascot, thinks, gets an idea and waves while a query streams its rows." width="100%" />
+  <img src="docs/media/banner.svg" alt="Celer. Swift SQL for every database. Gib, the mascot, thinks, gets an idea and waves while a query streams its rows." width="100%" />
+</p>
+
+<p align="center">
+  <b>Swift SQL for every database.</b><br/>
+  A fast, native desktop SQL client for PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, Informix and ODBC,<br/>
+  with an editor that knows your schema, an AI assistant with permissions and a mascot who keeps you company.
 </p>
 
 <p align="center">
   <a href="https://github.com/e-omunoz/celer/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/e-omunoz/celer?style=flat-square&color=F26B2A&label=release"></a>
-  <a href="https://github.com/e-omunoz/celer/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/e-omunoz/celer/ci.yml?branch=main&style=flat-square&label=CI"></a>
-  <a href="https://github.com/e-omunoz/celer/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/e-omunoz/celer/total?style=flat-square&color=4C88B8"></a>
-  <img alt="Windows, macOS, Linux" src="https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-2B2724?style=flat-square">
-  <img alt="Built with Tauri, Rust and SolidJS" src="https://img.shields.io/badge/Tauri%202%20·%20Rust%20·%20SolidJS-2B2724?style=flat-square&logo=tauri&logoColor=FFC131">
+  <a href="https://github.com/e-omunoz/celer/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/e-omunoz/celer/total?style=flat-square&color=4C88B8&label=downloads"></a>
+  <a href="https://github.com/e-omunoz/celer/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/e-omunoz/celer/ci.yml?branch=main&style=flat-square&label=build"></a>
+  <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20·%2011-2B2724?style=flat-square">
 </p>
 
 <p align="center">
-  <b>A fast, native desktop SQL client — light on memory, heavy on detail.</b><br/>
-  <a href="#install">Download</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#databases">Databases</a> ·
-  <a href="#keyboard-shortcuts">Shortcuts</a> ·
-  <a href="#build-from-source">Build</a> ·
-  <a href="CHANGELOG.md">Changelog</a>
+  <a href="https://github.com/e-omunoz/celer/releases/latest"><b>Download</b></a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="README.es.md">Español</a>
 </p>
+
+Open Celer, double-click a table and you are looking at its rows before you notice it loaded. Write a query and
+completion offers the columns of the tables you are using. Ctrl+click a table name to open it, Ctrl+click a
+foreign key to jump to the row it points to. Load 200,000 rows and the window keeps responding; if anything takes
+long, Gib shows what he is doing and a button to cancel it.
+
+Celer is a Rust core with a light web interface (Tauri 2). The installer is about 13 MB, installs for your user only,
+without administrator rights, and keeps itself up to date.
+
+> [!NOTE]
+> The interface is in Spanish. An English translation is planned and contributions are welcome.
+
+## See it in action
 
 <p align="center">
   <img src="docs/media/demo.gif" alt="Celer starting up, opening a 200,000-row table, filtering it and running an aggregate query" width="100%" />
 </p>
 
-## Why Celer
-
-- **Instant.** A Rust core with one thread per session: a slow query never freezes the window, and 200,000 rows load
-  into the grid in about a second.
-- **Native drivers.** PostgreSQL, MySQL / MariaDB, SQL Server and SQLite need nothing installed. Informix and any ODBC
-  source load the vendor library only when you use them.
-- **Made for long sessions.** A warm, quiet interface with eight themes, a canvas data grid, a command palette and the
-  keyboard shortcuts you already know.
-- **AI with permissions.** An assistant that sees your schema, never your rows, and an MCP server so Claude and
-  other clients can read your databases with per-connection limits and an audit log.
-- **Yours.** Passwords and API keys live in the operating system's credential store. No account, no telemetry.
-
-> The interface is in Spanish. English is on the [roadmap](docs/ROADMAP.md).
-
-## Install
-
-Everything is on the [latest release](https://github.com/e-omunoz/celer/releases/latest).
-
-| System | Download | Notes |
-|---|---|---|
-| **Windows** | `Celer-Setup-x.y.z.exe` | Recommended. Installs for your user only (no administrator rights) and updates itself in one click. |
-| Windows (IT) | `Celer-x.y.z-x64.msi` | Per-machine package for managed deployments (GPO, Intune). |
-| Windows | `Celer-x.y.z-portable.exe` · `…-nsis-setup.exe` | Runs without installing · classic installer. |
-| **macOS** 11+ | `Celer-x.y.z-macos-universal.dmg` | Apple Silicon and Intel. Built on demand, so not every release has it. Not notarised yet: the first time, right-click → *Open*. |
-| **Linux** | `.AppImage` · `.deb` · `.rpm` | x86_64, built on demand. Credentials are stored in the Secret Service (GNOME Keyring, KWallet). |
-
-Open Celer and a short guide shows you around; it can create a sample database for you to play with. Every release
-also carries `SHA256SUMS` files to verify the downloads, and Celer checks for new versions on start-up.
-
 ## Features
 
-### SQL editor and results
-
-<img src="docs/media/hero.png" alt="SQL console with a join, results grid and the object explorer" width="100%" />
-
-- CodeMirror editor with schema-aware completion, formatting (`Ctrl+Alt+L`) and the current statement highlighted.
-- `Ctrl+Enter` runs the statement under the caret, `Ctrl+Shift+Enter` the whole script, and `Ctrl+Shift+E` shows the plan.
-- Results are paged from an open cursor. Load the next page, load everything, or cancel at any time.
-- Auto or manual transactions, with commit and rollback always in sight. Production connections ask before a write,
-  and read-only connections refuse one, even when it is hidden in a batch.
-
-### Table viewer with real filters
-
-<img src="docs/media/table.png" alt="Table viewer with a filter chip on the kind column" width="100%" />
-
-- Filter chips per column: equals, contains, between, null checks and value checklists. You can also write your own
-  `WHERE` and `ORDER BY`.
-- Sorting runs on the server, and there is an exact row count on demand.
-- Edit cells, add and delete rows, then save them all in one transaction or revert.
-- Columns, indexes, keys and DDL for every table.
-
-### Command palette
-
-<img src="docs/media/palette.png" alt="Command palette searching tables and actions" width="100%" />
-
-Press `Shift` twice or `Ctrl+K` to reach every table, tab and action. `Ctrl+N` jumps straight to a table.
-
-### Export and import
-
-<img src="docs/media/export.png" alt="Export dialog with CSV, TSV, Excel, JSON, SQL, Markdown and HTML formats" width="100%" />
-
-- Export streams CSV, TSV, Excel, JSON, SQL `INSERT`s (batched, in each dialect), Markdown and HTML. You get progress,
-  can cancel, and can open the folder when it finishes.
-- Import CSV/TSV with column mapping, in a single transaction.
-
-### AI assistant and MCP server
+- **Fast by design.** One session per tab, each on its own thread: a slow query never blocks the rest. Results come
+  in pages from an open cursor, the grid is drawn on a canvas, and 200,000 rows load in about two seconds.
+- **An editor that knows your schema.** Completion offers tables after `FROM`/`JOIN`, the columns of the tables in
+  the statement everywhere else, and `alias.` or `schema.` narrow the list. **Ctrl+click** (or F4 / Ctrl+B) on a
+  table opens it. The statement under the caret is highlighted; Ctrl+Enter runs it.
+- **Tables you can explore.** Filter chips per column (equals, contains, between, value lists…), your own `WHERE`
+  and `ORDER BY` with live help (it warns when `"text"` would be read as a column name and fixes it in one click),
+  sorting on the server and an exact count on demand. Edit cells and save everything in one transaction.
+- **Foreign keys you can follow.** FK columns are marked in the header; Ctrl+click a value to open the referenced
+  row, or open the referenced table from the *Claves* tab.
+- **Never frozen.** Long operations show Gib at his laptop with live progress and **Cancelar**: loading every row
+  stops after the chunk in flight and keeps what arrived; server queries are cancelled on the server.
+- **Export and import.** Stream CSV, TSV, Excel, JSON, SQL `INSERT`s, Markdown or HTML straight to disk; import
+  CSV/TSV with column mapping in a single transaction.
+- **AI with permissions.** An assistant that writes, explains, fixes and optimises SQL with Claude using your schema,
+  never your rows. An **MCP server** (`celer.exe --mcp`) lets Claude Desktop, Claude Code and other clients use your
+  connections with a permission level per connection, row and time limits, masked columns and an audit log.
+- **Bring your connections.** Import them from **DBeaver** (saved passwords included, if you want) and
+  **DbVisualizer**, with folders and production flags. Drag connections between folders in the explorer.
+- **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift), a guided
+  tour, and **Gib**: he thinks while queries run, has an idea when a long one finishes and shares tips.
+- **Updates in the app.** Celer checks GitHub for new releases, shows what's new and installs them in one click,
+  after verifying the download against the release's SHA-256 sums.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/ai.png" alt="AI assistant panel" /></td>
-    <td width="50%"><img src="docs/media/mcp.png" alt="MCP permissions per connection" /></td>
+    <td width="50%"><img src="docs/media/hero.png" alt="SQL console with a join and its results" /><br/><sub>Console, explorer and results</sub></td>
+    <td width="50%"><img src="docs/media/completion.png" alt="Completion offering the columns of the statement's tables" /><br/><sub>Completion with the statement's columns</sub></td>
   </tr>
-</table>
-
-- **Assistant** (`Ctrl+Alt+I`): ask in plain language, or explain, fix and optimise the current query with Claude.
-  It receives the schema, never row data, and you insert, replace or run its SQL with one click.
-- **MCP server** (`celer.exe --mcp`): lets Claude Desktop, Claude Code and other MCP clients use your connections.
-  - Each connection has a level: none, schema, read or write.
-  - Limits on rows and time, and masking of sensitive columns.
-  - An audit log of every request.
-
-  See [docs/AI_MCP.md](docs/AI_MCP.md).
-
-### Themes, guide and Gib
-
-<table>
   <tr>
-    <td width="50%"><img src="docs/media/light.png" alt="Celer light theme" /></td>
-    <td width="50%"><img src="docs/media/guide.png" alt="Start-up guide with Gib" /></td>
+    <td><img src="docs/media/table.png" alt="Table viewer with a filter chip" /><br/><sub>Table viewer with column filters</sub></td>
+    <td><img src="docs/media/keys.png" alt="Keys tab with a button to open the referenced table" /><br/><sub>Foreign keys: jump to the referenced table or row</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/busy.png" alt="Gib at his laptop while 200,000 rows load, with a Cancel button" /><br/><sub>Loading 200,000 rows, cancellable</sub></td>
+    <td><img src="docs/media/palette.png" alt="Command palette" /><br/><sub>Command palette</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/ai.png" alt="AI assistant panel" /><br/><sub>AI assistant</sub></td>
+    <td><img src="docs/media/mcp.png" alt="MCP permissions per connection" /><br/><sub>MCP server with permissions per connection</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/export.png" alt="Export dialog" /><br/><sub>Streaming export</sub></td>
+    <td><img src="docs/media/light.png" alt="Light theme" /><br/><sub>Light theme</sub></td>
   </tr>
 </table>
 
-- Themes: Celer dark and light, Darcula, Fjord, Sand, two high-contrast themes, or follow the system. Choose compact or
-  comfortable density.
-- A start-up guide: pick a theme, connect or create a sample database, then follow a spotlight tour of the interface.
-- **Gib** lives in the status bar.
-  - He thinks while a query runs, has an idea when a long one finishes and shrugs at errors.
-  - He offers tips based on how you work.
-  - Click him for a tip, or turn him off in Settings.
+## Installation
+
+1. Download **`Celer-Setup-x.y.z.exe`** from the [latest release](https://github.com/e-omunoz/celer/releases/latest)
+   and run it.
+2. Choose the folder and shortcuts (or just click *Instalar*).
+3. Open Celer: a short guide shows you around and can create a sample database to play with.
+
+Celer installs to `%LOCALAPPDATA%\Programs\Celer`, adds a Start menu entry and appears in *Settings › Apps* for
+uninstalling. It runs on Windows 10 and 11 (WebView2, included with Windows). To update, accept the notice in the
+app, or run a newer installer.
+
+Because the executables are not code-signed yet, SmartScreen may warn the first time (*More info › Run anyway*).
+Every release can be verified with its `SHA256SUMS.txt`, as described in [SECURITY.md](SECURITY.md).
+
+Also in every release: `Celer-x.y.z-portable.exe` (runs without installing) and `Celer-x.y.z-nsis-setup.exe`
+(classic installer).
+
+### Deploying in an organization
+
+Every release includes `Celer-x.y.z-x64.msi`, a Windows Installer package for Intune, Configuration Manager or any
+other deployment tool. It installs per machine (administrator rights) under *Program Files*.
+
+| | |
+|---|---|
+| Install | `msiexec /i Celer-x.y.z-x64.msi /qn` |
+| Uninstall | `msiexec /x Celer-x.y.z-x64.msi /qn` (or from *Settings › Apps*) |
+| Upgrade | Deploy the newer MSI; settings and connections are kept |
+| Updates | Copies installed with the MSI don't update themselves: the app points to the new package instead |
+
+<details>
+<summary>Silent installation with Celer Setup</summary>
+
+```bat
+Celer-Setup-x.y.z.exe --silent [--dir "C:\Tools\Celer"] [--desktop] [--no-start-menu] [--associate-sql] [--launch]
+"%LOCALAPPDATA%\Programs\Celer\uninstall.exe" --uninstall --silent [--purge-data]
+```
+
+The exit code is 0 on success; errors are written to `%TEMP%\celer-setup.log`.
+</details>
 
 ## Databases
 
 | Engine | Driver | Status |
 |---|---|---|
-| PostgreSQL | native (server-side cursors, cancel, full DDL) | ✅ |
-| MySQL / MariaDB | native (streaming, `KILL QUERY`, `DELIMITER`) | ✅ |
-| SQL Server | native (TDS) | ✅ |
+| PostgreSQL | native: server-side cursors, cancel, full DDL | ✅ |
+| MySQL / MariaDB | native: streaming, `KILL QUERY`, `DELIMITER` | ✅ |
+| SQL Server | native (TDS), Windows authentication | ✅ |
 | SQLite | embedded | ✅ |
 | Informix | IBM CLI / Client SDK, loaded on demand | ✅ |
 | Any ODBC source | ODBC driver manager | ✅ |
-| Oracle, Db2, libSQL / Turso | — | 🟡 planned |
-| DuckDB, ClickHouse, Snowflake, BigQuery, Redshift, Trino… | — | 🟡 planned |
+| Oracle, Db2, DuckDB, ClickHouse, Snowflake… | — | planned |
 
-The full matrix, connection strategies and licensing are in [docs/DRIVERS.md](docs/DRIVERS.md).
+## Keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Enter` / `Ctrl+Shift+Enter` | Run the statement / the whole script |
+| `Ctrl+click` · `F4` · `Ctrl+B` | Open the table under the caret (in the SQL) |
+| `Ctrl+click` on an FK value | Open the referenced row |
+| `Shift` `Shift` · `Ctrl+K` | Search tables, tabs and actions |
+| `Ctrl+N` | Go to table |
+| `Ctrl+Shift+A` | Actions |
+| `Ctrl+Shift+L` | New console |
+| `Ctrl+Alt+N` | New connection |
+| `Ctrl+Alt+L` | Format SQL |
+| `Ctrl+Shift+E` | Execution plan |
+| `Ctrl+F2` | Stop |
+| `Ctrl+Alt+I` | AI assistant |
+| `Ctrl+Alt+E` | History |
+| `Ctrl+Alt+S` | Settings |
+| `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
+
+## Privacy and security
+
+- No accounts, no telemetry. Your data never leaves the computer unless you ask for it.
+- Passwords and the AI key live in the operating system's credential store, never in files.
+- Network access beyond your databases is limited to: the update check against the GitHub Releases API (it sends
+  nothing about you and can be turned off), the IBM driver download when you ask for it, and the AI assistant if you
+  configure your own key (it receives the schema, never row data).
+- The MCP server runs locally over stdio, is off by default and only sees what each connection's permission allows.
+- Read-only connections refuse writes, even hidden in a batch; production connections ask before risky statements.
+
+Details and how to report a vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Performance
 
 Measured on a laptop against the seeded PostgreSQL test database:
 
-| Workload | Result |
+| | |
 |---|---|
-| First page of 500 rows on screen | a few milliseconds after the server answers |
-| Load all 200,000 rows into the grid | 1.3 s |
-| Export 200,000 rows to CSV | streaming, memory stays flat |
-| Grid scrolling, 50 columns | 60 fps (canvas) |
+| First page of 500 rows | a few milliseconds after the server answers |
+| Load 200,000 rows into the grid | about 2 s, the window stays responsive |
+| Select all / copy 200,000 rows | ~40 ms / ~250 ms |
+| Export 200,000 rows to CSV | ~1 s, streaming to disk |
 
-Targets and method: [docs/ROADMAP.md](docs/ROADMAP.md#performance-targets).
+## Building from source
 
-## Keyboard shortcuts
-
-| Action | Keys |
-|---|---|
-| Run statement / script | `Ctrl+Enter` / `Ctrl+Shift+Enter` |
-| Execution plan | `Ctrl+Shift+E` |
-| Stop | `Ctrl+F2` |
-| Search everything | `Shift` `Shift` or `Ctrl+K` |
-| Go to table | `Ctrl+N` |
-| Actions | `Ctrl+Shift+A` |
-| New console | `Ctrl+Shift+L` |
-| New connection | `Ctrl+Alt+N` |
-| Format SQL | `Ctrl+Alt+L` |
-| AI assistant | `Ctrl+Alt+I` |
-| History | `Ctrl+Alt+E` |
-| Settings | `Ctrl+Alt+S` |
-| Commit / rollback | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` |
-
-## Build from source
-
-Requirements: [Rust](https://rustup.rs) (stable), [Node.js](https://nodejs.org) 20+, and on Windows the Visual Studio
+Requirements: [Rust](https://rustup.rs) (stable), [Node.js](https://nodejs.org) 20+ and, on Windows, the Visual Studio
 Build Tools with the C++ workload.
 
 ```bash
+git clone https://github.com/e-omunoz/celer
+cd celer
 npm install
 npm run tauri dev
 ```
 
-The same interface runs in a browser with `npm run dev`, against an in-memory SQLite demo.
+`npm run dev` runs the same interface in a browser against an in-memory SQLite demo. Releases are built with
+`dev\release.ps1` (see [CONTRIBUTING.md](CONTRIBUTING.md#releases)).
 
-```bash
-npm run tauri build
-```
-
-`npm run tauri build` builds the app; `dev/release.ps1` builds all the release files (see [CONTRIBUTING.md](CONTRIBUTING.md#releases)).
-
-<details>
-<summary>Project layout</summary>
-
-```
-src/                    Interface (SolidJS + TypeScript)
-  components/           Workspace, grid, explorer, dialogs, AI panel, guide
-  gib/                  Gib, the start-up splash and the status-bar companion
-src-tauri/src/          Rust core
-  session.rs            Driver trait and one session per thread
-  postgres.rs mysql.rs  Native PostgreSQL and MySQL/MariaDB drivers
-  mssql.rs sqlite.rs    SQL Server and SQLite drivers
-  odbc.rs odbc_driver.rs ODBC layer with dynamic loading (Informix, generic ODBC)
-  export.rs             Streaming export
-  mcp.rs                MCP server, permissions and audit log
-  store.rs              Connections, settings and history
-installer/              Celer Setup: custom installer and uninstaller (Tauri)
-docs/                   Architecture, design, drivers, roadmap, AI/MCP, brand
-dev/                    Test databases, end-to-end tests, media capture, release scripts
-```
-</details>
-
-## Documentation
-
-- [Architecture](docs/ARCHITECTURE.md): stack, sessions, paging, the `Driver` trait and persistence.
-- [Design](docs/DESIGN.md): the product and interface guide.
-- [Drivers](docs/DRIVERS.md): support matrix, connection strategies and test containers.
-- [AI and MCP](docs/AI_MCP.md): assistant, MCP server, permissions and privacy.
-- [Roadmap](docs/ROADMAP.md) and [status](STATUS.md).
+| Folder | Contents |
+|---|---|
+| `src/` | Interface (SolidJS + TypeScript): workspace, grid, editor, explorer, dialogs, AI panel, guide |
+| `src/gib/` | Gib, the start-up splash and the status-bar companion |
+| `src-tauri/src/` | Rust core: drivers, sessions, export, MCP server, updates, migration |
+| `installer/` | Celer Setup: the custom installer and uninstaller |
+| `docs/` | Architecture, design, drivers, roadmap, AI/MCP; `docs/media` is regenerated by `dev/readme-media.mjs` |
+| `dev/` | Test databases, end-to-end checks, media capture and release scripts |
 
 ## Contributing
 
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, conventions and how
-to run the tests. To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+Bug reports and ideas are welcome in [Issues](https://github.com/e-omunoz/celer/issues). Conventions, checks and how
+releases are made are in [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately as described
+in [SECURITY.md](SECURITY.md).
 
 <p align="center">
   <img src="docs/brand/app-icon.svg" alt="" width="44" /><br/>

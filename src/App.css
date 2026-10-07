@@ -510,6 +510,13 @@ kbd {
 .tree:focus .tree-row.selected { background: var(--selection); }
 .tree-row.group { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); padding-top: 6px; }
 .tree-row.group:hover { background: transparent; }
+/* Drag and drop of connections: a folder lights up, a connection shows an insertion line above it */
+.tree-row.group.drop-into { background: var(--accent-soft); color: var(--accent-text, var(--accent)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 6px; }
+.tree-row.conn { position: relative; }
+.folder-new { display: flex; align-items: center; gap: 4px; }
+.folder-new input { flex: 1; min-width: 0; }
+.tree-row.conn.drop-before::before { content: ""; position: absolute; left: 8px; right: 8px; top: -1px; height: 2px; border-radius: 1px; background: var(--accent); }
+.tree-row.conn.dragging { opacity: 0.45; }
 .tree-row.status { color: var(--text-faint); font-size: 12px; font-style: italic; overflow: hidden; text-overflow: ellipsis; }
 .tree-row.status.error { color: var(--danger); font-style: normal; }
 .tree-row.conn { font-weight: 500; }
@@ -1478,7 +1485,8 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .tour-blocker { position: fixed; inset: 0; z-index: 205; }
 .tour-spot {
   position: fixed; z-index: 206; border-radius: 12px; pointer-events: none;
-  box-shadow: 0 0 0 2px var(--accent), 0 0 0 9999px rgb(10 8 6 / 0.62), 0 0 40px 8px color-mix(in srgb, var(--accent) 35%, transparent);
+  /* The ring is inset: at a window edge an outer ring would fall off-screen and look cut. */
+  box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 18px color-mix(in srgb, var(--accent) 22%, transparent), 0 0 0 9999px rgb(10 8 6 / 0.62), 0 0 40px 8px color-mix(in srgb, var(--accent) 35%, transparent);
   transition: left 420ms var(--ease-out), top 420ms var(--ease-out), width 420ms var(--ease-out), height 420ms var(--ease-out);
 }
 .tour-bubble {

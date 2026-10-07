@@ -18,6 +18,7 @@ import {
   state,
   submitConnection,
   testConnection,
+  connectionFolders,
 } from "../state";
 import { ACCENTS, ENGINES, emptyConn, engineOf, type ConnConfig, type DbKind, type ThemeName } from "../types";
 import { CodeView } from "./Editor";
@@ -103,6 +104,42 @@ export function Dialog(props: { title: string; onClose: () => void; children: JS
 
 // ---------------------------------------------------------------- connection
 
+/**
+ * Folder of a connection: every existing folder, "Sin carpeta", or "Nueva carpeta…" to type one.
+ * (A <datalist> only suggests entries matching what is already typed, so other folders never showed.)
+ */
+function FolderPicker(props: { value: string; onChange: (folder: string) => void }) {
+  const NEW = "__celer_new_folder__";
+  const [typing, setTyping] = createSignal(Boolean(props.value) && !connectionFolders().includes(props.value));
+  return (
+    <Show
+      when={!typing()}
+      fallback={
+        <div class="folder-new">
+          <input value={props.value} placeholder="Nombre de la carpeta" ref={(el) => queueMicrotask(() => el.focus())} onInput={(event) => props.onChange(event.currentTarget.value)} />
+          <button type="button" class="icon-btn tiny" title="Elegir una carpeta existente" onClick={() => { setTyping(false); if (!connectionFolders().includes(props.value)) props.onChange(""); }}>
+            <X size={12} />
+          </button>
+        </div>
+      }
+    >
+      <select
+        onChange={(event) => {
+          const value = event.currentTarget.value;
+          if (value === NEW) {
+            setTyping(true);
+            props.onChange("");
+          } else props.onChange(value);
+        }}
+      >
+        <option value="" selected={!props.value}>Sin carpeta</option>
+        <For each={connectionFolders()}>{(folder) => <option value={folder} selected={folder === props.value}>{folder}</option>}</For>
+        <option value={NEW}>Nueva carpeta…</option>
+      </select>
+    </Show>
+  );
+}
+
 function ConnectionDialog(props: { cfg: ConnConfig }) {
   const [cfg, setCfg] = createSignal<ConnConfig>({ ...props.cfg });
   const [advanced, setAdvanced] = createSignal(false);
@@ -172,14 +209,11 @@ function ConnectionDialog(props: { cfg: ConnConfig }) {
               <span>Nombre</span>
               <input value={cfg().name} placeholder={autoName({ ...cfg(), name: "" })} onInput={(event) => set("name", event.currentTarget.value)} ref={(el) => queueMicrotask(() => el.focus())} />
             </label>
-            <label class="field" style={{ width: "150px" }}>
+            <label class="field" style={{ width: "170px" }}>
               <span>Carpeta</span>
-              <input value={cfg().folder} list="conn-folders" placeholder="—" onInput={(event) => set("folder", event.currentTarget.value)} />
+              <FolderPicker value={cfg().folder} onChange={(folder) => set("folder", folder)} />
             </label>
           </div>
-          <datalist id="conn-folders">
-            <For each={[...new Set(state.connections.map((conn) => conn.folder).filter(Boolean))]}>{(folder) => <option value={folder} />}</For>
-          </datalist>
 
           <Show when={kind() === "sqlite"}>
             <label class="field">

@@ -11,6 +11,7 @@ import {
   disconnect,
   duplicateConnection,
   generateSql,
+  moveConnection,
   openConnDialog,
   openMenu,
   openQuery,
@@ -30,6 +31,25 @@ import { startImport } from "../importer";
 import { engineOf } from "../types";
 
 const ROW = 24;
+
+// Drag and drop of connections between folders (and to reorder them).
+const CONN_MIME = "application/x-celer-connection";
+const [dropOver, setDropOver] = createSignal<string | null>(null);
+const [dragging, setDragging] = createSignal<string | null>(null);
+function acceptConnDrop(event: DragEvent, key: string) {
+  if (!event.dataTransfer?.types.includes(CONN_MIME)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  setDropOver(key);
+}
+function dropConn(event: DragEvent, folder: string, beforeId?: string) {
+  const id = event.dataTransfer?.getData(CONN_MIME);
+  setDropOver(null);
+  setDragging(null);
+  if (!id) return;
+  event.preventDefault();
+  void moveConnection(id, folder, beforeId);
+}
 
 type Row =
   | { type: "group"; key: string; name: string; depth: 0 }
@@ -85,6 +105,8 @@ export function Sidebar() {
         out.push(...children);
       }
     }
+    // While dragging, offer "Sin carpeta" as a target even when every connection is in a folder.
+    if (dragging() && grouped && !groups.has("")) out.push({ type: "group", key: "g:", name: "Sin carpeta", depth: 0 });
     return out;
   }
 
@@ -343,7 +365,20 @@ function TreeRow(props: {
   const indent = () => 6 + props.row.depth * 14;
   const row = props.row;
   if (row.type === "group") {
-    return <div class="tree-row group" style={{ "padding-left": `${indent()}px` }}>{row.name}</div>;
+    // Drop a connection on a folder header to move it there.
+    const folder = row.key.slice(2);
+    return (
+      <div
+        class="tree-row group"
+        classList={{ "drop-into": dropOver() === row.key }}
+        style={{ "padding-left": `${indent()}px` }}
+        onDragOver={(event) => acceptConnDrop(event, row.key)}
+        onDragLeave={() => setDropOver(null)}
+        onDrop={(event) => dropConn(event, folder)}
+      >
+        {row.name}
+      </div>
+    );
   }
   if (row.type === "status") {
     return <div class="tree-row status" classList={{ error: row.error }} style={{ "padding-left": `${indent() + 20}px` }} title={row.text}>{row.error ? `⚠ ${row.text}` : row.text}</div>;
@@ -356,10 +391,25 @@ function TreeRow(props: {
     return (
       <div
         class="tree-row conn"
-        classList={{ selected: props.selected, connected: connected() }}
+        classList={{ selected: props.selected, connected: connected(), "drop-before": dropOver() === row.key, dragging: dragging() === conn.id }}
         style={{ "padding-left": `${indent()}px` }}
         role="treeitem"
         aria-expanded={Boolean(open())}
+        draggable={true}
+        onDragStart={(event) => {
+          event.dataTransfer?.setData(CONN_MIME, conn.id);
+          event.dataTransfer?.setData("text/plain", conn.name);
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          setDragging(conn.id);
+        }}
+        onDragEnd={() => {
+          setDragging(null);
+          setDropOver(null);
+        }}
+        // Dropping on a connection moves the dragged one to its folder, right above it.
+        onDragOver={(event) => acceptConnDrop(event, row.key)}
+        onDragLeave={() => setDropOver(null)}
+        onDrop={(event) => dropConn(event, conn.folder || "", conn.id)}
         onMouseDown={props.onSelect}
         onDblClick={() => (connected() ? toggleConnection(conn.id) : void connect(conn.id))}
         onContextMenu={(event) => {

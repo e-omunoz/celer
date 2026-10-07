@@ -212,20 +212,20 @@
       <text x="756" y="78" fill="#BDB5AA" font-size="13">Postgres local · celer</text>
       <text x="1150" y="78" fill="#6F6862" font-size="13" text-anchor="end">Ctrl+Enter</text>
 
-      <text class="mono" x="740" y="118" font-size="14"><tspan fill="#E8885A">SELECT</tspan><tspan fill="#E6E0D8"> id, kind, customer_id, amount </tspan><tspan fill="#E8885A">FROM</tspan><tspan fill="#E6E0D8"> events</tspan></text>
+      <text class="mono" x="740" y="118" font-size="14"><tspan fill="#E8885A">SELECT</tspan><tspan fill="#E6E0D8"> id, kind, amount </tspan><tspan fill="#E8885A">FROM</tspan><tspan fill="#E6E0D8"> events</tspan></text>
       <text class="mono" x="740" y="140" font-size="14"><tspan fill="#E8885A">WHERE</tspan><tspan fill="#E6E0D8"> kind </tspan><tspan fill="#E8885A">IN</tspan><tspan fill="#E6E0D8"> (</tspan><tspan fill="#A7C080">'click'</tspan><tspan fill="#E6E0D8">, </tspan><tspan fill="#A7C080">'purchase'</tspan><tspan fill="#E6E0D8">);</tspan><tspan class="caret" fill="#F26B2A">▍</tspan></text>
 
       <rect class="scan" x="720" y="152" width="120" height="2" fill="url(#glow)"/>
       <rect x="720" y="156" width="452" height="26" fill="#2A2725"/>
       <g class="mono" font-size="12.5" fill="#8F877D" font-weight="600">
-        <text x="740" y="173">id</text><text x="812" y="173">kind</text><text x="910" y="173">customer_id</text><text x="1018" y="173" text-anchor="end">amount</text>
+        <text x="740" y="173">id</text><text x="830" y="173">kind</text><text x="990" y="173" text-anchor="end">amount</text>
       </g>
       <g class="mono" font-size="12.5" fill="#D8D1C8">
-        <g class="row" style="animation-delay:0s"><text x="740" y="200">200000</text><text x="812" y="200">purchase</text><text x="910" y="200">481</text><text x="1018" y="200" text-anchor="end">89.90</text></g>
-        <g class="row" style="animation-delay:.12s"><rect x="720" y="208" width="452" height="24" fill="#FFFFFF" fill-opacity=".025"/><text x="740" y="224">199998</text><text x="812" y="224">click</text><text x="910" y="224">120</text><text x="1018" y="224" text-anchor="end" fill="#7A736C" font-style="italic">NULL</text></g>
-        <g class="row" style="animation-delay:.24s"><text x="740" y="248">199997</text><text x="812" y="248">purchase</text><text x="910" y="248">77</text><text x="1018" y="248" text-anchor="end">249.00</text></g>
-        <g class="row" style="animation-delay:.36s"><rect x="720" y="256" width="452" height="24" fill="#FFFFFF" fill-opacity=".025"/><text x="740" y="272">199995</text><text x="812" y="272">click</text><text x="910" y="272">339</text><text x="1018" y="272" text-anchor="end" fill="#7A736C" font-style="italic">NULL</text></g>
-        <g class="row" style="animation-delay:.48s"><text x="740" y="296">199994</text><text x="812" y="296">purchase</text><text x="910" y="296">256</text><text x="1018" y="296" text-anchor="end">12.50</text></g>
+        <g class="row" style="animation-delay:0s"><text x="740" y="200">200000</text><text x="830" y="200">purchase</text><text x="990" y="200" text-anchor="end">89.90</text></g>
+        <g class="row" style="animation-delay:.12s"><rect x="720" y="208" width="452" height="24" fill="#FFFFFF" fill-opacity=".025"/><text x="740" y="224">199998</text><text x="830" y="224">click</text><text x="990" y="224" text-anchor="end" fill="#7A736C" font-style="italic">NULL</text></g>
+        <g class="row" style="animation-delay:.24s"><text x="740" y="248">199997</text><text x="830" y="248">purchase</text><text x="990" y="248" text-anchor="end">249.00</text></g>
+        <g class="row" style="animation-delay:.36s"><rect x="720" y="256" width="452" height="24" fill="#FFFFFF" fill-opacity=".025"/><text x="740" y="272">199995</text><text x="830" y="272">click</text><text x="990" y="272" text-anchor="end" fill="#7A736C" font-style="italic">NULL</text></g>
+        <g class="row" style="animation-delay:.48s"><text x="740" y="296">199994</text><text x="830" y="296">purchase</text><text x="990" y="296" text-anchor="end">12.50</text></g>
       </g>
       <rect x="720" y="326" width="452" height="30" fill="#2A2725"/>
       <g class="status"><circle cx="742" cy="341" r="4" fill="#7BC47F"/><text x="754" y="346" fill="#BDB5AA" font-size="12.5">500+ rows · 4 ms · streaming</text></g>
