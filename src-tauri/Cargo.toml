@@ -30,8 +30,8 @@ anyhow = "1"
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 uuid = { version = "1", features = ["v4"] }
 rust_xlsxwriter = { version = "0.99", default-features = false }
-ureq = "2"
-sha2 = "0.10"
+ureq = "3"
+sha2 = "0.11"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 dirs = "7"
 # Servidor MCP: patrón de columnas sensibles (src/mcp.rs)
@@ -45,7 +45,7 @@ postgres-native-tls = "0.5"
 native-tls = "0.2"
 rust_decimal = { version = "1", features = ["db-postgres"] }
 # MySQL / MariaDB — owned by src/mysql.rs
-mysql = { version = "25", default-features = false, features = ["minimal-rust", "native-tls"] }
+mysql = { version = "28", default-features = false, features = ["minimal-rust", "native-tls"] }
 
 [profile.dev]
 debug = "line-tables-only"
