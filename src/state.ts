@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
@@ -248,7 +248,7 @@ export const [resolvedTheme, setResolvedTheme] = createSignal<Exclude<ThemeName,
 
 /** Things Gib reacts to. The companion decides how (mood, tip, nothing). */
 export interface GibEvent {
-  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running";
+  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off";
   at: number;
   ms?: number;
   detail?: string;
@@ -551,7 +551,7 @@ export async function removeConnection(id: string) {
   if (!conn) return;
   const ok = await confirmDialog(`Eliminar «${conn.name}»`, "Se borrará la conexión y su contraseña guardada. Las consolas abiertas se quedarán sin conexión.", "Eliminar", true);
   if (!ok) return;
-  await disconnect(id);
+  await disconnect(id, false);
   await api().deleteConnection(id);
   await refreshConnections();
 }
@@ -608,10 +608,16 @@ export async function connect(connId: string, password?: string) {
     setState("passwords", connId, typed);
   }
   const pwd = state.passwords[connId];
+  const generation = connectGeneration(connId);
   setState("connecting", connId, true);
   try {
     const opened = await api().openSession(connId, pwd);
     const databases = await api().listDatabases(opened.sessionId).catch(() => [] as string[]);
+    // Disconnected while this was connecting: drop the new session instead of bringing the connection back.
+    if (connectGeneration(connId) !== generation) {
+      void api().closeSession(opened.sessionId).catch(() => {});
+      return;
+    }
     setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases });
     try {
       localStorage.setItem(`celer.server.${connId}`, opened.serverInfo.slice(0, 120));
@@ -638,9 +644,9 @@ export async function connect(connId: string, password?: string) {
     gib("connect-failed", { detail: message });
     // Forget a typed password that did not work, so the next attempt asks again.
     if (!conn.hasPassword) {
-      const passwords = { ...state.passwords };
-      delete passwords[connId];
-      setState("passwords", passwords);
+      setState(produce((draft) => {
+        delete draft.passwords[connId];
+      }));
     }
     if (message.includes("IBM_DRIVER_MISSING")) setState("settingsOpen", true);
   } finally {
@@ -665,25 +671,58 @@ async function autoExpand(connId: string) {
   if (tables && !tables.leaf) await loadChildren(connId, tables.path, true);
 }
 
-export async function disconnect(connId: string) {
-  const session = state.sessions[connId];
-  if (session) await api().closeSession(session.metaId).catch(() => {});
-  for (const tab of state.tabs) {
-    if (tab.connId === connId && tab.sessionId) await api().closeSession(tab.sessionId).catch(() => {});
+/** Bumped by every disconnect: a connect() still in flight from before must not resurrect the connection. */
+const generations: Record<string, number> = {};
+const connectGeneration = (connId: string) => generations[connId] ?? 0;
+
+/**
+ * Closes every session of a connection and forgets it in the UI. Open transactions and unsaved table edits are
+ * confirmed first (they would be lost); consoles and tables stay open and reconnect on their next run or reload.
+ */
+export async function disconnect(connId: string, confirm = true) {
+  const affected = state.tabs.filter((tab) => tab.connId === connId);
+  const inTransaction = affected.filter((tab) => tab.kind === "sql" && tab.inTransaction).length;
+  const dirty = affected.filter((tab) => tab.kind === "table" && tableDirty(tab)).length;
+  if (confirm && (inTransaction || dirty)) {
+    const lost = [
+      inTransaction ? `${inTransaction} ${inTransaction === 1 ? "consola con una transacción abierta (se deshará)" : "consolas con transacciones abiertas (se desharán)"}` : "",
+      dirty ? `${dirty} ${dirty === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}` : "",
+    ].filter(Boolean);
+    const ok = await confirmDialog(`Desconectar «${connectionById(connId)?.name ?? ""}»`, `Hay ${lost.join(" y ")}. Si desconectas se perderán.`, "Desconectar", true);
+    if (!ok) return;
   }
-  const sessions = { ...state.sessions };
-  delete sessions[connId];
-  setState("sessions", sessions);
+  generations[connId] = connectGeneration(connId) + 1;
+  // The UI forgets the connection at once; the sessions close behind it.
   setState(
-    "tabs",
-    // Consoles reopen a session on their next run; table tabs reopen one on reload.
-    state.tabs.map((tab) => (tab.connId !== connId ? tab : tab.kind === "sql" ? { ...tab, sessionId: null, inTransaction: false } : { ...tab, sessionId: "" })) as Tab[],
+    produce((draft) => {
+      delete draft.sessions[connId];
+      delete draft.connecting[connId];
+      for (const key of Object.keys(draft.tree)) {
+        if (key.startsWith(`${connId}\u0000`)) delete draft.tree[key];
+      }
+      // A selected node inside this connection goes away: select the connection row instead.
+      if (draft.treeSelected.startsWith(`n:${connId}\u0000`)) draft.treeSelected = `c:${connId}`;
+      for (const tab of draft.tabs) {
+        if (tab.connId !== connId) continue;
+        // Consoles reopen a session on their next run; table tabs on reload. Pending pages are gone with the cursor.
+        if (tab.kind === "sql") {
+          tab.sessionId = null;
+          tab.inTransaction = false;
+          tab.running = false;
+          tab.results = tab.results.map((result) => (result.hasMore ? { ...result, hasMore: false } : result));
+        } else {
+          tab.sessionId = "";
+          tab.loading = false;
+          tab.hasMore = false;
+          tab.edits = {};
+          tab.deleted = [];
+          tab.inserts = [];
+        }
+      }
+    }),
   );
-  const tree = { ...state.tree };
-  for (const key of Object.keys(tree)) {
-    if (key.startsWith(`${connId}\u0000`)) delete tree[key];
-  }
-  setState("tree", tree);
+  await api().closeConnectionSessions(connId).catch(() => 0);
+  persistSoon();
 }
 
 // ---------------------------------------------------------------- explorer
@@ -693,11 +732,13 @@ export async function loadChildren(connId: string, path: string[], open = true) 
   if (!session) return;
   const key = pathKey(connId, path);
   setState("tree", key, { open, status: "loading", nodes: state.tree[key]?.nodes ?? [] });
+  // A disconnect (or reconnect) while this loads: its answer belongs to a session that is gone.
+  const stale = () => state.sessions[connId]?.metaId !== session.metaId;
   try {
     const nodes = await api().metaChildren(session.metaId, path);
-    setState("tree", key, { open, status: "ready", nodes });
+    if (!stale()) setState("tree", key, { open, status: "ready", nodes });
   } catch (err) {
-    setState("tree", key, { open, status: "error", nodes: [], error: errorText(err) });
+    if (!stale()) setState("tree", key, { open, status: "error", nodes: [], error: errorText(err) });
   }
 }
 
@@ -807,6 +848,11 @@ async function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
   if (fresh.sessionId) return fresh;
   const pwd = state.passwords[fresh.connId!];
   const opened = await api().openSession(fresh.connId!, pwd);
+  // Disconnected meanwhile: do not attach a session to a connection the explorer shows as closed.
+  if (!state.sessions[fresh.connId!]) {
+    void api().closeSession(opened.sessionId).catch(() => {});
+    throw new Error("La conexión se ha cerrado");
+  }
   const wanted = fresh.database && fresh.database !== opened.database ? fresh.database : "";
   let database = opened.database;
   if (wanted) database = await api().useDatabase(opened.sessionId, wanted).catch(() => opened.database);
@@ -1137,6 +1183,21 @@ export async function switchDatabase(database: string) {
 
 // ---------------------------------------------------------------- table viewer
 
+/** Opens a new session for a table tab (connecting first if needed) and selects its database. */
+async function reopenTableSession(tabId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "table") throw new Error("La pestaña ya no existe");
+  const opened = await openSessionFor(tab.connId);
+  if (!opened) throw new Error("Sin conexión");
+  if (tabIndex(tabId) < 0) {
+    void api().closeSession(opened.sessionId).catch(() => {});
+    throw new Error("La pestaña ya no existe");
+  }
+  patchTab(tabId, { sessionId: opened.sessionId });
+  if (tab.obj.database) await api().useDatabase(opened.sessionId, tab.obj.database).catch(() => {});
+  return opened.sessionId;
+}
+
 async function openSessionFor(connId: string) {
   if (!state.sessions[connId]) await connect(connId);
   if (!state.sessions[connId]) return null;
@@ -1252,12 +1313,7 @@ export async function reloadTable(tabId: string, full = false) {
   let select = "";
   try {
     // After a disconnect the tab has no session: open a new one (connecting first if needed).
-    if (!tab.sessionId) {
-      const opened = await openSessionFor(tab.connId);
-      if (!opened) throw new Error("Sin conexión");
-      patchTab(tabId, { sessionId: opened.sessionId });
-      if (tab.obj.database) await api().useDatabase(opened.sessionId, tab.obj.database).catch(() => {});
-    }
+    if (!tab.sessionId) await reopenTableSession(tabId);
     let current = state.tabs[tabIndex(tabId)] as TableTab;
     const sid = current.sessionId;
     if (full || !current.baseSelect) {
@@ -1579,7 +1635,8 @@ export async function saveTable(tabId: string) {
     previewRun: async () => {
       const current = state.tabs[tabIndex(tabId)];
       if (!current || current.kind !== "table") return;
-      const session = current.sessionId;
+      // After a disconnect the tab has no session: reconnect instead of failing with "session not found".
+      const session = current.sessionId || (await reopenTableSession(tabId));
       // All changes apply atomically: one transaction, rolled back if any statement fails.
       await api().closeCursor(session).catch(() => {});
       await api().setAutocommit(session, false);

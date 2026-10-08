@@ -225,6 +225,17 @@ fn close_session(state: State<'_, Arc<AppState>>, session_id: String) {
     }
 }
 
+/// Disconnect: closes every session of a connection (explorer, consoles, tables, exports, temporary ones) and
+/// returns how many there were.
+#[tauri::command]
+fn close_connection_sessions(state: State<'_, Arc<AppState>>, conn_id: String) -> usize {
+    let closed = state.sessions.remove_for_conn(&conn_id);
+    for h in &closed {
+        h.cancel();
+    }
+    closed.len()
+}
+
 #[tauri::command]
 async fn execute(
     state: State<'_, Arc<AppState>>,
@@ -679,16 +690,26 @@ pub fn run_mcp() -> i32 {
     mcp::serve_stdio()
 }
 
+/// Debug builds only: `CELER_DATA_DIR` points the app at a separate data folder, so automated tests never touch
+/// the configuration of an installed copy.
+fn dev_data_dir() -> Option<std::path::PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("CELER_DATA_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let dir = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("celer"));
+            let dir = dev_data_dir().unwrap_or_else(|| {
+                app.path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir().join("celer"))
+            });
             let store = Store::new(dir.clone());
             let conns = store.load_connections();
             let mcp = mcp::McpServer::new(dir, true);
@@ -718,6 +739,7 @@ pub fn run() {
             test_connection,
             open_session,
             close_session,
+            close_connection_sessions,
             execute,
             fetch,
             close_cursor,

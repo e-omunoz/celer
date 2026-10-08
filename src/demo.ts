@@ -438,6 +438,16 @@ export function createDemoBackend(): Backend {
     async closeSession(sessionId) {
       sessions.delete(sessionId);
     },
+    async closeConnectionSessions(connId) {
+      let closed = 0;
+      for (const [sid, session] of sessions) {
+        if (session.connId === connId) {
+          sessions.delete(sid);
+          closed++;
+        }
+      }
+      return closed;
+    },
     async execute(sessionId, sql, fetch) {
       const session = requireSession(sessionId);
       if (loadConns().find((item) => item.id === session.connId)?.readOnly && /^\s*(insert|update|delete|drop|alter|create)\b/i.test(sql)) {

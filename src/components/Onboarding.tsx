@@ -16,7 +16,7 @@ import {
   setState,
   state,
 } from "../state";
-import { openMigration } from "../migrate";
+import { migration, openMigration } from "../migrate";
 import { ACCENTS, emptyConn, ENGINES, type ThemeName } from "../types";
 import { errorText } from "../api";
 
@@ -45,7 +45,7 @@ const TOUR: Spot[] = [
   { selector: ".pane-host.active .results", title: "Resultados", body: "Millones de filas sin bloquear nada: se leen por páginas. Selecciona celdas para ver suma y media abajo, Ctrl+F para buscar, clic derecho para copiar como CSV, JSON, INSERT…" },
   { selector: ".search-trigger", title: "Buscar en todo", body: "Pulsa Mayús dos veces (o Ctrl+K) para saltar a cualquier tabla, pestaña o acción. Ctrl+N va directo a una tabla." },
   { selector: ".stripe-btn[title^='Asistente']", title: "Asistente de IA", body: "Genera, explica, corrige y optimiza SQL con Claude usando tu esquema real, nunca tus filas. Y desde Ajustes › IA, un servidor MCP con permisos por conexión." },
-  { selector: ".companion .gib", title: "Gib", body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan. Haz clic para un consejo; doble clic si te caigo bien." },
+  { selector: ".companion .gib", title: "Gib", body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan; si no hay nada que hacer, me entretengo a mi manera. No me persigas con el ratón, que me molesta. ¿Consejos? «Gib: un consejo» en la paleta." },
 ];
 
 const KEYS: [string, string][] = [
@@ -115,6 +115,8 @@ export function Onboarding() {
   onMount(() => {
     const onResize = () => step() === "tour" && measure();
     const onKey = (event: KeyboardEvent) => {
+      // The import assistant opened from the guide owns the keyboard until it closes.
+      if (migration.open) return;
       if (event.key === "Escape") {
         event.stopPropagation();
         if (step() === "tour") setStep("keys");
@@ -207,187 +209,190 @@ export function Onboarding() {
     }
   }
 
+  // While the import assistant is open the guide steps aside; it comes back on this same step afterwards.
   return (
-    <Show
-      when={step() === "tour"}
-      fallback={
-        <>
-          <div class="scrim onb-scrim" />
-          <div class="onboarding" role="dialog" aria-label="Guía de inicio">
-            <aside class="onb-stage">
-              <div class="onb-glow" />
-              <div class="onb-brand"><Mark size={18} /><span>Celer</span></div>
-              <div class="onb-gib"><Gib size={120} pose="poker" mood={mood()} /></div>
-              <ol class="onb-steps">
-                <For each={STEPS}>
-                  {(item, i) => (
-                    <li classList={{ done: i() < index(), current: i() === index() }}>
-                      <span class="dot">{i() < index() ? <Check size={10} stroke-width={3} /> : i() + 1}</span>
-                      {item.label}
-                    </li>
-                  )}
-                </For>
-              </ol>
-            </aside>
-            <section class="onb-body">
-              <button type="button" class="icon-btn onb-close" title="Saltar la guía (Esc)" onClick={() => close(false)}><X size={15} /></button>
-              <div class="onb-content">
-                <Switch>
-                  <Match when={step() === "welcome"}>
-                    <div class="onb-screen">
-                      <h1>Bienvenido a Celer.</h1>
-                      <p class="onb-lead">Soy Gib. En un minuto te enseño lo esencial: cómo se ve, cómo conectar, dónde está cada cosa y los atajos que te harán volar.</p>
-                      <div class="onb-cards">
-                        <div class="onb-card"><Palette size={16} /><b>Tu estilo</b><small>Temas claros, oscuros y de alto contraste.</small></div>
-                        <div class="onb-card"><Database size={16} /><b>Tus datos</b><small>Conecta o prueba con una base de ejemplo.</small></div>
-                        <div class="onb-card"><MousePointerClick size={16} /><b>Recorrido</b><small>Te señalo cada parte de la interfaz.</small></div>
+    <Show when={!migration.open}>
+      <Show
+        when={step() === "tour"}
+        fallback={
+          <>
+            <div class="scrim onb-scrim" />
+            <div class="onboarding" role="dialog" aria-label="Guía de inicio">
+              <aside class="onb-stage">
+                <div class="onb-glow" />
+                <div class="onb-brand"><Mark size={18} /><span>Celer</span></div>
+                <div class="onb-gib"><Gib size={120} pose="poker" mood={mood()} /></div>
+                <ol class="onb-steps">
+                  <For each={STEPS}>
+                    {(item, i) => (
+                      <li classList={{ done: i() < index(), current: i() === index() }}>
+                        <span class="dot">{i() < index() ? <Check size={10} stroke-width={3} /> : i() + 1}</span>
+                        {item.label}
+                      </li>
+                    )}
+                  </For>
+                </ol>
+              </aside>
+              <section class="onb-body">
+                <button type="button" class="icon-btn onb-close" title="Saltar la guía (Esc)" onClick={() => close(false)}><X size={15} /></button>
+                <div class="onb-content">
+                  <Switch>
+                    <Match when={step() === "welcome"}>
+                      <div class="onb-screen">
+                        <h1>Bienvenido a Celer.</h1>
+                        <p class="onb-lead">Soy Gib. En un minuto te enseño lo esencial: cómo se ve, cómo conectar, dónde está cada cosa y los atajos que te harán volar.</p>
+                        <div class="onb-cards">
+                          <div class="onb-card"><Palette size={16} /><b>Tu estilo</b><small>Temas claros, oscuros y de alto contraste.</small></div>
+                          <div class="onb-card"><Database size={16} /><b>Tus datos</b><small>Conecta o prueba con una base de ejemplo.</small></div>
+                          <div class="onb-card"><MousePointerClick size={16} /><b>Recorrido</b><small>Te señalo cada parte de la interfaz.</small></div>
+                        </div>
                       </div>
-                    </div>
-                  </Match>
+                    </Match>
 
-                  <Match when={step() === "look"}>
-                    <div class="onb-screen">
-                      <h2>¿Cómo te gusta?</h2>
-                      <p class="onb-lead">Se aplica al momento. Lo puedes cambiar cuando quieras en Ajustes o con el botón ☀ de arriba.</p>
-                      <div class="onb-themes">
-                        <For each={themeChoices.filter((t) => ["dark", "light", "darcula", "system"].includes(t.id))}>
-                          {(theme) => (
-                            <button type="button" class="theme-card" classList={{ on: state.settings.theme === theme.id }} onClick={() => void saveSettings({ theme: theme.id as ThemeName })}>
-                              <div class="theme-preview" data-theme-preview={theme.id === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme.id}>
-                                <div class="tp-side"><i /><i /><i class="t" /><i class="t" /><i /></div>
-                                <div class="tp-main">
-                                  <div class="tp-code"><span class="k">SELECT</span> <span class="n">id</span>, <span class="f">count</span>(*)<br /><span class="k">FROM</span> <span class="t">orders</span></div>
-                                  <div class="tp-grid"><i /><i /><i /></div>
+                    <Match when={step() === "look"}>
+                      <div class="onb-screen">
+                        <h2>¿Cómo te gusta?</h2>
+                        <p class="onb-lead">Se aplica al momento. Lo puedes cambiar cuando quieras en Ajustes o con el botón ☀ de arriba.</p>
+                        <div class="onb-themes">
+                          <For each={themeChoices.filter((t) => ["dark", "light", "darcula", "system"].includes(t.id))}>
+                            {(theme) => (
+                              <button type="button" class="theme-card" classList={{ on: state.settings.theme === theme.id }} onClick={() => void saveSettings({ theme: theme.id as ThemeName })}>
+                                <div class="theme-preview" data-theme-preview={theme.id === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme.id}>
+                                  <div class="tp-side"><i /><i /><i class="t" /><i class="t" /><i /></div>
+                                  <div class="tp-main">
+                                    <div class="tp-code"><span class="k">SELECT</span> <span class="n">id</span>, <span class="f">count</span>(*)<br /><span class="k">FROM</span> <span class="t">orders</span></div>
+                                    <div class="tp-grid"><i /><i /><i /></div>
+                                  </div>
                                 </div>
-                              </div>
-                              <span>{theme.label}</span>
-                            </button>
-                          )}
-                        </For>
-                      </div>
-                      <div class="onb-row">
-                        <span class="onb-label">Acento</span>
-                        <div class="swatches">
-                          <For each={ACCENTS}>
-                            {(item) => <button type="button" class="swatch big" classList={{ on: state.settings.accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void saveSettings({ accent: item.value })} />}
+                                <span>{theme.label}</span>
+                              </button>
+                            )}
                           </For>
                         </div>
-                      </div>
-                      <div class="onb-row">
-                        <span class="onb-label">Densidad</span>
-                        <div class="seg">
-                          <button type="button" classList={{ on: state.settings.density === "compact" }} onClick={() => void saveSettings({ density: "compact" })}>Compacta</button>
-                          <button type="button" classList={{ on: state.settings.density === "comfortable" }} onClick={() => void saveSettings({ density: "comfortable" })}>Cómoda</button>
+                        <div class="onb-row">
+                          <span class="onb-label">Acento</span>
+                          <div class="swatches">
+                            <For each={ACCENTS}>
+                              {(item) => <button type="button" class="swatch big" classList={{ on: state.settings.accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void saveSettings({ accent: item.value })} />}
+                            </For>
+                          </div>
+                        </div>
+                        <div class="onb-row">
+                          <span class="onb-label">Densidad</span>
+                          <div class="seg">
+                            <button type="button" classList={{ on: state.settings.density === "compact" }} onClick={() => void saveSettings({ density: "compact" })}>Compacta</button>
+                            <button type="button" classList={{ on: state.settings.density === "comfortable" }} onClick={() => void saveSettings({ density: "comfortable" })}>Cómoda</button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </Match>
+                    </Match>
 
-                  <Match when={step() === "connect"}>
-                    <div class="onb-screen">
-                      <h2>Tu primera conexión</h2>
-                      <p class="onb-lead">Elige tu motor y rellena los datos, o empieza con una base de ejemplo que creo ahora mismo (SQLite, sin instalar nada).</p>
-                      <button type="button" class="onb-sample" disabled={busy()} onClick={() => void sample()}>
-                        <EngineIcon kind="sqlite" size={26} />
-                        <span>
-                          <b>{busy() ? "Creando la base de ejemplo…" : "Probar con datos de ejemplo"}</b>
-                          <small>Clientes y pedidos listos para consultar · recomendado si es tu primera vez</small>
-                        </span>
-                        <ArrowRight size={16} />
-                      </button>
-                      <div class="onb-engines">
-                        <For each={ENGINES}>
-                          {(engine) => (
-                            <button type="button" class="onb-engine" onClick={() => { setState("onboardingOpen", false); void saveSettings({ onboarded: true }); openConnDialog(emptyConn(engine.kind)); }}>
-                              <EngineIcon kind={engine.kind} size={22} />
-                              <span>{engine.label}</span>
-                            </button>
-                          )}
-                        </For>
+                    <Match when={step() === "connect"}>
+                      <div class="onb-screen">
+                        <h2>Tu primera conexión</h2>
+                        <p class="onb-lead">Elige tu motor y rellena los datos, o empieza con una base de ejemplo que creo ahora mismo (SQLite, sin instalar nada).</p>
+                        <button type="button" class="onb-sample" disabled={busy()} onClick={() => void sample()}>
+                          <EngineIcon kind="sqlite" size={26} />
+                          <span>
+                            <b>{busy() ? "Creando la base de ejemplo…" : "Probar con datos de ejemplo"}</b>
+                            <small>Clientes y pedidos listos para consultar · recomendado si es tu primera vez</small>
+                          </span>
+                          <ArrowRight size={16} />
+                        </button>
+                        <div class="onb-engines">
+                          <For each={ENGINES}>
+                            {(engine) => (
+                              <button type="button" class="onb-engine" onClick={() => { setState("onboardingOpen", false); void saveSettings({ onboarded: true }); openConnDialog(emptyConn(engine.kind)); }}>
+                                <EngineIcon kind={engine.kind} size={22} />
+                                <span>{engine.label}</span>
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                        <button type="button" class="link small onb-import" onClick={() => void openMigration()}>
+                          ¿Vienes de DBeaver o DbVisualizer? Importa tus conexiones
+                        </button>
+                        <Show when={state.connections.length}>
+                          <p class="onb-note">Ya tienes {state.connections.length} {state.connections.length === 1 ? "conexión" : "conexiones"}: puedes pasar directamente al recorrido.</p>
+                        </Show>
                       </div>
-                      <button type="button" class="link small onb-import" onClick={() => { setState("onboardingOpen", false); void saveSettings({ onboarded: true }); void openMigration(); }}>
-                        ¿Vienes de DBeaver o DbVisualizer? Importa tus conexiones
-                      </button>
-                      <Show when={state.connections.length}>
-                        <p class="onb-note">Ya tienes {state.connections.length} {state.connections.length === 1 ? "conexión" : "conexiones"}: puedes pasar directamente al recorrido.</p>
-                      </Show>
-                    </div>
-                  </Match>
+                    </Match>
 
-                  <Match when={step() === "keys"}>
-                    <div class="onb-screen">
-                      <h2><Keyboard size={18} /> Los atajos que más vas a usar</h2>
-                      <p class="onb-lead">Todos están también en la paleta (Mayús Mayús), con su atajo al lado.</p>
-                      <div class="onb-keys">
-                        <For each={KEYS}>{([keys, label]) => <div class="onb-key"><kbd>{keys}</kbd><span>{label}</span></div>}</For>
+                    <Match when={step() === "keys"}>
+                      <div class="onb-screen">
+                        <h2><Keyboard size={18} /> Los atajos que más vas a usar</h2>
+                        <p class="onb-lead">Todos están también en la paleta (Mayús Mayús), con su atajo al lado.</p>
+                        <div class="onb-keys">
+                          <For each={KEYS}>{([keys, label]) => <div class="onb-key"><kbd>{keys}</kbd><span>{label}</span></div>}</For>
+                        </div>
                       </div>
-                    </div>
-                  </Match>
+                    </Match>
 
-                  <Match when={step() === "done"}>
-                    <div class="onb-screen">
-                      <h1>Ya lo tienes.</h1>
-                      <p class="onb-lead">Me quedo en la esquina de abajo a la derecha. Si me necesitas, haz clic y te doy un consejo. Puedes repetir esta guía desde la paleta: «Guía de inicio».</p>
-                      <div class="onb-cards">
-                        <button type="button" class="onb-card action" onClick={() => { close(true); setState({ paletteOpen: true, paletteMode: "all" }); }}><Sparkles size={16} /><b>Abrir la paleta</b><small>Mayús Mayús</small></button>
-                        <button type="button" class="onb-card action" onClick={() => { close(true); openConnDialog(); }}><Database size={16} /><b>Nueva conexión</b><small>Ctrl+Alt+N</small></button>
-                        <button type="button" class="onb-card action" onClick={() => { close(true); setState("settingsOpen", true); }}><Palette size={16} /><b>Ajustes</b><small>Ctrl+Alt+S</small></button>
+                    <Match when={step() === "done"}>
+                      <div class="onb-screen">
+                        <h1>Ya lo tienes.</h1>
+                        <p class="onb-lead">Me quedo en la esquina de abajo a la derecha. Si me necesitas, haz clic y te doy un consejo. Puedes repetir esta guía desde la paleta: «Guía de inicio».</p>
+                        <div class="onb-cards">
+                          <button type="button" class="onb-card action" onClick={() => { close(true); setState({ paletteOpen: true, paletteMode: "all" }); }}><Sparkles size={16} /><b>Abrir la paleta</b><small>Mayús Mayús</small></button>
+                          <button type="button" class="onb-card action" onClick={() => { close(true); openConnDialog(); }}><Database size={16} /><b>Nueva conexión</b><small>Ctrl+Alt+N</small></button>
+                          <button type="button" class="onb-card action" onClick={() => { close(true); setState("settingsOpen", true); }}><Palette size={16} /><b>Ajustes</b><small>Ctrl+Alt+S</small></button>
+                        </div>
                       </div>
-                    </div>
-                  </Match>
-                </Switch>
-              </div>
-              <footer class="onb-actions">
-                <Show when={index() > 0}>
-                  <button type="button" class="btn" onClick={prev}><ArrowLeft size={14} /> Atrás</button>
-                </Show>
-                <Show when={step() === "welcome"}>
-                  <button type="button" class="btn ghost-link" onClick={() => close(false)}>Saltar la guía</button>
-                </Show>
-                <span class="spacer" />
-                <span class="onb-count">{index() + 1} / {STEPS.length}</span>
-                <Show when={step() === "connect"}>
-                  <button type="button" class="btn primary" onClick={() => { setSpot(0); setStep("tour"); }}>Hacer el recorrido <ArrowRight size={14} /></button>
-                </Show>
-                <Show when={step() !== "connect" && step() !== "done"}>
-                  <button type="button" class="btn primary" onClick={next}>{step() === "welcome" ? "Empezar" : "Siguiente"} <ArrowRight size={14} /></button>
-                </Show>
-                <Show when={step() === "done"}>
-                  <button type="button" class="btn primary" onClick={() => close(true)}>Empezar a trabajar</button>
-                </Show>
-              </footer>
-            </section>
-          </div>
-        </>
-      }
-    >
-      {/* Interactive tour: a spotlight over the real interface plus a speech bubble from Gib. */}
-      <div class="tour-blocker" onClick={tourNext} />
-      <div
-        class="tour-spot"
-        style={
-          spotBox()
-            ? { left: `${spotBox()!.left}px`, top: `${spotBox()!.top}px`, width: `${spotBox()!.width}px`, height: `${spotBox()!.height}px` }
-            : { left: "50%", top: "50%", width: "0px", height: "0px" }
+                    </Match>
+                  </Switch>
+                </div>
+                <footer class="onb-actions">
+                  <Show when={index() > 0}>
+                    <button type="button" class="btn" onClick={prev}><ArrowLeft size={14} /> Atrás</button>
+                  </Show>
+                  <Show when={step() === "welcome"}>
+                    <button type="button" class="btn ghost-link" onClick={() => close(false)}>Saltar la guía</button>
+                  </Show>
+                  <span class="spacer" />
+                  <span class="onb-count">{index() + 1} / {STEPS.length}</span>
+                  <Show when={step() === "connect"}>
+                    <button type="button" class="btn primary" onClick={() => { setSpot(0); setStep("tour"); }}>Hacer el recorrido <ArrowRight size={14} /></button>
+                  </Show>
+                  <Show when={step() !== "connect" && step() !== "done"}>
+                    <button type="button" class="btn primary" onClick={next}>{step() === "welcome" ? "Empezar" : "Siguiente"} <ArrowRight size={14} /></button>
+                  </Show>
+                  <Show when={step() === "done"}>
+                    <button type="button" class="btn primary" onClick={() => close(true)}>Empezar a trabajar</button>
+                  </Show>
+                </footer>
+              </section>
+            </div>
+          </>
         }
-      />
-      <div class="tour-bubble" ref={bubbleRef} style={bubbleStyle()}>
-        <div class="tour-head">
-          <Gib size={34} pose="poker" mood="idle" plain />
-          <div>
-            <small>{spot() + 1} de {TOUR.length}</small>
-            <b>{TOUR[spot()].title}</b>
+      >
+        {/* Interactive tour: a spotlight over the real interface plus a speech bubble from Gib. */}
+        <div class="tour-blocker" onClick={tourNext} />
+        <div
+          class="tour-spot"
+          style={
+            spotBox()
+              ? { left: `${spotBox()!.left}px`, top: `${spotBox()!.top}px`, width: `${spotBox()!.width}px`, height: `${spotBox()!.height}px` }
+              : { left: "50%", top: "50%", width: "0px", height: "0px" }
+          }
+        />
+        <div class="tour-bubble" ref={bubbleRef} style={bubbleStyle()}>
+          <div class="tour-head">
+            <Gib size={34} pose="poker" mood="idle" plain />
+            <div>
+              <small>{spot() + 1} de {TOUR.length}</small>
+              <b>{TOUR[spot()].title}</b>
+            </div>
           </div>
+          <p>{TOUR[spot()].body}</p>
+          <div class="tour-actions">
+            <button type="button" class="link small" onClick={() => setStep("keys")}>Saltar recorrido</button>
+            <span class="spacer" />
+            <button type="button" class="btn tiny" onClick={tourPrev}><ArrowLeft size={12} /></button>
+            <button type="button" class="btn tiny primary" onClick={tourNext}>{spot() === TOUR.length - 1 ? "Terminar" : "Siguiente"} <ArrowRight size={12} /></button>
+          </div>
+          <div class="tour-dots"><For each={TOUR}>{(_, i) => <i classList={{ on: i() === spot() }} />}</For></div>
         </div>
-        <p>{TOUR[spot()].body}</p>
-        <div class="tour-actions">
-          <button type="button" class="link small" onClick={() => setStep("keys")}>Saltar recorrido</button>
-          <span class="spacer" />
-          <button type="button" class="btn tiny" onClick={tourPrev}><ArrowLeft size={12} /></button>
-          <button type="button" class="btn tiny primary" onClick={tourNext}>{spot() === TOUR.length - 1 ? "Terminar" : "Siguiente"} <ArrowRight size={12} /></button>
-        </div>
-        <div class="tour-dots"><For each={TOUR}>{(_, i) => <i classList={{ on: i() === spot() }} />}</For></div>
-      </div>
+      </Show>
     </Show>
   );
 }

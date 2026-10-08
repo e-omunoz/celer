@@ -8,7 +8,9 @@ import {
   copySchemaForAi,
   contextConnId,
   cycleTab,
+  disconnect,
   formatActive,
+  gib,
   openConnDialog,
   openInspector,
   openPalette,
@@ -64,6 +66,8 @@ export function commands(): Command[] {
     { id: "export", label: "Exportar resultado…", group: "Consulta", run: () => void startExport(), enabled: sqlOnly },
     { id: "new-console", label: "Nueva consola", group: "Archivo", keys: "Ctrl+Mayús+L", run: () => openQuery(contextConnId()) },
     { id: "new-conn", label: "Nueva conexión…", group: "Archivo", keys: "Ctrl+Alt+N", run: () => openConnDialog() },
+    { id: "disconnect", label: "Desconectar", group: "Conexión", run: () => { const id = contextConnId(); if (id) void disconnect(id); }, enabled: () => Boolean(contextConnId() && state.sessions[contextConnId()!]) },
+    { id: "disconnect-all", label: "Desconectar todas", group: "Conexión", run: () => void disconnectAll(), enabled: () => Object.keys(state.sessions).length > 0 },
     { id: "import-conns", label: "Importar conexiones de DBeaver o DbVisualizer…", group: "Archivo", run: () => void openMigration() },
     { id: "open", label: "Abrir script…", group: "Archivo", keys: "Ctrl+O", run: () => void openScript() },
     { id: "save", label: "Guardar script…", group: "Archivo", keys: "Ctrl+S", run: () => void saveScript(), enabled: sqlOnly },
@@ -87,6 +91,8 @@ export function commands(): Command[] {
     { id: "font-up", label: "Aumentar tamaño del editor", group: "Preferencias", keys: "Ctrl++", run: () => void saveSettings({ editorFontSize: Math.min(24, state.settings.editorFontSize + 1) }) },
     { id: "font-down", label: "Reducir tamaño del editor", group: "Preferencias", keys: "Ctrl+-", run: () => void saveSettings({ editorFontSize: Math.max(10, state.settings.editorFontSize - 1) }) },
     { id: "guide", label: "Guía de inicio", group: "Ayuda", run: () => setState("onboardingOpen", true) },
+    { id: "gib-tip", label: "Gib: un consejo", group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
+    { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
     { id: "about", label: "Acerca de Celer", group: "Ayuda", run: () => setState("aboutOpen", true) },
     { id: "update", label: "Buscar actualizaciones", group: "Ayuda", run: () => void checkForUpdates(true) },
   ];
@@ -94,6 +100,10 @@ export function commands(): Command[] {
     list.push({ id: `theme-${theme.id}`, label: `Tema: ${theme.label}`, group: "Tema", run: () => void saveSettings({ theme: theme.id }) });
   }
   return list;
+}
+
+async function disconnectAll() {
+  for (const id of Object.keys(state.sessions)) await disconnect(id);
 }
 
 /** Global shortcuts that are not owned by the editor or the grid. */

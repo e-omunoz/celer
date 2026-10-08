@@ -23,6 +23,8 @@ export interface Backend {
   testConnection(cfg: ConnConfig): Promise<string>;
   openSession(connId: string, password?: string): Promise<SessionInfo>;
   closeSession(sessionId: string): Promise<void>;
+  /** Closes every session of a connection (disconnect); returns how many were open. */
+  closeConnectionSessions(connId: string): Promise<number>;
   execute(sessionId: string, sql: string, fetch: number): Promise<ExecOutput>;
   fetch(sessionId: string, n: number): Promise<FetchOutput>;
   closeCursor(sessionId: string): Promise<void>;
@@ -90,6 +92,7 @@ function tauriBackend(): Backend {
     testConnection: (cfg) => invoke("test_connection", { cfg }),
     openSession: (connId, password) => invoke("open_session", { connId: connId, password: password ?? null }),
     closeSession: (sessionId) => invoke("close_session", { sessionId: sessionId }),
+    closeConnectionSessions: (connId) => invoke("close_connection_sessions", { connId }),
     execute: (sessionId, sql, fetch) => invoke("execute", { sessionId: sessionId, sql, fetch }),
     fetch: (sessionId, n) => invoke("fetch", { sessionId: sessionId, n }),
     closeCursor: (sessionId) => invoke("close_cursor", { sessionId: sessionId }),

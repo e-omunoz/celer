@@ -1129,7 +1129,8 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .fx-sparkle i:nth-child(3) { right: 0.2em; top: 2.6em; animation-delay: 240ms; width: 0.7em; height: 0.7em; }
 
 /* Status bar companion: rises above the bar, never clipped */
-.companion { position: relative; width: 56px; height: 26px; flex: none; margin-left: 4px; opacity: 0; }
+/* margin-right: room for his arms (he swats and waves towards the window edge) */
+.companion { position: relative; width: 56px; height: 26px; flex: none; margin-left: 4px; margin-right: 12px; opacity: 0; }
 .companion.landed { opacity: 1; }
 .companion > .gib { position: absolute; left: 5px; bottom: 0; z-index: 40; }
 .tip {
