@@ -1424,6 +1424,21 @@ async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   return state.tabs[tabIndex(fresh.id)] as SqlTab;
 }
 
+/**
+ * Consoles whose autocompletion waits for their open result: reading the catalog on the session would close it (MySQL,
+ * SQLite), so the refresh after DDL comes once the result is read to the end or the next run leaves none open.
+ */
+const completionAfterResult = new Set<string>();
+
+/** Refreshes a console's autocompletion now, or once its open result is read (see completionAfterResult). */
+function refreshCompletion(tabId: string, results: ResultSet[]) {
+  if (results.some((result) => result.hasMore)) completionAfterResult.add(tabId);
+  else {
+    completionAfterResult.delete(tabId);
+    void loadCompletion(tabId);
+  }
+}
+
 async function loadCompletion(tabId: string) {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "sql" || !tab.sessionId) return;
@@ -1561,9 +1576,9 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     if (pending) notify(pending, "info");
     const rows = output.results.find((result) => result.columns.length)?.rows.length ?? output.results.find((result) => result.rowsAffected !== null)?.rowsAffected ?? null;
     if (isMutating(sql, conn?.kind) && /\b(create|drop|alter|rename)\b/i.test(sql)) {
-      void loadCompletion(tab.id);
+      refreshCompletion(tab.id, output.results);
       if (tab.connId) void refreshNode(tab.connId, []);
-    }
+    } else if (completionAfterResult.has(tab.id)) refreshCompletion(tab.id, output.results);
     await remember(tab, sql, true, output.elapsedMs, rows);
   } catch (err) {
     if (tokenOf(current.id) !== token) return;
@@ -1749,6 +1764,7 @@ export async function fetchMore(tabId: string, n = state.settings.pageSize): Pro
       results[resultIndex] = { ...result, rows: concatRows(result.rows, more.rows), hasMore: more.hasMore };
       if (!more.hasMore) results.push(...more.extra);
       patchTab(tab.id, { results, running: false });
+      if (completionAfterResult.has(tabId)) refreshCompletion(tabId, results);
       return true;
     } catch (err) {
       if (tokenOf(tabId) !== token) return false;

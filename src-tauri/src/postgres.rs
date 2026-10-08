@@ -750,7 +750,7 @@ impl Driver for PostgresDriver {
 
     fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
         if self.cursor.is_none() {
-            return Ok(FetchOutput::default());
+            bail!(crate::session::CURSOR_CLOSED);
         }
         self.busy.store(true, Ordering::SeqCst);
         let r = self.fetch_inner(n.max(1));

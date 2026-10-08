@@ -1129,7 +1129,7 @@ impl Driver for MysqlDriver {
     fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
         let mut out = FetchOutput::default();
         if self.cursor.is_none() {
-            return Ok(out);
+            bail!(crate::session::CURSOR_CLOSED);
         }
         let n = n.max(1);
         loop {
@@ -1887,8 +1887,12 @@ mod tests {
         assert_eq!(total, 200_000);
         assert_eq!(extra.len(), 1);
         assert_eq!(cell_str(&extra[0].rows[0][0]), "z");
-        // Sin cursor, fetch no devuelve nada.
-        assert!(d.fetch(10).unwrap().rows.is_empty());
+        // Without an open result, fetch says so (the grid must not take it for the last page).
+        assert!(d.fetch(10).is_err());
+        // Reading the catalog on the session (autocompletion after DDL) closes the open result: fetch fails.
+        assert!(d.execute("SELECT * FROM events", 10).unwrap().results[0].has_more);
+        d.completion("celer").unwrap();
+        assert!(d.fetch(10).unwrap_err().to_string().contains("ya no está abierto"));
 
         // Cerrar a mitad deja la conexión utilizable y no lee el resto.
         let t0 = Instant::now();

@@ -403,7 +403,7 @@ impl Driver for SqliteDriver {
     fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
         let n = n.max(1);
         if self.cursor.is_none() {
-            return Ok(FetchOutput::default());
+            bail!(crate::session::CURSOR_CLOSED);
         }
         self.enter();
         let result = self.fetch_inner(n);
@@ -976,6 +976,10 @@ mod tests {
         let out = d.execute("SELECT SUM(flag) FROM t", 10).unwrap();
         assert_eq!(cell_i64(&out.results[0].rows[0][0]), 3);
         assert!(out.messages.iter().all(|m| !m.contains("sentencia")), "{:?}", out.messages);
+        // Reading the catalog (autocompletion) closes the open result: fetch says so instead of a last page.
+        assert!(d.execute("SELECT * FROM t", 2).unwrap().results[0].has_more);
+        d.completion("main").unwrap();
+        assert!(d.fetch(10).is_err());
         assert_eq!(count_statements("CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET flag = 2; END; SELECT 1"), 2);
     }
 
