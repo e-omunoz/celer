@@ -1,7 +1,8 @@
 import { BookOpen, CircleAlert, CircleCheck, Copy, FolderOpen, Lightbulb, LoaderCircle, Minus, OctagonX, X } from "lucide-solid";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { EngineIcon } from "../icons";
-import { browseSqlite, connect, connectionFolders, copyText, formatMs, plainError, setState, state, submitConnection, testConnection } from "../state";
+import { browseSqlite, connect, copyText, formatMs, plainError, setState, state, submitConnection, testConnection } from "../state";
+import { knownFolders } from "../connManage";
 import { ENGINES, emptyConn, engineOf, type ConnConfig, type ConnTestReport, type DbKind } from "../types";
 import { applyJdbcUrl, defaultPort, hasErrors, looksLikeJdbcUrl, validateConn, visibleFields, type FieldIssue, type IssueField } from "../connForm";
 import { Dialog } from "./Modals";
@@ -16,19 +17,20 @@ const INFORMIX_MODES: Record<string, string> = {
 };
 
 /**
- * Folder of a connection: every existing folder, "Sin carpeta", or "Nueva carpeta…" to type one.
+ * Folder of a connection: every folder (nested ones as "Clientes/Egarsat", and the empty ones created in the explorer),
+ * "Sin carpeta", or "Nueva carpeta…" to type one.
  * (A <datalist> only suggests entries matching what is already typed, so other folders never showed.)
  */
 function FolderPicker(props: { value: string; onChange: (folder: string) => void }) {
   const NEW = "__celer_new_folder__";
-  const [typing, setTyping] = createSignal(Boolean(props.value) && !connectionFolders().includes(props.value));
+  const [typing, setTyping] = createSignal(Boolean(props.value) && !knownFolders().includes(props.value));
   return (
     <Show
       when={!typing()}
       fallback={
         <div class="folder-new">
           <input value={props.value} placeholder="Nombre de la carpeta" ref={(el) => queueMicrotask(() => el.focus())} onInput={(event) => props.onChange(event.currentTarget.value)} />
-          <button type="button" class="icon-btn tiny" title="Elegir una carpeta existente" onClick={() => { setTyping(false); if (!connectionFolders().includes(props.value)) props.onChange(""); }}>
+          <button type="button" class="icon-btn tiny" title="Elegir una carpeta existente" onClick={() => { setTyping(false); if (!knownFolders().includes(props.value)) props.onChange(""); }}>
             <X size={12} />
           </button>
         </div>
@@ -44,7 +46,7 @@ function FolderPicker(props: { value: string; onChange: (folder: string) => void
         }}
       >
         <option value="" selected={!props.value}>Sin carpeta</option>
-        <For each={connectionFolders()}>{(folder) => <option value={folder} selected={folder === props.value}>{folder}</option>}</For>
+        <For each={knownFolders()}>{(folder) => <option value={folder} selected={folder === props.value}>{folder}</option>}</For>
         <option value={NEW}>Nueva carpeta…</option>
       </select>
     </Show>
