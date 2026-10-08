@@ -8,8 +8,10 @@
 //! Celer's bridge (`bridge/CelerBridge.java`, embedded by build.rs) runs in one JVM shared by the whole app: a child
 //! process that talks to Celer only through its stdin and stdout, never a network port. It starts once (the first
 //! JDBC connection, or `prewarm` as soon as one is being opened), and every session after that only pays for its own
-//! connection. Each session runs on its own thread in the bridge; a cancel is served at once by the bridge's reader
-//! thread (`Statement.cancel()`).
+//! connection. Each session runs on its own thread in the bridge, and the reader thread never waits on a driver: a
+//! cancel runs `Statement.cancel()` on a helper thread. Informix sends that cancel as TCP urgent data, which proxies
+//! and firewalls may drop: if the statement is still running 5 s later the bridge cuts the connection
+//! (`Connection.abort`), answers with RESET_STATE, and the driver above opens a new one (`Link::reset_pending`).
 //!
 //! Protocol, version 1. Every frame is a little-endian u32 length and that many bytes.
 //! - Request: u32 request id (0: no reply wanted), u32 session, u8 operation, body.
@@ -59,12 +61,17 @@ const W_DOUBLE: u8 = 3;
 const W_TEXT: u8 = 4;
 const W_BYTES: u8 = 5;
 
-/// Informix's fetch buffer, in bytes, when the user does not set one. Measured against the 200,000-row read of the
-/// engine tests (`informix_speed`): the driver's default is the row size (4–8 KB, a round trip every few dozen
-/// rows); 4.50 accepts up to 2 GB when the server allows it (32 KB otherwise, and it cuts the value to that).
-pub const FET_BUF_SIZE: u32 = 1 << 20;
+/// Informix's fetch buffer, in bytes, when the user does not set one. The driver's default is the row size (4–8 KB,
+/// a round trip every few dozen rows); it accepts up to 2 GB when the server allows it (32 KB otherwise, and it cuts
+/// the value to that). Measured with the engine tests' 200,000-row read (`informix_speed`, Informix 15): 256 KB was
+/// the fastest (918 ms against 985 ms with 1 MB, 1,325 ms with the driver's default and 1,603 ms with 4 MB). Pages
+/// set the fetch size to the rows asked for; this buffer governs the reads without it (metadata).
+pub const FET_BUF_SIZE: u32 = 256 << 10;
 
 const MAX_FRAME: usize = 512 << 20;
+
+/// SQLSTATE of the bridge's "the connection was cut after a cancel": it has to be opened again.
+const RESET_STATE: &str = "CELER-RESET";
 
 /// The bridge jar built by build.rs: empty when Celer was compiled without a JDK.
 static BRIDGE_JAR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/celer-bridge.jar"));
@@ -269,7 +276,7 @@ pub struct JdbcError {
 
 impl std::fmt::Display for JdbcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if !self.state.is_empty() {
+        if !self.state.is_empty() && self.state != RESET_STATE {
             write!(f, "[{}] ", self.state)?;
         }
         write!(f, "{}", self.message)?;
@@ -545,6 +552,22 @@ impl Bridge {
     }
 }
 
+/// Notes in `reset` that the bridge cut the connection (the next operation reconnects).
+fn noting_reset<T>(reset: &AtomicBool, r: Result<T>) -> Result<T> {
+    if let Err(e) = &r {
+        if e.downcast_ref::<JdbcError>().is_some_and(|j| j.state == RESET_STATE) {
+            reset.store(true, Ordering::SeqCst);
+        }
+    }
+    r
+}
+
+/// The bridge's process id, to dump its threads when a test hangs.
+#[cfg(test)]
+pub fn bridge_pid() -> Option<u32> {
+    BRIDGE.lock().as_ref().map(|b| b.child.lock().id())
+}
+
 fn driver_body(b: &mut Out, rt: &Runtime) {
     b.varint(rt.jars.len() as u64);
     for j in &rt.jars {
@@ -649,6 +672,8 @@ pub struct JdbcConn {
     rt: Runtime,
     params: Params,
     server: String,
+    /// The bridge cut this connection after a cancel that did not stop (shared with its statements).
+    reset: Arc<AtomicBool>,
     /// The driver fetches as many rows a trip as Celer asks for (see `informix_speed` in engine_tests.rs).
     pub page_fetch: bool,
 }
@@ -657,7 +682,7 @@ impl JdbcConn {
     pub fn connect(cfg: &ConnConfig, rt: Runtime, params: Params) -> Result<JdbcConn> {
         let bridge = Bridge::get(&rt)?;
         let session = NEXT_SESSION.fetch_add(1, Ordering::SeqCst);
-        let mut conn = JdbcConn { cancel: Arc::new(Mutex::new((bridge.clone(), session))), bridge, session, rt, params, server: String::new(), page_fetch: true };
+        let mut conn = JdbcConn { cancel: Arc::new(Mutex::new((bridge.clone(), session))), bridge, session, rt, params, server: String::new(), reset: Arc::new(AtomicBool::new(false)), page_fetch: true };
         conn.open(cfg, None)?;
         Ok(conn)
     }
@@ -679,6 +704,7 @@ impl JdbcConn {
         }
         let reply = self.bridge.call(self.session, OP_CONNECT, &b.0, Some(CONNECT_WAIT))?;
         self.server = In::new(&reply).str()?;
+        self.reset.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -687,12 +713,12 @@ impl JdbcConn {
         b.str(sql);
         b.varint(first.min(i32::MAX as usize) as u64);
         b.u8(self.page_fetch as u8);
-        let reply = self.bridge.call(self.session, OP_EXEC, &b.0, None)?;
-        JdbcStmt::from_exec(self.bridge.clone(), self.session, self.page_fetch, &reply)
+        let reply = noting_reset(&self.reset, self.bridge.call(self.session, OP_EXEC, &b.0, None))?;
+        JdbcStmt::from_exec(self.bridge.clone(), self.session, self.page_fetch, self.reset.clone(), &reply)
     }
 
     fn simple(&self, op: u8, body: &[u8]) -> Result<()> {
-        self.bridge.call(self.session, op, body, None).map(|_| ())
+        noting_reset(&self.reset, self.bridge.call(self.session, op, body, None)).map(|_| ())
     }
 }
 
@@ -740,6 +766,10 @@ impl Link for JdbcConn {
     fn reconnect(&mut self, cfg: &ConnConfig, database: Option<&str>) -> Result<()> {
         self.open(cfg, database).map_err(explain)
     }
+
+    fn reset_pending(&self) -> bool {
+        self.reset.load(Ordering::SeqCst)
+    }
 }
 
 /// A statement run through the bridge: the first rows came with its answer, the rest arrive in batches.
@@ -756,17 +786,18 @@ pub struct JdbcStmt {
     count: i64,
     messages: Vec<String>,
     page_fetch: bool,
+    reset: Arc<AtomicBool>,
 }
 
 impl JdbcStmt {
-    fn from_exec(bridge: Arc<Bridge>, session: u32, page_fetch: bool, reply: &[u8]) -> Result<JdbcStmt> {
+    fn from_exec(bridge: Arc<Bridge>, session: u32, page_fetch: bool, reset: Arc<AtomicBool>, reply: &[u8]) -> Result<JdbcStmt> {
         let mut r = In::new(reply);
         let warnings = r.varint()?;
         let mut messages = Vec::new();
         for _ in 0..warnings {
             messages.push(r.str()?);
         }
-        let mut st = JdbcStmt { bridge, session, cursor: 0, cols: vec![], plan: vec![], rows: VecDeque::new(), more: false, in_result: false, count: -1, messages, page_fetch };
+        let mut st = JdbcStmt { bridge, session, cursor: 0, cols: vec![], plan: vec![], rows: VecDeque::new(), more: false, in_result: false, count: -1, messages, page_fetch, reset };
         if r.u8()? == 0 {
             st.count = r.zigzag()?;
             return Ok(st);
@@ -785,7 +816,7 @@ impl JdbcStmt {
         b.varint(self.cursor as u64);
         b.varint(want.clamp(1, i32::MAX as usize) as u64);
         b.u8(self.page_fetch as u8);
-        let reply = self.bridge.call(self.session, OP_FETCH, &b.0, None)?;
+        let reply = noting_reset(&self.reset, self.bridge.call(self.session, OP_FETCH, &b.0, None))?;
         self.more = read_batch(&mut In::new(&reply), &self.plan, &mut self.rows)?;
         Ok(())
     }
@@ -1027,6 +1058,14 @@ mod tests {
         let other = explain(anyhow::Error::new(JdbcError { message: "A syntax error has occurred.".into(), state: "42000".into(), code: -201 })).to_string();
         assert_eq!(other, "[42000] A syntax error has occurred. (-201)");
         assert_eq!(explain(anyhow!("otro")).to_string(), "otro");
+        // The bridge cut the connection after a cancel: noted for the next operation, shown without its SQLSTATE.
+        let reset = AtomicBool::new(false);
+        let r: Result<()> = noting_reset(&reset, Err(anyhow::Error::new(JdbcError { message: "Consulta cancelada (se reabre la conexión…)".into(), state: RESET_STATE.into(), code: 0 })));
+        assert!(reset.load(Ordering::SeqCst));
+        assert_eq!(r.unwrap_err().to_string(), "Consulta cancelada (se reabre la conexión…)");
+        let other = AtomicBool::new(false);
+        let _ = noting_reset::<()>(&other, Err(anyhow!("[42000] x")));
+        assert!(!other.load(Ordering::SeqCst));
     }
 
     fn informix_cfg() -> ConnConfig {
