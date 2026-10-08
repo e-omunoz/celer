@@ -6,6 +6,21 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-08
+
+### Fixed
+- **SQL Server**: closing a result before reading it all could crash the session ("no reactor running").
+- **SQL Server**: text values are written as `N'…'`, so accents and other Unicode characters survive filters, edits and scripts.
+- **Informix** (IBM driver on macOS and Linux): database and object names came back cut or with garbage; the driver's 32-bit lengths are now read as such.
+- **Informix**:
+  - foreign keys appear in the explorer ("Claves foráneas"), with their columns and the table they point to;
+  - DATETIME values are written with exactly their column's fields (YEAR TO MINUTE, FRACTION(3)…), so a value from the grid can be edited, filtered and compared;
+  - fractions of seconds are shown with the column's digits;
+  - BOOLEAN filters and edits use `'t'` / `'f'`;
+  - a script with several statements now runs all of them, not just the first: table edits, data comparison and schema comparison scripts were partly lost;
+  - generated scripts no longer quote names, which Informix took as text.
+- Integration tests against real SQL Server 2022 and Informix servers cover filters, edits, dates and times, MERGE, foreign-key lookup, cancel, data comparison and the startup script; execution plans and schema comparison on SQL Server.
+
 ## [2.0.0] - 2026-10-08
 
 ### Added
@@ -171,7 +186,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/e-omunoz/celer/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/e-omunoz/celer/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/e-omunoz/celer/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/e-omunoz/celer/compare/v1.2.0...v1.3.0
