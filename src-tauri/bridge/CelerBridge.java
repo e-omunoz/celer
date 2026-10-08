@@ -1,6 +1,8 @@
 // Celer's JDBC bridge: a child process of Celer that talks to it only through stdin and stdout (it never opens a
 // port). One JVM serves every JDBC session of the app: each request names its session and each session runs on its
-// own thread, so a slow query never holds up another one; a cancel is served on the reader thread, at once.
+// own thread, so a slow query never holds up another one. The reader thread only dispatches: nothing it does waits
+// on a driver. A cancel runs on a helper thread and, if the statement has not stopped 5 s later, the connection is
+// cut (`Connection.abort`) and Celer opens another one.
 // The protocol is described in src-tauri/src/jdbc.rs. Built with `javac --release 11` by src-tauri/build.rs, with
 // no dependencies: the JDBC driver is loaded at run time from the jars Celer names.
 
@@ -38,6 +40,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class CelerBridge {
     static final int PROTOCOL = 1;
@@ -61,11 +67,22 @@ public final class CelerBridge {
     static final Object writeLock = new Object();
     static final Map<Integer, Session> sessions = new ConcurrentHashMap<>();
     static final Map<String, Driver> drivers = new HashMap<>();
-    static final ExecutorService control = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "celer-control");
-        t.setDaemon(true);
-        return t;
-    });
+    // The SQLSTATE of "the connection was cut and has to be opened again" (jdbc.rs reconnects on it).
+    static final String RESET = "CELER-RESET";
+    static final long ESCALATE_MS = 5000;
+
+    static final ExecutorService control = Executors.newSingleThreadExecutor(daemon("celer-control"));
+    // Cancels and aborts: a driver may wait on the network or on its connection's lock while doing them.
+    static final ExecutorService helpers = Executors.newCachedThreadPool(daemon("celer-cancel"));
+    static final ScheduledExecutorService timers = Executors.newSingleThreadScheduledExecutor(daemon("celer-timer"));
+
+    static ThreadFactory daemon(String name) {
+        return r -> {
+            Thread t = new Thread(r, name);
+            t.setDaemon(true);
+            return t;
+        };
+    }
 
     public static void main(String[] args) throws Exception {
         out = new BufferedOutputStream(new FileOutputStream(FileDescriptor.out), 1 << 16);
@@ -122,9 +139,9 @@ public final class CelerBridge {
                     Driver d = driver(r.in);
                     Buf b = new Buf();
                     b.str(d.getMajorVersion() + "." + d.getMinorVersion());
-                    if (r.req != 0) reply(r.req, 0, b);
+                    answer(r, b);
                 } catch (Throwable t) {
-                    if (r.req != 0) fail(r.req, t);
+                    answerError(r, t);
                 }
             });
             return;
@@ -132,7 +149,7 @@ public final class CelerBridge {
         Session s = sessions.get(r.session);
         if (s == null) {
             if (r.op != OP_CONNECT) {
-                if (r.req != 0) fail(r.req, new SQLException("La sesión JDBC ya está cerrada"));
+                answerError(r, new SQLException("La sesión JDBC ya está cerrada"));
                 return;
             }
             s = new Session(r.session);
@@ -163,6 +180,15 @@ public final class CelerBridge {
             }
             return d;
         }
+    }
+
+    /** The reply to a request, once: a request cut short by a cancel was already answered. */
+    static void answer(Req r, Buf body) {
+        if (r.req != 0 && r.answered.compareAndSet(false, true)) reply(r.req, 0, body);
+    }
+
+    static void answerError(Req r, Throwable t) {
+        if (r.req != 0 && r.answered.compareAndSet(false, true)) fail(r.req, t);
     }
 
     static void reply(int req, int status, Buf body) {
@@ -226,8 +252,11 @@ public final class CelerBridge {
         final Map<Integer, Cursor> cursors = new HashMap<>();
         int nextCursor = 1;
         Connection conn;
-        /** The statement running now, for a cancel from the reader thread. */
+        /** The statement running now and its request, for a cancel. */
         volatile Statement running;
+        volatile Req current;
+        /** Cut off by a cancel that did not stop: the thread ends when the driver gives it back. */
+        volatile boolean dead;
 
         Session(int id) {
             super("celer-session-" + id);
@@ -235,25 +264,62 @@ public final class CelerBridge {
             setDaemon(true);
         }
 
+        /** Called on the reader thread: it never waits here. */
         void cancel() {
             Statement st = running;
-            if (st == null) return;
-            try {
-                st.cancel();
-            } catch (Throwable ignored) {
-                // nothing running any more
+            Req req = current;
+            if (st == null || req == null) return;
+            helpers.execute(() -> {
+                try {
+                    st.cancel();
+                } catch (Throwable ignored) {
+                    // nothing running any more
+                }
+            });
+            // Informix sends the cancel as TCP urgent data, which some proxies and firewalls drop.
+            timers.schedule(() -> {
+                if (running == st && current == req) escalate(req);
+            }, ESCALATE_MS, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * The statement did not stop: its connection is cut (abort closes the socket without waiting for the driver),
+         * the request gets its answer now and the session leaves the table, so Celer's next CONNECT opens a new one.
+         */
+        void escalate(Req req) {
+            // Claiming the answer decides the race with the session thread finishing on its own.
+            if (!req.answered.compareAndSet(false, true)) return;
+            sessions.remove(id, this);
+            dead = true;
+            Connection c = conn;
+            if (c != null) {
+                helpers.execute(() -> {
+                    try {
+                        c.abort(helpers);
+                    } catch (Throwable t) {
+                        try {
+                            c.close();
+                        } catch (Throwable ignored) {
+                            // gone either way
+                        }
+                    }
+                });
             }
+            SQLException reset = new SQLException("Consulta cancelada (se reabre la conexión: el servidor no la detuvo en " + ESCALATE_MS / 1000 + " s)", RESET);
+            if (req.req != 0) fail(req.req, reset);
+            for (Req q = queue.poll(); q != null; q = queue.poll()) answerError(q, reset);
         }
 
         @Override
         public void run() {
-            while (true) {
+            while (!dead) {
                 Req r;
                 try {
                     r = queue.take();
                 } catch (InterruptedException e) {
                     return;
                 }
+                current = r;
                 Buf result = null;
                 Throwable error = null;
                 try {
@@ -261,15 +327,15 @@ public final class CelerBridge {
                 } catch (Throwable t) {
                     error = t;
                 }
-                if (r.req != 0) {
-                    if (error == null) reply(r.req, 0, result);
-                    else fail(r.req, error);
-                }
+                current = null;
+                if (error == null) answer(r, result);
+                else answerError(r, error);
                 if (r.op == OP_CLOSE) {
-                    sessions.remove(id);
+                    sessions.remove(id, this);
                     return;
                 }
             }
+            closeAll();
         }
 
         Connection conn() throws SQLException {
@@ -649,6 +715,7 @@ public final class CelerBridge {
         final int session;
         final int op;
         final In in;
+        final AtomicBoolean answered = new AtomicBoolean();
 
         Req(byte[] frame) {
             in = new In(frame);

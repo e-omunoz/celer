@@ -38,6 +38,10 @@ pub trait Link: Send + Sized + 'static {
     fn odbc(&self) -> Option<&OdbcConn> {
         None
     }
+    /// The connection was cut (a cancel the server did not obey, on JDBC): the next operation opens a new one.
+    fn reset_pending(&self) -> bool {
+        false
+    }
 }
 
 /// A statement run on a `Link`: its results, read in pages.
@@ -185,6 +189,78 @@ impl<L: Link> LinkDriver<L> {
             d.database = d.current_database().unwrap_or_default();
         }
         Ok(d)
+    }
+
+    /// After a connection was cut: a new one in its place, on the same database (startup script and manual mode
+    /// again). If it cannot be opened now, the next operation tries again.
+    fn recover(&mut self) {
+        if !self.conn.reset_pending() {
+            return;
+        }
+        let db = self.database.clone();
+        let _ = self.reconnect((!db.is_empty()).then_some(db.as_str()));
+    }
+
+    /// An error of a statement: if it cut the connection, a new one is opened now, and the user is told when an
+    /// open transaction was lost with it.
+    fn after_error(&mut self, e: anyhow::Error) -> anyhow::Error {
+        if !self.conn.reset_pending() {
+            return e;
+        }
+        let lost = self.in_tx;
+        self.recover();
+        if lost {
+            anyhow!("{e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
+        } else {
+            e
+        }
+    }
+
+    fn execute_batch(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
+        let t0 = Instant::now();
+        self.stmt = None;
+        self.pending = split_batch(sql, self.dialect).into();
+        let mut out = ExecOutput::default();
+        let r = self.run_pending(fetch.max(1), &mut out.results, &mut out.messages);
+        out.in_transaction = self.in_tx;
+        r?;
+        out.elapsed_ms = t0.elapsed().as_millis() as u64;
+        Ok(out)
+    }
+
+    fn fetch_more(&mut self, n: usize) -> Result<FetchOutput> {
+        let mut out = FetchOutput::default();
+        let Some(st) = self.stmt.as_mut() else {
+            return Ok(out);
+        };
+        if st.in_result() {
+            match st.read(n.max(1)) {
+                Ok((rows, more)) => {
+                    out.rows = rows;
+                    out.has_more = more;
+                }
+                Err(e) => {
+                    self.stmt = None;
+                    self.pending.clear();
+                    return Err(e);
+                }
+            }
+        }
+        if !out.has_more {
+            let st = self.stmt.as_mut().unwrap();
+            if st.more_results()? {
+                let mut msgs = vec![];
+                out.extra = self.pump(n.max(1), &mut msgs)?;
+            } else {
+                self.stmt = None;
+            }
+        }
+        // The rest of a split batch.
+        if self.stmt.is_none() && !self.pending.is_empty() {
+            let mut msgs = vec![];
+            self.run_pending(n.max(1), &mut out.extra, &mut msgs)?;
+        }
+        Ok(out)
     }
 
     /// The ODBC connection, for generic ODBC sources (catalog functions).
@@ -702,50 +778,12 @@ const IFX_SYSTEM_DBS: [&str; 6] = [
 
 impl<L: Link> Driver for LinkDriver<L> {
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
-        let t0 = Instant::now();
-        self.stmt = None;
-        self.pending = split_batch(sql, self.dialect).into();
-        let mut out = ExecOutput::default();
-        let r = self.run_pending(fetch.max(1), &mut out.results, &mut out.messages);
-        out.in_transaction = self.in_tx;
-        r?;
-        out.elapsed_ms = t0.elapsed().as_millis() as u64;
-        Ok(out)
+        self.recover();
+        self.execute_batch(sql, fetch).map_err(|e| self.after_error(e))
     }
 
     fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
-        let mut out = FetchOutput::default();
-        let Some(st) = self.stmt.as_mut() else {
-            return Ok(out);
-        };
-        if st.in_result() {
-            match st.read(n.max(1)) {
-                Ok((rows, more)) => {
-                    out.rows = rows;
-                    out.has_more = more;
-                }
-                Err(e) => {
-                    self.stmt = None;
-                    self.pending.clear();
-                    return Err(e);
-                }
-            }
-        }
-        if !out.has_more {
-            let st = self.stmt.as_mut().unwrap();
-            if st.more_results()? {
-                let mut msgs = vec![];
-                out.extra = self.pump(n.max(1), &mut msgs)?;
-            } else {
-                self.stmt = None;
-            }
-        }
-        // The rest of a split batch.
-        if self.stmt.is_none() && !self.pending.is_empty() {
-            let mut msgs = vec![];
-            self.run_pending(n.max(1), &mut out.extra, &mut msgs)?;
-        }
-        Ok(out)
+        self.fetch_more(n).map_err(|e| self.after_error(e))
     }
 
     fn close_cursor(&mut self) -> Result<()> {
@@ -755,6 +793,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn set_autocommit(&mut self, on: bool) -> Result<bool> {
+        self.recover();
         self.stmt = None;
         self.pending.clear();
         if on && self.in_tx {
@@ -767,6 +806,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn commit(&mut self) -> Result<bool> {
+        self.recover();
         self.stmt = None;
         self.pending.clear();
         self.conn.end_tran(true)?;
@@ -775,6 +815,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn rollback(&mut self) -> Result<bool> {
+        self.recover();
         self.stmt = None;
         self.pending.clear();
         self.conn.end_tran(false)?;
@@ -783,6 +824,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn children(&mut self, path: &[String]) -> Result<Vec<MetaNode>> {
+        self.recover();
         let mut p: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
         // The interface also asks with the other engines' order [db, schema(owner), folder, table, …]: the tree
         // here is [db, folder, owner, table, …].
@@ -969,6 +1011,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {
+        self.recover();
         if self.dialect == Dialect::Generic {
             return self.generic_columns(obj);
         }
@@ -988,6 +1031,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn ddl(&mut self, obj: &ObjectRef) -> Result<String> {
+        self.recover();
         let qn = self.qualified_name(obj);
         if self.dialect == Dialect::Generic {
             if obj.kind != "table" {
@@ -1135,6 +1179,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn completion(&mut self, database: &str) -> Result<CompletionSchema> {
+        self.recover();
         let mut out = CompletionSchema::default();
         if self.dialect == Dialect::Generic {
             let rows = self
@@ -1169,6 +1214,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn databases(&mut self) -> Result<Vec<String>> {
+        self.recover();
         if self.dialect == Dialect::Generic {
             let rows = self
                 .odbc()?
@@ -1187,6 +1233,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn current_database(&mut self) -> Result<String> {
+        self.recover();
         if self.dialect == Dialect::Informix {
             let rows = self.q("SELECT TRIM(DBINFO('dbname')) FROM systables WHERE tabid = 1")?;
             return Ok(rows.first().map(|r| cell_str(&r[0])).unwrap_or_default());
@@ -1195,6 +1242,7 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn use_database(&mut self, db: &str) -> Result<()> {
+        self.recover();
         // Informix changes database by reconnecting: not when the session is already there (asked to the server,
         // since a DATABASE statement run by the user also moves it).
         if self.dialect == Dialect::Informix && self.current_database().is_ok_and(|current| current == db) {
