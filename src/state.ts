@@ -1100,6 +1100,8 @@ export async function connect(connId: string, password?: string) {
     persistSoon();
   } catch (err) {
     const message = errorText(err);
+    // Shown on its dot; showing its consoles does not try again on its own (connecting by hand does).
+    if (connectGeneration(connId) === generation) markConn(connId, "down", { note: plainError(message) });
     notify(`No se pudo conectar a «${conn.name}»`, "error", plainError(message));
     gib("connect-failed", { detail: plainError(message) });
     // Forget a typed password that did not work, so the next attempt asks again.
