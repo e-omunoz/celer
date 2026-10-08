@@ -61,10 +61,12 @@ const W_DOUBLE: u8 = 3;
 const W_TEXT: u8 = 4;
 const W_BYTES: u8 = 5;
 
-/// Informix's fetch buffer, in bytes, when the user does not set one. Measured against the 200,000-row read of the
-/// engine tests (`informix_speed`): the driver's default is the row size (4–8 KB, a round trip every few dozen
-/// rows); 4.50 accepts up to 2 GB when the server allows it (32 KB otherwise, and it cuts the value to that).
-pub const FET_BUF_SIZE: u32 = 1 << 20;
+/// Informix's fetch buffer, in bytes, when the user does not set one. The driver's default is the row size (4–8 KB,
+/// a round trip every few dozen rows); it accepts up to 2 GB when the server allows it (32 KB otherwise, and it cuts
+/// the value to that). Measured with the engine tests' 200,000-row read (`informix_speed`, Informix 15): 256 KB was
+/// the fastest (918 ms against 985 ms with 1 MB, 1,325 ms with the driver's default and 1,603 ms with 4 MB). Pages
+/// set the fetch size to the rows asked for; this buffer governs the reads without it (metadata).
+pub const FET_BUF_SIZE: u32 = 256 << 10;
 
 const MAX_FRAME: usize = 512 << 20;
 

@@ -140,7 +140,8 @@ with the Java it found.
   without it, so a published Celer always has it. CI builds it with `actions/setup-java`.
 
 Informix's own part lives on the Rust side: the URL (`jdbc:informix-sqli://host:port/db:INFORMIXSERVER=name`), the
-properties (`FET_BUF_SIZE`, `INFORMIXCONTIME`, `DB_LOCALE` / `CLIENT_LOCALE` from the environment unless given) and the
+properties (`FET_BUF_SIZE=262144`, the fastest in the engine tests' 200,000-row read; `INFORMIXCONTIME`; `DB_LOCALE` /
+`CLIENT_LOCALE` from the environment unless given) and the
 user's "Parámetros extra", which win over Celer's. `DELIMIDENT` is not set: Celer writes Informix names unquoted, as
 on the other protocols.
 

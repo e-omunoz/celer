@@ -175,7 +175,8 @@ En *Ajustes › Drivers* se ve qué ha encontrado, se puede elegir el de DBeaver
 y carga el driver.
 
 Java se arranca una sola vez para todas las conexiones JDBC (mientras escribes la contraseña) y no abre ningún puerto:
-habla con Celer por su entrada y salida estándar.
+habla con Celer por su entrada y salida estándar. Celer pide a Informix bloques de 256 KB (`FET_BUF_SIZE=262144`, lo más
+rápido en sus pruebas); si quieres otro valor, ponlo en *Parámetros extra*.
 
 **Detener una consulta** funciona como en los demás motores. Si el servidor no la detiene en 5 segundos (algunos
 proxies y cortafuegos se comen el aviso de cancelación de Informix), Celer corta esa conexión y abre otra en la misma
