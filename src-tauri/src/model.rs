@@ -99,6 +99,18 @@ pub struct ExecOutput {
     pub in_transaction: bool,
 }
 
+/// Una sesión comprobada (y reconectada si se había cortado), para la interfaz.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Health {
+    pub ok: bool,
+    /// La conexión se había cortado y otra ha ocupado su lugar.
+    pub reconnected: bool,
+    /// Lo que se perdió con la vieja ("" si nada), ya explicado.
+    pub lost: String,
+    pub ms: u64,
+    pub error: String,
+}
+
 /// Respuesta a `fetch`: más filas del resultado abierto y, si éste termina,
 /// los resultados posteriores del mismo lote.
 #[derive(Debug, Clone, Serialize, Default)]
