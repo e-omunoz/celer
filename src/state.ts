@@ -26,7 +26,7 @@ import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, typ
 import { activitySpec, readSessions, type ServerSession } from "./activity";
 import type { AiMessage } from "./ai";
 
-export type InspectorMode = "value" | "record" | "history" | "ai";
+export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
 
 export interface OutputEntry {
   at: number;
@@ -70,6 +70,8 @@ export interface SqlTab {
   fileEncoding?: string;
   /** The file's line endings, written back on save (the editor works with \n). */
   fileCrlf?: boolean;
+  /** The script library entry the console was opened from (saving to the library updates it). */
+  libraryId?: string;
   /** The last execution plan (Ctrl+Shift+E), shown in its own result tab. */
   plan: { plan: Plan; sql: string } | null;
   activePlan: boolean;
@@ -189,6 +191,7 @@ interface SavedSqlTab {
   filePath?: string;
   fileEncoding?: string;
   fileCrlf?: boolean;
+  libraryId?: string;
 }
 
 interface SavedTableTab {
@@ -349,11 +352,11 @@ export function pathKey(connId: string, path: string[]) {
   return `${connId}\u0000${path.join("\u0000")}`;
 }
 
-function uid(): string {
+export function uid(): string {
   return crypto.randomUUID();
 }
 
-function patchTab(id: string, patch: Record<string, unknown>) {
+export function patchTab(id: string, patch: Record<string, unknown>) {
   const index = state.tabs.findIndex((tab) => tab.id === id);
   if (index < 0) return;
   setState("tabs", index, patch as Partial<Tab>);
@@ -487,6 +490,7 @@ export async function boot() {
                   filePath: tab.filePath,
                   fileEncoding: tab.fileEncoding,
                   fileCrlf: tab.fileCrlf,
+                  libraryId: tab.libraryId,
                 },
           ),
       );
@@ -585,7 +589,7 @@ export function loadIfRestored(tabId: string) {
   void reloadTable(tabId, true);
 }
 
-function persistSoon() {
+export function persistSoon() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(persistNow, 400);
 }
@@ -599,7 +603,7 @@ export function persistNow() {
     tabs: state.tabs.map(
       (tab): SavedSqlTab | SavedTableTab =>
         tab.kind === "sql"
-          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf }
+          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, libraryId: tab.libraryId }
           : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
     ),
   };

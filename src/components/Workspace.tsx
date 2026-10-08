@@ -385,13 +385,13 @@ function SqlPane(props: { tab: SqlTab }) {
         </button>
         <Show when={props.tab.inTransaction}><span class="tag warn">Transacción abierta</span></Show>
         <span class="tb-sep" />
-        <button type="button" class="tb-icon" title="Formatear SQL (Ctrl+Alt+L)" onClick={formatActive}>
+        <button type="button" class="tb-icon secondary" title="Formatear SQL (Ctrl+Alt+L)" onClick={formatActive}>
           <AlignLeft size={16} />
         </button>
-        <button type="button" class="tb-icon" title="Abrir script (Ctrl+O)" onClick={() => void openScript()}>
+        <button type="button" class="tb-icon secondary" title="Abrir script (Ctrl+O)" onClick={() => void openScript()}>
           <FolderOpen size={16} />
         </button>
-        <button type="button" class="tb-icon" title="Guardar script (Ctrl+S)" onClick={() => void saveScript()}>
+        <button type="button" class="tb-icon secondary" title="Guardar script (Ctrl+S)" onClick={() => void saveScript()}>
           <Save size={16} />
         </button>
         <span class="spacer" />

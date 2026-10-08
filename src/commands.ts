@@ -30,6 +30,7 @@ import type { ThemeName } from "./types";
 import { askAi } from "./ai";
 import { checkForUpdates } from "./update";
 import { openMigration } from "./migrate";
+import { saveToLibrary } from "./library";
 
 export interface Command {
   id: string;
@@ -86,6 +87,8 @@ export function commands(): Command[] {
     { id: "ai-optimize", label: "IA: optimizar la consulta", group: "IA", run: () => void askAi("optimize"), enabled: sqlOnly },
     { id: "ai-schema", label: "Copiar esquema para IA", group: "IA", run: () => { const id = activeTab()?.connId; if (id) void copySchemaForAi(id); }, enabled: () => Boolean(activeTab()?.connId && state.sessions[activeTab()!.connId!]) },
     { id: "history", label: "Historial de consultas", group: "Ventana", keys: "Ctrl+Alt+E", run: () => openInspector("history") },
+    { id: "library", label: "Biblioteca de scripts", group: "Ventana", run: () => openInspector("library") },
+    { id: "save-library", label: "Guardar la consola en la biblioteca", group: "Archivo", keys: "Ctrl+Alt+B", run: () => void saveToLibrary(), enabled: sqlOnly },
     { id: "collapse", label: "Contraer el árbol", group: "Ventana", run: collapseAll },
     { id: "go-table", label: "Ir a tabla…", group: "Navegar", keys: "Ctrl+N", run: () => openPalette("tables") },
     { id: "reload-table", label: "Recargar tabla", group: "Datos", keys: "F5", run: () => { const tab = activeTab(); if (tab?.kind === "table") void reloadTableSafe(tab.id); }, enabled: () => activeTab()?.kind === "table" },
@@ -133,6 +136,7 @@ export function handleGlobalKey(event: KeyboardEvent): boolean {
   if (ctrl && event.shiftKey && key === "l") return run("new-console");
   if (ctrl && event.altKey && key === "s") return run("settings");
   if (ctrl && event.altKey && key === "e") return run("history");
+  if (ctrl && event.altKey && !event.shiftKey && key === "b") return run("save-library");
   if (ctrl && event.altKey && key === "i") return run("ai");
   if (ctrl && event.altKey && event.shiftKey && key === "c") return run("commit");
   if (ctrl && event.altKey && event.shiftKey && key === "r") return run("rollback");

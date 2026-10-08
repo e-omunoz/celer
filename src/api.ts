@@ -44,8 +44,8 @@ export interface Backend {
   addHistory(entry: HistoryEntry): Promise<void>;
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
-  loadJson(name: "settings" | "workspace"): Promise<unknown>;
-  saveJson(name: "settings" | "workspace", value: unknown): Promise<void>;
+  loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
+  saveJson(name: "settings" | "workspace" | "library", value: unknown): Promise<void>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */

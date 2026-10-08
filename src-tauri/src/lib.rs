@@ -471,7 +471,7 @@ fn clear_history(state: State<'_, Arc<AppState>>) -> CmdResult<()> {
 
 #[tauri::command]
 fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_json::Value> {
-    if !matches!(name.as_str(), "settings" | "workspace") {
+    if !matches!(name.as_str(), "settings" | "workspace" | "library") {
         return Err("Nombre no permitido".into());
     }
     Ok(state.store.load_json(&format!("{name}.json")))
@@ -483,7 +483,7 @@ fn save_json(
     name: String,
     value: serde_json::Value,
 ) -> CmdResult<()> {
-    if !matches!(name.as_str(), "settings" | "workspace") {
+    if !matches!(name.as_str(), "settings" | "workspace" | "library") {
         return Err("Nombre no permitido".into());
     }
     state

@@ -333,7 +333,8 @@
    ========================================================================== */
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; overflow: hidden; }
+/* clip, not hidden: focusing a field never scrolls the whole window sideways. */
+html, body, #root { height: 100%; margin: 0; overflow: clip; }
 body { background: var(--bg); color: var(--text); }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -571,18 +572,27 @@ kbd {
 .pane-host { position: absolute; inset: 0; display: none; }
 .pane-host.active { display: flex; }
 .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
+/* Scoped to .pane so they win over the base rules below (same specificity otherwise, and those come later). */
 @container (max-width: 760px) {
-  .tx-toggle, .pane-toolbar .tag.warn, .filter-field.narrow { display: none; }
-  .picker { max-width: 150px; }
+  .pane .tx-toggle, .pane .pane-toolbar .tag.warn, .pane .filter-field.narrow { display: none; }
+  .pane .picker { max-width: 150px; }
 }
 @container (max-width: 600px) {
-  .tb-btn.run span, .tb-btn.stop span { display: none; }
-  .tb-btn.run, .tb-btn.stop { padding: 0 8px; }
+  .pane .tb-btn.run span, .pane .tb-btn.stop span { display: none; }
+  .pane .tb-btn.run, .pane .tb-btn.stop { padding: 0 8px; }
+}
+/* Very narrow (side panels open on a small window): the separators go and the pickers shrink first. */
+@container (max-width: 440px) {
+  .pane .pane-toolbar .tb-sep, .pane .pane-toolbar .tb-icon.secondary, .pane .pane-toolbar .tb-icon:disabled { display: none; }
+  .pane .picker { max-width: 92px; }
+  .pane .ctx-pickers { flex: none; }
 }
 
 .pane-toolbar, .data-toolbar {
   display: flex; align-items: center; gap: 4px; height: var(--bar-h); flex: none; padding: 0 8px;
   border-bottom: 1px solid var(--border); background: var(--surface); min-width: 0;
+  /* Never painted over the panel next to it (its menus open in an overlay, not inside the bar). */
+  overflow: hidden;
 }
 .data-toolbar { height: 36px; background: var(--surface-alt); }
 .tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; flex: none; }
@@ -785,6 +795,24 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .history-item small i { width: 6px; height: 6px; border-radius: 50%; }
 .history-item small i.ok { background: var(--success); }
 .history-item small i.bad { background: var(--danger); }
+.library-item { position: relative; border-radius: 6px; }
+.library-item.open { box-shadow: inset 2px 0 0 var(--accent); }
+.library-item .history-item { padding-right: 58px; }
+.library-title { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-item .history-item code { color: var(--text-muted); -webkit-line-clamp: 2; }
+.library-actions { position: absolute; top: 5px; right: 4px; display: flex; gap: 1px; opacity: 0; transition: opacity 120ms; }
+.library-item:hover .library-actions, .library-item:focus-within .library-actions { opacity: 1; }
+.library-rename { width: calc(100% - 58px); margin: 6px 0 6px 8px; padding: 4px 8px; font: inherit; font-size: 12.5px; }
+.library-name { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin: 8px 6px 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2, var(--bg)); }
+.library-name label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
+.library-name-row { display: flex; gap: 6px; align-items: center; }
+.library-name-row input { flex: 1; min-width: 0; padding: 4px 8px; font: inherit; font-size: 12.5px; }
+.inspector { container-type: inline-size; container-name: inspector; }
+.inspector .toolwin-head .seg.small { min-width: 0; overflow: hidden; }
+/* A narrow panel: the tabs that are not open show just their icon (the title says what they are). */
+@container inspector (max-width: 440px) {
+  .inspector .toolwin-head .seg.small button:not(.on) .seg-label { display: none; }
+}
 
 /* ============================================================================
    Status bar
