@@ -27,6 +27,7 @@ import {
 } from "./libraryModel";
 import { activeSql, connectionById, notify, openInspector, openQuery, patchTab, persistSoon, runActive, selectTab, state, uid } from "./state";
 import type { SqlTab } from "./state";
+import { forwardFromPanel } from "./windows";
 
 export type { LibraryScript } from "./libraryModel";
 
@@ -101,6 +102,18 @@ export function loadLibrary(): Promise<void> {
       notify("No se pudo leer la biblioteca de scripts", "error", message);
     });
   return loading;
+}
+
+/**
+ * library.json changed in another window: the core sends the new file to every window (only the core writes it, see
+ * windows.ts), so this one shows the same scripts and folders.
+ */
+export function applySharedLibrary(file: unknown) {
+  const data = migrateLibrary(file);
+  extra = data.extra;
+  loadFailed = false;
+  loading ??= Promise.resolve();
+  setLibrary({ loaded: true, scripts: data.scripts, folders: data.folders });
 }
 
 async function persist() {
@@ -183,6 +196,8 @@ function suggestedName(title: string, sql: string, connName?: string): string {
  * one (or `asNew`) asks for a name first, in the library panel, to go into `folder` (by default the current one).
  */
 export async function saveToLibrary(asNew = false, folder?: string) {
+  // From the library's own window: the console is in the window it works with, which asks for the name.
+  if (forwardFromPanel("library-save", { asNew, folder: folder ?? null })) return;
   const tab = activeSql();
   if (!tab) return;
   if (!tab.sql.trim()) {
@@ -195,7 +210,7 @@ export async function saveToLibrary(asNew = false, folder?: string) {
     await saveConsoleToScript(existing.id);
     return;
   }
-  openInspector("library");
+  openInspector("library", true);
   const name = existing ? copyName(existing.name, library.scripts.map((s) => s.name)) : suggestedName(tab.title, tab.sql, connectionById(tab.connId)?.name);
   setLibrary("naming", { tabId: tab.id, name, folder: folder ?? existing?.folder ?? currentFolder() });
 }
@@ -212,6 +227,7 @@ export async function saveConsoleToScript(id: string) {
 
 /** Puts the saved text back in the script's open console (drops the changes made there). */
 export function revertConsole(id: string) {
+  if (forwardFromPanel("library-revert", { id })) return;
   const tab = consoleOf(id);
   const script = scriptById(id);
   if (!tab || !script) return;
@@ -259,6 +275,7 @@ export function cancelNaming() {
 
 /** Opens a library script in a console (on its connection when it still exists); `run` also runs all of it. */
 export async function openLibraryScript(id: string, run = false) {
+  if (forwardFromPanel("library-open", { id, run })) return;
   const script = scriptById(id);
   if (!script) return;
   setLibrary("scripts", (s) => s.id === id, "usedAt", Date.now());
@@ -285,6 +302,7 @@ export async function openLibraryScript(id: string, run = false) {
 
 /** Pastes the script at the cursor of the active console (or opens a console with it). */
 export function insertLibraryScript(id: string) {
+  if (forwardFromPanel("library-insert", { id })) return;
   const script = scriptById(id);
   if (!script) return;
   const tab = activeSql();

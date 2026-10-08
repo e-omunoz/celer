@@ -7,6 +7,7 @@ import { columnIndex, compareResults, guessKey, keyIsUnique, type Comparison } f
 import { dataSyncScript } from "./dataCompareSql";
 import { connectionById, kindOf, notify, openQuery, openSessionFor, patchTab, persistSoon } from "./state";
 import type { ObjectRef, ResultSet, TableColumn } from "./types";
+import { forwardFromPanel } from "./windows";
 
 export const DATA_LIMIT = 50_000;
 
@@ -122,6 +123,8 @@ export async function runDataCompare(source: TableRef, target: TableRef) {
 }
 
 export function swapDataCompare() {
+  // In a window of its own: the window it came from compares again and sends it over.
+  if (forwardFromPanel("data-swap")) return;
   const { source, target } = dataCompare;
   if (source && target && !dataCompare.loading) void runDataCompare(target, source);
 }
@@ -133,6 +136,7 @@ export function closeDataCompare() {
 
 /** INSERT / UPDATE (and DELETE commented) to make the target's rows like the source's, in a console of the target. */
 export function openDataSyncScript() {
+  if (forwardFromPanel("data-script")) return;
   const { source, target, comparison } = dataCompare;
   if (!source || !target || !comparison || dataCompare.blocked) return;
   const header = `-- Cambios para que ${tableTitle(target)}\n-- tenga los datos de ${tableTitle(source)}${dataCompare.truncated ? ` (solo las primeras ${DATA_LIMIT.toLocaleString()} filas de cada una)` : ""}.\n-- Revísalo antes de ejecutarlo (Ctrl+Mayús+Intro ejecuta el script entero).\n\n`;

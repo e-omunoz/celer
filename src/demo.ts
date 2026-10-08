@@ -623,8 +623,9 @@ export function createDemoBackend(): Backend {
       const value = localStorage.getItem(`celer.${name}`);
       return value ? JSON.parse(value) : null;
     },
-    async saveJson(name, value) {
-      writeJson(`celer.${name}`, value);
+    async saveJson(name, value, merge) {
+      const before = merge ? JSON.parse(localStorage.getItem(`celer.${name}`) ?? "null") : null;
+      writeJson(`celer.${name}`, before && typeof before === "object" && value && typeof value === "object" ? { ...before, ...value } : value);
     },
     async readTextFile(path) {
       const hit = textFiles.get(path);

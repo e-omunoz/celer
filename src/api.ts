@@ -47,7 +47,11 @@ export interface Backend {
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
   loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
-  saveJson(name: "settings" | "workspace" | "library", value: unknown): Promise<void>;
+  /**
+   * Writes a shared file through the core, which tells the other windows. `merge`: `value` holds only some top-level
+   * keys, merged into what the file has. In the desktop app the workspace is written by windows.ts instead.
+   */
+  saveJson(name: "settings" | "workspace" | "library", value: unknown, merge?: boolean): Promise<void>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */
@@ -124,7 +128,7 @@ function tauriBackend(): Backend {
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
     clearHistory: () => invoke("clear_history"),
     loadJson: (name) => invoke("load_json", { name }),
-    saveJson: (name, value) => invoke("save_json", { name, value }),
+    saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),
     readSpreadsheet: (path, sheet) => invoke("read_spreadsheet", { path, sheet: sheet ?? null }),
     writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),

@@ -25,6 +25,17 @@ function loadMemory(): Memory {
   }
 }
 
+// Gib lives in one window at a time and that window writes his memory; when he moves to another window, or the
+// palette of another window resets it, the others read it again (the storage is the same for every window).
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== MEMORY_KEY) return;
+    const fresh = loadMemory();
+    memory.seen = fresh.seen;
+    memory.advice = fresh.advice;
+  });
+}
+
 export function saveMemory() {
   try {
     localStorage.setItem(MEMORY_KEY, JSON.stringify(memory));

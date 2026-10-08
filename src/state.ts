@@ -26,6 +26,8 @@ import type { ErEdge, ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, parseSynapsePlan, type Plan } from "./plan";
 import { activitySpec, readSessions, synapseDedicated, type ServerSession } from "./activity";
 import type { AiMessage } from "./ai";
+import { insertAt } from "./windowModel";
+import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
 
@@ -180,7 +182,7 @@ interface ConnSession {
   connecting?: boolean;
 }
 
-interface SavedSqlTab {
+export interface SavedSqlTab {
   id: string;
   kind: "sql";
   title: string;
@@ -195,7 +197,7 @@ interface SavedSqlTab {
   libraryId?: string;
 }
 
-interface SavedTableTab {
+export interface SavedTableTab {
   id: string;
   kind: "table";
   title: string;
@@ -209,11 +211,8 @@ interface SavedTableTab {
   sort: TableTab["sort"];
 }
 
-interface WorkspaceFile {
-  tabs: (SavedSqlTab | SavedTableTab)[];
-  activeTabId: string;
-  sidebarWidth: number;
-}
+/** A tab as workspace.json keeps it (one list per window, see windowModel.ts). */
+export type SavedTab = SavedSqlTab | SavedTableTab;
 
 export interface MenuItem {
   label?: string;
@@ -255,8 +254,21 @@ export interface GridStats {
   distinct: number;
 }
 
+/**
+ * The state of this window. Every Celer window (windows.ts) is its own page with its own copy of this store, split
+ * in two:
+ * - shared by every window: the saved connections and the settings (theme and shortcuts included). The core owns
+ *   them; a change is sent to the core, which writes the file and tells the other windows (windows.ts);
+ * - this window's own: its tabs and their sessions, its explorer (the connections it opened), its panels, focus,
+ *   dialogs and the typed passwords it was given.
+ */
 export const [state, setState] = createStore({
+  // ---- shared by every window (mirrored from the core)
   connections: [] as ConnSummary[],
+  settings: { ...defaultSettings } as Settings,
+  appInfo: { version: "", dataDir: "" },
+  driverPath: null as string | null,
+  // ---- this window's own
   sessions: {} as Record<string, ConnSession>,
   connecting: {} as Record<string, boolean>,
   catalog: {} as Record<string, { database: string; tables: CompletionSchema["tables"] }>,
@@ -266,7 +278,6 @@ export const [state, setState] = createStore({
   treeSelected: "",
   tabs: [] as Tab[],
   activeTabId: "",
-  settings: { ...defaultSettings } as Settings,
   explorerOpen: true,
   inspectorOpen: false,
   inspectorMode: "value" as InspectorMode,
@@ -295,8 +306,6 @@ export const [state, setState] = createStore({
   previewSql: "",
   previewRun: null as (() => Promise<void>) | null,
   toasts: [] as Toast[],
-  appInfo: { version: "", dataDir: "" },
-  driverPath: null as string | null,
   driverProgress: "",
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
   passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
@@ -332,7 +341,10 @@ export interface GibEvent {
 }
 export const [gibEvent, setGibEvent] = createSignal<GibEvent | null>(null);
 export function gib(type: GibEvent["type"], extra: Omit<GibEvent, "type" | "at"> = {}) {
-  setGibEvent({ type, at: Date.now(), ...extra });
+  const event: GibEvent = { type, at: Date.now(), ...extra };
+  // Gib lives in one window: the others tell him what happened there.
+  if (!gibHere()) forwardGib(event);
+  else setGibEvent(event);
 }
 /** False while the startup animation plays; the companion appears when Gib lands. */
 export const [splashDone, setSplashDone] = createSignal(false);
@@ -481,40 +493,9 @@ export async function boot() {
   } catch (err) {
     notify(errorText(err), "error");
   }
-  try {
-    const workspace = (await api().loadJson("workspace")) as WorkspaceFile | null;
-    if (workspace?.tabs?.length) {
-      // Tables of connections that no longer exist are dropped (only when the list did load: a failure must not
-      // lose them for good); the rest load when first shown.
-      const known = (id: string | null) => !id || !connectionsLoaded || state.connections.some((conn) => conn.id === id);
-      setState(
-        "tabs",
-        workspace.tabs
-          .filter((tab) => tab.kind !== "table" || known(tab.connId))
-          .map((tab): Tab =>
-            tab.kind === "table"
-              ? { ...blankTable(tab.id, tab.connId, tab.obj, "", tab.database, tab.section, tab.filters ?? []), where: tab.where ?? "", orderBy: tab.orderBy ?? "", sort: tab.sort ?? null, loading: false, restored: true }
-              : {
-                  ...blankSql(tab.id, tab.connId, tab.sql, tab.title),
-                  database: tab.database ?? "",
-                  cursor: Math.min(tab.cursor ?? tab.sql.length, tab.sql.length),
-                  autocommit: tab.autocommit ?? true,
-                  filePath: tab.filePath,
-                  fileEncoding: tab.fileEncoding,
-                  fileCrlf: tab.fileCrlf,
-                  libraryId: tab.libraryId,
-                },
-          ),
-      );
-      const active = state.tabs.some((tab) => tab.id === workspace.activeTabId) ? workspace.activeTabId : state.tabs[0]?.id ?? "";
-      setState("activeTabId", active);
-    }
-  } catch (err) {
-    const message = errorText(err);
-    // Not read but still there (locked…): this session must not write over it. A damaged one was set aside.
-    if (!message.includes(".unreadable-")) workspaceUnreadable = true;
-    notify("No se pudieron restaurar las pestañas de la última sesión", "error", message);
-  }
+  // This window's tabs: the main one's from workspace.json (and the other windows open again), a new window's from
+  // the window that opened it.
+  await restoreWindowLayout(connectionsLoaded);
   setState("ready", true);
   void api().onExportProgress((progress) => {
     if (state.exportRunning) setState("exportRows", progress.rows);
@@ -525,7 +506,33 @@ export async function boot() {
   });
 }
 
-function blankSql(id: string, connId: string | null = null, sql = "", title = "console"): SqlTab {
+/**
+ * Puts saved tabs in this window: tables of connections that no longer exist are dropped (`known`), the rest load
+ * when first shown.
+ */
+export function restoreTabs(saved: SavedTab[], activeTabId: string, known: (connId: string | null) => boolean) {
+  const tabs = saved
+    .filter((tab) => tab.kind !== "table" || known(tab.connId))
+    .map((tab): Tab =>
+      tab.kind === "table"
+        ? { ...blankTable(tab.id, tab.connId, tab.obj, "", tab.database, tab.section, tab.filters ?? []), where: tab.where ?? "", orderBy: tab.orderBy ?? "", sort: tab.sort ?? null, loading: false, restored: true }
+        : {
+            ...blankSql(tab.id, tab.connId, tab.sql, tab.title),
+            database: tab.database ?? "",
+            cursor: Math.min(tab.cursor ?? tab.sql.length, tab.sql.length),
+            autocommit: tab.autocommit ?? true,
+            filePath: tab.filePath,
+            fileEncoding: tab.fileEncoding,
+            fileCrlf: tab.fileCrlf,
+            libraryId: tab.libraryId,
+          },
+    );
+  if (!tabs.length) return;
+  setState("tabs", [...state.tabs, ...tabs]);
+  setState("activeTabId", state.tabs.some((tab) => tab.id === activeTabId) ? activeTabId : (state.tabs[0]?.id ?? ""));
+}
+
+export function blankSql(id: string, connId: string | null = null, sql = "", title = "console"): SqlTab {
   return {
     id,
     kind: "sql",
@@ -609,24 +616,20 @@ export function persistSoon() {
   saveTimer = window.setTimeout(persistNow, 400);
 }
 
-/** The workspace file could not be read at start-up: it is left as it is (not replaced by this session's tabs). */
-let workspaceUnreadable = false;
+/** This window's tabs as workspace.json keeps them. */
+export function savedTabs(): SavedTab[] {
+  return state.tabs.map(
+    (tab): SavedTab =>
+      tab.kind === "sql"
+        ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, libraryId: tab.libraryId }
+        : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
+  );
+}
 
-/** Writes the workspace file right away (used before the window closes). */
+/** Writes this window's part of the workspace file right away (used before the window closes). */
 export function persistNow() {
   window.clearTimeout(saveTimer);
-  if (workspaceUnreadable) return Promise.resolve();
-  const file: WorkspaceFile = {
-    activeTabId: state.activeTabId,
-    sidebarWidth: state.settings.sidebarWidth,
-    tabs: state.tabs.map(
-      (tab): SavedSqlTab | SavedTableTab =>
-        tab.kind === "sql"
-          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, libraryId: tab.libraryId }
-          : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
-    ),
-  };
-  return api().saveJson("workspace", file);
+  return saveWindowLayout();
 }
 
 /** Before the window closes: warn about open transactions and unsaved table edits, then save the workspace. */
@@ -653,7 +656,15 @@ export async function saveSettings(patch: Partial<Settings>) {
     notify("Los ajustes no se guardan en esta sesión: no se pudo leer el fichero que ya había", "warning");
     return;
   }
-  await api().saveJson("settings", settings);
+  // Only what changed: the core merges it into settings.json and tells the other windows, so two windows changing
+  // different settings at once do not undo each other.
+  await api().saveJson("settings", patch, true);
+}
+
+/** Settings changed by another window (the core sends the whole file). */
+export function applySharedSettings(value: Partial<Settings>) {
+  setState("settings", { ...defaultSettings, ...value });
+  applyTheme();
 }
 
 // ---------------------------------------------------------------- connections
@@ -1017,7 +1028,8 @@ export async function connect(connId: string, password?: string) {
     gib("connected", { production: conn.production, detail: conn.name });
     const current = activeTab();
     if (!current) {
-      openQuery(connId, "");
+      // A panel window has no consoles of its own.
+      if (!isPanelWindow()) openQuery(connId, "");
     } else if (current.kind === "sql" && !current.connId) {
       setState("tabs", tabIndex(current.id), { connId, database: opened.database, serverInfo: opened.serverInfo, title: current.title === "console" ? conn.name : current.title });
       warmSqlSession(current.id);
@@ -1084,6 +1096,8 @@ export async function disconnect(connId: string, confirm = true) {
   generations[connId] = connectGeneration(connId) + 1;
   for (const tab of affected) bumpToken(tab.id);
   if (exporting) void cancelExport();
+  // This window's sessions of the connection (its explorer, its tabs, its activity monitor): other windows keep theirs.
+  const own = [state.sessions[connId]?.metaId, ...affected.map((tab) => tab.sessionId), state.activity?.connId === connId ? state.activity.sessionId : ""].filter((id): id is string => Boolean(id));
   // The UI forgets the connection at once; the sessions close behind it.
   setState(
     produce((draft) => {
@@ -1113,7 +1127,8 @@ export async function disconnect(connId: string, confirm = true) {
       }
     }),
   );
-  await api().closeConnectionSessions(connId).catch(() => 0);
+  if (otherFullWindows().length) await Promise.all(own.map((id) => api().closeSession(id).catch(() => {})));
+  else await api().closeConnectionSessions(connId).catch(() => 0);
   persistSoon();
 }
 
@@ -1243,6 +1258,7 @@ export function formatActive() {
 }
 
 export function insertIntoActive(text: string) {
+  if (forwardFromPanel("insert", { text })) return;
   const tab = activeSql();
   if (!tab) {
     openQuery(null, text);
@@ -1277,6 +1293,9 @@ function warmSqlSession(tabId: string) {
 
 async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   if (!tab.connId) throw new Error("Elige una conexión para esta consola");
+  // Moved here from another window with its session (and its transaction, #temp tables, pending rows): kept.
+  const moved = state.tabs[tabIndex(tab.id)];
+  if (moved?.kind === "sql" && moved.sessionId) return moved;
   if (!state.sessions[tab.connId]) await connect(tab.connId);
   if (!state.sessions[tab.connId]) throw new Error("Sin conexión");
   const fresh = state.tabs[tabIndex(tab.id)];
@@ -1472,6 +1491,8 @@ function afterSideStatement(tabId: string, inTransaction: boolean | null): Parti
  * without a plan reader show the raw EXPLAIN output instead.
  */
 export async function explainStatement(tabId: string, sql: string, analyze = false) {
+  // A plan in a window of its own: the console's window plans again, and sends the new plan over.
+  if (forwardFromPanel("plan-explain", { tabId, sql, analyze })) return;
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "sql" || tab.running) return;
   const kind = kindOf(tab.connId);
@@ -1535,6 +1556,7 @@ export async function explainStatement(tabId: string, sql: string, analyze = fal
 
 /** Runs a given SQL text in the active console without touching what the user wrote. */
 export async function runText(sql: string) {
+  if (forwardFromPanel("run-text", { sql })) return;
   const tab = activeSql();
   if (!tab) return;
   const keep = tab.selection;
@@ -1545,6 +1567,7 @@ export async function runText(sql: string) {
 
 /** Replaces the whole text of the active console. */
 export function replaceActiveSql(sql: string) {
+  if (forwardFromPanel("replace", { sql })) return;
   const tab = activeSql();
   if (!tab) {
     openQuery(null, sql);
@@ -1831,6 +1854,7 @@ export async function followForeignKey(tab: TableTab, fk: ForeignKey, row?: Reco
 }
 
 export async function openTable(connId: string, obj: ObjectRef, section: TableTab["section"] = "data", filters: ColumnFilter[] = []) {
+  if (forwardFromPanel("open-table", { connId, obj, section, filters })) return;
   const existing = state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
   if (existing) {
     // A restored tab not loaded yet loads once here (with the filters, if any), not again when it is shown.
@@ -2303,6 +2327,55 @@ export async function closeOtherTabs(id: string) {
   for (const tab of state.tabs.filter((item) => item.id !== id)) await closeTab(tab.id);
 }
 
+/** Why a tab cannot go to another window right now ("" when it can): its answer would arrive here. */
+export function tabMoveBlocker(tab: Tab): string {
+  if (tab.kind === "sql" && tab.running) return "La consola está ejecutando: espera a que termine o detenla antes de moverla";
+  if (tab.kind === "table" && (tab.loading || tab.counting)) return "La tabla está cargando: espera a que termine antes de moverla";
+  if (openingSql.has(tab.id) || reopening.has(tab.id)) return "La pestaña está conectando: prueba otra vez en un momento";
+  return "";
+}
+
+/**
+ * Takes a tab out of this window without closing its session: it goes on in another window (windows.ts) with the
+ * same connection, transaction, pending rows and #temp tables.
+ */
+export function detachTab(id: string) {
+  const position = tabIndex(id);
+  if (position < 0) return;
+  // Anything still on its way for it belongs to the other window now.
+  bumpToken(id);
+  delete rememberedParams[id];
+  const tabs = state.tabs.filter((item) => item.id !== id);
+  setState("tabs", tabs);
+  if (state.activeTabId === id) setState("activeTabId", tabs[Math.min(position, tabs.length - 1)]?.id ?? "");
+  persistSoon();
+}
+
+/** A tab from another window, at `index` (the end when null), with its session as it was. */
+export function adoptTab(tab: Tab, index: number | null) {
+  if (tabIndex(tab.id) >= 0) return;
+  setState("tabs", insertAt(state.tabs, [tab], index));
+  setState("activeTabId", tab.id);
+  persistSoon();
+}
+
+/** Closes tabs without asking (their window is closing and the user chose so): their sessions end. */
+export async function closeTabsQuietly(ids: string[]) {
+  const closing = state.tabs.filter((tab) => ids.includes(tab.id));
+  if (!closing.length) return;
+  for (const tab of closing) bumpToken(tab.id);
+  setState("tabs", state.tabs.filter((tab) => !ids.includes(tab.id)));
+  if (!state.tabs.some((tab) => tab.id === state.activeTabId)) setState("activeTabId", state.tabs[0]?.id ?? "");
+  await Promise.all(closing.map((tab) => (tab.sessionId ? api().closeSession(tab.sessionId).catch(() => {}) : Promise.resolve())));
+}
+
+/** The sessions this window opened besides its tabs' (explorer, activity monitor, export), before it closes. */
+export async function releaseWindowSessions() {
+  if (state.exportRunning) await cancelExport().catch(() => {});
+  if (state.activity) closeActivity();
+  await Promise.all(Object.values(state.sessions).map((session) => api().closeSession(session.metaId).catch(() => {})));
+}
+
 export function selectTab(id: string) {
   setState("activeTabId", id);
   persistSoon();
@@ -2405,7 +2478,12 @@ export async function refreshHistory() {
   setState("history", await api().getHistory(state.historyQuery, 300));
 }
 
-export function openInspector(mode: InspectorMode) {
+/**
+ * Shows a side panel. The library and the assistant may be in a window of their own: that window comes to the front
+ * instead, unless `docked` (the library asking for a script's name needs this window's panel).
+ */
+export function openInspector(mode: InspectorMode, docked = false) {
+  if (!docked && (mode === "library" || mode === "ai") && raisePanel(mode)) return;
   setState({ inspectorOpen: true, inspectorMode: mode });
   if (mode === "history") void refreshHistory();
 }
