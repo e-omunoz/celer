@@ -1,11 +1,11 @@
-import { BookMarked, BookmarkPlus, Braces, Code2, Copy, History, Pencil, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
+import { BookMarked, Braces, Code2, Copy, History, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
 import { AiPanel } from "./AiPanel";
-import { createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
-import { cancelNaming, deleteLibraryScript, filteredScripts, finishNaming, library, loadLibrary, openLibraryScript, renameLibraryScript, saveToLibrary, setLibrary, type LibraryScript } from "../library";
-import { shortcutLabel, withShortcut } from "../commands";
+import { LibraryView, relative } from "./LibraryView";
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { withShortcut } from "../commands";
 import { prettyXml } from "../prettyXml";
 import { cellText, isNullCell, prettyJson } from "../sql";
-import { activeSql, clearHistory, confirmDialog, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory } from "../state";
+import { clearHistory, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory } from "../state";
 
 export function Inspector() {
   return (
@@ -15,7 +15,7 @@ export function Inspector() {
           <button type="button" classList={{ on: state.inspectorMode === "value" }} title="Valor de la celda" onClick={() => openInspector("value")}><Braces size={13} /><span class="seg-label">Valor</span></button>
           <button type="button" classList={{ on: state.inspectorMode === "record" }} title="Registro: la fila como formulario" onClick={() => openInspector("record")}><Rows3 size={13} /><span class="seg-label">Registro</span></button>
           <button type="button" classList={{ on: state.inspectorMode === "history" }} title={withShortcut("Historial de consultas", "history")} onClick={() => openInspector("history")}><History size={13} /><span class="seg-label">Historial</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "library" }} title="Biblioteca de scripts guardados" onClick={() => openInspector("library")}><BookMarked size={13} /><span class="seg-label">Biblioteca</span></button>
+          <button type="button" classList={{ on: state.inspectorMode === "library" }} title={withShortcut("Biblioteca de scripts guardados", "library")} onClick={() => openInspector("library")}><BookMarked size={13} /><span class="seg-label">Biblioteca</span></button>
           <button type="button" classList={{ on: state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => openInspector("ai")}><Sparkles size={13} /><span class="seg-label">IA</span></button>
         </div>
         <span class="spacer" />
@@ -151,114 +151,4 @@ function HistoryView() {
       </div>
     </>
   );
-}
-
-function LibraryView() {
-  onMount(() => void loadLibrary());
-  const [renaming, setRenaming] = createSignal<string | null>(null);
-  const focusSelect = (el: HTMLInputElement) => queueMicrotask(() => {
-    el.focus();
-    el.select();
-  });
-  const remove = async (script: LibraryScript) => {
-    if (await confirmDialog("Borrar de la biblioteca", `Se borra «${script.name}» de la biblioteca. Las consolas abiertas conservan su texto.`, "Borrar", true)) void deleteLibraryScript(script.id);
-  };
-  return (
-    <>
-      <Show when={library.naming}>
-        {(naming) => (
-          <form
-            class="library-name"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void finishNaming(new FormData(event.currentTarget).get("name") as string);
-            }}
-          >
-            <label for="library-name">Nombre del script</label>
-            <div class="library-name-row">
-              <input
-                id="library-name"
-                name="name"
-                value={naming().name}
-                ref={focusSelect}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    event.stopPropagation();
-                    cancelNaming();
-                  }
-                }}
-              />
-              <button type="submit" class="btn primary tiny">Guardar</button>
-              <button type="button" class="btn tiny" onClick={cancelNaming}>Cancelar</button>
-            </div>
-          </form>
-        )}
-      </Show>
-      <div class="record-head">
-        <div class="mini-search grow">
-          <Search size={12} />
-          <input placeholder="Buscar en la biblioteca" value={library.query} onInput={(event) => setLibrary("query", event.currentTarget.value)} />
-        </div>
-        <button type="button" class="icon-btn" title={withShortcut("Guardar la consola actual en la biblioteca", "save-library")} disabled={!activeSql()} onClick={() => void saveToLibrary()}><BookmarkPlus size={14} /></button>
-      </div>
-      <div class="history-list">
-        <Show when={library.loaded && !library.scripts.length}>
-          <p class="inspector-empty">
-            La biblioteca está vacía. Guarda aquí las consultas que repites
-            {shortcutLabel("save-library") ? ` con ${shortcutLabel("save-library")}` : " con el botón de arriba"} desde la consola.
-          </p>
-        </Show>
-        <Show when={library.scripts.length && !filteredScripts().length}>
-          <p class="inspector-empty">Ningún script coincide con la búsqueda.</p>
-        </Show>
-        <For each={filteredScripts()}>
-          {(script) => (
-            <div class="library-item" classList={{ open: activeSql()?.libraryId === script.id }}>
-              <Show
-                when={renaming() === script.id}
-                fallback={
-                  <button type="button" class="history-item" title="Abrir en una consola" onClick={() => openLibraryScript(script.id)}>
-                    <b class="library-title">{script.name}</b>
-                    <code>{script.sql.replace(/\s+/g, " ").slice(0, 180)}</code>
-                    <small>{connectionById(script.connId)?.name ?? "Sin conexión"} · {relative(script.updatedAt)}</small>
-                  </button>
-                }
-              >
-                <input
-                  class="library-rename"
-                  value={script.name}
-                  ref={focusSelect}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      void renameLibraryScript(script.id, event.currentTarget.value);
-                      setRenaming(null);
-                    } else if (event.key === "Escape") {
-                      event.stopPropagation();
-                      setRenaming(null);
-                    }
-                  }}
-                  onBlur={(event) => {
-                    if (renaming() === script.id) void renameLibraryScript(script.id, event.currentTarget.value);
-                    setRenaming(null);
-                  }}
-                />
-              </Show>
-              <div class="library-actions">
-                <button type="button" class="icon-btn" title="Renombrar" onClick={() => setRenaming(script.id)}><Pencil size={13} /></button>
-                <button type="button" class="icon-btn" title="Borrar de la biblioteca" onClick={() => void remove(script)}><Trash2 size={13} /></button>
-              </div>
-            </div>
-          )}
-        </For>
-      </div>
-    </>
-  );
-}
-
-function relative(at: number) {
-  const diff = Date.now() - at;
-  if (diff < 60_000) return "ahora";
-  if (diff < 3_600_000) return `hace ${Math.floor(diff / 60_000)} min`;
-  if (diff < 86_400_000) return `hace ${Math.floor(diff / 3_600_000)} h`;
-  return new Date(at).toLocaleDateString();
 }

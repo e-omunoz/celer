@@ -72,8 +72,11 @@ export interface Backend {
   mcpClientInfo(): Promise<McpClientInfo>;
   mcpInstallClaudeDesktop(): Promise<string>;
   mcpTestTool(name: string, args: Record<string, unknown>): Promise<unknown>;
-  pickSavePath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
+  /** `defaultName`: the file name the dialog proposes. */
+  pickSavePath(filters: { name: string; extensions: string[] }[], defaultName?: string): Promise<string | null>;
   pickOpenPath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
+  /** Several files at once (an empty list when cancelled). */
+  pickOpenPaths(filters: { name: string; extensions: string[] }[]): Promise<string[]>;
   onExportProgress(cb: (progress: { exportId: string; rows: number }) => void): Promise<() => void>;
   onDriverDownload(cb: (progress: { done: number; total: number }) => void): Promise<() => void>;
 }
@@ -145,9 +148,9 @@ function tauriBackend(): Backend {
     mcpClientInfo: () => invoke("mcp_client_info"),
     mcpInstallClaudeDesktop: () => invoke("mcp_install_claude_desktop"),
     mcpTestTool: (name, args) => invoke("mcp_test_tool", { name, args }),
-    pickSavePath: async (filters) => {
+    pickSavePath: async (filters, defaultName) => {
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const picked = await save({ filters });
+      const picked = await save({ filters, defaultPath: defaultName });
       return picked ?? null;
     },
     pickOpenPath: async (filters) => {
@@ -161,6 +164,11 @@ function tauriBackend(): Backend {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const picked = await open({ multiple: false, directory: false, filters });
       return typeof picked === "string" ? picked : null;
+    },
+    pickOpenPaths: async (filters) => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({ multiple: true, directory: false, filters });
+      return Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
     },
     onExportProgress: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");

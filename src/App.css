@@ -816,18 +816,59 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .history-item small i { width: 6px; height: 6px; border-radius: 50%; }
 .history-item small i.ok { background: var(--success); }
 .history-item small i.bad { background: var(--danger); }
-.library-item { position: relative; border-radius: 6px; }
-.library-item.open { box-shadow: inset 2px 0 0 var(--accent); }
-.library-item .history-item { padding-right: 58px; }
-.library-title { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.library-item .history-item code { color: var(--text-muted); -webkit-line-clamp: 2; }
-.library-actions { position: absolute; top: 5px; right: 4px; display: flex; gap: 1px; opacity: 0; transition: opacity 120ms; }
-.library-item:hover .library-actions, .library-item:focus-within .library-actions { opacity: 1; }
-.library-rename { width: calc(100% - 58px); margin: 6px 0 6px 8px; padding: 4px 8px; font: inherit; font-size: 12.5px; }
 .library-name { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin: 8px 6px 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2, var(--bg)); }
 .library-name label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
 .library-name-row { display: flex; gap: 6px; align-items: center; }
+.library-name > input, .lib-details > input, .lib-details > select { min-width: 0; padding: 4px 8px; font: inherit; font-size: 12.5px; }
 .library-name-row input { flex: 1; min-width: 0; padding: 4px 8px; font: inherit; font-size: 12.5px; }
+.library-name-row small { font-size: 11px; line-height: 1.35; }
+
+/* Script library: a tree of folders and scripts */
+.library { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.lib-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 8px 14px; }
+.lib-tag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast); }
+.lib-tag small { font-size: 10px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.lib-tag:hover { color: var(--text); border-color: var(--border-strong); }
+.lib-tag.on { color: var(--accent-text); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.lib-tag.small { height: 16px; padding: 0 5px; font-size: 10.5px; }
+.lib-tree { flex: 1; overflow: auto; padding: 2px 6px 12px; outline: none; border-radius: 6px; }
+.lib-tree.drop-root { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
+.lib-row { position: relative; display: flex; align-items: flex-start; gap: 6px; padding: 5px 8px 5px 6px; border-radius: 6px; cursor: default; user-select: none; }
+.lib-row.folder { align-items: center; height: 28px; padding-top: 0; padding-bottom: 0; }
+.lib-row:hover { background: var(--hover); }
+.lib-row.selected { background: var(--active); }
+.lib-tree:focus-visible .lib-row.selected { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.lib-row.open::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--accent); }
+.lib-row.dragging { opacity: 0.45; }
+.lib-row.drop-into { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent); }
+.lib-chevron { display: inline-grid; place-items: center; width: 12px; color: var(--text-faint); transition: transform var(--dur-fast) var(--ease-out); }
+.lib-chevron.open { transform: rotate(90deg); }
+.lib-icon { display: inline-grid; place-items: center; flex: none; line-height: 0; }
+.lib-icon.folder { color: var(--text-muted); }
+.lib-icon.script { color: var(--text-faint); margin-top: 1px; }
+.lib-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.lib-row.script .lib-name { font-weight: 600; color: var(--text); }
+.lib-count { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.lib-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.lib-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lib-dirty { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+.lib-preview { font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; color: var(--text-faint); }
+.lib-conn { display: inline-flex; align-items: center; gap: 4px; margin-right: 2px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-conn i { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+/* Actions over the row's right end; they appear on hover, selection or focus (opacity only) */
+.lib-actions { position: absolute; top: 3px; right: 4px; display: flex; gap: 1px; padding-left: 10px; border-radius: 6px; background: linear-gradient(90deg, transparent, var(--panel) 10px); opacity: 0; pointer-events: none; transition: opacity var(--dur-fast); }
+.lib-row:hover .lib-actions, .lib-row.selected .lib-actions, .lib-row:focus-within .lib-actions { opacity: 1; pointer-events: auto; }
+.lib-rename { flex: 1; min-width: 0; padding: 2px 6px; font: inherit; font-size: 12.5px; }
+.lib-details { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 8px; padding: 10px 12px; margin: 2px 6px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2, var(--bg)); animation: pop-in var(--dur-med) var(--ease-out); transform-origin: top center; }
+.lib-details label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
+.lib-details .library-name-row { grid-column: 1 / -1; }
+.lib-empty p { margin: 0 0 12px; }
+.lib-empty-actions { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+.lib-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.lib-foot span[title] { cursor: help; }
+.tb-icon.lib-save { position: relative; }
+.tb-icon.lib-save.dirty::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
 .inspector { container-type: inline-size; container-name: inspector; }
 .inspector .toolwin-head .seg.small { min-width: 0; overflow: hidden; }
 /* A narrow panel: the tabs that are not open show just their icon (the title says what they are). */

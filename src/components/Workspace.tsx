@@ -5,6 +5,7 @@ import {
   AlignLeft,
   ArrowDownToLine,
   ArrowRight,
+  BookmarkPlus,
   Check,
   ChevronDown,
   CircleAlert,
@@ -114,6 +115,7 @@ import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
+import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 
@@ -395,6 +397,15 @@ function SqlPane(props: { tab: SqlTab }) {
         </button>
         <button type="button" class="tb-icon secondary" title={withShortcut("Guardar script", "save")} onClick={() => void saveScript()}>
           <Save size={16} />
+        </button>
+        <button
+          type="button"
+          class="tb-icon secondary lib-save"
+          classList={{ dirty: Boolean(props.tab.libraryId && libraryDirty(props.tab.libraryId)) }}
+          title={withShortcut(props.tab.libraryId && scriptById(props.tab.libraryId) ? `Guardar los cambios en la biblioteca («${scriptById(props.tab.libraryId)!.name}»)` : "Guardar en la biblioteca de scripts", "save-library")}
+          onClick={() => void saveToLibrary()}
+        >
+          <BookmarkPlus size={16} />
         </button>
         <span class="spacer" />
         <ConnectionPicker tab={props.tab} />

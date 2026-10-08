@@ -717,6 +717,11 @@ export function createDemoBackend(): Backend {
       const picked = await pickFile(accept || "*");
       return picked?.name ?? null;
     },
+    async pickOpenPaths(filters) {
+      const accept = filters.flatMap((filter) => filter.extensions.map((ext) => `.${ext}`)).join(",");
+      const picked = await pickFile(accept || "*");
+      return picked ? [picked.name] : [];
+    },
     async onExportProgress() {
       return () => {};
     },

@@ -1,44 +1,95 @@
 // The script library: named SQL scripts kept in the app's data folder (library.json), apart from files on disk
-// and from the history. A console opened from the library remembers its entry, so saving again updates it.
-import { createStore } from "solid-js/store";
-import { api, errorText } from "./api";
-import { activeSql, connectionById, notify, openInspector, openQuery, patchTab, persistSoon, selectTab, state, uid } from "./state";
+// and from the history, in folders and with tags. A console opened from the library remembers its entry, so saving
+// again updates it. The data rules (file format, folders, search, .sql import/export) are in libraryModel.ts.
+import { createStore, produce } from "solid-js/store";
+import { api, errorText, isTauri } from "./api";
+import {
+  copyName,
+  exportBundle,
+  exportScript,
+  fileNameFor,
+  freeName,
+  inFolder,
+  joinFolder,
+  migrateLibrary,
+  moveFolder,
+  normalizeFolder,
+  normalizeTags,
+  parseSqlFile,
+  parentFolder,
+  removeFolder,
+  renameFolder,
+  serializeLibrary,
+  withParents,
+  type LibraryData,
+  type LibraryScript,
+  type LibrarySort,
+} from "./libraryModel";
+import { activeSql, connectionById, notify, openInspector, openQuery, patchTab, persistSoon, runActive, selectTab, state, uid } from "./state";
+import type { SqlTab } from "./state";
 
-export interface LibraryScript {
-  id: string;
-  name: string;
-  sql: string;
-  /** The connection it was saved from (opened there again when it still exists). */
-  connId: string | null;
-  createdAt: number;
-  updatedAt: number;
+export type { LibraryScript } from "./libraryModel";
+
+const VIEW_KEY = "celer.library.view";
+
+interface LibraryView {
+  sort: LibrarySort;
+  /** Only the scripts of the active console's connection (and those of none). */
+  onlyConn: boolean;
+  collapsed: string[];
 }
+
+function loadView(): LibraryView {
+  const fallback: LibraryView = { sort: "name", onlyConn: false, collapsed: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null") as Partial<LibraryView> | null;
+    if (!raw) return fallback;
+    return {
+      sort: raw.sort === "recent" ? "recent" : "name",
+      onlyConn: raw.onlyConn === true,
+      collapsed: Array.isArray(raw.collapsed) ? raw.collapsed.filter((f): f is string => typeof f === "string") : [],
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+const view = loadView();
 
 export const [library, setLibrary] = createStore({
   loaded: false,
   scripts: [] as LibraryScript[],
+  folders: [] as string[],
   query: "",
+  sort: view.sort,
+  onlyConn: view.onlyConn,
+  collapsed: view.collapsed,
+  /** The row with the keyboard focus: "s:<id>" or "f:<folder>". */
+  selected: "",
+  /** The row being renamed in place ("s:<id>" or "f:<folder>"). */
+  renaming: "",
+  /** The script whose details (folder, tags, connection) are being edited. */
+  editing: "",
   /** Naming the active console before saving it (the panel shows a name field). */
-  naming: null as { tabId: string; name: string } | null,
+  naming: null as { tabId: string; name: string; folder: string } | null,
+  /** Bumped to move the focus to the search box (palette: "Buscar en la biblioteca"). */
+  focusSearch: 0,
 });
 
+/** Top-level fields of library.json this version does not know: written back as they were. */
+let extra: Record<string, unknown> = {};
 let loading: Promise<void> | null = null;
 /** The last load failed: saving would replace scripts that may still be in the file. */
 let loadFailed = false;
-
-const valid = (s: unknown): s is LibraryScript => {
-  const x = s as LibraryScript;
-  return Boolean(x && typeof x.id === "string" && typeof x.name === "string" && typeof x.sql === "string");
-};
 
 export function loadLibrary(): Promise<void> {
   loading ??= api()
     .loadJson("library")
     .then((file) => {
-      const list = (file as { scripts?: unknown[] } | null)?.scripts;
-      const scripts = Array.isArray(list) ? list.filter(valid).map((s) => ({ ...s, connId: s.connId ?? null, createdAt: s.createdAt ?? 0, updatedAt: s.updatedAt ?? 0 })) : [];
+      const data = migrateLibrary(file);
+      extra = data.extra;
       loadFailed = false;
-      setLibrary({ loaded: true, scripts });
+      setLibrary({ loaded: true, scripts: data.scripts, folders: data.folders });
     })
     .catch((err) => {
       const message = errorText(err);
@@ -46,7 +97,7 @@ export function loadLibrary(): Promise<void> {
       // set aside by the core, so starting a new one is safe.
       loadFailed = !message.includes(".unreadable-");
       if (loadFailed) loading = null;
-      setLibrary({ loaded: true, scripts: [] });
+      setLibrary({ loaded: true, scripts: [], folders: [] });
       notify("No se pudo leer la biblioteca de scripts", "error", message);
     });
   return loading;
@@ -58,18 +109,67 @@ async function persist() {
     return;
   }
   try {
-    await api().saveJson("library", { version: 1, scripts: library.scripts });
+    await api().saveJson("library", serializeLibrary({ scripts: library.scripts, folders: library.folders }, extra));
   } catch (err) {
     notify("No se pudo guardar la biblioteca de scripts", "error", errorText(err));
   }
 }
 
-/** Library scripts matching the search, most recently changed first. */
-export function filteredScripts(): LibraryScript[] {
-  const q = library.query.trim().toLowerCase();
-  const list = q ? library.scripts.filter((s) => s.name.toLowerCase().includes(q) || s.sql.toLowerCase().includes(q)) : library.scripts;
-  return [...list].sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name));
+function saveView() {
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ sort: library.sort, onlyConn: library.onlyConn, collapsed: library.collapsed }));
+  } catch {
+    // Not kept: the panel opens with the defaults next time.
+  }
 }
+
+export function setLibrarySort(sort: LibrarySort) {
+  setLibrary("sort", sort);
+  saveView();
+}
+
+export function setOnlyConn(on: boolean) {
+  setLibrary("onlyConn", on);
+  saveView();
+}
+
+export function toggleFolder(folder: string, open?: boolean) {
+  const closed = library.collapsed.includes(folder);
+  const shouldOpen = open ?? closed;
+  if (shouldOpen === closed) setLibrary("collapsed", shouldOpen ? library.collapsed.filter((f) => f !== folder) : [...library.collapsed, folder]);
+  saveView();
+}
+
+/** Replaces scripts and folders at once (folder operations, undo), keeping the open consoles linked. */
+function setData(data: LibraryData) {
+  setLibrary({ scripts: data.scripts, folders: withParents(data.folders, data.scripts) });
+}
+
+export function scriptById(id: string) {
+  return library.scripts.find((s) => s.id === id);
+}
+
+/** The open console of a script, if any. */
+export function consoleOf(id: string): SqlTab | undefined {
+  return state.tabs.find((t): t is SqlTab => t.kind === "sql" && t.libraryId === id);
+}
+
+/** Its console has changes not saved to the library. */
+export function libraryDirty(id: string): boolean {
+  const tab = consoleOf(id);
+  const script = scriptById(id);
+  return Boolean(tab && script && tab.sql !== script.sql);
+}
+
+/** The folder new things go into: the selected folder, or the folder of the selected script. */
+export function currentFolder(): string {
+  const key = library.selected;
+  if (key.startsWith("f:")) return key.slice(2);
+  if (key.startsWith("s:")) return scriptById(key.slice(2))?.folder ?? "";
+  return "";
+}
+
+// ---------------------------------------------------------------- saving consoles
 
 /** A name for a console that has none yet: its title, unless it is the default one, or its first words. */
 function suggestedName(title: string, sql: string, connName?: string): string {
@@ -80,9 +180,9 @@ function suggestedName(title: string, sql: string, connName?: string): string {
 
 /**
  * Ctrl+Alt+B: the active console into the library. A console that came from the library updates its entry; a new
- * one asks for a name first (in the library panel).
+ * one (or `asNew`) asks for a name first, in the library panel, to go into `folder` (by default the current one).
  */
-export async function saveToLibrary() {
+export async function saveToLibrary(asNew = false, folder?: string) {
   const tab = activeSql();
   if (!tab) return;
   if (!tab.sql.trim()) {
@@ -90,19 +190,37 @@ export async function saveToLibrary() {
     return;
   }
   await loadLibrary();
-  const existing = tab.libraryId ? library.scripts.find((s) => s.id === tab.libraryId) : undefined;
-  if (existing) {
-    setLibrary("scripts", (s) => s.id === existing.id, { sql: tab.sql, connId: tab.connId, updatedAt: Date.now() });
-    await persist();
-    notify(`«${existing.name}» actualizado en la biblioteca`, "success");
+  const existing = tab.libraryId ? scriptById(tab.libraryId) : undefined;
+  if (existing && !asNew) {
+    await saveConsoleToScript(existing.id);
     return;
   }
   openInspector("library");
-  setLibrary("naming", { tabId: tab.id, name: suggestedName(tab.title, tab.sql, connectionById(tab.connId)?.name) });
+  const name = existing ? copyName(existing.name, library.scripts.map((s) => s.name)) : suggestedName(tab.title, tab.sql, connectionById(tab.connId)?.name);
+  setLibrary("naming", { tabId: tab.id, name, folder: folder ?? existing?.folder ?? currentFolder() });
+}
+
+/** Writes the text of the script's open console into the library. */
+export async function saveConsoleToScript(id: string) {
+  const tab = consoleOf(id);
+  const script = scriptById(id);
+  if (!tab || !script) return;
+  setLibrary("scripts", (s) => s.id === id, { sql: tab.sql, updatedAt: Date.now() });
+  await persist();
+  notify(`«${script.name}» actualizado en la biblioteca`, "success");
+}
+
+/** Puts the saved text back in the script's open console (drops the changes made there). */
+export function revertConsole(id: string) {
+  const tab = consoleOf(id);
+  const script = scriptById(id);
+  if (!tab || !script) return;
+  patchTab(tab.id, { sql: script.sql, revision: tab.revision + 1, cursor: Math.min(tab.cursor, script.sql.length) });
+  persistSoon();
 }
 
 /** Confirms the name asked by saveToLibrary. */
-export async function finishNaming(name: string) {
+export async function finishNaming(name: string, folder?: string) {
   const naming = library.naming;
   setLibrary("naming", null);
   const tab = naming && state.tabs.find((t) => t.id === naming.tabId);
@@ -113,8 +231,20 @@ export async function finishNaming(name: string) {
     return;
   }
   const now = Date.now();
-  const script: LibraryScript = { id: uid(), name: clean, sql: tab.sql, connId: tab.connId, createdAt: now, updatedAt: now };
+  const script: LibraryScript = {
+    id: uid(),
+    name: clean,
+    sql: tab.sql,
+    connId: tab.connId,
+    folder: normalizeFolder(folder ?? naming?.folder ?? ""),
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  };
   setLibrary("scripts", (list) => [...list, script]);
+  setLibrary("folders", (list) => withParents(list, [script]));
+  setLibrary("selected", `s:${script.id}`);
+  if (script.folder) toggleFolder(script.folder, true);
   patchTab(tab.id, { libraryId: script.id, title: clean });
   persistSoon();
   await persist();
@@ -125,34 +255,258 @@ export function cancelNaming() {
   setLibrary("naming", null);
 }
 
-/** Opens a library script in a new console (on its connection when it still exists). */
-export function openLibraryScript(id: string) {
-  const script = library.scripts.find((s) => s.id === id);
+// ---------------------------------------------------------------- opening and running
+
+/** Opens a library script in a console (on its connection when it still exists); `run` also runs all of it. */
+export async function openLibraryScript(id: string, run = false) {
+  const script = scriptById(id);
   if (!script) return;
+  setLibrary("scripts", (s) => s.id === id, "usedAt", Date.now());
+  void persist();
   // Already open: go there instead of opening it twice.
-  const open = state.tabs.find((t) => t.kind === "sql" && t.libraryId === id);
-  if (open) {
-    selectTab(open.id);
+  const open = consoleOf(id);
+  if (open) selectTab(open.id);
+  else {
+    const tabId = openQuery(connectionById(script.connId) ? script.connId : (activeSql()?.connId ?? null), script.sql, script.name);
+    patchTab(tabId, { libraryId: script.id });
+    persistSoon();
+  }
+  if (run) {
+    // The editor of a new console mounts first; then the whole script runs (production asks as usual).
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const tab = activeSql();
+    if (!tab?.connId) {
+      notify("Elige una conexión para la consola y vuelve a ejecutar", "warning", script.connId ? "La conexión del script ya no existe." : "El script no tiene conexión asociada.");
+      return;
+    }
+    void runActive("script");
+  }
+}
+
+/** Pastes the script at the cursor of the active console (or opens a console with it). */
+export function insertLibraryScript(id: string) {
+  const script = scriptById(id);
+  if (!script) return;
+  const tab = activeSql();
+  if (!tab) {
+    void openLibraryScript(id);
     return;
   }
-  const tabId = openQuery(connectionById(script.connId) ? script.connId : (activeSql()?.connId ?? null), script.sql, script.name);
-  patchTab(tabId, { libraryId: script.id });
+  const at = Math.min(tab.cursor, tab.sql.length);
+  const sql = tab.sql.slice(0, at) + script.sql + tab.sql.slice(at);
+  patchTab(tab.id, { sql, cursor: at + script.sql.length, revision: tab.revision + 1 });
   persistSoon();
 }
+
+// ---------------------------------------------------------------- editing
 
 export async function renameLibraryScript(id: string, name: string) {
   const clean = name.trim();
-  if (!clean) return;
+  const script = scriptById(id);
+  if (!clean || !script || clean === script.name) return;
   setLibrary("scripts", (s) => s.id === id, { name: clean, updatedAt: Date.now() });
-  for (const tab of state.tabs) if (tab.kind === "sql" && tab.libraryId === id) patchTab(tab.id, { title: clean });
+  const tab = consoleOf(id);
+  if (tab) patchTab(tab.id, { title: clean });
   persistSoon();
   await persist();
 }
 
-export async function deleteLibraryScript(id: string) {
-  setLibrary("scripts", (list) => list.filter((s) => s.id !== id));
-  // Open consoles keep their text; they are just no longer linked.
-  for (const tab of state.tabs) if (tab.kind === "sql" && tab.libraryId === id) patchTab(tab.id, { libraryId: undefined });
+/** Name, folder, tags and connection at once (the details form). */
+export async function updateLibraryScript(id: string, patch: { name?: string; folder?: string; tags?: string | string[]; connId?: string | null }) {
+  const script = scriptById(id);
+  if (!script) return;
+  const next: Partial<LibraryScript> = {};
+  if (patch.name !== undefined && patch.name.trim()) next.name = patch.name.trim();
+  if (patch.folder !== undefined) next.folder = normalizeFolder(patch.folder);
+  if (patch.tags !== undefined) next.tags = normalizeTags(patch.tags);
+  if (patch.connId !== undefined) next.connId = patch.connId || null;
+  setLibrary("scripts", (s) => s.id === id, { ...next, updatedAt: Date.now() });
+  if (next.folder) setLibrary("folders", (list) => withParents(list, [{ ...script, ...next } as LibraryScript]));
+  if (next.name) {
+    const tab = consoleOf(id);
+    if (tab) patchTab(tab.id, { title: next.name });
+  }
   persistSoon();
   await persist();
+}
+
+export async function duplicateLibraryScript(id: string) {
+  const script = scriptById(id);
+  if (!script) return;
+  const now = Date.now();
+  const copy: LibraryScript = { ...script, id: uid(), name: copyName(script.name, library.scripts.map((s) => s.name)), createdAt: now, updatedAt: now, usedAt: undefined };
+  const at = library.scripts.findIndex((s) => s.id === id);
+  setLibrary("scripts", (list) => [...list.slice(0, at + 1), copy, ...list.slice(at + 1)]);
+  setLibrary({ selected: `s:${copy.id}`, renaming: `s:${copy.id}` });
+  await persist();
+}
+
+/** The library as it is now plus the consoles linked to it: what "Deshacer" puts back. */
+function snapshot() {
+  const data: LibraryData = { scripts: library.scripts.map((s) => ({ ...s, tags: [...s.tags] })), folders: [...library.folders] };
+  const links = state.tabs.flatMap((t) => (t.kind === "sql" && t.libraryId ? [{ tabId: t.id, libraryId: t.libraryId }] : []));
+  return () => {
+    setData(data);
+    for (const link of links) if (state.tabs.some((t) => t.id === link.tabId)) patchTab(link.tabId, { libraryId: link.libraryId });
+    persistSoon();
+    void persist();
+  };
+}
+
+/** Unlinks the consoles of scripts that are gone (they keep their text). */
+function unlinkGone() {
+  const ids = new Set(library.scripts.map((s) => s.id));
+  for (const tab of state.tabs) if (tab.kind === "sql" && tab.libraryId && !ids.has(tab.libraryId)) patchTab(tab.id, { libraryId: undefined });
+  persistSoon();
+}
+
+/** Deletes scripts at once, with "Deshacer" in the notice (no confirmation to click through). */
+export async function deleteLibraryScripts(ids: string[]) {
+  const gone = library.scripts.filter((s) => ids.includes(s.id));
+  if (!gone.length) return;
+  const undo = snapshot();
+  setLibrary("scripts", (list) => list.filter((s) => !ids.includes(s.id)));
+  if (library.editing && ids.includes(library.editing)) setLibrary("editing", "");
+  unlinkGone();
+  await persist();
+  notify(gone.length === 1 ? `«${gone[0].name}» borrado de la biblioteca` : `${gone.length} scripts borrados de la biblioteca`, "info", "Las consolas abiertas conservan su texto.", { label: "Deshacer", run: undo });
+}
+
+export async function deleteLibraryScript(id: string) {
+  await deleteLibraryScripts([id]);
+}
+
+/** Moves scripts to a folder ("" is the top level). */
+export async function moveScriptsToFolder(ids: string[], folder: string) {
+  const target = normalizeFolder(folder);
+  if (!library.scripts.some((s) => ids.includes(s.id) && s.folder !== target)) return;
+  setLibrary(
+    "scripts",
+    produce((list: LibraryScript[]) => {
+      for (const s of list) if (ids.includes(s.id)) s.folder = target;
+    }),
+  );
+  setLibrary("folders", (list) => withParents([...list, target].filter(Boolean), library.scripts));
+  if (target) toggleFolder(target, true);
+  await persist();
+}
+
+// ---------------------------------------------------------------- folders
+
+/** A new folder inside `parent` (the current one by default), left in rename mode. */
+export async function createLibraryFolder(parent = currentFolder()) {
+  await loadLibrary();
+  openInspector("library");
+  const siblings = library.folders.filter((f) => parentFolder(f) === parent).map((f) => f.slice(f.lastIndexOf("/") + 1));
+  const folder = joinFolder(parent, freeName("Nueva carpeta", siblings));
+  setLibrary("folders", (list) => withParents([...list, folder], []));
+  if (parent) toggleFolder(parent, true);
+  setLibrary({ selected: `f:${folder}`, renaming: `f:${folder}` });
+  await persist();
+}
+
+export async function renameLibraryFolder(folder: string, name: string) {
+  const clean = name.replace(/[\\/]/g, " ").trim();
+  if (!clean || clean === folder.slice(folder.lastIndexOf("/") + 1)) return;
+  const next = renameFolder({ scripts: library.scripts, folders: library.folders }, folder, joinFolder(parentFolder(folder), clean));
+  if (!next) return;
+  setData(next);
+  const to = joinFolder(parentFolder(folder), clean);
+  setLibrary("collapsed", (list) => list.map((f) => (inFolder(f, folder) ? to + f.slice(folder.length) : f)));
+  setLibrary("selected", `f:${to}`);
+  saveView();
+  await persist();
+}
+
+/** Drag and drop of a folder into another one ("" is the top level). */
+export async function moveLibraryFolder(folder: string, into: string) {
+  if (parentFolder(folder) === into) return;
+  const next = moveFolder({ scripts: library.scripts, folders: library.folders }, folder, into);
+  if (!next) {
+    notify("Una carpeta no puede ir dentro de sí misma", "warning");
+    return;
+  }
+  setData(next);
+  if (into) toggleFolder(into, true);
+  await persist();
+}
+
+/** Deletes a folder with its subfolders and scripts; "Deshacer" brings everything back. */
+export async function deleteLibraryFolder(folder: string) {
+  const undo = snapshot();
+  const { data, removed } = removeFolder({ scripts: library.scripts, folders: library.folders }, folder);
+  setData(data);
+  if (library.selected === `f:${folder}`) setLibrary("selected", "");
+  unlinkGone();
+  await persist();
+  const what = removed.length ? ` y ${removed.length === 1 ? "su script" : `sus ${removed.length} scripts`}` : "";
+  notify(`Carpeta «${folder}»${what} borrada`, "info", undefined, { label: "Deshacer", run: undo });
+}
+
+// ---------------------------------------------------------------- .sql files
+
+/** Imports .sql files into the current folder: one script per file, or the scripts of a library export. */
+export async function importLibraryFiles() {
+  await loadLibrary();
+  const paths = await api().pickOpenPaths([{ name: "SQL", extensions: ["sql", "txt"] }]);
+  if (!paths.length) return;
+  const into = currentFolder();
+  const added: LibraryScript[] = [];
+  const failed: string[] = [];
+  for (const path of paths) {
+    try {
+      const { text } = await api().readTextFile(path);
+      const now = Date.now();
+      for (const item of parseSqlFile(path, text)) {
+        added.push({ id: uid(), name: item.name, sql: item.sql, connId: null, folder: joinFolder(into, item.folder), tags: item.tags, createdAt: now, updatedAt: now });
+      }
+    } catch (err) {
+      failed.push(`${path.split(/[\\/]/).pop()}: ${errorText(err)}`);
+    }
+  }
+  if (added.length) {
+    setLibrary("scripts", (list) => [...list, ...added]);
+    setLibrary("folders", (list) => withParents(list, added));
+    openInspector("library");
+    setLibrary("selected", `s:${added[0].id}`);
+    if (into) toggleFolder(into, true);
+    await persist();
+    notify(added.length === 1 ? `«${added[0].name}» importado a la biblioteca` : `${added.length} scripts importados a la biblioteca`, "success");
+  } else if (!failed.length) notify("Los ficheros no tenían SQL", "warning");
+  if (failed.length) notify("Algún fichero no se pudo leer", "error", failed.join("\n"));
+}
+
+/**
+ * Exports to a .sql file: one script as plain SQL; a folder or the whole library as one file that imports back
+ * with its folders and tags.
+ */
+export async function exportLibrary(scope: { scriptId: string } | { folder: string }) {
+  await loadLibrary();
+  let scripts: LibraryScript[];
+  let name: string;
+  if ("scriptId" in scope) {
+    const script = scriptById(scope.scriptId);
+    if (!script) return;
+    scripts = [script];
+    name = fileNameFor(script.name);
+  } else {
+    scripts = library.scripts.filter((s) => inFolder(s.folder, scope.folder));
+    name = fileNameFor(scope.folder ? scope.folder.slice(scope.folder.lastIndexOf("/") + 1) : "biblioteca");
+  }
+  if (!scripts.length) {
+    notify("No hay scripts que exportar", "warning");
+    return;
+  }
+  let path = name;
+  if (isTauri()) {
+    const picked = await api().pickSavePath([{ name: "SQL", extensions: ["sql"] }], name);
+    if (!picked) return;
+    path = picked;
+  }
+  try {
+    await api().writeTextFile(path, scripts.length === 1 && "scriptId" in scope ? exportScript(scripts[0]) : exportBundle(scripts));
+    notify(scripts.length === 1 ? "Script exportado" : `${scripts.length} scripts exportados`, "success", path);
+  } catch (err) {
+    notify("No se pudo exportar", "error", errorText(err));
+  }
 }

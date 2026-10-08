@@ -1,4 +1,4 @@
-import { ArrowDownToLine, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
+import { ArrowDownToLine, BookMarked, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
 import { createEffect, onCleanup, onMount, Show, untrack } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
@@ -14,6 +14,7 @@ import { Splash } from "./gib/Splash";
 import { Onboarding } from "./components/Onboarding";
 import { revealWindow, WindowControls } from "./components/WindowControls";
 import { EngineIcon } from "./icons";
+import { loadLibrary } from "./library";
 import {
   activeTab,
   boot,
@@ -45,7 +46,11 @@ export default function App() {
     if (id) untrack(() => loadIfRestored(id));
   });
   onMount(() => {
-    void boot().then(startUpdateChecks);
+    void boot().then(() => {
+      startUpdateChecks();
+      // The library early: consoles opened from it show whether they have unsaved changes, and the palette lists it.
+      void loadLibrary();
+    });
     revealWindow();
     // Window in the background: Gib's idle loops pause (App.css, data-focus).
     const focus = () => (document.documentElement.dataset.focus = document.hasFocus() && !document.hidden ? "in" : "out");
@@ -102,6 +107,9 @@ export default function App() {
           </button>
           <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "history" }} title={withShortcut("Historial", "history")} onClick={() => toggleInspector("history")}>
             <History size={17} />
+          </button>
+          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "library" }} title={withShortcut("Biblioteca de scripts", "library")} onClick={() => toggleInspector("library")}>
+            <BookMarked size={17} />
           </button>
           <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => toggleInspector("ai")}>
             <Sparkles size={17} />
