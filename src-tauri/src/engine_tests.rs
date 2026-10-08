@@ -538,7 +538,7 @@ fn informix_engine() {
     let (mut cfg, lib) = informix_cfg().unwrap();
     cfg.startup_sql = "SET LOCK MODE TO WAIT 5".into();
     let mut s = crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone()).unwrap();
-    assert_eq!(scalar(&mut s, "SELECT COUNT(*) FROM celer_t"), "4");
+    assert_eq!(scalar(&mut s, "SELECT COUNT(*) FROM celer_t"), "5", "4 seeded, one deleted, one inserted, one upserted");
     cfg.startup_sql = "SELEC 1".into();
     let err = crate::odbc_driver::OdbcDriver::connect(cfg, lib).err().expect("script erróneo").to_string();
     assert!(err.contains("script de inicio"), "{err}");
