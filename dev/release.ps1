@@ -72,6 +72,9 @@ if (-not $SkipTests) {
 
 # ---------------------------------------------------------------- builds
 Step "Compilando Celer"
+# The release embeds the JDBC bridge (src-tauri/build.rs compiles it with javac): a JDK 11+ is needed.
+$javac = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin\javac.exe" } else { "" }
+Check ($env:CELER_BRIDGE_JAR -or ($javac -and (Test-Path $javac)) -or (Get-Command javac -ErrorAction SilentlyContinue)) "Falta un JDK 11+ (JAVA_HOME o javac en el PATH) para el puente JDBC"
 Get-Process celer -ErrorAction SilentlyContinue | Stop-Process -Force
 node node_modules/@tauri-apps/cli/tauri.js build; Check ($LASTEXITCODE -eq 0) "tauri build falló"
 

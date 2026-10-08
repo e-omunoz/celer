@@ -28,6 +28,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The JDBC bridge (src-tauri/bridge) is compiled by build.rs with javac, and run by its unit test.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -54,6 +60,19 @@ jobs:
         if: hashFiles('installer/tsconfig.json') != ''
         run: npx tsc --noEmit -p installer
 
+      - name: Connection import checks
+        run: node --experimental-strip-types --no-warnings dev/migrate-check.ts
+
+      - name: Connection form checks
+        run: node --experimental-strip-types --no-warnings dev/connform-check.ts
+
+      - name: Explorer checks
+        run: node --experimental-strip-types --no-warnings dev/explorer-check.ts
+
       - name: Rust tests
         working-directory: src-tauri
-        run: cargo test --lib
+        run: |
+          $env:CELER_TEST_JAVA = Join-Path $env:JAVA_HOME "bin\java.exe"
+          cargo test --lib
+        env:
+          CELER_REQUIRE_BRIDGE: "1"

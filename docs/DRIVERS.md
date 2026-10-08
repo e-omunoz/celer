@@ -19,6 +19,7 @@ transactions, object tree, table columns, DDL and autocompletion metadata. See [
 | **ODBC** | System driver manager (`odbc32.dll`, unixODBC, iODBC) | Reaches almost any database | Driver must be installed; quality varies |
 | **ADBC** | Arrow Database Connectivity driver manager | Columnar, very fast for analytics | Young ecosystem |
 | **HTTP / REST** | Engine's HTTP query API | No native protocol needed | Higher latency per request |
+| **JDBC bridge** | The vendor's pure-Java driver in one shared JVM, over stdin/stdout | The same drivers DBeaver uses; no native client install | Needs Java 11+ (DBeaver's JRE works) |
 
 ## Support matrix
 
@@ -29,7 +30,7 @@ Legend: ✅ done · 🟡 planned · ⚪ via generic layer only
 | Engine | Also covers | Strategy | Crate / library | Status |
 |---|---|---|---|---|
 | SQL Server | Azure SQL, Azure SQL MI, Synapse dedicated / PDW, Fabric Warehouse (edition from `SERVERPROPERTY('EngineEdition')`: own DDL, plan and activity on Synapse) | Native | `tiberius` | ✅ written |
-| Informix | — | IBM CLI (DRDA) or Informix CSDK (SQLI, via ODBC) | `db2cli64.dll` / ODBC | ✅ written |
+| Informix | — | IBM JDBC driver (SQLI, through Celer's JDBC bridge), Informix CSDK (SQLI, via ODBC) or IBM CLI (DRDA) | `com.ibm.informix:jdbc` / ODBC / `db2cli64.dll` | ✅ written |
 | PostgreSQL | CockroachDB, YugabyteDB, TimescaleDB, Citus, Neon, Supabase, AlloyDB, Greenplum | Native | `tokio-postgres` | 🟡 |
 | MySQL / MariaDB | Aurora MySQL, TiDB, SingleStore, PlanetScale, Percona | Native | `mysql_async` | 🟡 |
 | SQLite | libSQL / Turso (remote, still planned) | Native (embedded) | `rusqlite` (bundled) | ✅ embedded |
@@ -94,8 +95,68 @@ Each driver declares what it supports so the UI only shows what works:
 | Native Rust crates | Compiled into Celer | MIT / Apache-2.0 (checked with `cargo deny`) |
 | IBM Data Server Driver (Informix DRDA, Db2) | Downloaded on demand from IBM's public site | IBM licence: not bundled |
 | Oracle Instant Client | Downloaded on demand from Oracle | Oracle licence: not bundled; user accepts it |
+| Informix JDBC driver (`com.ibm.informix:jdbc`, with `org.mongodb:bson`) | Found in DBeaver's cache (its 4.50 first), or downloaded on demand from Maven Central: 15.0.1.4, which also reads Informix 15 servers (SHA-256 fixed in `drivers.rs`) | IBM licence: not bundled |
+| Java (Eclipse Temurin JRE 21) | Any Java 11+ already installed (DBeaver's first), or downloaded on demand from Adoptium (SHA-256 from its API) | GPLv2 with Classpath Exception: not bundled |
 | Informix Client SDK, other ODBC drivers | Installed by the user | Vendor licences |
 | SQLite, DuckDB | Bundled (compiled in) | Public domain / MIT |
+
+## Informix: which protocol
+
+| Protocol | Driver | Server side | Needs |
+|---|---|---|---|
+| **Automático** (default for new connections) | The Client SDK if its ODBC driver is registered, JDBC otherwise | | |
+| SQLI (JDBC) | IBM's JDBC driver in the bridge | `onsoctcp` listener (usually 9088) | Java 11+ and the driver jar: both found or downloaded |
+| SQLI (Client SDK / ODBC) | `IBM INFORMIX ODBC DRIVER (64-bit)` | `onsoctcp` listener | The Client SDK installed (admin rights) |
+| DRDA (IBM CLI) | IBM Data Server Driver | `drsoctcp` listener (often 9089) | The CLI driver, downloaded from IBM's public site |
+
+The three share the Informix dialect in `odbc_driver.rs` (catalog queries, batches split per statement, DDL, foreign keys,
+database switching): it runs over a `Link` (`exec`, `query_all`, transactions, cancel, reconnect), which `OdbcConn`
+(odbc.rs) and `JdbcConn` (jdbc.rs) implement.
+
+### The JDBC bridge
+
+`src-tauri/bridge/CelerBridge.java` is a small program with no dependencies, compiled with `javac --release 11` by
+`build.rs` and embedded in Celer (`include_bytes!`). Celer writes it to `drivers/jdbc/` in its data folder and runs it
+with the Java it found.
+
+- **One JVM for the whole app**, started on the first JDBC connection (or as soon as one is being opened, while the
+  password is asked). Each request names its session; each session runs on its own thread in the JVM, so a slow query
+  never holds up another one, and a cancel is served at once by the reader thread with `Statement.cancel()`.
+- **Only stdin and stdout**, never a network port. Frames have a length prefix; rows travel in batches in a compact
+  binary format (a null bitmap per row and typed values: varints, doubles, UTF-8 text, bytes), with the first page
+  inside the answer to the query and a 4 MB cap per batch. The protocol is described at the top of `jdbc.rs`.
+- **Nothing engine-specific in the bridge or its protocol**: the driver class, its jars, the URL and the properties
+  come with each connection, and the driver is loaded in a class loader of its own. The password travels in those
+  properties, through the pipe: never on a command line, in the environment or in a log.
+- Java is started directly (no shell in between) with fixed arguments and without a console window
+  (`CREATE_NO_WINDOW`), from the bridge's folder; it writes nothing outside Celer's data folder (`-XX:-UsePerfData`,
+  `java.io.tmpdir` there, and on JDK 19+ a class-data archive next to the jar that speeds up the next start).
+- A build without a JDK leaves the bridge out (`build.rs` warns) and JDBC connections say so; a release build fails
+  without it, so a published Celer always has it. CI builds it with `actions/setup-java`.
+
+Informix's own part lives on the Rust side: the URL (`jdbc:informix-sqli://host:port/db:INFORMIXSERVER=name`), the
+properties (`FET_BUF_SIZE`, `INFORMIXCONTIME`, `DB_LOCALE` / `CLIENT_LOCALE` from the environment unless given) and the
+user's "Parámetros extra", which win over Celer's. `DELIMIDENT` is not set: Celer writes Informix names unquoted, as
+on the other protocols.
+
+### Adding another engine over JDBC
+
+Engines whose best client is a Java driver (Azure Synapse or SQL Server features through `mssql-jdbc`, Oracle through
+`ojdbc`, Db2 through `jcc`…) can reuse the bridge as it is:
+
+1. A `JdbcSpec` in `drivers.rs`: the driver class and its Maven coordinates, version and SHA-256, plus the jars it
+   needs. `find_jdbc` then looks for it in Settings, DBeaver's cache (`DBeaverData/drivers/maven/maven-central`) and
+   Celer's downloads, and `download_jdbc` fetches it from Maven Central.
+2. A `Params` function (`jdbc.rs`) that builds the URL and the properties from the connection.
+3. A dialect: the `Driver` trait over `JdbcConn` — either a new one, or `LinkDriver` (`odbc_driver.rs`) taught the
+   engine's catalog queries.
+4. The route in `lib.rs` (`connector_and_route`) and the form fields in the interface.
+
+### Guide for users
+
+Settings › Drivers shows what each protocol has and offers the downloads; the in-app guide (and
+[GUIA.md](GUIA.md#drivers-de-informix)) explains where to get the Client SDK, how to ask for a DRDA listener, and what
+to do about the server name and the locale.
 
 ## Test environments
 
@@ -105,7 +166,7 @@ Every driver gets an integration test suite run against a Docker container with 
 | Engine | Docker image |
 |---|---|
 | SQL Server | `mcr.microsoft.com/mssql/server:2022-latest` |
-| Informix | `icr.io/informix/informix-developer-database` |
+| Informix | `icr.io/informix/informix-developer-database` (tested over DRDA and over JDBC, with a 200,000-row speed comparison) |
 | PostgreSQL | `postgres:17` |
 | MySQL / MariaDB | `mysql:8.4`, `mariadb:11` |
 | Oracle | `gvenzl/oracle-free` |

@@ -42,6 +42,28 @@ pub trait Driver: Send {
     fn progress(&self) -> Progress {
         Arc::new(|| None)
     }
+    /// Comprobación barata de que la conexión sigue viva (una ida y vuelta con tiempo límite), para antes de usar una
+    /// sesión que lleva un rato parada (suspensión del equipo, VPN, cortafuegos). Por defecto no hay nada que mirar.
+    fn ping(&mut self) -> Result<()> {
+        Ok(())
+    }
+    /// La conexión quedó inservible (se cortó): la operación siguiente necesita otra.
+    fn broken(&self) -> bool {
+        false
+    }
+    /// Lo que la sesión tiene que otra conexión no tendría, según el propio driver ("" si nada o si no lo sabe): la
+    /// transacción abierta, las tablas temporales, los SET.
+    fn session_state(&self) -> String {
+        String::new()
+    }
+    /// Comprueba la sesión para la interfaz (siempre con `force`; si no, solo si lleva un rato parada). Las sesiones
+    /// vigiladas (`guard.rs`) además reconectan si se cortó.
+    fn health(&mut self, _force: bool) -> Health {
+        match self.ping() {
+            Ok(()) => Health { ok: true, ..Health::default() },
+            Err(e) => Health { error: e.to_string(), ..Health::default() },
+        }
+    }
 }
 
 pub type Canceller = Arc<dyn Fn() + Send + Sync>;
@@ -158,6 +180,12 @@ impl Sessions {
             .collect();
         ids.into_iter().filter_map(|k| m.remove(&k)).collect()
     }
+}
+
+/// Keepalive de TCP para las conexiones que Celer abre por su cuenta: a los 60 s parada, el sistema empieza a
+/// comprobarla cada 15 s. Así un corte (suspensión, VPN) se nota antes y los cortafuegos no la dan por muerta.
+pub fn tcp_keepalive() -> socket2::TcpKeepalive {
+    socket2::TcpKeepalive::new().with_time(std::time::Duration::from_secs(60)).with_interval(std::time::Duration::from_secs(15))
 }
 
 /// Primera palabra clave de una sentencia, ignorando comentarios y espacios.

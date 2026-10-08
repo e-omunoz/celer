@@ -112,6 +112,7 @@ import {
 import { engineOf, type Cell } from "../types";
 import { api, isTauri } from "../api";
 import { CodeView, SqlEditor } from "./Editor";
+import { TabLink } from "./LinkDot";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
@@ -230,6 +231,7 @@ function TabBar() {
             >
               <span class="tab-strip" style={{ background: tab.connId ? connColor(conn()) : "transparent" }} />
               <ObjIcon kind={tab.kind === "table" ? (tab.obj.kind === "view" ? "view" : "table") : tab.title.endsWith(".sql") ? "file" : "console"} size={14} />
+              <TabLink tab={tab} />
               <Show when={renaming() === tab.id} fallback={<span class="tab-title">{tab.title}</span>}>
                 <input
                   class="tab-rename"

@@ -1,6 +1,8 @@
 # macOS and Linux packages, on demand. Windows installers are built locally by dev/release.ps1; this
 # attaches the other platforms to an existing GitHub Release. Manual only (Actions → Run workflow, or
 # `gh workflow run release-desktop.yml -f tag=vX.Y.Z`): the macOS and Linux builds take ~15 minutes.
+# Without a tag it only builds, and also builds Windows (unsigned NSIS installer, portable .exe and Celer Setup)
+# as run artifacts, to try a branch; the release's Windows files keep coming from dev/release.ps1.
 name: Release (macOS, Linux)
 
 on:
@@ -45,6 +47,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.label == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      # Release builds embed the JDBC bridge, compiled with javac (src-tauri/build.rs).
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -92,3 +100,61 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" out/* --clobber
+
+  # Build-only runs (no tag): Windows too, to try a branch. Never attached to a release.
+  windows:
+    if: github.event_name == 'workflow_dispatch' && inputs.tag == ''
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            installer/src-tauri
+
+      - name: Install
+        run: npm ci
+
+      - name: Build Celer (NSIS installer and portable)
+        run: npx tauri build --bundles nsis
+
+      - name: Build Celer Setup
+        run: |
+          npx vite build --config installer/vite.config.ts
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $env:CELER_PAYLOAD = Join-Path $PWD "src-tauri\target\release\celer.exe"
+          cargo build --release --manifest-path installer/src-tauri/Cargo.toml
+
+      - name: Collect packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          SHA=$(git rev-parse --short HEAD)
+          mkdir -p out
+          cp "$(ls src-tauri/target/release/bundle/nsis/*.exe | head -n1)" "out/Celer-$VERSION-$SHA-nsis-setup.exe"
+          cp src-tauri/target/release/celer.exe "out/Celer-$VERSION-$SHA-portable.exe"
+          cp installer/src-tauri/target/release/celer-setup.exe "out/Celer-Setup-$VERSION-$SHA.exe"
+          (cd out && sha256sum * > SHA256SUMS-windows.txt)
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: celer-windows
+          path: out/*
+          retention-days: 7

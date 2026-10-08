@@ -1,6 +1,8 @@
 # Integration tests against real SQL Server 2022 and Informix (developer edition) servers, in containers.
 # Runs src-tauri/src/engine_tests.rs: the drivers themselves and the exact SQL the interface writes for each
-# engine (dev/engine-sql.ts). Manual only (Actions → Run workflow, or `gh workflow run engines.yml`).
+# engine (dev/engine-sql.ts). Informix runs over DRDA (IBM CLI) and over JDBC (Celer's bridge, Java 21 and the
+# driver from Maven Central), and both read 200,000 rows to compare their speed (out/informix-speed.txt).
+# Manual only (Actions → Run workflow, or `gh workflow run engines.yml`).
 name: Engines (SQL Server, Informix)
 
 on:
@@ -30,6 +32,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -44,8 +51,18 @@ jobs:
           curl -fsSL https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/linuxx64_odbc_cli.tar.gz | tar xz
           ls clidriver/lib | head
 
+      - name: Informix JDBC driver, as Celer downloads it (same SHA-256)
+        run: |
+          mkdir -p jdbc && cd jdbc
+          curl -fsSLO https://repo1.maven.org/maven2/com/ibm/informix/jdbc/15.0.1.4/jdbc-15.0.1.4.jar
+          curl -fsSLO https://repo1.maven.org/maven2/org/mongodb/bson/3.8.0/bson-3.8.0.jar
+          echo "152fe3380e414261266d7bde6bacae348c94b6db0cf16f969d1094368449cec7  jdbc-15.0.1.4.jar" | sha256sum -c
+          echo "d30b5aeba3ae9b7c68c8a6103b41918c5f7318972007b9b92033ee861762d87e  bson-3.8.0.jar" | sha256sum -c
+
       - name: Build the tests
         working-directory: src-tauri
+        env:
+          CELER_REQUIRE_BRIDGE: "1"
         run: cargo test --lib --no-run
 
       - name: Wait for SQL Server
@@ -72,7 +89,13 @@ jobs:
           CELER_INFORMIX_TEST: "host=localhost port=9089 user=informix password=in4mix database=celer"
           CELER_IBM_LIB: ${{ github.workspace }}/clidriver/lib/libdb2.so
           LD_LIBRARY_PATH: ${{ github.workspace }}/clidriver/lib
+          CELER_INFORMIX_JDBC_TEST: "host=localhost port=9088 user=informix password=in4mix database=celer server=informix"
+          CELER_JAVA: ${{ env.JAVA_HOME }}/bin/java
+          CELER_JDBC_JARS: ${{ github.workspace }}/jdbc/jdbc-15.0.1.4.jar:${{ github.workspace }}/jdbc/bson-3.8.0.jar
+          CELER_REQUIRE_BRIDGE: "1"
           CELER_NODE: node
+          # Reconnection tests end sessions with onmode -z when the SQL admin API is not there.
+          CELER_INFORMIX_CONTAINER: ifx
         run: cargo test --lib engine_tests -- --nocapture --test-threads=1
 
       - name: Execution plans and server logs
@@ -80,6 +103,7 @@ jobs:
         run: |
           mkdir -p out
           cp target-showplan-*.xml out/ 2>/dev/null || true
+          cp target-informix-speed.txt out/informix-speed.txt 2>/dev/null || true
           docker logs mssql > out/mssql.log 2>&1 || true
           docker logs ifx > out/informix.log 2>&1 || true
 

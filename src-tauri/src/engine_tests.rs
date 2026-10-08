@@ -1,6 +1,10 @@
 //! Integration tests against real SQL Server and Informix servers (run in CI by .github/workflows/engines.yml).
 //!   CELER_MSSQL_TEST="host=localhost port=1433 user=sa password=…"
 //!   CELER_INFORMIX_TEST="host=localhost port=9089 user=informix password=in4mix database=celer" + CELER_IBM_LIB
+//!   CELER_INFORMIX_JDBC_TEST="host=localhost port=9088 user=informix password=in4mix database=celer server=informix"
+//!     + CELER_JAVA (java executable) + CELER_JDBC_JARS (the driver jar and bson, as a PATH-style list)
+//! Informix runs the same suite over DRDA (IBM CLI) and over JDBC (Celer's bridge), and `informix_speed` reads
+//! 200,000 rows through both.
 //! Besides the driver itself (paging, types, transactions, cancel, metadata, startup script, plans), they run the
 //! exact SQL the interface writes for each engine, produced by dev/engine-sql.ts from the tables as the driver
 //! sees them: table filters, saved edits, generated scripts, UPSERT/MERGE, the FK lookup, the activity monitor
@@ -466,7 +470,9 @@ fn schema_shape(d: &mut dyn Driver, database: &str, source: &str, target: &str) 
     json!({ "source": src, "target": dst, "sourceDdl": ddl, "schema": target, "sourceSchema": source })
 }
 
-// ───────────────────────────────────────────────────────────────── Informix (DRDA, IBM CLI driver)
+// ───────────────────────────────────────────────────────────────── Informix (DRDA and JDBC)
+
+type Connect = dyn Fn(ConnConfig) -> anyhow::Result<Box<dyn Driver>>;
 
 fn informix_cfg() -> Option<(ConnConfig, String)> {
     let s = spec("CELER_INFORMIX_TEST")?;
@@ -481,9 +487,33 @@ fn informix_cfg() -> Option<(ConnConfig, String)> {
     Some((cfg, lib))
 }
 
-fn informix() -> Option<crate::odbc_driver::OdbcDriver> {
-    let (cfg, lib) = informix_cfg()?;
-    Some(crate::odbc_driver::OdbcDriver::connect(cfg, lib).expect("conexión Informix"))
+/// Informix over JDBC: the connection, and Java with the driver's jars.
+fn informix_jdbc_cfg() -> Option<(ConnConfig, crate::jdbc::Runtime)> {
+    let s = spec("CELER_INFORMIX_JDBC_TEST")?;
+    let java = std::env::var("CELER_JAVA").ok()?;
+    let jars: Vec<std::path::PathBuf> = std::env::split_paths(&std::env::var_os("CELER_JDBC_JARS")?).collect();
+    let dir = std::env::temp_dir().join("celer-engine-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let found = crate::drivers::find_java(Some(&java), &dir, false);
+    let java_major = found.first().map(|j| j.major).expect("la versión de CELER_JAVA");
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Informix;
+    cfg.informix_mode = "jdbc".into();
+    cfg.host = get(&s, "host");
+    cfg.port = get(&s, "port").parse().ok();
+    cfg.user = get(&s, "user");
+    cfg.password = Some(get(&s, "password"));
+    cfg.database = get(&s, "database");
+    cfg.instance = get(&s, "server");
+    Some((cfg, crate::jdbc::Runtime { java: java.into(), java_major, driver_class: crate::drivers::INFORMIX_JDBC.class.into(), jars, dir }))
+}
+
+fn drda_connect(lib: String) -> Box<Connect> {
+    Box::new(move |cfg| Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg, lib.clone())?) as Box<dyn Driver>))
+}
+
+fn jdbc_connect(rt: crate::jdbc::Runtime) -> Box<Connect> {
+    Box::new(move |cfg| Ok(Box::new(crate::jdbc::connect(cfg, rt.clone())?) as Box<dyn Driver>))
 }
 
 const INFORMIX_SEED: &str = "DROP TABLE IF EXISTS celer_t;
@@ -500,8 +530,40 @@ INSERT INTO celer_t VALUES (4, 'O''Neil', NULL, MDY(12, 31, 2023), 99999.99, '',
 
 #[test]
 fn informix_engine() {
-    let Some(mut d) = informix() else { return };
-    let d: &mut dyn Driver = &mut d;
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    informix_suite("DRDA", cfg, &drda_connect(lib));
+}
+
+#[test]
+fn informix_jdbc_engine() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let t0 = Instant::now();
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    println!("JDBC: Java arrancado y conectado en {:?}", t0.elapsed());
+    let t1 = Instant::now();
+    let again = jdbc_connect(rt.clone())(cfg.clone()).expect("segunda conexión por JDBC");
+    println!("JDBC: otra conexión con Java ya en marcha: {:?}", t1.elapsed());
+    drop(again);
+    // JDBC brings Informix's own types: BOOLEAN is a boolean, not DRDA's SMALLINT.
+    d.execute("DROP TABLE IF EXISTS jt; CREATE TABLE jt (b BOOLEAN, i8 INT8, f FLOAT, m MONEY(8,2), t TEXT, bt BYTE, iv INTERVAL DAY TO SECOND)", 10).unwrap();
+    d.execute("INSERT INTO jt (b, i8, f, m, iv) VALUES ('t', 9007199254740993, 1.5, 12.34, INTERVAL(1 02:03:04) DAY TO SECOND)", 10).unwrap();
+    d.execute("INSERT INTO jt (b) VALUES (NULL)", 10).unwrap();
+    let (cols, rows) = all_rows(d.as_mut(), "SELECT * FROM jt ORDER BY 1");
+    println!("JDBC tipos: {:?}", cols.iter().map(|c| (&c.name, &c.type_name, c.kind)).collect::<Vec<_>>());
+    println!("JDBC filas: {:?}", rows.iter().map(|r| r.iter().map(txt).collect::<Vec<_>>()).collect::<Vec<_>>());
+    let full = rows.iter().find(|r| !matches!(r[0], Cell::Null)).unwrap();
+    assert!(matches!(full[0], Cell::Bool(true)), "{:?}", full[0]);
+    assert_eq!(txt(&full[1]), "9007199254740993", "INT8 beyond JavaScript's safe integers, exact");
+    assert_eq!(txt(&full[3]), "12.34");
+    assert!(rows.iter().any(|r| r.iter().all(|c| matches!(c, Cell::Null))), "a row of NULLs");
+    drop(d);
+    informix_suite("JDBC", cfg, &jdbc_connect(rt));
+}
+
+fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
+    println!("── Informix por {via}");
+    let mut d = connect(cfg.clone()).unwrap_or_else(|e| panic!("conexión Informix por {via}: {e}"));
+    let d: &mut dyn Driver = d.as_mut();
     let db = d.current_database().unwrap();
     assert_eq!(db.trim(), "celer");
     println!("servidor: {}", d.server_info().unwrap());
@@ -621,11 +683,251 @@ fn informix_engine() {
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM dc_b WHERE id = 4 AND momento = DATETIME(2024-12-31 23:59) YEAR TO MINUTE"), "1");
 
     // Startup script: run on connect; a broken one says so.
-    let (mut cfg, lib) = informix_cfg().unwrap();
+    let mut cfg = cfg;
     cfg.startup_sql = "SET LOCK MODE TO WAIT 5".into();
-    let mut s = crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone()).unwrap();
-    assert_eq!(scalar(&mut s, "SELECT COUNT(*) FROM celer_t"), "5", "4 seeded, one deleted, one inserted, one upserted");
+    let mut s = connect(cfg.clone()).unwrap();
+    assert_eq!(scalar(s.as_mut(), "SELECT COUNT(*) FROM celer_t"), "5", "4 seeded, one deleted, one inserted, one upserted");
     cfg.startup_sql = "SELEC 1".into();
-    let err = crate::odbc_driver::OdbcDriver::connect(cfg, lib).err().expect("script erróneo").to_string();
+    let err = connect(cfg.clone()).err().expect("script erróneo").to_string();
     assert!(err.contains("script de inicio"), "{err}");
+
+    // Another database: the session reconnects there and back.
+    d.use_database("sysmaster").unwrap();
+    assert_eq!(d.current_database().unwrap().trim(), "sysmaster");
+    d.use_database("celer").unwrap();
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM celer_t"), "5");
+}
+
+/// Reading 200,000 rows the way "Cargar todo" does (pages of 5,000), over DRDA and over JDBC with several fetch
+/// buffers. The numbers go to the log and to target-informix-speed.txt (an artifact of the engines workflow).
+#[test]
+fn informix_speed() {
+    let mut runs: Vec<(String, Box<dyn Fn() -> Box<dyn Driver>>)> = Vec::new();
+    if let Some((cfg, lib)) = informix_cfg() {
+        let connect = drda_connect(lib);
+        runs.push(("DRDA (IBM CLI)".into(), Box::new(move || connect(cfg.clone()).unwrap())));
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        let variants: [(&str, &str, bool); 6] = [
+            ("JDBC, como lo usa Celer", "", true),
+            ("JDBC, FET_BUF_SIZE del driver", "FET_BUF_SIZE=0", false),
+            ("JDBC, FET_BUF_SIZE=32767", "FET_BUF_SIZE=32767", false),
+            ("JDBC, FET_BUF_SIZE=262144", "FET_BUF_SIZE=262144", false),
+            ("JDBC, FET_BUF_SIZE=1048576", "FET_BUF_SIZE=1048576", false),
+            ("JDBC, FET_BUF_SIZE=4194304", "FET_BUF_SIZE=4194304", false),
+        ];
+        for (name, extra, page_fetch) in variants {
+            let (mut cfg, rt) = (cfg.clone(), rt.clone());
+            cfg.extra = extra.into();
+            runs.push((name.into(), Box::new(move || Box::new(crate::jdbc::connect_tuned(cfg.clone(), rt.clone(), page_fetch).unwrap()) as Box<dyn Driver>)));
+        }
+    }
+    if runs.is_empty() {
+        return;
+    }
+    // The table, once: a RAW table (no logging for 200,000 inserts) filled from a cross join of digits.
+    {
+        let mut d = (runs[0].1)();
+        let d = d.as_mut();
+        let ready = d.execute("SELECT COUNT(*) FROM perf", 1).ok().and_then(|o| o.results.first().map(|r| txt(&r.rows[0][0]))).is_some_and(|n| n == "200000");
+        if !ready {
+            d.execute("DROP TABLE IF EXISTS perf; DROP TABLE IF EXISTS digits; CREATE TABLE digits (n INT)", 1).unwrap();
+            for i in 0..10 {
+                d.execute(&format!("INSERT INTO digits VALUES ({i})"), 1).unwrap();
+            }
+            d.execute("CREATE RAW TABLE perf (id INT, nombre VARCHAR(40), importe DECIMAL(12,2), alta DATE, momento DATETIME YEAR TO SECOND, activo BOOLEAN, notas LVARCHAR(200))", 1).unwrap();
+            d.execute(
+                "INSERT INTO perf SELECT a.n + b.n * 10 + c.n * 100 + e.n * 1000 + f.n * 10000 + g.n * 100000, \
+                   'nombre ' || TRIM(CAST(a.n + b.n * 10 + c.n * 100 AS VARCHAR(12))), (a.n + b.n * 10 + c.n * 100 + e.n * 1000) / 7.0, \
+                   MDY(1 + b.n, 1 + c.n, 2000 + e.n), DATETIME(2024-01-01 00:00:00) YEAR TO SECOND + (a.n + b.n * 10) UNITS MINUTE, \
+                   CASE WHEN a.n > 4 THEN 't' ELSE 'f' END, 'una nota algo más larga para que la fila pese lo normal ' || TRIM(CAST(f.n AS VARCHAR(2))) \
+                 FROM digits a, digits b, digits c, digits e, digits f, digits g WHERE g.n < 2",
+                1,
+            )
+            .unwrap();
+        }
+        assert_eq!(scalar(d, "SELECT COUNT(*) FROM perf"), "200000");
+    }
+    let read_all = |d: &mut dyn Driver| {
+        let t0 = Instant::now();
+        let out = d.execute("SELECT * FROM perf", 5000).unwrap();
+        let mut n = out.results[0].rows.len();
+        let mut more = out.results[0].has_more;
+        while more {
+            let f = d.fetch(5000).unwrap();
+            n += f.rows.len();
+            more = f.has_more;
+        }
+        assert_eq!(n, 200_000);
+        t0.elapsed()
+    };
+    let mut report = vec![format!("{:<34} {:>11} {:>10} {:>10} {:>10}", "200.000 filas, páginas de 5.000", "conexión", "mejor", "mediana", "filas/s")];
+    for (name, open) in &runs {
+        let t0 = Instant::now();
+        let mut d = open();
+        let connect = t0.elapsed();
+        read_all(d.as_mut()); // warm-up: server cache, JIT
+        let mut times: Vec<Duration> = (0..3).map(|_| read_all(d.as_mut())).collect();
+        times.sort();
+        let (best, median) = (times[0], times[1]);
+        report.push(format!("{name:<34} {:>8} ms {:>7} ms {:>7} ms {:>10.0}", connect.as_millis(), best.as_millis(), median.as_millis(), 200_000.0 / median.as_secs_f64()));
+    }
+    let text = report.join("\n");
+    println!("\n{text}\n");
+    let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-informix-speed.txt"), text);
+}
+
+// ───────────────────────────────────────────────────────────────── reconnection and the pool (guard.rs)
+
+use crate::guard::{Connector, Guarded, Opts, RECOVERED};
+
+/// A watched session, as the interface opens them (`key` "" = without the generic pool).
+fn guarded(kind: DbKind, connect: &Connector, key: &str, database: &str) -> Guarded {
+    Guarded::open(connect.clone(), Opts { kind, owner: format!("engine-test-{key}"), key: key.into(), database: database.into(), autocommit: true }).expect("sesión vigilada")
+}
+
+/// Ends a SQL Server session from another one (KILL), as a DBA or a failover would; returns its SPID.
+fn mssql_kill(admin: &mut dyn Driver, g: &mut Guarded) -> String {
+    let spid = scalar(g, "SELECT @@SPID");
+    admin.execute(&format!("KILL {spid}"), 10).unwrap_or_else(|e| panic!("KILL {spid}: {e}"));
+    std::thread::sleep(Duration::from_millis(500));
+    spid
+}
+
+/// A session killed on the server comes back on its own when nothing would be lost (the read runs again, the output
+/// says so), says so when a transaction or #temp tables went with it, never repeats a write, and is checked before
+/// use after a pause.
+#[test]
+fn mssql_reconnects() {
+    let Some(cfg) = mssql_cfg("tempdb") else { return };
+    let Some(mut admin) = mssql("master") else { return };
+    let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mssql::MssqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let mut g = guarded(DbKind::Mssql, &connect, "", "tempdb");
+
+    let spid = mssql_kill(&mut admin, &mut g);
+    let t0 = Instant::now();
+    let out = g.execute("SELECT @@SPID, DB_NAME()", 10).unwrap_or_else(|e| panic!("tras KILL: {e}"));
+    eprintln!("SQL Server, sesión terminada con KILL: {} ms; {:?}", t0.elapsed().as_millis(), out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), spid, "otra conexión");
+    assert_eq!(txt(&out.results[0].rows[0][1]), "tempdb", "en la misma base");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{:?}", out.messages);
+
+    // A transaction and a #temp table are never lost in silence.
+    let out = g.execute("BEGIN TRAN; CREATE TABLE #celer_rc (a int)", 10).unwrap();
+    assert!(out.in_transaction);
+    mssql_kill(&mut admin, &mut g);
+    let e = g.execute("SELECT 1", 10).unwrap_err().to_string();
+    eprintln!("con transacción: {e}");
+    assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción"), "{e}");
+    assert_eq!(scalar(&mut g, "SELECT @@TRANCOUNT"), "0", "the session goes on, without the transaction");
+
+    // A write is not repeated: it is not known whether it ran.
+    g.execute("IF OBJECT_ID('dbo.celer_rc') IS NOT NULL DROP TABLE dbo.celer_rc; CREATE TABLE dbo.celer_rc (a int)", 10).unwrap();
+    mssql_kill(&mut admin, &mut g);
+    let e = g.execute("INSERT INTO dbo.celer_rc VALUES (1)", 10).unwrap_err().to_string();
+    assert!(e.starts_with("CONN_RESET:"), "{e}");
+    assert_eq!(scalar(&mut g, "SELECT COUNT(*) FROM dbo.celer_rc"), "0");
+
+    // After a pause (suspension, VPN), the session is checked before use: the statement runs once, on the new one.
+    let spid = mssql_kill(&mut admin, &mut g);
+    g.pretend_idle(Duration::from_secs(300));
+    let out = g.execute("SELECT @@SPID", 10).unwrap();
+    assert!(out.messages.first().is_some_and(|m| m.starts_with(RECOVERED) && m.contains("sin usarse")), "{:?}", out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), spid);
+
+    // The interface's check (after the computer wakes up) reconnects too.
+    mssql_kill(&mut admin, &mut g);
+    let health = g.health(true);
+    assert!(health.ok && health.reconnected && health.lost.is_empty(), "{health:?}");
+    assert_eq!(scalar(&mut g, "SELECT 1"), "1");
+    g.execute("DROP TABLE dbo.celer_rc", 10).unwrap();
+}
+
+/// Ends an Informix session from outside, as a DBA would with `onmode -z`: through the SQL admin API
+/// (sysadmin:task) or with onmode in the container (CELER_INFORMIX_CONTAINER). false when neither works here.
+fn informix_kill(admin: &mut dyn Driver, sid: &str) -> bool {
+    let done = match admin.execute(&format!("EXECUTE FUNCTION task('onmode', 'z', '{sid}')"), 10) {
+        Ok(out) => {
+            eprintln!("task('onmode', 'z', {sid}): {:?}", out.results.first().map(|r| r.rows.iter().map(|row| row.iter().map(txt).collect::<Vec<_>>()).collect::<Vec<_>>()));
+            true
+        }
+        Err(e) => {
+            eprintln!("sysadmin:task no disponible ({e}); se prueba onmode en el contenedor");
+            match std::env::var("CELER_INFORMIX_CONTAINER") {
+                Ok(container) => {
+                    let onmode = format!("onmode -z {sid}");
+                    Command::new("docker").args(["exec", container.as_str(), "bash", "-lc", onmode.as_str()]).status().is_ok_and(|s| s.success())
+                }
+                Err(_) => false,
+            }
+        }
+    };
+    std::thread::sleep(Duration::from_millis(1500));
+    done
+}
+
+/// The same for Informix (DRDA and JDBC): reconnection after `onmode -z`, the transaction never lost in silence, and
+/// the generic pool (a session closed without state leaves its connection to the next one).
+fn informix_reconnect_suite(via: &str, connect: &Connector, admin: &mut dyn Driver) {
+    const SID: &str = "SELECT DBINFO('sessionid') FROM systables WHERE tabid = 1";
+    let mut g = guarded(DbKind::Informix, connect, "", "celer");
+    let sid = scalar(&mut g, SID);
+    if !informix_kill(admin, &sid) {
+        eprintln!("{via}: no se puede terminar una sesión en este servidor; sin prueba de reconexión");
+        return;
+    }
+    let t0 = Instant::now();
+    let out = g.execute(SID, 10).unwrap_or_else(|e| panic!("{via}: tras onmode -z → {e}"));
+    eprintln!("{via}: sesión terminada con onmode -z: {} ms; {:?}", t0.elapsed().as_millis(), out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), sid, "{via}: otra sesión");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{via}: {:?}", out.messages);
+
+    // Manual mode with work done: the transaction is lost with the session, and that is said.
+    g.set_autocommit(false).unwrap();
+    let sid = scalar(&mut g, SID);
+    assert!(informix_kill(admin, &sid));
+    let e = g.execute("SELECT COUNT(*) FROM systables", 10).unwrap_err().to_string();
+    eprintln!("{via}, con transacción: {e}");
+    assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción"), "{via}: {e}");
+    assert_eq!(scalar(&mut g, "SELECT 1 FROM systables WHERE tabid = 1"), "1", "{via}: the session goes on (still in manual mode)");
+    g.rollback().unwrap();
+    g.set_autocommit(true).unwrap();
+    drop(g);
+
+    // The pool: no new login for the next session of the same settings, unless the closed one had state.
+    let key = format!("engine-test-informix-{via}");
+    let mut a = guarded(DbKind::Informix, connect, &key, "celer");
+    let sid_a = scalar(&mut a, SID);
+    drop(a);
+    let t0 = Instant::now();
+    let mut b = guarded(DbKind::Informix, connect, &key, "celer");
+    eprintln!("{via}: sesión nueva con la conexión libre de otra: {} ms", t0.elapsed().as_millis());
+    assert!(b.reused, "{via}: la conexión libre se reutiliza");
+    assert_eq!(scalar(&mut b, SID), sid_a, "{via}: misma sesión del servidor");
+    b.set_autocommit(false).unwrap();
+    drop(b);
+    let c = guarded(DbKind::Informix, connect, &key, "celer");
+    assert!(!c.reused, "{via}: una sesión en modo manual no deja su conexión");
+    drop(c);
+    crate::guard::pool_forget(&format!("engine-test-{key}"));
+}
+
+#[test]
+fn informix_reconnects() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::odbc_driver::OdbcDriver::connect(admin_cfg, lib.clone()).expect("conexión a sysadmin");
+    let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+    informix_reconnect_suite("DRDA", &connect, &mut admin);
+}
+
+#[test]
+fn informix_jdbc_reconnects() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
+    let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
+    informix_reconnect_suite("JDBC", &connect, &mut admin);
 }

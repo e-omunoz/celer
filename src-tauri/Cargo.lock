@@ -596,6 +596,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "socket2 0.6.5",
  "tar",
  "tauri",
  "tauri-build",
@@ -606,6 +607,7 @@ dependencies = [
  "tokio-util",
  "ureq",
  "uuid",
+ "winreg",
  "zip",
 ]
 

@@ -168,7 +168,7 @@ Devuelve 0 si todo va bien; los errores se escriben en `%TEMP%\celer-setup.log`.
 | MySQL / MariaDB | nativo: streaming, `KILL QUERY`, `DELIMITER` | ✅ |
 | SQL Server | nativo (TDS), autenticación de Windows | ✅ |
 | SQLite | embebido | ✅ |
-| Informix | IBM CLI / Client SDK, se descarga bajo demanda | ✅ |
+| Informix | JDBC (puente de Celer; Java y driver encontrados o descargados bajo demanda), Client SDK o IBM CLI | ✅ |
 | Cualquier origen ODBC | gestor de drivers ODBC | ✅ |
 | Oracle, Db2, DuckDB, ClickHouse, Snowflake… | — | previsto |
 

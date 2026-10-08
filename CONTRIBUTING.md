@@ -12,7 +12,8 @@ Thanks for helping make Celer better. This guide covers the workflow, the conven
 ## Setup
 
 You need [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) 20+. On Windows you also need the Visual
-Studio Build Tools with the C++ workload.
+Studio Build Tools with the C++ workload. A JDK 11+ (`JAVA_HOME` or `javac` in the `PATH`) compiles the JDBC bridge
+(`src-tauri/bridge`): without one, debug builds leave it out and Informix over JDBC says so; release builds need it.
 
 ```bash
 npm install

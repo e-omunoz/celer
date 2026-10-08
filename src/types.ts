@@ -35,7 +35,7 @@ export const ENGINES: { kind: DbKind; label: string; hint: string; port: number 
   { kind: "mysql", label: "MySQL / MariaDB", hint: "Nativo · también TiDB, PlanetScale", port: 3306, user: "root", color: "#C0765A" },
   { kind: "mssql", label: "SQL Server", hint: "TDS nativo · autenticación SQL y Windows", port: 1433, user: "sa", color: "#CC2927" },
   { kind: "sqlite", label: "SQLite", hint: "Embebido · un fichero o en memoria", port: null, user: "", color: "#4F8FBF" },
-  { kind: "informix", label: "Informix", hint: "IBM CLI (DRDA) o Client SDK", port: 9088, user: "informix", color: "#4B6EAF" },
+  { kind: "informix", label: "Informix", hint: "JDBC o Client SDK (SQLI), IBM CLI (DRDA)", port: 9088, user: "informix", color: "#4B6EAF" },
   { kind: "odbc", label: "ODBC", hint: "Cualquier origen de datos ODBC", port: null, user: "", color: "#7C8796" },
 ];
 
@@ -57,6 +57,7 @@ export interface ConnConfig {
   integratedAuth: boolean;
   encryption: string;
   trustCert: boolean;
+  /** Informix: "auto" (Client SDK if installed, else JDBC) | "jdbc" | "sqli" (Client SDK, ODBC) | "drda" (IBM CLI). */
   informixMode: string;
   odbcConnStr: string;
   extra: string;
@@ -124,6 +125,51 @@ export interface SessionInfo {
   sessionId: string;
   database: string;
   serverInfo: string;
+  /** Time to get the session ready (login, or taking a free connection of the same settings). */
+  connectMs: number;
+  /** A free connection of the same settings was taken instead of logging in again. */
+  reused: boolean;
+}
+
+/** How a session should start: right in a database and transaction mode (no extra round trips afterwards). */
+export interface OpenSessionOptions {
+  database?: string;
+  autocommit?: boolean;
+}
+
+/** One step of "Probar conexión", timed. */
+export interface ConnTestStep {
+  /** resolve | tcp | tls | login | database */
+  id: string;
+  label: string;
+  status: "ok" | "failed" | "skipped";
+  ms: number;
+  detail: string;
+}
+
+/** "Probar conexión": the steps, the way Celer reached the server and, when it failed, what to do. */
+export interface ConnTestReport {
+  ok: boolean;
+  steps: ConnTestStep[];
+  /** Driver and protocol used ("TDS nativo · TLS obligatorio", "Automático → SQLI por JDBC · Java 21…"). */
+  route: string;
+  serverInfo: string;
+  totalMs: number;
+  /** The driver's error as it came (it may carry a code: INFORMIX_GUIDE:…, JDBC_SETUP:…). */
+  error: string;
+  /** What the error means and what to do, in plain words ("" when Celer does not know). */
+  hint: string;
+}
+
+/** A session checked (and reconnected if it had dropped). */
+export interface SessionHealth {
+  ok: boolean;
+  /** The connection had dropped and a new one took its place. */
+  reconnected: boolean;
+  /** What the session had and lost with the old connection ("" if nothing): transaction, #temp tables, SET… */
+  lost: string;
+  ms: number;
+  error: string;
 }
 
 export interface ExportOptions {
@@ -157,6 +203,10 @@ export interface Settings {
   editorFontSize: number;
   pageSize: number;
   ibmDriverPath: string;
+  /** Java for Informix over JDBC: an executable or a JRE/JDK folder (empty: found on its own). */
+  javaPath: string;
+  /** Informix JDBC driver: a jar or a folder with one (empty: DBeaver's or the one Celer downloaded). */
+  informixJdbcPath: string;
   sidebarWidth: number;
   inspectorWidth: number;
   editorRatio: number;
@@ -181,6 +231,16 @@ export interface Settings {
   motion: "system" | "reduce" | "full";
   /** Shortcuts the user changed, per command id (keymap.ts); an empty list leaves the command without one. */
   keymap: Record<string, string[]>;
+  /** Explorer: folders the user created, shown even when empty ("/" between nested levels: "Clientes/Egarsat"). */
+  connFolders: string[];
+  /** Explorer: folders shown closed. */
+  collapsedFolders: string[];
+  /** Explorer: connections in the order they were placed (manual) or by name. */
+  connSort: "manual" | "alpha";
+  /** Explorer: favourite connections (a star, and the "Favoritas" section on top). */
+  favoriteConns: string[];
+  /** Explorer: the connections connected to last, newest first. */
+  recentConns: { id: string; at: number }[];
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -214,6 +274,8 @@ export const defaultSettings: Settings = {
   editorFontSize: 13,
   pageSize: 500,
   ibmDriverPath: "",
+  javaPath: "",
+  informixJdbcPath: "",
   sidebarWidth: 280,
   inspectorWidth: 320,
   editorRatio: 0.45,
@@ -230,6 +292,11 @@ export const defaultSettings: Settings = {
   confirmNoWhere: true,
   motion: "system",
   keymap: {},
+  connFolders: [],
+  collapsedFolders: [],
+  connSort: "manual",
+  favoriteConns: [],
+  recentConns: [],
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
@@ -249,7 +316,7 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     integratedAuth: false,
     encryption: kind === "mssql" ? "required" : "login",
     trustCert: true,
-    informixMode: "drda",
+    informixMode: "auto",
     odbcConnStr: "",
     extra: "",
     color: "",
@@ -258,6 +325,38 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     folder: "",
     filePath: kind === "sqlite" ? "" : "",
   };
+}
+
+export interface JavaFound {
+  path: string;
+  major: number;
+  version: string;
+  /** settings | JAVA_HOME | DBeaver | PATH | Celer */
+  source: string;
+}
+
+export interface JdbcFound {
+  jars: string[];
+  version: string;
+  /** settings | DBeaver | Celer */
+  source: string;
+}
+
+/** What Informix can connect with on this machine (Settings › Drivers). */
+export interface InformixDrivers {
+  cli: string | null;
+  java: JavaFound[];
+  javaUsed: JavaFound | null;
+  javaMin: number;
+  jdbc: JdbcFound[];
+  jdbcUsed: JdbcFound | null;
+  jdbcVersion: string;
+  /** Informix ODBC drivers registered (the Client SDK's). */
+  odbc: string[];
+  sdkReady: boolean;
+  /** The JDBC bridge is part of this build. */
+  bridge: boolean;
+  jreDownload: boolean;
 }
 
 export type McpLevel = "none" | "schema" | "read" | "write";

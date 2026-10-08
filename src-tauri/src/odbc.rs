@@ -50,7 +50,7 @@ const SQL_FETCH_NEXT: u16 = 1;
 const SQL_FETCH_FIRST: u16 = 2;
 
 const LOB_LIMIT_CHARS: usize = 1_000_000;
-const BINARY_PREVIEW: usize = 4096;
+pub(crate) const BINARY_PREVIEW: usize = 4096;
 const BLOCK_BYTES: usize = 4 * 1024 * 1024;
 
 type FnAllocHandle = unsafe extern "system" fn(i16, H, *mut H) -> i16;
@@ -277,6 +277,8 @@ pub struct OdbcConn {
     pub api: Arc<Api>,
     env: H,
     pub dbc: H,
+    /// The statement running now, for the session's canceller (kept when the driver reconnects).
+    pub cancel_slot: Arc<Mutex<usize>>,
 }
 
 unsafe impl Send for OdbcConn {}
@@ -322,7 +324,7 @@ impl OdbcConn {
                 (api.free_handle)(SQL_HANDLE_ENV, env);
                 bail!(e);
             }
-            Ok(OdbcConn { api, env, dbc })
+            Ok(OdbcConn { api, env, dbc, cancel_slot: Arc::new(Mutex::new(0)) })
         }
     }
 
@@ -485,7 +487,7 @@ struct ColPlan {
 }
 
 /// "2024-03-15 10:20:30.123450" with `digits` fractional digits ("…30.12345"; none: "…30").
-fn fit_fraction(s: String, digits: u8) -> String {
+pub(crate) fn fit_fraction(s: String, digits: u8) -> String {
     let Some(dot) = s.rfind('.') else { return s };
     // Only a time's fraction (hh:mm:ss.ffff), not a date or an offset.
     if dot < 8 || !s[..dot].ends_with(|c: char| c.is_ascii_digit()) || s[dot - 3..dot].chars().nth(0) != Some(':') {
@@ -1101,6 +1103,16 @@ fn enumerate(api: &Api, f: FnEnum) -> Result<Vec<String>> {
         (api.free_handle)(SQL_HANDLE_ENV, env);
     }
     Ok(out)
+}
+
+/// The Informix Client SDK's ODBC driver, as Celer's SQLI connection string names it.
+pub const IFX_ODBC_DRIVER: &str = "IBM INFORMIX ODBC DRIVER (64-bit)";
+
+/// Informix ODBC drivers registered in the system (the Client SDK's), best match first.
+pub fn informix_odbc_drivers() -> Vec<String> {
+    let mut found: Vec<String> = list_drivers().unwrap_or_default().into_iter().filter(|d| d.to_lowercase().contains("informix")).collect();
+    found.sort_by_key(|d| !d.eq_ignore_ascii_case(IFX_ODBC_DRIVER));
+    found
 }
 
 pub fn system_manager() -> &'static str {

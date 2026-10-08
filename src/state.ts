@@ -10,8 +10,10 @@ import type {
   CompletionSchema,
   ConnConfig,
   ConnSummary,
+  ConnTestReport,
   DbKind,
   HistoryEntry,
+  InformixDrivers,
   MetaNode,
   ObjectRef,
   ResultSet,
@@ -28,6 +30,8 @@ import { activitySpec, readSessions, synapseDedicated, type ServerSession } from
 import type { AiMessage } from "./ai";
 import { insertAt } from "./windowModel";
 import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
+import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
+import { startConnWatch } from "./connWatch";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
 
@@ -307,6 +311,18 @@ export const [state, setState] = createStore({
   previewRun: null as (() => Promise<void>) | null,
   toasts: [] as Toast[],
   driverProgress: "",
+  /** A driver download in progress (it can be cancelled). */
+  driverDownload: null as { what: string; done: number; total: number } | null,
+  /** Settings › Drivers: what Informix can connect with on this machine. */
+  informixDrivers: null as InformixDrivers | null,
+  /** A JDBC connection lacks Java or the driver: what is missing, and what to retry once it is downloaded. */
+  jdbcSetup: null as { missing: ("java" | "jdbc")[]; text: string; retry: (() => void) | null } | null,
+  /** The Informix drivers guide, open on a topic (jdbc, sdk, drda, locale, server), with the error that led there. */
+  informixGuide: null as { topic: string; message: string } | null,
+  /** "Probar conexión" failed with something the guide explains: its topic. */
+  testGuide: "",
+  /** "Probar conexión": every step with its time, the way it connected and, if it failed, what to do. */
+  testReport: null as ConnTestReport | null,
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
   passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
   /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
@@ -398,7 +414,7 @@ export function connectionById(id: string | null | undefined) {
 /** Connection of the explorer selection, falling back to the active tab, then the first connection. */
 export function contextConnId(): string | null {
   const key = state.treeSelected;
-  if (key.startsWith("c:")) return key.slice(2);
+  if (key.startsWith("c:") || key.startsWith("f:")) return key.slice(2);
   if (key.startsWith("n:")) return key.slice(2).split("\u0000")[0] || null;
   return activeTab()?.connId ?? state.connections[0]?.id ?? null;
 }
@@ -497,12 +513,14 @@ export async function boot() {
   // the window that opened it.
   await restoreWindowLayout(connectionsLoaded);
   setState("ready", true);
+  startConnWatch();
   void api().onExportProgress((progress) => {
     if (state.exportRunning) setState("exportRows", progress.rows);
   });
   void api().onDriverDownload((progress) => {
     const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
     setState("driverProgress", progress.total ? `${pct}%` : `${progress.done} bytes`);
+    if (state.driverDownload) setState("driverDownload", { what: progress.what || state.driverDownload.what, done: progress.done, total: progress.total });
   });
 }
 
@@ -927,7 +945,7 @@ export async function moveConnection(id: string, folder: string, beforeId?: stri
 }
 
 export function openConnDialog(cfg?: ConnConfig) {
-  setState({ testOutput: "", testOk: null, testing: false });
+  setState({ testOutput: "", testOk: null, testing: false, testGuide: "", testReport: null });
   setState("connDialog", cfg ? { ...cfg, password: "" } : emptyConn(isTauri() ? "postgres" : "sqlite"));
 }
 
@@ -982,19 +1000,70 @@ export async function duplicateConnection(id: string) {
 }
 
 export async function testConnection(cfg: ConnConfig) {
-  setState({ testOutput: "", testOk: null, testing: true });
+  setState({ testOutput: "", testOk: null, testing: true, testGuide: "", testReport: null });
   try {
-    setState({ testOutput: await api().testConnection(cfg), testOk: true });
+    const report = await api().testConnection(cfg);
+    const code = errorCode(report.error);
+    const summary = report.ok
+      ? [report.serverInfo, report.route ? `Vía: ${report.route}` : "", `Total: ${formatMs(report.totalMs)}`]
+      : [report.hint, plainError(report.error)];
+    setState({ testReport: report, testOutput: summary.filter(Boolean).join("\n"), testOk: report.ok, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
+    if (code?.code === "JDBC_SETUP") offerDriverHelp(report.error, () => void testConnection(cfg));
   } catch (err) {
-    setState({ testOutput: errorText(err), testOk: false });
+    const message = errorText(err);
+    const code = errorCode(message);
+    setState({ testOutput: plainError(message), testOk: false, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
+    // The dialog stays open: only what has to be downloaded is offered on top of it.
+    if (code?.code === "JDBC_SETUP") offerDriverHelp(message, () => void testConnection(cfg));
   } finally {
     setState("testing", false);
   }
 }
 
+/**
+ * A code the core puts in front of some errors: "JDBC_SETUP:java,jdbc: …", "INFORMIX_GUIDE:sdk: …", "IBM_DRIVER_MISSING: …",
+ * and the connection's own (src-tauri/src/guard.rs): SESSION_LOST (it dropped and the transaction, #temp tables or SET
+ * went with it), CONN_RESET (it dropped and a write was not repeated), CONN_DOWN (it dropped and could not reconnect).
+ */
+export function errorCode(message: string): { code: string; arg: string; text: string } | null {
+  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING|SESSION_LOST|CONN_RESET|CONN_DOWN)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
+  return match ? { code: match[1], arg: match[2] ?? "", text: match[3] } : null;
+}
+
+/** An error as the user reads it (without its code). */
+export function plainError(message: string) {
+  return errorCode(message)?.text ?? message;
+}
+
+/**
+ * Offers what a driver error asks for: the downloads Informix over JDBC lacks (then `retry`), the Informix guide on
+ * the error's topic, or Settings › Drivers. Returns whether it did.
+ */
+export function offerDriverHelp(message: string, retry: (() => void) | null): boolean {
+  const code = errorCode(message);
+  if (!code) return false;
+  if (code.code === "JDBC_SETUP") {
+    const missing = code.arg.split(",").filter((m): m is "java" | "jdbc" => m === "java" || m === "jdbc");
+    setState("jdbcSetup", { missing, text: code.text, retry });
+    void refreshInformixDrivers();
+    return true;
+  }
+  if (code.code === "INFORMIX_GUIDE") {
+    setState("informixGuide", { topic: code.arg || "jdbc", message: code.text });
+    return true;
+  }
+  if (code.code === "IBM_DRIVER_MISSING" || code.code === "JDBC_BRIDGE_MISSING") {
+    setState({ settingsOpen: true, settingsSection: "drivers" });
+    return true;
+  }
+  return false;
+}
+
 export async function connect(connId: string, password?: string) {
   const conn = connectionById(connId);
   if (!conn || state.connecting[connId]) return;
+  // Informix over JDBC: Java starts now, while the password is asked.
+  if (isTauri() && conn.kind === "informix" && (conn.informixMode === "jdbc" || conn.informixMode === "auto")) void api().jdbcPrewarm(connId).catch(() => {});
   if (password) setState("passwords", connId, password);
   else if (needsPassword(conn)) {
     const typed = await askPassword(conn.name);
@@ -1006,25 +1075,32 @@ export async function connect(connId: string, password?: string) {
   setState("connecting", connId, true);
   try {
     const opened = await api().openSession(connId, pwd);
-    const databases = await api().listDatabases(opened.sessionId).catch(() => [] as string[]);
     // Disconnected while this was connecting: drop the new session instead of bringing the connection back.
     if (connectGeneration(connId) !== generation) {
       void api().closeSession(opened.sessionId).catch(() => {});
       return;
     }
-    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases });
+    markConn(connId, "on", { connectMs: opened.connectMs, reused: opened.reused, note: "" });
+    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases: [] });
     try {
       localStorage.setItem(`celer.server.${connId}`, opened.serverInfo.slice(0, 120));
     } catch {
       /* only cosmetic */
     }
-    void api()
-      .completion(opened.sessionId, opened.database)
-      .then((schema) => setState("catalog", connId, { database: opened.database, tables: schema.tables }))
-      .catch(() => {});
+    // The explorer's first level first; the database list comes from it when it lists databases (one round trip
+    // less), and autocompletion after the tree has opened (on the same session, it would hold the tree back).
     await loadChildren(connId, [], true);
     if (connectGeneration(connId) !== generation) return;
-    autoExpand(connId);
+    const roots = state.tree[pathKey(connId, [])]?.nodes ?? [];
+    const listed = roots.filter((node) => node.kind === "database").map((node) => node.name);
+    const databases = listed.length ? [...listed].sort((a, b) => a.localeCompare(b)) : await api().listDatabases(opened.sessionId).catch(() => [] as string[]);
+    if (state.sessions[connId]?.metaId === opened.sessionId) setState("sessions", connId, "databases", databases);
+    const loadCatalog = () =>
+      void api()
+        .completion(opened.sessionId, opened.database)
+        .then((schema) => setState("catalog", connId, { database: opened.database, tables: schema.tables }))
+        .catch(() => {});
+    void autoExpand(connId).then(loadCatalog, loadCatalog);
     gib("connected", { production: conn.production, detail: conn.name });
     const current = activeTab();
     if (!current) {
@@ -1039,15 +1115,17 @@ export async function connect(connId: string, password?: string) {
     persistSoon();
   } catch (err) {
     const message = errorText(err);
-    notify(`No se pudo conectar a «${conn.name}»`, "error", message);
-    gib("connect-failed", { detail: message });
+    // Shown on its dot; showing its consoles does not try again on its own (connecting by hand does).
+    if (connectGeneration(connId) === generation) markConn(connId, "down", { note: plainError(message) });
+    notify(`No se pudo conectar a «${conn.name}»`, "error", plainError(message));
+    gib("connect-failed", { detail: plainError(message) });
     // Forget a typed password that did not work, so the next attempt asks again.
     if (!conn.hasPassword) {
       setState(produce((draft) => {
         delete draft.passwords[connId];
       }));
     }
-    if (message.includes("IBM_DRIVER_MISSING")) setState({ settingsOpen: true, settingsSection: "drivers" });
+    offerDriverHelp(message, () => void connect(connId));
   } finally {
     // A disconnect in between owns the flag now (a newer connect may be running).
     if (connectGeneration(connId) === generation) setState("connecting", connId, false);
@@ -1094,6 +1172,7 @@ export async function disconnect(connId: string, confirm = true) {
     if (!ok) return;
   }
   generations[connId] = connectGeneration(connId) + 1;
+  markConn(connId, "off", { note: "" });
   for (const tab of affected) bumpToken(tab.id);
   if (exporting) void cancelExport();
   // This window's sessions of the connection (its explorer, its tabs, its activity monitor): other windows keep theirs.
@@ -1282,12 +1361,18 @@ function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
 }
 
 /**
- * Opens the session of a console of a connected connection in the background, as soon as the console opens: the
- * first run does not pay the login (TLS included), as when a tool keeps its connection open.
+ * Opens the session of a console in the background as soon as the console opens or is shown: the first run does not
+ * pay the login (TLS included), as when a tool keeps its connection open. A connection that is not connected yet
+ * connects on its own when it needs no password (connect() then warms the active console).
  */
-function warmSqlSession(tabId: string) {
+export function warmSqlSession(tabId: string) {
   const tab = state.tabs[tabIndex(tabId)];
-  if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId || !state.sessions[tab.connId]) return;
+  if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId) return;
+  const conn = connectionById(tab.connId);
+  if (!state.sessions[tab.connId]) {
+    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
+    return;
+  }
   void ensureSqlSession(tab).catch(() => {});
 }
 
@@ -1303,24 +1388,30 @@ async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   if (fresh.sessionId) return fresh;
   const pwd = state.passwords[fresh.connId!];
   const generation = connectGeneration(fresh.connId!);
-  const opened = await api().openSession(fresh.connId!, pwd);
+  // Straight into the console's database and transaction mode (a console in Manual mode stays manual on a new
+  // session): no USE or extra round trips afterwards. If that database is gone, the connection's own.
+  markTab(fresh.id, "connecting");
+  const mode = { autocommit: fresh.autocommit };
+  const opened = await api()
+    .openSession(fresh.connId!, pwd, { ...mode, database: fresh.database || undefined })
+    .catch((err: unknown) => (fresh.database ? api().openSession(fresh.connId!, pwd, mode) : Promise.reject(err)))
+    .catch((err: unknown) => {
+      markTab(fresh.id, "down", { note: plainError(errorText(err)) });
+      throw err;
+    });
   // Disconnected meanwhile (even if reconnected since): do not attach a session the core may have closed.
   if (!state.sessions[fresh.connId!] || connectGeneration(fresh.connId!) !== generation) {
     void api().closeSession(opened.sessionId).catch(() => {});
+    markTab(fresh.id, "off");
     throw new Error("La conexión se ha cerrado");
   }
-  const wanted = fresh.database && fresh.database !== opened.database ? fresh.database : "";
-  let database = opened.database;
-  if (wanted) database = await api().useDatabase(opened.sessionId, wanted).catch(() => opened.database);
-  // A console in Manual mode must stay manual on a new session (after a reconnect or a connection change).
-  let inTransaction = false;
-  if (!fresh.autocommit) inTransaction = await api().setAutocommit(opened.sessionId, false).catch(() => false);
   const now = state.tabs[tabIndex(fresh.id)];
   if (!now || now.kind !== "sql") {
     void api().closeSession(opened.sessionId).catch(() => {});
     throw new Error("La pestaña ya no existe");
   }
-  patchTab(fresh.id, { sessionId: opened.sessionId, database, serverInfo: opened.serverInfo, inTransaction });
+  markTab(fresh.id, "on", { connectMs: opened.connectMs, reused: opened.reused, note: "" });
+  patchTab(fresh.id, { sessionId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, inTransaction: false });
   void loadCompletion(fresh.id);
   return state.tabs[tabIndex(fresh.id)] as SqlTab;
 }
@@ -1420,10 +1511,17 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   patchTab(current.id, { running: true, error: "", messages: [], startedAt: Date.now(), lastSql: sql });
   const token = tokenOf(current.id);
   try {
+    const hadSession = Boolean(fresh.sessionId);
     const tab = await ensureSqlSession(fresh);
     const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize);
     // Disconnected while it ran: this answer belongs to a closed session.
     if (tokenOf(current.id) !== token) return;
+    // The session opened for this run: how long that took goes with the output. One that dropped and came back on
+    // its own says so (the core's note) and the tab shows it.
+    const opened = hadSession ? null : tabLink(tab);
+    if (opened && opened.connectMs !== null) output.messages = [`Sesión abierta en ${connectTimeText(opened)}`, ...output.messages];
+    const recovered = output.messages.find((message) => message.startsWith(RECOVERED_PREFIX));
+    if (recovered) markTab(tab.id, "reconnected", { note: recovered });
     const firstGrid = output.results.findIndex((result) => result.columns.length);
     patchTab(tab.id, {
       runId: (tab.runId ?? 0) + 1,
@@ -1456,14 +1554,34 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     await remember(tab, sql, true, output.elapsedMs, rows);
   } catch (err) {
     if (tokenOf(current.id) !== token) return;
-    const message = errorText(err);
+    const full = errorText(err);
+    // The connection dropped: the core reconnected (or could not) and says what was lost; the tab shows it.
+    const dropped = noteDropped(current.id, current.title, full);
+    const message = dropped ? plainError(full) : full;
     const at = tabIndex(current.id);
-    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1, activePinned: null, activePlan: false, compare: null });
+    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1, activePinned: null, activePlan: false, compare: null, ...(dropped ? { inTransaction: false } : {}) });
     pushOutput(current.id, { at: Date.now(), sql, ok: false, text: message, elapsedMs: null });
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
-    if (message.includes("IBM_DRIVER_MISSING")) setState({ settingsOpen: true, settingsSection: "drivers" });
+    offerDriverHelp(full, null);
   }
+}
+
+/**
+ * An error that says the connection dropped (SESSION_LOST, CONN_RESET, CONN_DOWN from src-tauri/src/guard.rs): the
+ * tab's indicator shows it, and a lost transaction or session state is also told in a balloon, since it is not an
+ * error of the statement. Returns whether it was one of those.
+ */
+export function noteDropped(tabId: string, title: string, message: string): boolean {
+  const code = errorCode(message)?.code ?? "";
+  const text = plainError(message);
+  if (code === "SESSION_LOST") {
+    markTab(tabId, "lost", { note: text });
+    notify(`«${title}» perdió su sesión al cortarse la conexión`, "warning", text);
+  } else if (code === "CONN_RESET") markTab(tabId, "reconnected", { note: text });
+  else if (code === "CONN_DOWN") markTab(tabId, "down", { note: text });
+  else return false;
+  return true;
 }
 
 /** ANALYZE runs the statement: only for reads, on engines whose analyzed plan Celer reads (PostgreSQL, MariaDB). */
@@ -1773,14 +1891,13 @@ function reopenTableSession(tabId: string): Promise<string> {
   const job = (async () => {
     const tab = state.tabs[tabIndex(tabId)];
     if (!tab || tab.kind !== "table") throw new Error("La pestaña ya no existe");
-    const opened = await openSessionFor(tab.connId);
+    const opened = await openSessionFor(tab.connId, tab.obj.database);
     if (!opened) throw new Error("Sin conexión");
     if (tabIndex(tabId) < 0) {
       void api().closeSession(opened.sessionId).catch(() => {});
       throw new Error("La pestaña ya no existe");
     }
     patchTab(tabId, { sessionId: opened.sessionId });
-    if (tab.obj.database) await api().useDatabase(opened.sessionId, tab.obj.database).catch(() => {});
     return opened.sessionId;
   })();
   reopening.set(tabId, job);
@@ -1789,16 +1906,23 @@ function reopenTableSession(tabId: string): Promise<string> {
 }
 
 /** A new session for a connection (connecting first if needed); null when it cannot connect. */
-export async function openSessionFor(connId: string) {
+/** The database each side session opened in: a table's first load needs no USE when it is already there. */
+const sessionDatabase = new Map<string, string>();
+
+/** A side session (a table, a count, a comparison…), straight in `database` when one is given. */
+export async function openSessionFor(connId: string, database?: string) {
   if (!state.sessions[connId]) await connect(connId);
   if (!state.sessions[connId]) return null;
   const generation = connectGeneration(connId);
-  const opened = await api().openSession(connId, state.passwords[connId]);
+  const opened = await api()
+    .openSession(connId, state.passwords[connId], { database: database || undefined })
+    .catch((err: unknown) => (database ? api().openSession(connId, state.passwords[connId]) : Promise.reject(err)));
   // Disconnected while it opened: the core may have closed it already.
   if (connectGeneration(connId) !== generation || !state.sessions[connId]) {
     void api().closeSession(opened.sessionId).catch(() => {});
     throw new Error("La conexión se ha cerrado");
   }
+  sessionDatabase.set(opened.sessionId, opened.database);
   return opened;
 }
 
@@ -1870,7 +1994,7 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
     }
     return;
   }
-  const opened = await openSessionFor(connId).catch((err) => {
+  const opened = await openSessionFor(connId, obj.database).catch((err) => {
     notify(errorText(err), "error");
     return null;
   });
@@ -1898,7 +2022,10 @@ export async function reloadTable(tabId: string, full = false) {
     let current = state.tabs[tabIndex(tabId)] as TableTab;
     const sid = current.sessionId;
     if (full || !current.baseSelect) {
-      if (tab.obj.database) await api().useDatabase(sid, tab.obj.database).catch(() => {});
+      // Opened in the table's database already: no USE (one round trip less on every engine but PostgreSQL).
+      if (tab.obj.database && sessionDatabase.get(sid)?.toLowerCase() !== tab.obj.database.toLowerCase()) {
+        await api().useDatabase(sid, tab.obj.database).then((db) => sessionDatabase.set(sid, db)).catch(() => {});
+      }
       const [columnsMeta, sqlInfo, ddl] = await Promise.all([
         api().tableColumns(sid, tab.obj),
         api().objectSql(sid, tab.obj),
@@ -1945,6 +2072,8 @@ export async function reloadTable(tabId: string, full = false) {
   } catch (err) {
     if (tokenOf(tabId) !== token) return;
     let message = errorText(err);
+    // The connection dropped and the core could not bring it back (or a write was not repeated): the tab shows it.
+    if (noteDropped(tabId, tab.title, message)) message = plainError(message);
     // The engine's position counts over the generated SELECT: translate it to the WHERE the user typed.
     const typed = (state.tabs[tabIndex(tabId)] as TableTab | undefined)?.where.trim() ?? "";
     const errorAt = select ? wherePosition(message, select, typed) : null;
@@ -2766,15 +2895,64 @@ export async function saveScript(saveAs = false) {
 }
 
 export async function downloadDriver() {
-  setState("driverProgress", "0%");
+  setState({ driverProgress: "0%", driverDownload: { what: "IBM Data Server Driver", done: 0, total: 0 } });
   try {
     const path = await api().ibmDriverDownload();
     setState({ driverPath: path, driverProgress: "" });
     notify("Driver IBM instalado", "success");
   } catch (err) {
     setState("driverProgress", "");
-    notify(errorText(err), "error");
+    if (!/cancelada/i.test(errorText(err))) notify(errorText(err), "error");
+  } finally {
+    setState("driverDownload", null);
+    void refreshInformixDrivers();
   }
+}
+
+export async function refreshInformixDrivers() {
+  if (!isTauri()) return;
+  try {
+    setState("informixDrivers", await api().informixDrivers());
+  } catch (err) {
+    notify("No se pudo comprobar los drivers", "error", errorText(err));
+  }
+}
+
+/**
+ * Downloads Java (Eclipse Temurin JRE 21) or the Informix JDBC driver into Celer's data folder. Only on the user's
+ * request: the buttons that call this say what is downloaded and from where. Returns whether it worked.
+ */
+export async function downloadJdbcPiece(what: "java" | "jdbc"): Promise<boolean> {
+  if (state.driverDownload) return false;
+  setState("driverDownload", { what: what === "java" ? "Java (Temurin JRE 21)" : "Driver JDBC de Informix", done: 0, total: 0 });
+  try {
+    await api().jdbcDownload(what);
+    notify(what === "java" ? "Java descargado" : "Driver JDBC descargado", "success");
+    return true;
+  } catch (err) {
+    if (!/cancelada/i.test(errorText(err))) notify("No se pudo completar la descarga", "error", errorText(err));
+    return false;
+  } finally {
+    setState("driverDownload", null);
+    await refreshInformixDrivers();
+  }
+}
+
+export function cancelDriverDownload() {
+  void api().driverDownloadCancel();
+}
+
+/** The JDBC setup dialog: downloads what is missing, in turn, then retries what failed. */
+export async function completeJdbcSetup(what: ("java" | "jdbc")[]) {
+  const setup = state.jdbcSetup;
+  for (const piece of what) {
+    if (!(await downloadJdbcPiece(piece))) return;
+  }
+  const drivers = state.informixDrivers;
+  const ready = !drivers || (drivers.javaUsed && drivers.jdbcUsed);
+  if (!ready) return;
+  setState("jdbcSetup", null);
+  setup?.retry?.();
 }
 
 // ---------------------------------------------------------------- completion

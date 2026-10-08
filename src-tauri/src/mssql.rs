@@ -126,6 +126,8 @@ struct Idle {
     client: Cli,
     facts: Facts,
     since: Instant,
+    /// La conexión guardada de la que viene (al desconectarla se cierran sus conexiones libres).
+    owner: String,
 }
 
 /// Las conexiones libres, con la clave de su configuración (`pool_key`).
@@ -135,8 +137,9 @@ fn pool() -> &'static Mutex<Vec<(String, Idle)>> {
 }
 
 /// La clave de una configuración en el pool, sin guardar la contraseña en claro: todo lo que decide cómo es la
-/// conexión (servidor, usuario, cifrado, script de inicio…) salvo la base, que va en cada conexión libre.
-fn pool_key(cfg: &ConnConfig) -> String {
+/// conexión (servidor, usuario, cifrado, script de inicio…) salvo la base, que va en cada conexión libre. También la
+/// usa el pool de los demás motores (`guard.rs`).
+pub(crate) fn pool_key(cfg: &ConnConfig) -> String {
     let mut c = cfg.clone();
     c.database.clear();
     c.id.clear();
@@ -155,6 +158,20 @@ fn put_idle(key: String, idle: Idle) {
     if pool.iter().filter(|(k, _)| *k == key).count() < IDLE_MAX {
         pool.push((key, idle));
     }
+}
+
+/// Cierra las conexiones libres de una conexión guardada (al desconectarla o borrarla). Devuelve cuántas.
+pub fn pool_forget(owner: &str) -> usize {
+    let gone: Vec<(String, Idle)> = {
+        let mut pool = pool().lock();
+        let (gone, keep): (Vec<(String, Idle)>, Vec<(String, Idle)>) = std::mem::take(&mut *pool).into_iter().partition(|(_, i)| i.owner == owner);
+        *pool = keep;
+        gone
+    };
+    let n = gone.len();
+    // Cerrarlas es soltar el cliente; dentro del runtime en el que se abrieron.
+    rt().spawn(async move { drop(gone) });
+    n
 }
 
 /// Una conexión libre para la base `wanted`, la más reciente. Si lleva un rato parada se comprueba antes con un
@@ -214,6 +231,7 @@ async fn open_connection(cfg: &ConnConfig, database: &str) -> Result<Idle> {
     }
     let actual = cell(0);
     Ok(Idle {
+        owner: cfg.id.clone(),
         client,
         facts: Facts {
             home: database.to_string(),
@@ -576,7 +594,7 @@ impl MssqlDriver {
             return Err(e);
         }
         if let (true, Some(client)) = (reusable, old) {
-            put_idle(self.key.clone(), Idle { client, facts, since: Instant::now() });
+            put_idle(self.key.clone(), Idle { client, facts, since: Instant::now(), owner: self.cfg.id.clone() });
         }
         Ok(())
     }
@@ -743,6 +761,11 @@ impl MssqlDriver {
         }
         if self.cursor.is_some() {
             self.in_tx = true;
+            return;
+        }
+        // La conexión se cortó: preguntar abriría otra (y perdería en silencio lo que hubiera). Se deja como estaba
+        // para que la sesión vigilada (guard.rs) diga lo que se pierde.
+        if self.client.is_none() {
             return;
         }
         self.in_tx = self
@@ -1264,6 +1287,8 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
                 TcpStream::connect(config.get_addr()).await?
             };
             tcp.set_nodelay(true)?;
+            // Keepalive de TCP: el sistema comprueba la conexión parada y la mantiene viva en cortafuegos y NAT.
+            let _ = socket2::SockRef::from(&tcp).set_tcp_keepalive(&crate::session::tcp_keepalive());
             match Client::connect(config.clone(), tcp.compat_write()).await {
                 Ok(c) => return Ok(c),
                 // Azure SQL y grupos de disponibilidad pueden redirigir a otro servidor.
@@ -2292,6 +2317,33 @@ impl Driver for MssqlDriver {
             }
         })
     }
+
+    /// Un SELECT 1 con 5 s de límite. Con un resultado abierto no se mira (la conexión la tiene su lector) y sin
+    /// conexión no hay nada que mirar. Si no responde, la conexión se suelta.
+    fn ping(&mut self) -> Result<()> {
+        if self.cursor.is_some() {
+            return Ok(());
+        }
+        let Some(mut client) = self.client.take() else { return Ok(()) };
+        let ok = rt().block_on(async {
+            let ping = async { client.simple_query("SELECT 1").await?.into_results().await };
+            matches!(tokio::time::timeout(Duration::from_secs(5), ping).await, Ok(Ok(_)))
+        });
+        if !ok {
+            bail!("SQL Server no responde en esta conexión");
+        }
+        self.client = Some(client);
+        Ok(())
+    }
+
+    /// Sin conexión ni lector: se cortó (o se cortó a propósito al cancelar).
+    fn broken(&self) -> bool {
+        self.client.is_none() && self.cursor.is_none()
+    }
+
+    fn session_state(&self) -> String {
+        self.lost_state()
+    }
 }
 
 impl Drop for MssqlDriver {
@@ -2314,7 +2366,7 @@ impl Drop for MssqlDriver {
             return;
         }
         if let Some(client) = self.client.take() {
-            put_idle(self.key.clone(), Idle { client, facts: self.facts(), since: Instant::now() });
+            put_idle(self.key.clone(), Idle { client, facts: self.facts(), since: Instant::now(), owner: self.cfg.id.clone() });
         }
     }
 }

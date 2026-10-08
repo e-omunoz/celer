@@ -6,12 +6,15 @@ import type {
   ExportOptions,
   FetchOutput,
   HistoryEntry,
+  ConnTestReport,
   MetaNode,
   ObjectRef,
+  OpenSessionOptions,
+  SessionHealth,
   SessionInfo,
   TableColumn,
 } from "./types";
-import type { McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
+import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
 import type { MigrationSource } from "./migrate";
 import { createDemoBackend } from "./demo";
 
@@ -19,9 +22,17 @@ export interface Backend {
   listConnections(): Promise<ConnSummary[]>;
   saveConnection(cfg: ConnConfig): Promise<ConnConfig>;
   reorderConnections(ids: string[]): Promise<void>;
+  /** Deletes a connection; its saved password is kept in memory until the app closes, for `restoreConnection`. */
   deleteConnection(id: string): Promise<void>;
-  testConnection(cfg: ConnConfig): Promise<string>;
-  openSession(connId: string, password?: string): Promise<SessionInfo>;
+  /** Undo of a delete: saves the connection again with the password it had. */
+  restoreConnection(cfg: ConnConfig): Promise<ConnConfig>;
+  /** A copy of a saved connection under a new id and name, with its saved password. */
+  duplicateConnection(id: string, name: string): Promise<ConnConfig>;
+  /** "Probar conexión": every step timed. Rejects only when the connection cannot even be attempted (driver missing…). */
+  testConnection(cfg: ConnConfig): Promise<ConnTestReport>;
+  openSession(connId: string, password?: string, options?: OpenSessionOptions): Promise<SessionInfo>;
+  /** Checks a session (a cheap round trip if it has been idle, or always with `force`) and reconnects it if it dropped. */
+  checkSession(sessionId: string, force: boolean): Promise<SessionHealth>;
   closeSession(sessionId: string): Promise<void>;
   /** Closes every session of a connection (disconnect); returns how many were open. */
   closeConnectionSessions(connId: string): Promise<number>;
@@ -62,6 +73,15 @@ export interface Backend {
   odbcDsns(): Promise<string[]>;
   ibmDriverStatus(): Promise<string | null>;
   ibmDriverDownload(): Promise<string>;
+  /** IBM CLI, Java and the JDBC driver, the Client SDK's ODBC driver: what is installed and what connections use. */
+  informixDrivers(): Promise<InformixDrivers>;
+  /** Downloads Java (Temurin JRE 21) or the Informix JDBC driver (Maven Central), with progress (onDriverDownload). */
+  jdbcDownload(what: "java" | "jdbc"): Promise<string>;
+  /** Starts the JDBC bridge with the Java and driver connections would use and loads the driver. */
+  jdbcCheck(): Promise<string>;
+  /** Starts Java ahead of an Informix JDBC connection (while the password is asked). */
+  jdbcPrewarm(connId: string): Promise<void>;
+  driverDownloadCancel(): Promise<void>;
   appInfo(): Promise<{ version: string; dataDir: string }>;
   migrationSources(): Promise<MigrationSource[]>;
   updateCheck(): Promise<UpdateInfo>;
@@ -84,7 +104,7 @@ export interface Backend {
   /** Several files at once (an empty list when cancelled). */
   pickOpenPaths(filters: { name: string; extensions: string[] }[]): Promise<string[]>;
   onExportProgress(cb: (progress: { exportId: string; rows: number }) => void): Promise<() => void>;
-  onDriverDownload(cb: (progress: { done: number; total: number }) => void): Promise<() => void>;
+  onDriverDownload(cb: (progress: { done: number; total: number; what?: string }) => void): Promise<() => void>;
 }
 
 export function isTauri(): boolean {
@@ -102,8 +122,12 @@ function tauriBackend(): Backend {
     saveConnection: (cfg) => invoke("save_connection", { cfg: { ...cfg, password: cfg.password || null } }),
     reorderConnections: (ids) => invoke("reorder_connections", { ids }),
     deleteConnection: (id) => invoke("delete_connection", { id }),
+    restoreConnection: (cfg) => invoke("restore_connection", { cfg: { ...cfg, password: cfg.password || null } }),
+    duplicateConnection: (id, name) => invoke("duplicate_connection", { id, name }),
     testConnection: (cfg) => invoke("test_connection", { cfg }),
-    openSession: (connId, password) => invoke("open_session", { connId: connId, password: password ?? null }),
+    openSession: (connId, password, options) =>
+      invoke("open_session", { connId: connId, password: password ?? null, database: options?.database || null, autocommit: options?.autocommit ?? null }),
+    checkSession: (sessionId, force) => invoke("check_session", { sessionId: sessionId, force }),
     closeSession: (sessionId) => invoke("close_session", { sessionId: sessionId }),
     closeConnectionSessions: (connId) => invoke("close_connection_sessions", { connId }),
     execute: (sessionId, sql, fetch) => invoke("execute", { sessionId: sessionId, sql, fetch }),
@@ -136,6 +160,11 @@ function tauriBackend(): Backend {
     odbcDsns: () => invoke("odbc_dsns"),
     ibmDriverStatus: () => invoke("ibm_driver_status"),
     ibmDriverDownload: () => invoke("ibm_driver_download"),
+    informixDrivers: () => invoke("informix_drivers"),
+    jdbcDownload: (what) => invoke("jdbc_download", { what }),
+    jdbcCheck: () => invoke("jdbc_check"),
+    jdbcPrewarm: (connId) => invoke("jdbc_prewarm", { connId }),
+    driverDownloadCancel: () => invoke("driver_download_cancel"),
     appInfo: () => invoke("app_info"),
     migrationSources: () => invoke("migration_sources"),
     updateCheck: () => invoke("update_check"),
@@ -183,7 +212,7 @@ function tauriBackend(): Backend {
     },
     onDriverDownload: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");
-      return listen<{ done: number; total: number }>("driver-download", (e) => cb(e.payload));
+      return listen<{ done: number; total: number; what?: string }>("driver-download", (e) => cb(e.payload));
     },
   };
 }

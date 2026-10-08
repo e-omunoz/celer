@@ -1,16 +1,17 @@
-//! Driver basado en ODBC/CLI: Informix (DRDA o SQLI) y conexiones ODBC genéricas.
+//! Driver basado en ODBC/CLI: Informix (DRDA o SQLI) y conexiones ODBC genéricas. The Informix dialect (catalog
+//! queries, batches split per statement, DDL, database switching…) works over any `Link`: ODBC/CLI here, or the JDBC
+//! bridge (jdbc.rs).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Result};
-use parking_lot::Mutex;
 
 use crate::model::*;
 use crate::mssql::{cell_i64, cell_str, fmt_rows, kind_from_type};
 use crate::odbc::*;
-use crate::session::{Canceller, Driver};
+use crate::session::{first_keyword, Canceller, Driver};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
@@ -18,44 +19,168 @@ pub enum Dialect {
     Generic,
 }
 
-pub struct OdbcDriver {
+/// What the driver needs from a connection: run a statement, read metadata, transactions, cancel and reconnect.
+pub trait Link: Send + Sized + 'static {
+    type Stmt: LinkStmt;
+    /// Runs one statement. `fetch`: rows the caller reads first (the JDBC bridge sends them with its answer).
+    fn exec(&mut self, sql: &str, fetch: usize) -> Result<Self::Stmt>;
+    /// Every row of the first result (metadata queries).
+    fn query_all(&self, sql: &str) -> Result<Vec<Vec<Cell>>>;
+    fn set_autocommit(&mut self, on: bool) -> Result<()>;
+    fn end_tran(&mut self, commit: bool) -> Result<()>;
+    /// Product and version of the server.
+    fn server_info(&self) -> String;
+    /// Cancels, from another thread, what the connection is running; it keeps working after `reconnect`.
+    fn canceller(&self) -> Canceller;
+    /// A new connection in place of this one (Informix changes database by reconnecting).
+    fn reconnect(&mut self, cfg: &ConnConfig, database: Option<&str>) -> Result<()>;
+    /// Generic ODBC sources need the catalog functions of the ODBC connection itself.
+    fn odbc(&self) -> Option<&OdbcConn> {
+        None
+    }
+}
+
+/// A statement run on a `Link`: its results, read in pages.
+pub trait LinkStmt: Send {
+    fn num_cols(&mut self) -> Result<usize>;
+    /// Describes the current result and prepares to read it.
+    fn begin_result(&mut self, ncols: usize) -> Result<()>;
+    fn columns(&self) -> &[ColumnInfo];
+    fn in_result(&self) -> bool;
+    /// Up to `n` rows of the current result, and whether more remain.
+    fn read(&mut self, n: usize) -> Result<(Vec<Vec<Cell>>, bool)>;
+    fn row_count(&self) -> i64;
+    /// Moves to the next result of the statement; false when there is none.
+    fn more_results(&mut self) -> Result<bool>;
+    fn messages(&mut self) -> &mut Vec<String>;
+}
+
+impl Link for OdbcConn {
+    type Stmt = Stmt;
+
+    fn exec(&mut self, sql: &str, _fetch: usize) -> Result<Stmt> {
+        let mut st = self.alloc_stmt()?;
+        st.register_cancel(self.cancel_slot.clone());
+        st.exec(sql)?;
+        Ok(st)
+    }
+
+    fn query_all(&self, sql: &str) -> Result<Vec<Vec<Cell>>> {
+        OdbcConn::query_all(self, sql)
+    }
+
+    fn set_autocommit(&mut self, on: bool) -> Result<()> {
+        OdbcConn::set_autocommit(self, on)
+    }
+
+    fn end_tran(&mut self, commit: bool) -> Result<()> {
+        OdbcConn::end_tran(self, commit)
+    }
+
+    fn server_info(&self) -> String {
+        format!("{} {}", self.info(SQL_DBMS_NAME), self.info(SQL_DBMS_VER)).trim().to_string()
+    }
+
+    fn canceller(&self) -> Canceller {
+        let slot = self.cancel_slot.clone();
+        let api = self.api.clone();
+        Arc::new(move || cancel_stmt(&api, &slot))
+    }
+
+    fn reconnect(&mut self, cfg: &ConnConfig, database: Option<&str>) -> Result<()> {
+        let mut conn = OdbcConn::connect(self.api.clone(), &conn_string(cfg, database), 20).map_err(|e| explain_odbc(cfg, e))?;
+        conn.cancel_slot = self.cancel_slot.clone();
+        *self = conn;
+        Ok(())
+    }
+
+    fn odbc(&self) -> Option<&OdbcConn> {
+        Some(self)
+    }
+}
+
+impl LinkStmt for Stmt {
+    fn num_cols(&mut self) -> Result<usize> {
+        Stmt::num_cols(self)
+    }
+
+    fn begin_result(&mut self, ncols: usize) -> Result<()> {
+        Stmt::begin_result(self, ncols)
+    }
+
+    fn columns(&self) -> &[ColumnInfo] {
+        &self.columns
+    }
+
+    fn in_result(&self) -> bool {
+        self.in_result
+    }
+
+    fn read(&mut self, n: usize) -> Result<(Vec<Vec<Cell>>, bool)> {
+        Stmt::read(self, n)
+    }
+
+    fn row_count(&self) -> i64 {
+        Stmt::row_count(self)
+    }
+
+    fn more_results(&mut self) -> Result<bool> {
+        Stmt::more_results(self)
+    }
+
+    fn messages(&mut self) -> &mut Vec<String> {
+        &mut self.messages
+    }
+}
+
+/// Informix (DRDA or SQLI, ODBC or JDBC) and generic ODBC sources, over a `Link`.
+pub struct LinkDriver<L: Link> {
     cfg: ConnConfig,
-    lib_path: String,
     dialect: Dialect,
-    conn: OdbcConn,
-    stmt: Option<Stmt>,
+    conn: L,
+    stmt: Option<L::Stmt>,
     /// Statements of a batch still to run (Informix runs one statement per call: the batch is split).
     pending: VecDeque<String>,
-    cancel_slot: Arc<Mutex<usize>>,
     autocommit: bool,
     in_tx: bool,
     database: String,
+    /// Informix: `database` es la base en la que está la sesión (se pregunta solo si no se sabe: un DATABASE del
+    /// usuario la cambia).
+    db_known: bool,
     quote: String,
 }
 
-impl OdbcDriver {
+pub type OdbcDriver = LinkDriver<OdbcConn>;
+
+impl LinkDriver<OdbcConn> {
     pub fn connect(cfg: ConnConfig, lib_path: String) -> Result<OdbcDriver> {
+        let api = Api::load(&lib_path)?;
+        let conn = OdbcConn::connect(api, &conn_string(&cfg, None), 20).map_err(|e| explain_odbc(&cfg, e))?;
+        LinkDriver::over(cfg, conn)
+    }
+}
+
+impl<L: Link> LinkDriver<L> {
+    /// The driver over an open connection: runs the startup script and reads what it needs.
+    pub fn over(cfg: ConnConfig, mut conn: L) -> Result<LinkDriver<L>> {
         let dialect = if cfg.kind == DbKind::Informix {
             Dialect::Informix
         } else {
             Dialect::Generic
         };
-        let api = Api::load(&lib_path)?;
-        let conn = OdbcConn::connect(api, &conn_string(&cfg, None), 20)?;
-        run_startup(&conn, &cfg)?;
-        let quote = match conn.info(SQL_IDENTIFIER_QUOTE_CHAR).trim() {
+        run_startup(&mut conn, &cfg)?;
+        let quote = match conn.odbc().map(|c| c.info(SQL_IDENTIFIER_QUOTE_CHAR)).unwrap_or_default().trim() {
             "" => "\"".to_string(),
             q => q.to_string(),
         };
-        let mut d = OdbcDriver {
-            database: cfg.database.clone(),
+        let mut d = LinkDriver {
+            database: cfg.database.trim().to_string(),
+            db_known: !cfg.database.trim().is_empty(),
             cfg,
-            lib_path,
             dialect,
             conn,
             stmt: None,
             pending: VecDeque::new(),
-            cancel_slot: Arc::new(Mutex::new(0)),
             autocommit: true,
             in_tx: false,
             quote,
@@ -66,26 +191,32 @@ impl OdbcDriver {
         Ok(d)
     }
 
+    /// The ODBC connection, for generic ODBC sources (catalog functions).
+    fn odbc(&self) -> Result<&OdbcConn> {
+        self.conn.odbc().ok_or_else(|| anyhow!("Solo disponible en conexiones ODBC"))
+    }
+
     /// Runs the batch's statements in turn, adding their results, until one leaves rows to read (its cursor stays
     /// open for `fetch`) or none is left. An error stops the batch: the statements after it do not run.
     fn run_pending(&mut self, fetch: usize, results: &mut Vec<ResultSet>, messages: &mut Vec<String>) -> Result<()> {
         let total = self.pending.len();
         while self.stmt.is_none() {
             let Some(sql) = self.pending.pop_front() else { break };
-            let mut st = self.conn.alloc_stmt()?;
-            st.register_cancel(self.cancel_slot.clone());
-            let r = st.exec(&sql);
+            let r = self.conn.exec(&sql, fetch);
             if !self.autocommit {
                 self.in_tx = true;
             }
-            if let Err(e) = r {
-                let done = total - self.pending.len();
-                self.pending.clear();
-                if total > 1 {
-                    bail!("Sentencia {done} de {total}: {e}");
+            let st = match r {
+                Ok(st) => st,
+                Err(e) => {
+                    let done = total - self.pending.len();
+                    self.pending.clear();
+                    if total > 1 {
+                        bail!("Sentencia {done} de {total}: {e}");
+                    }
+                    bail!(e);
                 }
-                bail!(e);
-            }
+            };
             self.stmt = Some(st);
             results.extend(self.pump(fetch, messages)?);
         }
@@ -114,13 +245,13 @@ impl OdbcDriver {
                 st.begin_result(n)?;
                 let (rows, more) = st.read(fetch)?;
                 results.push(ResultSet {
-                    columns: st.columns.clone(),
+                    columns: st.columns().to_vec(),
                     rows,
                     has_more: more,
                     rows_affected: None,
                 });
                 if more {
-                    messages.append(&mut st.messages);
+                    messages.append(st.messages());
                     return Ok(results);
                 }
             } else {
@@ -139,7 +270,7 @@ impl OdbcDriver {
             }
         }
         if let Some(mut st) = self.stmt.take() {
-            messages.append(&mut st.messages);
+            messages.append(st.messages());
         }
         Ok(results)
     }
@@ -305,9 +436,9 @@ impl OdbcDriver {
     }
 
     fn generic_columns(&self, o: &ObjectRef) -> Result<Vec<TableColumn>> {
-        let rows = self.conn.catalog_columns(&o.database, &o.schema, &o.name)?;
+        let rows = self.odbc()?.catalog_columns(&o.database, &o.schema, &o.name)?;
         let pks: Vec<String> = self
-            .conn
+            .odbc()?
             .catalog_pks(&o.database, &o.schema, &o.name)
             .unwrap_or_default()
             .iter()
@@ -344,13 +475,11 @@ impl OdbcDriver {
     fn reconnect(&mut self, database: Option<&str>) -> Result<()> {
         self.stmt = None;
         self.pending.clear();
-        let api = Api::load(&self.lib_path)?;
-        let conn = OdbcConn::connect(api, &conn_string(&self.cfg, database), 20)?;
-        run_startup(&conn, &self.cfg)?;
+        self.conn.reconnect(&self.cfg, database)?;
+        run_startup(&mut self.conn, &self.cfg)?;
         if !self.autocommit {
-            conn.set_autocommit(false)?;
+            self.conn.set_autocommit(false)?;
         }
-        self.conn = conn;
         self.in_tx = false;
         Ok(())
     }
@@ -377,16 +506,17 @@ fn split_batch(sql: &str, dialect: Dialect) -> Vec<String> {
 }
 
 /// El script de inicio de la conexión, en cada conexión nueva (todavía en autocommit).
-fn run_startup(conn: &OdbcConn, cfg: &ConnConfig) -> Result<()> {
+fn run_startup<L: Link>(conn: &mut L, cfg: &ConnConfig) -> Result<()> {
     for sql in crate::startup::statements(cfg) {
-        conn.alloc_stmt()?.exec(&sql).map_err(|e| crate::startup::failed(&sql, e))?;
+        conn.exec(&sql, 1).map_err(|e| crate::startup::failed(&sql, e))?;
     }
     Ok(())
 }
 
-/// Construye la cadena de conexión según el tipo de conexión.
+/// Construye la cadena de conexión según el tipo de conexión. An empty database is left out (`DATABASE=;` makes the
+/// IBM CLI driver fail with CLI0199E; DRDA needs one, which lib.rs asks for before connecting).
 pub fn conn_string(cfg: &ConnConfig, database: Option<&str>) -> String {
-    let db = database.unwrap_or(&cfg.database);
+    let db = database.unwrap_or(&cfg.database).trim();
     let pwd = cfg.password.clone().unwrap_or_default();
     let esc = |s: &str| {
         if s.contains(';') || s.contains('}') {
@@ -395,19 +525,18 @@ pub fn conn_string(cfg: &ConnConfig, database: Option<&str>) -> String {
             s.to_string()
         }
     };
+    let database_kv = if db.is_empty() { String::new() } else { format!("DATABASE={db};") };
     let mut s = match (cfg.kind, cfg.informix_mode.as_str()) {
         (DbKind::Informix, "sqli") => format!(
-            "DRIVER={{IBM INFORMIX ODBC DRIVER (64-bit)}};HOST={};SERVICE={};SERVER={};DATABASE={};PROTOCOL=onsoctcp;UID={};PWD={};",
+            "DRIVER={{{IFX_ODBC_DRIVER}}};HOST={};SERVICE={};SERVER={};{database_kv}PROTOCOL=onsoctcp;UID={};PWD={};",
             cfg.host,
             cfg.port.unwrap_or(9088),
             cfg.instance,
-            db,
             esc(&cfg.user),
             esc(&pwd)
         ),
         (DbKind::Informix, _) => format!(
-            "DATABASE={};HOSTNAME={};PORT={};PROTOCOL=TCPIP;UID={};PWD={};",
-            db,
+            "{database_kv}HOSTNAME={};PORT={};PROTOCOL=TCPIP;UID={};PWD={};",
             cfg.host,
             cfg.port.unwrap_or(9089),
             esc(&cfg.user),
@@ -424,8 +553,8 @@ pub fn conn_string(cfg: &ConnConfig, database: Option<&str>) -> String {
             if !pwd.is_empty() {
                 s.push_str(&format!("PWD={};", esc(&pwd)));
             }
-            if let Some(d) = database {
-                s.push_str(&format!("DATABASE={d};"));
+            if database.is_some() {
+                s.push_str(&database_kv);
             }
             s
         }
@@ -438,6 +567,34 @@ pub fn conn_string(cfg: &ConnConfig, database: Option<&str>) -> String {
         }
     }
     s
+}
+
+/// An ODBC / IBM CLI connection error for Informix with what to do about it. A leading `INFORMIX_GUIDE:<topic>:`
+/// makes the interface offer its guide on that topic (sdk, drda, locale, server).
+pub fn explain_odbc(cfg: &ConnConfig, e: anyhow::Error) -> anyhow::Error {
+    if cfg.kind != DbKind::Informix {
+        return e;
+    }
+    let text = e.to_string();
+    let hint = |topic: &str, what: &str| anyhow!("INFORMIX_GUIDE:{topic}: {what}\n\n{text}");
+    let sqli = cfg.informix_mode == "sqli";
+    if sqli && text.contains("[IM002]") {
+        return hint("sdk", &format!("El driver ODBC del Informix Client SDK ({IFX_ODBC_DRIVER}) no está instalado. Elige el protocolo «Automático» o «SQLI (JDBC)», que no lo necesitan, o instala el Client SDK."));
+    }
+    if text.contains("CLI0199E") {
+        return hint("drda", "El driver IBM CLI rechazó la cadena de conexión: revisa la base de datos y los parámetros extra.");
+    }
+    if !sqli && text.contains("SQL30081N") {
+        return hint("drda", &format!("No hay respuesta DRDA en {}:{}. Muchos servidores Informix solo escuchan SQLI (onsoctcp, puerto 9088): prueba el protocolo «Automático» o «SQLI (JDBC)», o pide a los DBA un alias drsoctcp.", cfg.host, cfg.port.unwrap_or(9089)));
+    }
+    let lower = text.to_lowercase();
+    if lower.contains("-23101") || lower.contains("-23197") || lower.contains("locale") {
+        return hint("locale", "El locale de la conexión no es el de la base de datos: indícalo en Parámetros extra, por ejemplo DB_LOCALE=es_ES.819.");
+    }
+    if lower.contains("-25596") || lower.contains("-908") || lower.contains("-761") || lower.contains("sqlhosts") {
+        return hint("server", "Revisa el campo INFORMIXSERVER: debe ser el nombre del servidor (DBSERVERNAME) o uno de sus alias.");
+    }
+    e
 }
 
 fn lit(s: &str) -> String {
@@ -547,11 +704,14 @@ const IFX_SYSTEM_DBS: [&str; 6] = [
     "syscdcv1",
 ];
 
-impl Driver for OdbcDriver {
+impl<L: Link> Driver for LinkDriver<L> {
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
         self.stmt = None;
         self.pending = split_batch(sql, self.dialect).into();
+        if self.pending.iter().any(|st| matches!(first_keyword(st).as_str(), "DATABASE" | "CLOSE" | "CONNECT" | "DISCONNECT")) {
+            self.db_known = false;
+        }
         let mut out = ExecOutput::default();
         let r = self.run_pending(fetch.max(1), &mut out.results, &mut out.messages);
         out.in_transaction = self.in_tx;
@@ -565,7 +725,7 @@ impl Driver for OdbcDriver {
         let Some(st) = self.stmt.as_mut() else {
             return Ok(out);
         };
-        if st.in_result {
+        if st.in_result() {
             match st.read(n.max(1)) {
                 Ok((rows, more)) => {
                     out.rows = rows;
@@ -643,7 +803,7 @@ impl Driver for OdbcDriver {
                     MetaNode::branch("Vistas", "folder", vec!["VIEW".into()]),
                 ]),
                 [ty] => {
-                    let rows = self.conn.catalog_tables(None, None, Some("%"), Some(ty))?;
+                    let rows = self.odbc()?.catalog_tables(None, None, Some("%"), Some(ty))?;
                     let kind = if *ty == "VIEW" { "view" } else { "table" };
                     Ok(rows
                         .iter()
@@ -985,7 +1145,7 @@ impl Driver for OdbcDriver {
         let mut out = CompletionSchema::default();
         if self.dialect == Dialect::Generic {
             let rows = self
-                .conn
+                .odbc()?
                 .catalog_tables(None, None, Some("%"), Some("TABLE,VIEW"))?;
             for r in rows.iter().take(3000) {
                 out.tables.push(CompletionTable {
@@ -1018,7 +1178,7 @@ impl Driver for OdbcDriver {
     fn databases(&mut self) -> Result<Vec<String>> {
         if self.dialect == Dialect::Generic {
             let rows = self
-                .conn
+                .odbc()?
                 .catalog_tables(Some("%"), Some(""), Some(""), None)
                 .unwrap_or_default();
             let mut v: Vec<String> = rows
@@ -1035,15 +1195,20 @@ impl Driver for OdbcDriver {
 
     fn current_database(&mut self) -> Result<String> {
         if self.dialect == Dialect::Informix {
+            if self.db_known {
+                return Ok(self.database.clone());
+            }
             let rows = self.q("SELECT TRIM(DBINFO('dbname')) FROM systables WHERE tabid = 1")?;
-            return Ok(rows.first().map(|r| cell_str(&r[0])).unwrap_or_default());
+            self.database = rows.first().map(|r| cell_str(&r[0])).unwrap_or_default();
+            self.db_known = true;
+            return Ok(self.database.clone());
         }
-        Ok(self.conn.info(SQL_DATABASE_NAME))
+        Ok(self.odbc()?.info(SQL_DATABASE_NAME))
     }
 
     fn use_database(&mut self, db: &str) -> Result<()> {
-        // Informix changes database by reconnecting: not when the session is already there (asked to the server,
-        // since a DATABASE statement run by the user also moves it).
+        // Informix changes database by reconnecting: not when the session is already there (known, or asked to the
+        // server after a DATABASE statement run by the user).
         if self.dialect == Dialect::Informix && self.current_database().is_ok_and(|current| current == db) {
             self.database = db.to_string();
             return Ok(());
@@ -1051,11 +1216,12 @@ impl Driver for OdbcDriver {
         if self.dialect == Dialect::Generic {
             self.stmt = None;
             self.pending.clear();
-            self.conn.set_catalog(db)?;
+            self.odbc()?.set_catalog(db)?;
         } else {
             self.reconnect(Some(db))?;
         }
         self.database = db.to_string();
+        self.db_known = true;
         Ok(())
     }
 
@@ -1092,19 +1258,20 @@ impl Driver for OdbcDriver {
     }
 
     fn server_info(&mut self) -> Result<String> {
-        Ok(format!(
-            "{} {}",
-            self.conn.info(SQL_DBMS_NAME),
-            self.conn.info(SQL_DBMS_VER)
-        )
-        .trim()
-        .to_string())
+        Ok(self.conn.server_info())
     }
 
     fn canceller(&self) -> Canceller {
-        let slot = self.cancel_slot.clone();
-        let api = self.conn.api.clone();
-        Arc::new(move || cancel_stmt(&api, &slot))
+        self.conn.canceller()
+    }
+
+    /// Informix: la consulta más barata del catálogo. Otros orígenes ODBC: no hay una consulta que valga para todos;
+    /// sus cortes se reconocen por el SQLSTATE (08S01…).
+    fn ping(&mut self) -> Result<()> {
+        if self.dialect != Dialect::Informix || self.stmt.is_some() {
+            return Ok(());
+        }
+        self.q("SELECT 1 FROM systables WHERE tabid = 1").map(|_| ())
     }
 }
 
@@ -1123,6 +1290,40 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn empty_database_is_left_out() {
+        let mut cfg = ConnConfig { kind: DbKind::Informix, host: "db".into(), user: "u".into(), password: Some("p;w".into()), ..Default::default() };
+        cfg.informix_mode = "drda".into();
+        let s = conn_string(&cfg, None);
+        assert!(!s.contains("DATABASE="), "{s}");
+        assert!(s.contains("PWD={p;w};"), "{s}");
+        cfg.informix_mode = "sqli".into();
+        cfg.instance = "ol_srv".into();
+        let s = conn_string(&cfg, None);
+        assert!(!s.contains("DATABASE=") && s.contains("SERVER=ol_srv;") && s.contains("SERVICE=9088;"), "{s}");
+        assert!(conn_string(&cfg, Some("ventas")).contains("DATABASE=ventas;"));
+        cfg.database = " stock ".into();
+        assert!(conn_string(&cfg, None).contains("DATABASE=stock;"));
+    }
+
+    #[test]
+    fn odbc_errors_explained() {
+        let mut cfg = ConnConfig { kind: DbKind::Informix, ..Default::default() };
+        cfg.informix_mode = "sqli".into();
+        let e = explain_odbc(&cfg, anyhow!("[IM002] [Microsoft][ODBC Driver Manager] Data source name not found")).to_string();
+        assert!(e.starts_with("INFORMIX_GUIDE:sdk: "), "{e}");
+        assert!(e.contains("[IM002]"), "the original message stays: {e}");
+        cfg.informix_mode = "drda".into();
+        let e = explain_odbc(&cfg, anyhow!("[08001] [IBM][CLI Driver] SQL30081N  A communication error has been detected.")).to_string();
+        assert!(e.starts_with("INFORMIX_GUIDE:drda: "), "{e}");
+        let e = explain_odbc(&cfg, anyhow!("[HY000] [IBM][CLI Driver] CLI0199E  Invalid connection string attribute.")).to_string();
+        assert!(e.starts_with("INFORMIX_GUIDE:drda: "), "{e}");
+        assert_eq!(explain_odbc(&cfg, anyhow!("[42000] syntax")).to_string(), "[42000] syntax");
+        let generic = ConnConfig { kind: DbKind::Odbc, ..Default::default() };
+        assert_eq!(explain_odbc(&generic, anyhow!("[IM002] x")).to_string(), "[IM002] x");
+    }
+
     #[test]
     fn informix_types() {
         assert_eq!(ifx_type(0, 10, 0), "CHAR(10)");

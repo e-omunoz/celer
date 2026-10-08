@@ -10,10 +10,13 @@
 │  lib.rs        Tauri commands, app state                                    │
 │  windows.rs    Several windows: inboxes, layout file, tab drag, focus       │
 │  session.rs    Driver trait · one OS thread per session · job queue         │
+│  guard.rs      Watched sessions: check before use, reconnect, generic pool  │
+│  probe.rs      "Probar conexión" step by step (DNS, port, TLS, login, query) │
 │  drivers       mssql.rs · odbc.rs + odbc_driver.rs · (postgres, mysql, …)   │
 │  export.rs     Streaming export (CSV, TSV, JSON, SQL, XLSX)                 │
 │  store.rs      Connections, settings, workspace, history; OS credential store│
 │  drivers.rs    Discovery and on-demand download of vendor client libraries  │
+│  jdbc.rs       JDBC bridge: one shared JVM over stdin/stdout (bridge/*.java) │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -34,6 +37,13 @@ database connection. The UI sends jobs (closures) through a channel and awaits t
   (`SQLCancel` for ODBC, dropping the connection for SQL Server).
 - A panic inside a driver is caught on the session thread and reported as an error; the app keeps running.
 - A separate metadata session per connection serves the object tree and autocompletion.
+- Sessions opened by the interface are **watched** (`guard.rs`): one idle for a minute is checked with a cheap
+  round trip (`Driver::ping`) before use; a dropped connection is replaced by a new one in the same database and
+  transaction mode, and the operation goes on if nothing was lost (reads run again, writes never). With a transaction,
+  temporary tables or `SET` of its own, the session says so (`SESSION_LOST:`) instead of reconnecting in silence.
+  Transient connect failures are retried with a wait.
+- The connection of a session that closes without state of its own stays free for a few minutes for the next session
+  with the same settings (`guard.rs` for every engine; SQL Server keeps its own pool of raw connections in `mssql.rs`).
 
 ## Result paging
 
@@ -53,6 +63,7 @@ precision is lost.
 | `databases` / `current_database` / `use_database` | Database switching |
 | `qualified_name` / `quote_ident` | Dialect-aware SQL generation |
 | `server_info` / `canceller` | Diagnostics and cancellation |
+| `ping` / `broken` / `session_state` | Cheap liveness check, a dropped connection, what another connection would not have |
 
 New drivers implement this trait and declare their capability flags (see [DRIVERS.md](DRIVERS.md)).
 Each driver also describes its connection form (fields, defaults, validation), so the UI builds the
@@ -66,7 +77,7 @@ connection dialog generically instead of hard-coding one per engine.
 | Passwords | Windows Credential Manager / macOS Keychain / Secret Service |
 | Settings and open tabs | `settings.json`, `workspace.json` (every window: its tabs, panels, place and monitor) |
 | Query history | `history.jsonl` (append-only, compacted at 5,000 entries) |
-| Downloaded drivers | `%APPDATA%\es.celer.app\drivers\` |
+| Downloaded drivers (IBM CLI, JDBC jars, Java) and the JDBC bridge | `%APPDATA%\es.celer.app\drivers\` |
 
 ## Windows
 

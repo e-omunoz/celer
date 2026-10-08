@@ -2,6 +2,8 @@ mod drivers;
 #[cfg(test)]
 mod engine_tests;
 mod export;
+mod guard;
+mod jdbc;
 mod mcp;
 mod migrate;
 mod model;
@@ -10,6 +12,7 @@ mod mysql;
 mod odbc;
 mod odbc_driver;
 mod postgres;
+mod probe;
 mod session;
 mod sheets;
 mod sqlite;
@@ -18,6 +21,8 @@ mod store;
 mod update;
 mod windows;
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -38,6 +43,8 @@ struct AppState {
     store: Store,
     conns: Mutex<Vec<ConnConfig>>,
     sessions: Sessions,
+    /// Contraseñas de las conexiones borradas en esta ejecución, solo en memoria: «Deshacer» las devuelve.
+    trash: Mutex<HashMap<String, String>>,
     /// Servidor MCP en modo vista previa (para que la interfaz muestre lo que vería la IA).
     mcp: mcp::McpServer,
     /// Un solo escritor a la vez de los ficheros que comparten las ventanas (ajustes, biblioteca).
@@ -67,48 +74,167 @@ impl AppState {
 }
 
 fn ibm_driver_setting(store: &Store) -> Option<String> {
+    setting(store, "ibmDriverPath")
+}
+
+/// A text setting of settings.json (driver paths), when it is not empty.
+fn setting(store: &Store, key: &str) -> Option<String> {
     // A plain read: setting a damaged file aside is for the interface's load, which tells the user.
     let settings: serde_json::Value = serde_json::from_str(&store.read("settings.json")?).ok()?;
-    settings.get("ibmDriverPath").and_then(|v| v.as_str()).map(|s| s.to_string())
+    settings.get(key).and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.trim().is_empty())
+}
+
+/// Informix: the protocol a connection really uses. "auto" takes the Client SDK when its ODBC driver is registered
+/// and JDBC otherwise; connections saved before there was a choice (no mode) keep DRDA.
+fn informix_mode(cfg: &ConnConfig) -> &'static str {
+    match cfg.informix_mode.as_str() {
+        "sqli" => "sqli",
+        "jdbc" => "jdbc",
+        "auto" if odbc::informix_odbc_drivers().iter().any(|d| d.eq_ignore_ascii_case(odbc::IFX_ODBC_DRIVER)) => "sqli",
+        "auto" => "jdbc",
+        _ => "drda",
+    }
+}
+
+fn source_label(source: &str) -> &str {
+    match source {
+        "settings" => "Ajustes",
+        "DBeaver" => "de DBeaver",
+        "Celer" => "descargado por Celer",
+        other => other,
+    }
+}
+
+/// What Informix over JDBC runs on, or what is missing: `JDBC_SETUP:<java,jdbc>:` lets the interface offer to
+/// download it.
+fn jdbc_runtime(store: &Store) -> CmdResult<(jdbc::Runtime, String)> {
+    if !jdbc::bridge_included() {
+        return Err("JDBC_BRIDGE_MISSING: Esta compilación de Celer no incluye el puente JDBC (se compiló sin un JDK). Usa una versión publicada de Celer o elige otro protocolo.".into());
+    }
+    let javas = drivers::find_java(setting(store, "javaPath").as_deref(), &store.dir, false);
+    let java = drivers::pick_java(&javas).cloned();
+    let jdbc = drivers::find_jdbc(&drivers::INFORMIX_JDBC, setting(store, "informixJdbcPath").as_deref(), &store.dir).into_iter().next();
+    match (java, jdbc) {
+        (Some(java), Some(jdbc)) => {
+            let jar = PathBuf::from(&jdbc.jars[0]).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let label = format!("Java {} ({}) · {jar} ({})", java.version, source_label(java.source), source_label(jdbc.source));
+            let rt = jdbc::Runtime {
+                java: PathBuf::from(&java.path),
+                java_major: java.major,
+                driver_class: drivers::INFORMIX_JDBC.class.into(),
+                jars: jdbc.jars.iter().map(PathBuf::from).collect(),
+                dir: store.dir.clone(),
+            };
+            Ok((rt, label))
+        }
+        (java, jdbc) => {
+            let (mut missing, mut what) = (Vec::new(), Vec::new());
+            if java.is_none() {
+                missing.push("java");
+                what.push(match javas.first() {
+                    Some(old) => format!("Java {} o superior (el de {} es Java {})", drivers::JAVA_MIN, old.path, old.major),
+                    None => format!("Java {} o superior", drivers::JAVA_MIN),
+                });
+            }
+            if jdbc.is_none() {
+                missing.push("jdbc");
+                what.push("el driver JDBC de Informix".to_string());
+            }
+            Err(format!("JDBC_SETUP:{}: Para conectar por JDBC falta {}. Celer puede descargarlo.", missing.join(","), what.join(" y ")))
+        }
+    }
 }
 
 /// Prepara la conexión (contraseña del almacén, driver IBM/ODBC). La usan la interfaz y el
 /// servidor MCP, que no tiene `State` de Tauri.
 pub(crate) fn make_connector(
     store: &Store,
-    mut cfg: ConnConfig,
+    cfg: ConnConfig,
 ) -> CmdResult<impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static> {
-    if cfg.password.is_none() && !cfg.integrated_auth {
-        cfg.password = store.get_password(&cfg.id);
+    let connector = prepare(store, cfg)?.connector;
+    Ok(move || connector())
+}
+
+/// Una conexión lista para abrirse, y para volver a abrirse si se corta: el conector, la vía por la que llega al
+/// servidor («Probar conexión» la muestra) y la clave de su configuración en el pool genérico.
+struct Prepared {
+    connector: guard::Connector,
+    route: String,
+    /// "" si el motor no usa el pool genérico (SQL Server lleva el suyo; SQLite abre al instante).
+    key: String,
+    kind: DbKind,
+}
+
+fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
+    // Sin contraseña escrita (el diálogo manda "" para «sin cambios»), la guardada.
+    if cfg.password.as_deref().is_none_or(str::is_empty) && !cfg.integrated_auth {
+        cfg.password = store.get_password(&cfg.id).or(cfg.password);
     }
     let kind = cfg.kind;
+    let mut route = String::new();
+    let mut jdbc_rt: Option<jdbc::Runtime> = None;
     let odbc_lib = match kind {
         DbKind::Mssql | DbKind::Sqlite | DbKind::Postgres | DbKind::Mysql => None,
-        DbKind::Informix if cfg.informix_mode == "drda" => {
-            let dll = drivers::find_cli(ibm_driver_setting(store).as_deref(), &store.dir).ok_or_else(|| {
-                "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
-            })?;
-            drivers::prepare_env(&dll);
-            Some(dll.to_string_lossy().to_string())
+        DbKind::Informix => {
+            let prefix = if cfg.informix_mode == "auto" { "Automático → " } else { "" };
+            let mode = informix_mode(&cfg);
+            cfg.informix_mode = mode.to_string();
+            match mode {
+                "drda" => {
+                    if cfg.database.trim().is_empty() {
+                        return Err("Por DRDA hay que indicar la base de datos: el driver IBM CLI no conecta sin ella.".into());
+                    }
+                    let dll = drivers::find_cli(ibm_driver_setting(store).as_deref(), &store.dir).ok_or_else(|| {
+                        "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
+                    })?;
+                    drivers::prepare_env(&dll);
+                    route = format!("{prefix}DRDA · IBM Data Server Driver (CLI)");
+                    Some(dll.to_string_lossy().to_string())
+                }
+                "jdbc" => {
+                    let (rt, label) = jdbc_runtime(store)?;
+                    route = format!("{prefix}SQLI por JDBC · {label}");
+                    jdbc_rt = Some(rt);
+                    None
+                }
+                _ => {
+                    route = format!("{prefix}SQLI · Informix Client SDK (ODBC)");
+                    Some(odbc::system_manager().to_string())
+                }
+            }
         }
-        DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
+        DbKind::Odbc => Some(odbc::system_manager().to_string()),
     };
     // The startup script runs inside each driver, on every connection it opens; a read-only connection
     // refuses one that writes before connecting at all.
     startup::check(&cfg).map_err(err)?;
-    Ok(move || -> anyhow::Result<Box<dyn Driver>> {
-        let driver: Box<dyn Driver> = match kind {
-            DbKind::Sqlite => Box::new(sqlite::SqliteDriver::connect(cfg)?),
-            DbKind::Mssql => Box::new(mssql::MssqlDriver::connect(cfg)?),
-            DbKind::Postgres => Box::new(postgres::PostgresDriver::connect(cfg)?),
-            DbKind::Mysql => Box::new(mysql::MysqlDriver::connect(cfg)?),
-            DbKind::Informix | DbKind::Odbc => {
-                let path = odbc_lib.unwrap_or_else(|| odbc::system_manager().to_string());
+    let key = match kind {
+        DbKind::Mssql | DbKind::Sqlite => String::new(),
+        _ => mssql::pool_key(&cfg),
+    };
+    let connector: guard::Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> {
+        let cfg = cfg.clone();
+        let driver: Box<dyn Driver> = match (kind, jdbc_rt.clone()) {
+            (DbKind::Sqlite, _) => Box::new(sqlite::SqliteDriver::connect(cfg)?),
+            (DbKind::Mssql, _) => Box::new(mssql::MssqlDriver::connect(cfg)?),
+            (DbKind::Postgres, _) => Box::new(postgres::PostgresDriver::connect(cfg)?),
+            (DbKind::Mysql, _) => Box::new(mysql::MysqlDriver::connect(cfg)?),
+            (DbKind::Informix, Some(rt)) => Box::new(jdbc::connect(cfg, rt)?),
+            (DbKind::Informix | DbKind::Odbc, _) => {
+                let path = odbc_lib.clone().unwrap_or_else(|| odbc::system_manager().to_string());
                 Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
             }
         };
         Ok(driver)
-    })
+    });
+    Ok(Prepared { connector, route, key, kind })
+}
+
+/// Cierra las conexiones libres que dejaron las sesiones de una conexión guardada (al desconectarla, editarla o
+/// borrarla): que no queden sesiones suyas abiertas en el servidor.
+fn forget_free(conn_id: &str) {
+    guard::pool_forget(conn_id);
+    mssql::pool_forget(conn_id);
 }
 
 #[derive(Serialize)]
@@ -139,28 +265,59 @@ fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
 }
 
 #[tauri::command]
-fn save_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
+fn save_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<ConnConfig> {
+    let saved = save_cfg(&state, cfg)?;
+    connections_changed(&window);
+    Ok(saved)
+}
+
+fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     if cfg.id.is_empty() {
         cfg.id = uuid::Uuid::new_v4().to_string();
     }
     if cfg.save_password {
         if let Some(p) = cfg.password.as_ref().filter(|p| !p.is_empty()) {
-            state.store.set_password(&cfg.id, p).map_err(err)?;
+            app.store.set_password(&cfg.id, p).map_err(err)?;
         }
     } else {
-        state.store.delete_password(&cfg.id);
+        app.store.delete_password(&cfg.id);
     }
     cfg.password = None;
-    {
-        let mut conns = state.conns.lock();
-        match conns.iter_mut().find(|c| c.id == cfg.id) {
-            Some(c) => *c = cfg.clone(),
-            None => conns.push(cfg.clone()),
+    let mut conns = app.conns.lock();
+    match conns.iter_mut().find(|c| c.id == cfg.id) {
+        Some(c) => {
+            // Las conexiones libres de la configuración anterior ya no sirven.
+            forget_free(&cfg.id);
+            *c = cfg.clone();
         }
-        state.store.save_connections(&conns).map_err(err)?;
+        None => conns.push(cfg.clone()),
     }
-    connections_changed(&window);
+    app.store.save_connections(&conns).map_err(err)?;
     Ok(cfg)
+}
+
+/// «Deshacer» un borrado: la conexión vuelve con su id y con la contraseña que tenía guardada.
+#[tauri::command]
+fn restore_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
+    let kept = state.trash.lock().remove(&cfg.id);
+    if cfg.password.as_deref().is_none_or(str::is_empty) {
+        cfg.password = kept;
+    }
+    let saved = save_cfg(&state, cfg)?;
+    connections_changed(&window);
+    Ok(saved)
+}
+
+/// Una copia de una conexión guardada, con otro id y otro nombre y con su contraseña guardada.
+#[tauri::command]
+fn duplicate_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, id: String, name: String) -> CmdResult<ConnConfig> {
+    let mut cfg = state.conn(&id)?;
+    cfg.password = if cfg.save_password { state.store.get_password(&id) } else { None };
+    cfg.id = String::new();
+    cfg.name = name;
+    let saved = save_cfg(&state, cfg)?;
+    connections_changed(&window);
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -179,6 +336,11 @@ fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState
     for s in state.sessions.remove_for_conn(&id) {
         s.cancel();
     }
+    forget_free(&id);
+    // Hasta cerrar Celer, en memoria: «Deshacer» la devuelve con la conexión.
+    if let Some(p) = state.store.get_password(&id) {
+        state.trash.lock().insert(id.clone(), p);
+    }
     state.store.delete_password(&id);
     {
         let mut conns = state.conns.lock();
@@ -189,20 +351,38 @@ fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState
     Ok(())
 }
 
+/// «Probar conexión»: cada paso con su tiempo (resolver el nombre, abrir el puerto, TLS, iniciar sesión, la base) y,
+/// si falla, qué hacer. Solo falla del todo si ni siquiera se puede intentar (falta un driver).
 #[tauri::command]
-async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<String> {
-    let connector = state.make_connector(cfg)?;
-    let t0 = std::time::Instant::now();
-    let h = SessionHandle::open("test".into(), connector)
-        .await
+async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<probe::Report> {
+    let app = state.inner().clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // En un hilo propio: resolver nombres, abrir sockets y los drivers bloquean (y algunos llevan su propio runtime).
+    std::thread::Builder::new()
+        .name("celer-test-connection".into())
+        .spawn(move || {
+            let report = prepare(&app.store, cfg.clone()).map(|p| probe::run(&cfg, p.connector, &p.route));
+            let _ = tx.send(report);
+        })
         .map_err(err)?;
-    let connect_ms = t0.elapsed().as_millis();
-    let t1 = std::time::Instant::now();
-    let info = h.run(|d| d.server_info()).await.map_err(err)?;
-    Ok(format!(
-        "{info}\nConexión: {connect_ms} ms · ida y vuelta: {} ms",
-        t1.elapsed().as_millis()
-    ))
+    rx.await.map_err(|_| "La prueba de conexión terminó inesperadamente".to_string())?
+}
+
+/// An Informix connection over JDBC is about to open: Java starts now, while the user types the password.
+#[tauri::command]
+fn jdbc_prewarm(state: State<'_, Arc<AppState>>, conn_id: String) {
+    let Ok(cfg) = state.conn(&conn_id) else { return };
+    if cfg.kind != DbKind::Informix || !matches!(cfg.informix_mode.as_str(), "jdbc" | "auto") {
+        return;
+    }
+    let app = state.inner().clone();
+    std::thread::spawn(move || {
+        if informix_mode(&cfg) == "jdbc" {
+            if let Ok((rt, _)) = jdbc_runtime(&app.store) {
+                jdbc::prewarm(rt);
+            }
+        }
+    });
 }
 
 #[derive(Serialize)]
@@ -211,20 +391,45 @@ struct SessionInfo {
     session_id: String,
     database: String,
     server_info: String,
+    /// Lo que tardó en estar lista (iniciar sesión, o tomar una conexión libre de la misma configuración).
+    connect_ms: u64,
+    reused: bool,
 }
 
+/// Abre una sesión vigilada (guard.rs): ya en la base y con el modo de transacción que pide la pestaña, sin idas y
+/// vueltas después; reconecta sola si la conexión se corta y avisa si con ello se pierde estado.
 #[tauri::command]
 async fn open_session(
     state: State<'_, Arc<AppState>>,
     conn_id: String,
     password: Option<String>,
+    database: Option<String>,
+    autocommit: Option<bool>,
 ) -> CmdResult<SessionInfo> {
     let mut cfg = state.conn(&conn_id)?;
     if password.is_some() {
         cfg.password = password;
     }
-    let connector = state.make_connector(cfg)?;
-    let h = SessionHandle::open(conn_id, connector).await.map_err(err)?;
+    let wanted = database.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+    // Los motores que eligen la base al conectar entran ya en ella (sin USE ni, en PostgreSQL, otra conexión).
+    if let Some(db) = &wanted {
+        if matches!(cfg.kind, DbKind::Postgres | DbKind::Mysql | DbKind::Mssql | DbKind::Informix) {
+            cfg.database = db.clone();
+        }
+    }
+    let home = wanted.unwrap_or_else(|| cfg.database.trim().to_string());
+    let prepared = prepare(&state.store, cfg)?;
+    let opts = guard::Opts { kind: prepared.kind, owner: conn_id.clone(), key: prepared.key, database: home, autocommit: autocommit.unwrap_or(true) };
+    let connector = prepared.connector;
+    let timing = Arc::new(Mutex::new((0u64, false)));
+    let seen = timing.clone();
+    let h = SessionHandle::open(conn_id, move || {
+        let g = guard::Guarded::open(connector, opts)?;
+        *seen.lock() = (g.connect_ms, g.reused);
+        Ok(Box::new(g) as Box<dyn Driver>)
+    })
+    .await
+    .map_err(err)?;
     let (database, server_info) = h
         .run(|d| {
             Ok((
@@ -234,13 +439,24 @@ async fn open_session(
         })
         .await
         .map_err(err)?;
+    let (connect_ms, reused) = *timing.lock();
     let id = uuid::Uuid::new_v4().to_string();
     state.sessions.insert(id.clone(), Arc::new(h));
     Ok(SessionInfo {
         session_id: id,
         database,
         server_info,
+        connect_ms,
+        reused,
     })
+}
+
+/// Comprueba una sesión (una ida y vuelta barata si lleva un rato parada, o siempre con `force`) y la reconecta si se
+/// cortó: la interfaz lo pide al volver de una suspensión o cuando el usuario lo pide.
+#[tauri::command]
+async fn check_session(state: State<'_, Arc<AppState>>, session_id: String, force: bool) -> CmdResult<Health> {
+    let h = state.sessions.get(&session_id).map_err(err)?;
+    h.run(move |d| Ok(d.health(force))).await.map_err(err)
 }
 
 #[tauri::command]
@@ -258,6 +474,14 @@ fn close_connection_sessions(state: State<'_, Arc<AppState>>, conn_id: String) -
     for h in &closed {
         h.cancel();
     }
+    // Las sesiones se cierran en sus hilos (y dejan su conexión libre si pueden): las libres se cierran un poco
+    // después, cuando ya han llegado.
+    let id = conn_id.clone();
+    std::thread::spawn(move || {
+        forget_free(&id);
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        forget_free(&id);
+    });
     closed.len()
 }
 
@@ -728,6 +952,8 @@ fn ibm_driver_status(state: State<'_, Arc<AppState>>) -> Option<String> {
 struct DownloadProgress {
     done: u64,
     total: u64,
+    /// What is being downloaded, for the drivers (several files in a row).
+    what: String,
 }
 
 #[tauri::command]
@@ -741,7 +967,7 @@ async fn ibm_driver_download(
         drivers::download(&dir, |done, total| {
             if done - last.get() > 512 * 1024 || done == total {
                 last.set(done);
-                let _ = app.emit("driver-download", DownloadProgress { done, total });
+                let _ = app.emit("driver-download", DownloadProgress { done, total, what: "IBM Data Server Driver".into() });
             }
         })
         .map(|p| p.to_string_lossy().to_string())
@@ -749,6 +975,90 @@ async fn ibm_driver_download(
     .await
     .map_err(err)?
     .map_err(err)
+}
+
+/// Informix drivers on this machine, for Settings › Drivers: IBM CLI, Java and the JDBC driver (every one found, and
+/// the one connections use), and the Client SDK's ODBC driver.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InformixDrivers {
+    cli: Option<String>,
+    java: Vec<drivers::JavaFound>,
+    java_used: Option<drivers::JavaFound>,
+    java_min: u32,
+    jdbc: Vec<drivers::JdbcFound>,
+    jdbc_used: Option<drivers::JdbcFound>,
+    jdbc_version: &'static str,
+    odbc: Vec<String>,
+    /// The Client SDK's driver is registered under the name Celer uses: "Automático" takes it.
+    sdk_ready: bool,
+    /// The JDBC bridge is part of this build.
+    bridge: bool,
+    /// Celer can download a JRE for this system.
+    jre_download: bool,
+}
+
+#[tauri::command(async)]
+fn informix_drivers(state: State<'_, Arc<AppState>>) -> InformixDrivers {
+    let store = &state.store;
+    let java = drivers::find_java(setting(store, "javaPath").as_deref(), &store.dir, true);
+    let jdbc = drivers::find_jdbc(&drivers::INFORMIX_JDBC, setting(store, "informixJdbcPath").as_deref(), &store.dir);
+    let odbc = odbc::informix_odbc_drivers();
+    InformixDrivers {
+        cli: drivers::find_cli(ibm_driver_setting(store).as_deref(), &store.dir).map(|p| p.to_string_lossy().to_string()),
+        java_used: drivers::pick_java(&java).cloned(),
+        java,
+        java_min: drivers::JAVA_MIN,
+        jdbc_used: jdbc.first().cloned(),
+        jdbc,
+        jdbc_version: drivers::INFORMIX_JDBC.jar.version,
+        sdk_ready: odbc.iter().any(|d| d.eq_ignore_ascii_case(odbc::IFX_ODBC_DRIVER)),
+        odbc,
+        bridge: jdbc::bridge_included(),
+        jre_download: drivers::adoptium_platform().is_some(),
+    }
+}
+
+/// Downloads what Informix over JDBC needs, only when the user asks for it: "java" (Temurin JRE 21, which the
+/// interface offers only when no Java was found) or "jdbc" (the driver, from Maven Central). Nothing is run here.
+#[tauri::command]
+async fn jdbc_download(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, what: String) -> CmdResult<String> {
+    let dir = state.store.dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let last = std::cell::Cell::new(0u64);
+        let progress = |label: &str, done: u64, total: u64| {
+            if done < last.get() || done - last.get() > 256 * 1024 || done == total {
+                last.set(done);
+                let _ = app.emit("driver-download", DownloadProgress { done, total, what: label.to_string() });
+            }
+        };
+        match what.as_str() {
+            "java" => drivers::download_jre(&dir, progress).map(|p| p.to_string_lossy().to_string()),
+            "jdbc" => drivers::download_jdbc(&drivers::INFORMIX_JDBC, &dir, progress).map(|f| f.jars.join("\n")),
+            _ => Err(anyhow::anyhow!("Descarga desconocida: {what}")),
+        }
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+fn driver_download_cancel() {
+    drivers::cancel_download();
+}
+
+/// Starts the bridge with the Java and driver connections would use and loads the driver: what it answers.
+#[tauri::command]
+async fn jdbc_check(state: State<'_, Arc<AppState>>) -> CmdResult<String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (rt, label) = jdbc_runtime(&app.store)?;
+        let version = jdbc::check(&rt).map_err(err)?;
+        Ok(format!("{label} · driver {version} cargado"))
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
@@ -781,7 +1091,7 @@ async fn update_download(app: tauri::AppHandle, url: String, name: String, sums_
         update::download(&url, &name, &sums_url, |done, total| {
             if done - last.get() > 256 * 1024 || done == total {
                 last.set(done);
-                let _ = app.emit("update-download", DownloadProgress { done, total });
+                let _ = app.emit("update-download", DownloadProgress { done, total, what: String::new() });
             }
         })
         .map(|p| p.to_string_lossy().to_string())
@@ -930,6 +1240,7 @@ pub fn run() {
                 store,
                 conns: Mutex::new(conns),
                 sessions: Sessions::default(),
+                trash: Mutex::new(HashMap::new()),
                 mcp,
                 files: Mutex::new(()),
             }));
@@ -942,8 +1253,11 @@ pub fn run() {
             save_connection,
             reorder_connections,
             delete_connection,
+            restore_connection,
+            duplicate_connection,
             test_connection,
             open_session,
+            check_session,
             close_session,
             close_connection_sessions,
             read_spreadsheet,
@@ -975,6 +1289,11 @@ pub fn run() {
             odbc_dsns,
             ibm_driver_status,
             ibm_driver_download,
+            informix_drivers,
+            jdbc_download,
+            jdbc_check,
+            jdbc_prewarm,
+            driver_download_cancel,
             app_info,
             migration_sources,
             update_check,
