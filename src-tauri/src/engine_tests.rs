@@ -874,12 +874,18 @@ fn guarded(kind: DbKind, connect: &Connector, key: &str, database: &str) -> Guar
     Guarded::open(connect.clone(), Opts { kind, owner: format!("engine-test-{key}"), key: key.into(), database: database.into(), autocommit: true }).expect("sesión vigilada")
 }
 
-/// Ends a SQL Server session from another one (KILL), as a DBA or a failover would; returns its SPID.
+/// The connection a SQL Server session runs on. SQL Server gives a killed session's SPID to the next login, so the
+/// SPID alone does not tell two connections apart; `connection_id` is new for every connection.
+const MSSQL_CONN_ID: &str = "SELECT CONVERT(varchar(36), connection_id) FROM sys.dm_exec_connections WHERE session_id = @@SPID AND parent_connection_id IS NULL";
+
+/// Ends a SQL Server session from another one (KILL), as a DBA or a failover would; returns its connection's
+/// `connection_id`.
 fn mssql_kill(admin: &mut dyn Driver, g: &mut Guarded) -> String {
     let spid = scalar(g, "SELECT @@SPID");
+    let conn = scalar(g, MSSQL_CONN_ID);
     admin.execute(&format!("KILL {spid}"), 10).unwrap_or_else(|e| panic!("KILL {spid}: {e}"));
     std::thread::sleep(Duration::from_millis(500));
-    spid
+    conn
 }
 
 /// A session killed on the server comes back on its own when nothing would be lost (the read runs again, the output
@@ -892,11 +898,11 @@ fn mssql_reconnects() {
     let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mssql::MssqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
     let mut g = guarded(DbKind::Mssql, &connect, "", "tempdb");
 
-    let spid = mssql_kill(&mut admin, &mut g);
+    let killed = mssql_kill(&mut admin, &mut g);
     let t0 = Instant::now();
-    let out = g.execute("SELECT @@SPID, DB_NAME()", 10).unwrap_or_else(|e| panic!("tras KILL: {e}"));
+    let out = g.execute(&format!("SELECT ({MSSQL_CONN_ID}), DB_NAME()"), 10).unwrap_or_else(|e| panic!("tras KILL: {e}"));
     eprintln!("SQL Server, sesión terminada con KILL: {} ms; {:?}", t0.elapsed().as_millis(), out.messages);
-    assert_ne!(txt(&out.results[0].rows[0][0]), spid, "otra conexión");
+    assert_ne!(txt(&out.results[0].rows[0][0]), killed, "otra conexión");
     assert_eq!(txt(&out.results[0].rows[0][1]), "tempdb", "en la misma base");
     assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{:?}", out.messages);
 
@@ -917,11 +923,11 @@ fn mssql_reconnects() {
     assert_eq!(scalar(&mut g, "SELECT COUNT(*) FROM dbo.celer_rc"), "0");
 
     // After a pause (suspension, VPN), the session is checked before use: the statement runs once, on the new one.
-    let spid = mssql_kill(&mut admin, &mut g);
+    let killed = mssql_kill(&mut admin, &mut g);
     g.pretend_idle(Duration::from_secs(300));
-    let out = g.execute("SELECT @@SPID", 10).unwrap();
+    let out = g.execute(MSSQL_CONN_ID, 10).unwrap();
     assert!(out.messages.first().is_some_and(|m| m.starts_with(RECOVERED) && m.contains("sin usarse")), "{:?}", out.messages);
-    assert_ne!(txt(&out.results[0].rows[0][0]), spid);
+    assert_ne!(txt(&out.results[0].rows[0][0]), killed, "otra conexión");
 
     // The interface's check (after the computer wakes up) reconnects too.
     mssql_kill(&mut admin, &mut g);
