@@ -136,7 +136,7 @@ if (shape.dt) {
 const lit = (v: string, name: string) => {
   const c = t.columns[col(name)];
   if (c.kind === "number") return v;
-  if (c.kind === "bool") return kind === "mssql" || kind === "informix" ? (v === "true" ? "1" : "0") : v.toUpperCase();
+  if (c.kind === "bool") return kind === "mssql" ? (v === "true" ? "1" : "0") : kind === "informix" ? (v === "true" ? "'t'" : "'f'") : v.toUpperCase();
   return `${kind === "mssql" ? "N" : ""}'${v.replace(/'/g, "''")}'`;
 };
 const upCols = ["id", "nombre", "importe"].map(col);

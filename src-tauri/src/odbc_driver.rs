@@ -1,5 +1,6 @@
 //! Driver basado en ODBC/CLI: Informix (DRDA o SQLI) y conexiones ODBC genéricas.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,6 +24,8 @@ pub struct OdbcDriver {
     dialect: Dialect,
     conn: OdbcConn,
     stmt: Option<Stmt>,
+    /// Statements of a batch still to run (Informix runs one statement per call: the batch is split).
+    pending: VecDeque<String>,
     cancel_slot: Arc<Mutex<usize>>,
     autocommit: bool,
     in_tx: bool,
@@ -51,6 +54,7 @@ impl OdbcDriver {
             dialect,
             conn,
             stmt: None,
+            pending: VecDeque::new(),
             cancel_slot: Arc::new(Mutex::new(0)),
             autocommit: true,
             in_tx: false,
@@ -60,6 +64,32 @@ impl OdbcDriver {
             d.database = d.current_database().unwrap_or_default();
         }
         Ok(d)
+    }
+
+    /// Runs the batch's statements in turn, adding their results, until one leaves rows to read (its cursor stays
+    /// open for `fetch`) or none is left. An error stops the batch: the statements after it do not run.
+    fn run_pending(&mut self, fetch: usize, results: &mut Vec<ResultSet>, messages: &mut Vec<String>) -> Result<()> {
+        let total = self.pending.len();
+        while self.stmt.is_none() {
+            let Some(sql) = self.pending.pop_front() else { break };
+            let mut st = self.conn.alloc_stmt()?;
+            st.register_cancel(self.cancel_slot.clone());
+            let r = st.exec(&sql);
+            if !self.autocommit {
+                self.in_tx = true;
+            }
+            if let Err(e) = r {
+                let done = total - self.pending.len();
+                self.pending.clear();
+                if total > 1 {
+                    bail!("Sentencia {done} de {total}: {e}");
+                }
+                bail!(e);
+            }
+            self.stmt = Some(st);
+            results.extend(self.pump(fetch, messages)?);
+        }
+        Ok(())
     }
 
     fn q(&self, rows: &str) -> Result<Vec<Vec<Cell>>> {
@@ -313,6 +343,7 @@ impl OdbcDriver {
 
     fn reconnect(&mut self, database: Option<&str>) -> Result<()> {
         self.stmt = None;
+        self.pending.clear();
         let api = Api::load(&self.lib_path)?;
         let conn = OdbcConn::connect(api, &conn_string(&self.cfg, database), 20)?;
         run_startup(&conn, &self.cfg)?;
@@ -322,6 +353,26 @@ impl OdbcDriver {
         self.conn = conn;
         self.in_tx = false;
         Ok(())
+    }
+}
+
+/// The statements of a batch as the server must get them: Informix (over DRDA) runs one statement per call, so
+/// a script is split (`;` outside strings and comments); a routine definition (its body has `;`) goes whole.
+/// Other ODBC sources get the text as it is.
+fn split_batch(sql: &str, dialect: Dialect) -> Vec<String> {
+    if dialect != Dialect::Informix {
+        return vec![sql.to_string()];
+    }
+    let words = sql.to_uppercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let routine = ["CREATE PROCEDURE", "CREATE FUNCTION", "CREATE DBA PROCEDURE", "CREATE DBA FUNCTION", "CREATE TRIGGER"].iter().any(|k| words.contains(k));
+    if routine {
+        return vec![sql.to_string()];
+    }
+    let parts = crate::startup::split(sql, DbKind::Informix);
+    if parts.is_empty() {
+        vec![sql.to_string()]
+    } else {
+        parts
     }
 }
 
@@ -500,19 +551,11 @@ impl Driver for OdbcDriver {
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
         self.stmt = None;
-        let mut st = self.conn.alloc_stmt()?;
-        st.register_cancel(self.cancel_slot.clone());
-        let r = st.exec(sql);
-        if !self.autocommit {
-            self.in_tx = true;
-        }
-        if let Err(e) = r {
-            bail!(e);
-        }
-        self.stmt = Some(st);
+        self.pending = split_batch(sql, self.dialect).into();
         let mut out = ExecOutput::default();
-        out.results = self.pump(fetch.max(1), &mut out.messages)?;
+        let r = self.run_pending(fetch.max(1), &mut out.results, &mut out.messages);
         out.in_transaction = self.in_tx;
+        r?;
         out.elapsed_ms = t0.elapsed().as_millis() as u64;
         Ok(out)
     }
@@ -530,6 +573,7 @@ impl Driver for OdbcDriver {
                 }
                 Err(e) => {
                     self.stmt = None;
+                    self.pending.clear();
                     return Err(e);
                 }
             }
@@ -543,16 +587,23 @@ impl Driver for OdbcDriver {
                 self.stmt = None;
             }
         }
+        // The rest of a split batch.
+        if self.stmt.is_none() && !self.pending.is_empty() {
+            let mut msgs = vec![];
+            self.run_pending(n.max(1), &mut out.extra, &mut msgs)?;
+        }
         Ok(out)
     }
 
     fn close_cursor(&mut self) -> Result<()> {
         self.stmt = None;
+        self.pending.clear();
         Ok(())
     }
 
     fn set_autocommit(&mut self, on: bool) -> Result<bool> {
         self.stmt = None;
+        self.pending.clear();
         if on && self.in_tx {
             self.conn.end_tran(true)?;
         }
@@ -564,6 +615,7 @@ impl Driver for OdbcDriver {
 
     fn commit(&mut self) -> Result<bool> {
         self.stmt = None;
+        self.pending.clear();
         self.conn.end_tran(true)?;
         self.in_tx = false;
         Ok(false)
@@ -571,6 +623,7 @@ impl Driver for OdbcDriver {
 
     fn rollback(&mut self) -> Result<bool> {
         self.stmt = None;
+        self.pending.clear();
         self.conn.end_tran(false)?;
         self.in_tx = false;
         Ok(false)
@@ -997,6 +1050,7 @@ impl Driver for OdbcDriver {
         }
         if self.dialect == Dialect::Generic {
             self.stmt = None;
+            self.pending.clear();
             self.conn.set_catalog(db)?;
         } else {
             self.reconnect(Some(db))?;
@@ -1056,6 +1110,18 @@ impl Driver for OdbcDriver {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn informix_batches_are_split() {
+        use super::{split_batch, Dialect};
+        let parts = split_batch("DELETE FROM t WHERE id = 4;\nUPDATE t SET n = 'a;b' WHERE id = 2;\n-- fin; comentario\nINSERT INTO t VALUES (5);\n-- DELETE FROM t WHERE id = 3;", Dialect::Informix);
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        assert!(parts[1].contains("'a;b'"));
+        assert!(parts[2].ends_with("INSERT INTO t VALUES (5)"));
+        // A routine's body keeps its semicolons; other ODBC sources get the text as it is.
+        assert_eq!(split_batch("CREATE PROCEDURE p() LET x = 1; END PROCEDURE;", Dialect::Informix).len(), 1);
+        assert_eq!(split_batch("SELECT 1; SELECT 2", Dialect::Generic).len(), 1);
+    }
+
     use super::*;
     #[test]
     fn informix_types() {

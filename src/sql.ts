@@ -413,10 +413,14 @@ export function sqlLiteral(value: string | null, kind: ColKind, dialect?: string
   if (value === null) return "NULL";
   if (kind === "number" && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value.trim())) return value.trim();
   if (kind === "bool") {
-    // SQL Server bit columns take 1/0; PostgreSQL rejects 1/0 for boolean; MySQL and SQLite accept TRUE/FALSE.
-    const numeric = dialect === "mssql" || dialect === "informix" || dialect === "odbc";
-    if (/^(1|true|t|yes|y|✓ true)$/i.test(value.trim())) return numeric ? "1" : "TRUE";
-    if (/^(0|false|f|no|n|✗ false)$/i.test(value.trim())) return numeric ? "0" : "FALSE";
+    // SQL Server bit columns take 1/0; PostgreSQL rejects 1/0 for boolean; MySQL and SQLite accept TRUE/FALSE;
+    // an Informix BOOLEAN only compares with 't' / 'f' (with 1 it cannot resolve "equal").
+    const numeric = dialect === "mssql" || dialect === "odbc";
+    const yes = /^(1|true|t|yes|y|✓ true)$/i.test(value.trim());
+    const no = /^(0|false|f|no|n|✗ false)$/i.test(value.trim());
+    if (dialect === "informix" && (yes || no)) return yes ? "'t'" : "'f'";
+    if (yes) return numeric ? "1" : "TRUE";
+    if (no) return numeric ? "0" : "FALSE";
   }
   const escaped = dialect === "mysql" ? value.replace(/\\/g, "\\\\").replace(/'/g, "''") : value.replace(/'/g, "''");
   // SQL Server: N'…' keeps every Unicode character (a plain '…' turns those outside the code page into "?").

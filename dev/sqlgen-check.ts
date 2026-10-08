@@ -1,7 +1,7 @@
 // Checks for src/sqlgen.ts and the Informix DATETIME fitting in src/sql.ts:
 //   node --experimental-strip-types dev/sqlgen-check.ts
 import assert from "node:assert/strict";
-import { fitInformixDatetime } from "../src/sql.ts";
+import { fitInformixDatetime, sqlLiteral } from "../src/sql.ts";
 import { changesSql, filterSql, fitValue } from "../src/sqlgen.ts";
 import type { TableColumn } from "../src/types.ts";
 
@@ -38,5 +38,10 @@ assert.match(sql, /INSERT INTO t \(id, momento\) VALUES \(2, '2025-01-01 08:00'\
 // A DATETIME key is fitted in the WHERE of the edited row too.
 const keyed = { columnsMeta: [col("momento", "datetime year to minute", "date", true), col("n", "integer", "number")], quoted: ["momento", "n"], qualified: "t" };
 assert.match(changesSql({ ...keyed, rows: [["2024-03-15 10:20:00", 1]], edits: { "0:1": "2" }, deleted: [], inserts: [] }, "informix"), /WHERE momento = '2024-03-15 10:20';/);
+
+// Informix BOOLEAN takes 't' / 'f' (not 1 / 0); SQL Server bit takes 1 / 0.
+assert.equal(sqlLiteral("true", "bool", "informix"), "'t'");
+assert.equal(sqlLiteral("0", "bool", "informix"), "'f'");
+assert.equal(sqlLiteral("true", "bool", "mssql"), "1");
 
 console.log("sqlgen-check: all good");
