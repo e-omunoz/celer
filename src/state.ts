@@ -1857,14 +1857,13 @@ function reopenTableSession(tabId: string): Promise<string> {
   const job = (async () => {
     const tab = state.tabs[tabIndex(tabId)];
     if (!tab || tab.kind !== "table") throw new Error("La pestaña ya no existe");
-    const opened = await openSessionFor(tab.connId);
+    const opened = await openSessionFor(tab.connId, tab.obj.database);
     if (!opened) throw new Error("Sin conexión");
     if (tabIndex(tabId) < 0) {
       void api().closeSession(opened.sessionId).catch(() => {});
       throw new Error("La pestaña ya no existe");
     }
     patchTab(tabId, { sessionId: opened.sessionId });
-    if (tab.obj.database) await api().useDatabase(opened.sessionId, tab.obj.database).catch(() => {});
     return opened.sessionId;
   })();
   reopening.set(tabId, job);
@@ -1873,16 +1872,23 @@ function reopenTableSession(tabId: string): Promise<string> {
 }
 
 /** A new session for a connection (connecting first if needed); null when it cannot connect. */
-export async function openSessionFor(connId: string) {
+/** The database each side session opened in: a table's first load needs no USE when it is already there. */
+const sessionDatabase = new Map<string, string>();
+
+/** A side session (a table, a count, a comparison…), straight in `database` when one is given. */
+export async function openSessionFor(connId: string, database?: string) {
   if (!state.sessions[connId]) await connect(connId);
   if (!state.sessions[connId]) return null;
   const generation = connectGeneration(connId);
-  const opened = await api().openSession(connId, state.passwords[connId]);
+  const opened = await api()
+    .openSession(connId, state.passwords[connId], { database: database || undefined })
+    .catch((err: unknown) => (database ? api().openSession(connId, state.passwords[connId]) : Promise.reject(err)));
   // Disconnected while it opened: the core may have closed it already.
   if (connectGeneration(connId) !== generation || !state.sessions[connId]) {
     void api().closeSession(opened.sessionId).catch(() => {});
     throw new Error("La conexión se ha cerrado");
   }
+  sessionDatabase.set(opened.sessionId, opened.database);
   return opened;
 }
 
@@ -1953,7 +1959,7 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
     }
     return;
   }
-  const opened = await openSessionFor(connId).catch((err) => {
+  const opened = await openSessionFor(connId, obj.database).catch((err) => {
     notify(errorText(err), "error");
     return null;
   });
@@ -1981,7 +1987,10 @@ export async function reloadTable(tabId: string, full = false) {
     let current = state.tabs[tabIndex(tabId)] as TableTab;
     const sid = current.sessionId;
     if (full || !current.baseSelect) {
-      if (tab.obj.database) await api().useDatabase(sid, tab.obj.database).catch(() => {});
+      // Opened in the table's database already: no USE (one round trip less on every engine but PostgreSQL).
+      if (tab.obj.database && sessionDatabase.get(sid)?.toLowerCase() !== tab.obj.database.toLowerCase()) {
+        await api().useDatabase(sid, tab.obj.database).then((db) => sessionDatabase.set(sid, db)).catch(() => {});
+      }
       const [columnsMeta, sqlInfo, ddl] = await Promise.all([
         api().tableColumns(sid, tab.obj),
         api().objectSql(sid, tab.obj),
@@ -2028,6 +2037,8 @@ export async function reloadTable(tabId: string, full = false) {
   } catch (err) {
     if (tokenOf(tabId) !== token) return;
     let message = errorText(err);
+    // The connection dropped and the core could not bring it back (or a write was not repeated): the tab shows it.
+    if (noteDropped(tabId, tab.title, message)) message = plainError(message);
     // The engine's position counts over the generated SELECT: translate it to the WHERE the user typed.
     const typed = (state.tabs[tabIndex(tabId)] as TableTab | undefined)?.where.trim() ?? "";
     const errorAt = select ? wherePosition(message, select, typed) : null;
