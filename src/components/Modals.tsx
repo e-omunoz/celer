@@ -26,6 +26,7 @@ import { CodeView } from "./Editor";
 import { ExportDialog } from "./ExportDialog";
 import { AiSettings } from "./AiSettings";
 import { SnippetSettings } from "./SnippetSettings";
+import { ErDiagram } from "./ErDiagram";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
 import { checkForUpdates, openReleasePage } from "../update";
@@ -60,6 +61,7 @@ export function Modals() {
         )}
       </Show>
       <Show when={state.paramAsk}>{(ask) => <ParamsDialog ask={ask()} />}</Show>
+      <Show when={state.er}><ErDiagram /></Show>
       <Show when={state.passwordAsk}>
         {(ask) => (
           <Dialog title={`Conectar a ${ask().name}`} onClose={() => answerPassword(null)} small>

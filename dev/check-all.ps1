@@ -30,6 +30,7 @@ function Restart-App([switch]$Build) {
 Step "typescript" { & $node node_modules\typescript\bin\tsc --noEmit -p . }
 Step "sql context" { & $node --experimental-strip-types --no-warnings dev\sqlcontext-check.ts }
 Step "templates and parameters" { & $node --experimental-strip-types --no-warnings dev\snippets-check.ts }
+Step "ER layout" { & $node --experimental-strip-types --no-warnings dev\erlayout-check.ts }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
 
 Restart-App -Build:(-not $NoBuild)
@@ -39,6 +40,7 @@ Step "disconnect" { & $node dev\disconnect-check.mjs }
 Step "generated scripts" { & $node dev\generate-check.mjs }
 Step "misc (startup script, pins, undo)" { & $node dev\misc-check.mjs }
 Step "Gib companion" { & $node dev\gib-companion-check.mjs "$env:TEMP\gib-companion" }
+Step "ER diagram" { & $node dev\er-check.mjs "$env:TEMP\celer-er" }
 Restart-App
 Step "restore (prepare)" { & $node dev\restore-check.mjs prepare }
 $exe = "$env:CARGO_TARGET_DIR\debug\celer.exe"

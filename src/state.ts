@@ -21,6 +21,7 @@ import type {
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
 import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
+import type { ErEdge, ErTable } from "./erLayout";
 import type { AiMessage } from "./ai";
 
 export type InspectorMode = "value" | "record" | "history" | "ai";
@@ -278,6 +279,8 @@ export const [state, setState] = createStore({
   passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
   /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
   paramAsk: null as ParamAsk | null,
+  /** The entity-relationship diagram on show (a schema's tables and their foreign keys). */
+  er: null as ErState | null,
   paletteOpen: false,
   paletteMode: "all" as "all" | "actions" | "tables",
   menu: null as { x: number; y: number; items: MenuItem[] } | null,
@@ -601,6 +604,80 @@ export async function saveSettings(patch: Partial<Settings>) {
 
 export function askPassword(name: string) {
   return new Promise<string | null>((resolve) => setState("passwordAsk", { name, resolve }));
+}
+
+export interface ErState {
+  connId: string;
+  title: string;
+  loading: boolean;
+  done: number;
+  total: number;
+  error: string;
+  /** More tables than the diagram shows (it stops at ER_LIMIT). */
+  truncated: number;
+  tables: ErTable[];
+  edges: ErEdge[];
+  /** Where each diagram table comes from, to open it. */
+  objects: Record<string, ObjectRef>;
+}
+
+const ER_LIMIT = 250;
+let erToken = 0;
+
+/**
+ * Loads the tables of a schema (path [database, schema], or [database] on engines without schemas) with their
+ * columns and foreign keys, on a side session, and shows the diagram as it arrives.
+ */
+export async function openErDiagram(connId: string, path: string[]) {
+  const token = ++erToken;
+  // "main · main" (SQLite, MySQL: database and schema share the name) reads as just "main".
+  const title = path.filter((part, i) => part !== path[i - 1]).join(" · ");
+  setState("er", { connId, title, loading: true, done: 0, total: 0, error: "", truncated: 0, tables: [], edges: [], objects: {} });
+  const opened = await openSessionFor(connId).catch((err) => {
+    setState("er", { loading: false, error: errorText(err) });
+    return null;
+  });
+  if (!opened) return;
+  const current = () => token === erToken && state.er !== null;
+  try {
+    if (path[0]) await api().useDatabase(opened.sessionId, path[0]).catch(() => {});
+    const folders = await api().metaChildren(opened.sessionId, path);
+    const folder = folders.find((node) => node.kind === "folder" && (node.path[node.path.length - 1] === "tables" || /^(tablas|tables)$/i.test(node.name)));
+    if (!folder) throw new Error("Aquí no hay una carpeta de tablas");
+    const all = (await api().metaChildren(opened.sessionId, folder.path)).filter((node) => node.obj?.kind === "table");
+    const nodes = all.slice(0, ER_LIMIT);
+    if (!current()) return;
+    setState("er", { total: nodes.length, truncated: all.length - nodes.length });
+    const tables: ErTable[] = [];
+    const edges: ErEdge[] = [];
+    const objects: Record<string, ObjectRef> = {};
+    for (const [i, node] of nodes.entries()) {
+      const obj = node.obj!;
+      const id = `${obj.schema}.${obj.name}`;
+      const [columns, fkNodes] = await Promise.all([
+        api().tableColumns(opened.sessionId, obj).catch(() => [] as TableColumn[]),
+        api().metaChildren(opened.sessionId, [...node.path, "fks"]).catch(() => [] as MetaNode[]),
+      ]);
+      if (!current()) return;
+      const fks = parseForeignKeys(fkNodes, obj).filter((fk) => fk.columns.length);
+      const fkCols = new Set(fks.flatMap((fk) => fk.columns));
+      tables.push({ id, name: obj.name, schema: obj.schema, columns: columns.map((c) => ({ name: c.name, type: c.typeName, pk: c.primaryKey, fk: fkCols.has(c.name), nullable: c.nullable })) });
+      for (const fk of fks) edges.push({ name: fk.name, from: id, to: `${fk.target.schema}.${fk.target.name}`, fromCols: fk.columns, toCols: fk.targetColumns });
+      objects[id] = obj;
+      // Show progress (and the tables so far) every few tables.
+      if (i % 8 === 7 || i === nodes.length - 1) setState("er", { done: i + 1, tables: [...tables], edges: [...edges], objects: { ...objects } });
+    }
+    if (current()) setState("er", { loading: false, done: nodes.length });
+  } catch (err) {
+    if (current()) setState("er", { loading: false, error: errorText(err) });
+  } finally {
+    void api().closeSession(opened.sessionId).catch(() => {});
+  }
+}
+
+export function closeErDiagram() {
+  erToken++;
+  setState("er", null);
 }
 
 /** What the parameters dialog edits; values are remembered per console. */

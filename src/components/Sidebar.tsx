@@ -12,6 +12,7 @@ import {
   duplicateConnection,
   generateSql,
   kindOf,
+  openErDiagram,
   moveConnection,
   openConnDialog,
   openMenu,
@@ -282,6 +283,9 @@ export function Sidebar() {
     } else if (obj) {
       items.push({ label: "Abrir definición", icon: "code", run: () => void generateSql(connId, obj, "ddl") }, { separator: true });
     }
+    // Diagram of a schema (or of a database on engines without schemas: Informix, ODBC).
+    const schemaLevel = node.kind === "schema" || (node.kind === "database" && (kindOf(connId) === "informix" || kindOf(connId) === "odbc"));
+    if (schemaLevel) items.push({ label: "Diagrama entidad-relación", icon: "diagram", run: () => void openErDiagram(connId, node.path) }, { separator: true });
     items.push(
       { label: "Nueva consola aquí", icon: "console", run: () => openQuery(connId) },
       { label: "Copiar nombre", hint: "Ctrl+C", icon: "copy", run: () => void copyText(node.name) },

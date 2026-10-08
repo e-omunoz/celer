@@ -1544,3 +1544,43 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .results-head .result-filter { flex: 0 1 auto; min-width: 120px; }
 .results-head .result-filter input { width: 100%; min-width: 60px; max-width: 200px; }
 .startup-sql { width: 100%; resize: vertical; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+
+/* ============================================================================
+   Entity-relationship diagram
+   ========================================================================== */
+
+.er-view { position: fixed; inset: 0; z-index: 120; display: flex; flex-direction: column; background: var(--bg); animation: fade-in var(--dur-med, 180ms) var(--ease-out); }
+.er-head { display: flex; align-items: center; gap: 10px; height: 46px; flex: none; padding: 0 12px 0 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.er-head > b { font-family: var(--serif); font-size: 16px; font-weight: 500; }
+.er-title { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+.er-search { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-muted); }
+.er-search:focus-within { border-color: var(--accent); }
+.er-search input { width: 200px; border: 0; background: transparent; padding: 0; color: var(--text); font-size: 12.5px; outline: none; box-shadow: none; }
+.er-zoom { min-width: 42px; text-align: center; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.er-progress { height: 2px; background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.er-progress i { display: block; height: 100%; background: var(--accent); transition: width 200ms linear; }
+.er-canvas { position: relative; flex: 1; overflow: hidden; cursor: grab; background: var(--editor-bg, var(--surface)); background-image: radial-gradient(color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1px); background-size: 22px 22px; touch-action: none; }
+.er-canvas:active { cursor: grabbing; }
+.er-svg { display: block; user-select: none; }
+.er-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-muted); pointer-events: none; }
+.er-hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); margin: 0; padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--panel) 85%, transparent); color: var(--text-faint); font-size: 11.5px; pointer-events: none; white-space: nowrap; }
+.er-table { cursor: pointer; transition: opacity 160ms; }
+.er-table.dim { opacity: 0.28; }
+.er-card { fill: var(--popover); stroke: var(--border-strong); stroke-width: 1; }
+.er-table:hover .er-card, .er-table.hit .er-card { stroke: var(--accent); stroke-width: 1.6; }
+.er-card-head { fill: color-mix(in srgb, var(--accent) 16%, var(--popover)); }
+.er-name { fill: var(--text); font: 600 13px var(--sans); }
+.er-col { fill: var(--text); font: 12px var(--mono); }
+.er-col.pk { font-weight: 600; }
+.er-col.nullable { fill: var(--text-muted); }
+.er-type { fill: var(--text-faint); font: 11px var(--mono); }
+.er-key { font: 700 9px var(--sans); letter-spacing: 0.02em; }
+.er-key.pk { fill: #D4A72C; }
+.er-key.fk { fill: var(--accent); }
+.er-more { fill: var(--text-faint); font: italic 11px var(--sans); }
+.er-edge { fill: none; stroke: color-mix(in srgb, var(--text-muted) 60%, transparent); stroke-width: 1.4; transition: stroke 140ms, opacity 140ms; }
+.er-edge.lit { stroke: var(--accent); stroke-width: 2.2; }
+.er-edge.dim { opacity: 0.18; }
+.er-mark { fill: none; stroke: color-mix(in srgb, var(--text-muted) 75%, transparent); stroke-width: 1.4; }
+.er-head > .muted.small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.er-head > b, .er-title, .er-zoom { white-space: nowrap; flex: none; }
