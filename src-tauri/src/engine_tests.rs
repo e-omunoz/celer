@@ -364,8 +364,8 @@ fn mssql_engine() {
     assert_eq!(scalar(d, "SELECT DB_NAME()"), "celer_test");
 }
 
-/// A big result left half read (a page of 500, as the interface asks for): how long the next statement takes, and
-/// whether the session (its SPID, a #temp table, an open transaction) survives it.
+/// A big result left half read (a page of 500, as the interface asks for): the next statement must not wait for the
+/// rest of it, nor for a new connection. The session survives: same SPID, #temp tables, open transaction.
 #[test]
 fn mssql_abandoned_cursor() {
     let Some(mut d) = mssql("tempdb") else { return };
@@ -388,20 +388,47 @@ fn mssql_abandoned_cursor() {
         let next = t0.elapsed().as_millis();
         let now = txt(&out.results[0].rows[0][0]);
         eprintln!("cursor abandonado, ronda {round}: primera página {first} ms, siguiente consulta {next} ms, SPID {spid} → {now}; {:?}", out.messages);
+        assert_eq!(now, spid, "el cursor se cortó con ATTENTION en la misma conexión");
+        assert!(next < 1500, "la consulta tras el cursor abandonado tardó {next} ms");
+        assert!(out.messages.iter().any(|m| m.contains("ATTENTION")), "{:?}", out.messages);
     }
+    // "Pedir más" still works after a cut: a new cursor pages on.
+    page(d);
+    assert_eq!(d.fetch(500).unwrap().rows.len(), 500);
 
     // A #temp table and an open transaction (autocommit mode, BEGIN TRAN) across an abandoned cursor.
     d.execute("CREATE TABLE #celer_tmp (id int); INSERT INTO #celer_tmp VALUES (1)", 10).unwrap();
-    d.execute("BEGIN TRAN; INSERT INTO #celer_tmp VALUES (2)", 10).unwrap();
+    let out = d.execute("BEGIN TRAN; INSERT INTO #celer_tmp VALUES (2)", 10).unwrap();
+    assert!(out.in_transaction);
     page(d);
     let t0 = Instant::now();
-    let kept = d.execute("SELECT COUNT(*), @@TRANCOUNT FROM #celer_tmp", 10);
-    let next = t0.elapsed().as_millis();
-    match kept {
-        Ok(out) => eprintln!("#temp y transacción tras el cursor abandonado ({next} ms): filas {}, @@TRANCOUNT {}", txt(&out.results[0].rows[0][0]), txt(&out.results[0].rows[0][1])),
-        Err(e) => eprintln!("#temp y transacción tras el cursor abandonado ({next} ms): perdidas ({e})"),
-    }
-    let _ = d.execute("IF @@TRANCOUNT > 0 ROLLBACK", 10);
+    let out = d.execute("SELECT COUNT(*), @@TRANCOUNT, @@SPID FROM #celer_tmp", 10).unwrap();
+    eprintln!("#temp y transacción tras el cursor abandonado: {} ms; {:?}", t0.elapsed().as_millis(), out.messages);
+    let row: Vec<String> = out.results[0].rows[0].iter().map(txt).collect();
+    assert_eq!(row, vec!["2".to_string(), "1".to_string(), spid.clone()]);
+    assert!(out.in_transaction);
+    d.rollback().unwrap();
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "1");
+
+    // Manual mode keeps its transaction across a cut too.
+    d.set_autocommit(false).unwrap();
+    d.execute("INSERT INTO #celer_tmp VALUES (3)", 10).unwrap();
+    page(d);
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "2");
+    assert!(!d.rollback().unwrap());
+    d.set_autocommit(true).unwrap();
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "1");
+
+    // A closed session without state of its own leaves its connection to the next one: no new login.
+    let mut a = mssql("tempdb").unwrap();
+    let spid_a = scalar(&mut a, "SELECT @@SPID");
+    drop(a);
+    let t0 = Instant::now();
+    let mut b = mssql("tempdb").unwrap();
+    let reused = t0.elapsed().as_millis();
+    assert_eq!(scalar(&mut b, "SELECT @@SPID"), spid_a, "la sesión nueva debía reutilizar la conexión libre");
+    eprintln!("sesión nueva con la conexión libre de otra: {reused} ms");
+    assert_eq!(b.current_database().unwrap(), "tempdb");
 }
 
 /// "cols → table(cols)": the format the interface reads FK nodes with.
