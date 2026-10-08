@@ -123,7 +123,7 @@ const ROLE = role => `Read and follow your role file \`.claude/agents/${role}.md
 function auditPrompt(area) {
   const appRule = area.ui
     ? 'You may launch the desktop app (dev/run-desktop.ps1) and the browser pane preview `celer-web`; you are the only agent using them right now. Stop the app when done.'
-    : 'Do NOT launch the desktop app or the browser pane (UI auditors are using them). Static reading, cargo/node checks and test databases only.'
+    : 'Test everything live that you can: start, seed and kill test databases, build, run cargo/node checks and probes (CLAUDE.md "Local testing"). Only the desktop app and the browser pane are off-limits in this phase, because the UI auditors are using them (dev/run-desktop.ps1 would kill their instance).'
   return `${ROLE('celer-auditor')}
 
 Area: **${area.title}** — checklist in \`.claude/skills/macro-review/areas/${area.key}.md\`. Read it first.
@@ -138,7 +138,7 @@ function verifyPrompt(area, findings) {
 
 Area: ${area.title}. Try to refute each finding below (index = position in the list). Default to real=false when unsure.
 Also mark real=false for duplicates of each other or of existing issues (\`gh issue list --label review --state all -L 200\`).
-${area.ui ? 'You may re-check in the browser pane / desktop app (the auditor has finished with them).' : 'Do not launch the desktop app or the browser pane.'}
+${area.ui ? 'Re-check live in the browser pane / desktop app (the auditor has finished with them).' : 'Re-check live with test databases and CLI checks where cheap; the desktop app and browser pane belong to the UI auditors in this phase.'}
 
 ${JSON.stringify(findings.map((f, index) => ({ index, ...f })), null, 1)}`
 }
@@ -216,7 +216,7 @@ for (const g of byArea) {
   const r = await agent(`${ROLE('celer-fixer')}
 
 Area: ${g.area.title} (checklist for context: \`.claude/skills/macro-review/areas/${g.area.key}.md\`).
-${g.area.ui ? 'You may use the desktop app and the browser pane to confirm visual fixes.' : 'Avoid launching the desktop app unless the fix needs it.'}
+You are the only agent running now: use the desktop app, the browser pane, test databases and anything local to reproduce each issue before the fix and to confirm it after.
 Fix these issues, most severe first, one commit each, on the current branch. Do not push.
 
 ${JSON.stringify(g.items.map(f => ({ issue: f.issue, severity: f.severity, title: f.title, file: f.file, line: f.line, repro: f.repro, expected: f.expected, fix_hint: f.fix_hint })), null, 1)}`,
@@ -232,7 +232,7 @@ phase('Verify')
 const VERIFY_PROMPT = `${ROLE('celer-verifier')}
 
 Verify the review branch as a whole (diff: \`git diff ${BASE}...HEAD\`).
-1. Run: \`npx tsc --noEmit -p .\`, \`npx tsc --noEmit -p installer\`, every \`dev/*-check.ts\`, \`npm run build\`, and \`cargo test --lib\` in src-tauri (with CELER_PG_TEST / CELER_MYSQL_TEST when the test databases are up — start them with dev/testdb-*.ps1).
+1. Run: \`npx tsc --noEmit -p .\`, \`npx tsc --noEmit -p installer\`, every \`dev/*-check.ts\`, \`npm run build\`, and \`cargo test --lib\` in src-tauri with CELER_PG_TEST / CELER_MYSQL_TEST (start the servers with dev/testdb-*.ps1), then the full end-to-end suite \`powershell -ExecutionPolicy Bypass -File dev\\check-all.ps1\` against the desktop app.
 2. Review the fix commits since the audit for regressions: wrong fix, behaviour changed elsewhere, missing CHANGELOG line, style that does not match the file.
 green = every check passes and no regression found. Read-only.`
 let verdict = await agent(VERIFY_PROMPT, { label: 'verify:branch', phase: 'Verify', schema: VERIFIED })

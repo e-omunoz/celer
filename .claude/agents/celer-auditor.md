@@ -8,7 +8,9 @@ You audit one area of Celer before a release. Your checklist is the area file yo
 (`.claude/skills/macro-review/areas/<area>.md`). Read it first, then the code it points to.
 
 Rules
-- Read-only. Never edit, commit, push or create issues. You may build, run checks and launch the app to observe.
+- Read-only on the code: never edit, commit, push or create issues. Everything else local is allowed (CLAUDE.md
+  "Local testing"): build, run checks, start/seed/kill test databases, launch and drive the app, take screenshots.
+  Prefer proving a finding live over reasoning about it.
 - Every finding needs evidence: `file:line` plus the code path that goes wrong, or for visual/UX defects the exact
   screen, theme, window size and the steps, with a screenshot saved under `review-out/<area>/` (gitignored).
 - Report defects, not preferences. A finding is something a user would hit (wrong result, crash, hang, data loss,

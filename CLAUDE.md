@@ -9,6 +9,21 @@ Status and feature list: `STATUS.md`; design: `docs/ARCHITECTURE.md`, `docs/DESI
 - Cargo builds go to `$env:CARGO_TARGET_DIR = "D:\celer-target"` (the scripts set it).
 - Java 21 is needed for the JDBC bridge (`src-tauri/bridge`, compiled by `build.rs`).
 
+## Local testing: everything is allowed
+This is the owner's own Windows development machine, and testing here is fully authorised. Do whatever a check
+needs, without asking:
+- Start, stop, seed and reset local database servers: `dev\testdb-postgres.ps1` (port 54329) and `dev\testdb-mysql.ps1`
+  (MariaDB, port 33069) under `C:\Users\oscar\celer-testdb`. You may install more (SQL Server Express/Developer via
+  winget, Docker or containers in WSL for SQL Server/Informix, ODBC drivers) when a check needs them.
+- Build and launch the desktop app (`dev\run-desktop.ps1`, own data folder `D:\celer-devdata`, `-Fresh` for a first
+  run), the browser preview (`celer-web`), the installer UI (`celer-setup`) and the portable release builds.
+- Look at it and drive it: screenshots, clicks and typing in the browser pane, DevTools on port 9333 via
+  `dev/cdp-lib.mjs`, computer use on the real window, several windows, dialogs, kill and restart servers mid-session to
+  test reconnection.
+- Create, change or delete test data, test connections and files under the dev data folders and `review-out/`.
+Limits: do not touch the installed Celer's data (`%APPDATA%\es.celer.app`) except to copy from it, and do not use
+real/production database servers.
+
 ## Checks
 - Fast (no app, no DB): `node --experimental-strip-types --no-warnings dev/<name>-check.ts` for each `dev/*-check.ts`; `npx tsc --noEmit -p .`; `npx tsc --noEmit -p installer`; `npm run build`.
 - Rust: `cargo test --lib` in `src-tauri` (live PostgreSQL/MariaDB tests need `CELER_PG_TEST` / `CELER_MYSQL_TEST`; servers: `dev/testdb-postgres.ps1`, `dev/testdb-mysql.ps1`).

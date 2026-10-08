@@ -3,8 +3,10 @@
 Code: `src-tauri/src/mssql.rs` (tiberius), `odbc.rs`, `odbc_driver.rs`, `jdbc.rs`, `bridge/CelerBridge.java`,
 `build.rs`, `engine_tests.rs`; UI side `src/components/InformixDrivers.tsx`, `src/sqlgen.ts`, `dev/engine-sql.ts`;
 seeds `dev/seed-mssql.sql`, `dev/seed-informix.sql`; docs `docs/DRIVERS.md`.
-Live servers exist only in `.github/workflows/engines.yml`. You may read its latest logs
-(`gh run list --workflow engines.yml`, `gh run view <id> --log`) but do not trigger runs — the orchestrator does.
+Live servers: `.github/workflows/engines.yml` runs them on Actions (read the logs with `gh run list --workflow engines.yml`,
+`gh run view <id> --log`; the orchestrator triggers runs). You may also bring them up locally (CLAUDE.md "Local
+testing"): SQL Server Express/Developer via winget, or SQL Server and Informix containers in WSL, then load the seeds
+and point `engine_tests.rs` at them with the env vars the workflow uses.
 
 ## Check
 - SQL Server: types (datetime2/datetimeoffset precision, money, uniqueidentifier, xml, varbinary(max), sql_variant,
