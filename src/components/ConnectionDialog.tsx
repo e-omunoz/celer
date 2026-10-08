@@ -4,7 +4,7 @@ import { EngineIcon } from "../icons";
 import { browseSqlite, connect, copyText, formatMs, plainError, setState, state, submitConnection, testConnection } from "../state";
 import { knownFolders } from "../connManage";
 import { ENGINES, emptyConn, engineOf, type ConnConfig, type ConnTestReport, type DbKind } from "../types";
-import { applyJdbcUrl, defaultPort, hasErrors, looksLikeJdbcUrl, validateConn, visibleFields, type FieldIssue, type IssueField } from "../connForm";
+import { applyJdbcUrl, defaultPort, hasErrors, looksLikeJdbcUrl, validateConn, visibleFields, withInstanceName, type FieldIssue, type IssueField } from "../connForm";
 import { Dialog } from "./Modals";
 import { openInformixGuide } from "./InformixDrivers";
 
@@ -408,7 +408,7 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
                     spellcheck={false}
                     aria-invalid={invalid("instance")}
                     placeholder={kind() === "informix" ? "DBSERVERNAME o un alias" : "opcional (SQLEXPRESS…)"}
-                    onInput={(event) => set("instance", event.currentTarget.value)}
+                    onInput={(event) => fix(withInstanceName(cfg(), event.currentTarget.value))}
                     onBlur={() => touch("instance")}
                   />
                   <FieldMessages issues={issuesOf("instance")} onFix={fix} />

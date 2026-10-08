@@ -1,7 +1,7 @@
 // Checks for the connection form (src/connForm.ts, parseJdbc in src/migrateParse.ts): JDBC URLs of every engine,
 // field validation and the fields shown. node --experimental-strip-types dev/connform-check.ts
 import assert from "node:assert/strict";
-import { applyJdbcUrl, defaultPort, hasErrors, validateConn, visibleFields } from "../src/connForm.ts";
+import { applyJdbcUrl, defaultPort, hasErrors, validateConn, visibleFields, withInstanceName } from "../src/connForm.ts";
 import { parseJdbc, parseJdbcUrl } from "../src/migrateParse.ts";
 import { emptyConn, type ConnConfig } from "../src/types.ts";
 
@@ -117,7 +117,7 @@ assert.equal(applied.cfg.kind, "mssql");
 assert.equal(applied.cfg.name, "CRM");
 assert.equal(applied.cfg.folder, "Clientes");
 assert.equal(applied.cfg.production, true);
-assert.equal(applied.cfg.port, 1433, "the engine's port when the URL has none");
+assert.equal(applied.cfg.port, null, "a named instance without a port: SQL Server Browser gives it");
 assert.equal(applied.cfg.instance, "SQLEXPRESS");
 assert.equal(applied.cfg.user, "app");
 assert.equal(applied.cfg.password, "");
@@ -158,7 +158,16 @@ assert.deepEqual(issue.fix, { host: "db", port: 3307 });
 // server\instance: fine to split on SQL Server, an error elsewhere.
 issue = validateConn(conn({ kind: "mssql", host: "sql\\EXPRESS" }))[0];
 assert.equal(issue.level, "warning");
-assert.deepEqual(issue.fix, { host: "sql", instance: "EXPRESS" });
+assert.deepEqual(issue.fix, { host: "sql", instance: "EXPRESS", port: null }, "the default port is left out for the instance's own");
+assert.deepEqual(validateConn(conn({ kind: "mssql", host: "sql\\EXPRESS", port: 1500 }))[0].fix, { host: "sql", instance: "EXPRESS" }, "a typed port stays");
+// Typing an instance leaves the default port empty; a typed one stays; Informix's INFORMIXSERVER does not touch it.
+assert.deepEqual(withInstanceName(conn({ kind: "mssql" }), "SQLEXPRESS"), { instance: "SQLEXPRESS", port: null });
+assert.deepEqual(withInstanceName(conn({ kind: "mssql", port: 1500 }), "SQLEXPRESS"), { instance: "SQLEXPRESS" });
+assert.deepEqual(withInstanceName(conn({ kind: "informix", port: 9088 }), "ol_x"), { instance: "ol_x" });
+assert.equal(defaultPort(conn({ kind: "mssql", instance: "SQLEXPRESS" })), null);
+assert.equal(defaultPort(conn({ kind: "mssql" })), 1433);
+assert.equal(applyJdbcUrl(conn({ kind: "mssql" }), "jdbc:sqlserver://srv\\SQLEXPRESS:1500;databaseName=x")?.cfg.port, 1500);
+assert.equal(applyJdbcUrl(conn({ kind: "mssql" }), "jdbc:sqlserver://srv;databaseName=x")?.cfg.port, 1433);
 assert.deepEqual(fieldsWith(conn({ kind: "postgres", host: "sql\\EXPRESS" }), "error"), ["host"]);
 // IPv6 addresses are not a host with a port.
 assert.deepEqual(validateConn(conn({ kind: "postgres", host: "fe80::1" })), []);

@@ -94,7 +94,7 @@ export function validateConn(cfg: ConnConfig, others: { id: string; name: string
       if (withPort) {
         warn("host", `Parece que lleva el puerto (${withPort[2]}): va en «Puerto».`, { host: withPort[1], port: Number(withPort[2]) }, "Separar");
       } else if (withInstance && cfg.kind === "mssql") {
-        warn("host", `Lleva la instancia (${withInstance[2]}): mejor en «Instancia».`, { host: withInstance[1], instance: withInstance[2] }, "Separar");
+        warn("host", `Lleva la instancia (${withInstance[2]}): mejor en «Instancia».`, withInstanceName(cfg, withInstance[2], { host: withInstance[1] }), "Separar");
       } else if (withInstance) {
         error("host", "El servidor no puede llevar «\\»: escribe solo el nombre o la IP.");
       }
@@ -181,9 +181,9 @@ export function applyJdbcUrl(cfg: ConnConfig, url: string): { cfg: ConnConfig; n
   } else {
     if (info.kind === "informix") next.informixMode = informixModeFor(info, same ? cfg.informixMode : base.informixMode);
     next.host = info.host ?? "localhost";
+    next.instance = info.instance ?? "";
     next.port = info.port ?? defaultPort(next);
     next.database = info.database ?? "";
-    next.instance = info.instance ?? "";
     if (info.user) next.user = info.user;
     if (info.kind === "mssql") next.integratedAuth = info.integratedAuth ?? false;
     if (info.encryption) next.encryption = info.encryption;
@@ -213,10 +213,24 @@ function informixModeFor(info: JdbcInfo, current: string): string {
   return current === "jdbc" || current === "sqli" || current === "auto" ? current : "auto";
 }
 
-/** The usual port of a connection (Informix: 9089 for DRDA, 9088 for SQLI). */
+/**
+ * The usual port of a connection (Informix: 9089 for DRDA, 9088 for SQLI). None for a SQL Server named instance:
+ * SQL Server Browser tells its port, as mssql-jdbc does.
+ */
 export function defaultPort(cfg: ConnConfig): number | null {
   if (cfg.kind === "informix") return cfg.informixMode === "drda" ? 9089 : 9088;
+  if (cfg.kind === "mssql" && cfg.instance.trim()) return null;
   return engineOf(cfg.kind).port;
+}
+
+/**
+ * The patch that sets a SQL Server instance (plus `patch`): the port, if it is still the default 1433, is left empty
+ * so that SQL Server Browser gives the instance's own port. A port the user typed stays.
+ */
+export function withInstanceName(cfg: ConnConfig, instance: string, patch: Partial<ConnConfig> = {}): Partial<ConnConfig> {
+  const out: Partial<ConnConfig> = { ...patch, instance };
+  if (cfg.kind === "mssql" && instance.trim() && cfg.port === engineOf("mssql").port) out.port = null;
+  return out;
 }
 
 /** Whether a text looks like a JDBC URL (pasted in the server field, for example). */
