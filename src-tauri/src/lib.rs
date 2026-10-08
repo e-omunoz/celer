@@ -922,6 +922,13 @@ async fn migration_sources() -> Vec<migrate::SourceFile> {
     tauri::async_runtime::spawn_blocking(migrate::find_sources).await.unwrap_or_default()
 }
 
+/// DBeaver's encrypted credentials next to a listed data-sources.json: only when the user ticked «Importar también las
+/// contraseñas guardadas» and pressed Importar.
+#[tauri::command]
+async fn migration_dbeaver_credentials(path: String) -> CmdResult<Option<String>> {
+    tauri::async_runtime::spawn_blocking(move || migrate::dbeaver_credentials(&path)).await.map_err(err)?
+}
+
 // ───────────── Actualizaciones ─────────────
 
 #[tauri::command]
@@ -1144,6 +1151,7 @@ pub fn run() {
             driver_download_cancel,
             app_info,
             migration_sources,
+            migration_dbeaver_credentials,
             update_check,
             update_download,
             update_install,

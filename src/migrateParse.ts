@@ -1,5 +1,6 @@
-// Parsers for the migration assistant: DBeaver data-sources.json (+ encrypted credentials-config.json) and
-// DbVisualizer dbvis.xml → Celer connection configs. Pure functions (no store, no IPC) so they can be tested.
+// Parsers for the migration assistant: DBeaver data-sources.json and DbVisualizer dbvis.xml → Celer connection
+// configs. DBeaver's encrypted credentials-config.json is applied separately (applyDbeaverCredentials), only when the
+// user asks to import the saved passwords. Pure functions (no store, no IPC) so they can be tested.
 import { emptyConn, type ConnConfig, type DbKind } from "./types.ts";
 
 export interface MigrationSource {
@@ -7,7 +8,6 @@ export interface MigrationSource {
   project: string;
   path: string;
   text: string;
-  credentialsHex?: string | null;
 }
 
 export interface Candidate {
@@ -19,6 +19,12 @@ export interface Candidate {
   driver: string;
   status: "new" | "exists" | "unsupported";
   reason: string;
+  /** File it came from (DBeaver: its credentials-config.json sits next to it). */
+  sourcePath: string;
+  /** Id of the connection in that file (DBeaver keys its credentials by it). */
+  sourceId: string;
+  /** The tool says it keeps a password for this connection. */
+  savedPassword: boolean;
 }
 
 const TOOL_LABEL = { dbeaver: "DBeaver", dbvisualizer: "DbVisualizer" } as const;
@@ -96,7 +102,7 @@ function hexToBytes(hex: string) {
  * DBeaver's credentials-config.json: AES-128-CBC with DBeaver's fixed, publicly documented default key;
  * the first 16 bytes are the IV. Returns { "<connection id>": { "#connection": { user, password } } }.
  */
-async function decryptDbeaverCredentials(hex: string): Promise<Record<string, { "#connection"?: { user?: string; password?: string } }>> {
+export async function decryptDbeaverCredentials(hex: string): Promise<Record<string, { "#connection"?: { user?: string; password?: string } }>> {
   const data = hexToBytes(hex);
   if (data.length <= 16) return {};
   const key = await crypto.subtle.importKey("raw", hexToBytes("babb4a9f774ab853c96c2d653dfe544a"), { name: "AES-CBC" }, false, ["decrypt"]);
@@ -116,10 +122,9 @@ interface DbeaverConnection {
   configuration?: Record<string, unknown> & { host?: string; port?: string | number; database?: string; url?: string; user?: string; type?: string; server?: string };
 }
 
-export async function parseDbeaver(source: MigrationSource): Promise<Candidate[]> {
+/** DBeaver's connections, without credentials: the user comes from the plain configuration if it is there. */
+export function parseDbeaver(source: MigrationSource): Candidate[] {
   const doc = JSON.parse(source.text) as { connections?: Record<string, DbeaverConnection> };
-  let creds: Awaited<ReturnType<typeof decryptDbeaverCredentials>> = {};
-  if (source.credentialsHex) creds = await decryptDbeaverCredentials(source.credentialsHex).catch(() => ({}));
   const out: Candidate[] = [];
   for (const [id, c] of Object.entries(doc.connections ?? {})) {
     const conf = c.configuration ?? {};
@@ -133,9 +138,8 @@ export async function parseDbeaver(source: MigrationSource): Promise<Candidate[]
     cfg.port = Number(conf.port ?? fromUrl.port ?? cfg.port) || cfg.port;
     cfg.database = String(conf.database ?? fromUrl.database ?? "");
     cfg.instance = fromUrl.instance ?? "";
-    const cred = creds[id]?.["#connection"];
-    cfg.user = String(cred?.user ?? conf.user ?? cfg.user);
-    cfg.password = cred?.password ?? "";
+    cfg.user = String(conf.user ?? cfg.user);
+    cfg.password = "";
     cfg.production = conf.type === "prod";
     cfg.readOnly = Boolean(c["read-only"]);
     if (kind === "sqlite") {
@@ -145,9 +149,22 @@ export async function parseDbeaver(source: MigrationSource): Promise<Candidate[]
     }
     if (kind === "mssql" && cfg.host.includes("\\")) [cfg.host, cfg.instance] = cfg.host.split("\\");
     if (kind === "informix") applyInformix(cfg, fromUrl, conf.server, conf.properties as Record<string, unknown> | undefined);
-    out.push({ key: `dbeaver:${source.project}:${id}`, tool: "dbeaver", project: source.project, cfg, driver, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${c.provider ?? c.driver ?? "desconocido"})` });
+    out.push({ key: `dbeaver:${source.project}:${id}`, tool: "dbeaver", project: source.project, cfg, driver, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${c.provider ?? c.driver ?? "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: Boolean(c["save-password"]) });
   }
   return out;
+}
+
+/**
+ * The user and password DBeaver keeps for each connection (its credentials-config.json, hex-encoded, read only when
+ * the user ticked «Importar también las contraseñas guardadas») applied to the candidates that came from that file.
+ */
+export async function applyDbeaverCredentials(candidates: Candidate[], sourcePath: string, hex: string): Promise<Candidate[]> {
+  const creds = await decryptDbeaverCredentials(hex).catch(() => ({}) as Awaited<ReturnType<typeof decryptDbeaverCredentials>>);
+  return candidates.map((c) => {
+    const cred = c.tool === "dbeaver" && c.sourcePath === sourcePath ? creds[c.sourceId]?.["#connection"] : undefined;
+    if (!cred) return c;
+    return { ...c, cfg: { ...c.cfg, user: cred.user ?? c.cfg.user, password: cred.password ?? "" } };
+  });
 }
 
 // ---------------------------------------------------------------- DbVisualizer
@@ -185,7 +202,8 @@ export function parseDbVisualizer(source: MigrationSource): Candidate[] {
       cfg.database = "";
     }
     if (kind === "informix") applyInformix(cfg, fromUrl, vars.informixserver || vars["informix server"] || vars.servername);
-    out.push({ key: `dbvis:${db.getAttribute("id") ?? index}`, tool: "dbvisualizer", project: source.project, cfg, driver: driverName, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${driverName || "desconocido"})` });
+    const id = db.getAttribute("id") ?? String(index);
+    out.push({ key: `dbvis:${id}`, tool: "dbvisualizer", project: source.project, cfg, driver: driverName, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${driverName || "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: false });
   });
   return out;
 }

@@ -695,6 +695,9 @@ export function createDemoBackend(): Backend {
     async migrationSources() {
       return [];
     },
+    async migrationDbeaverCredentials() {
+      return null;
+    },
     // Browser demo: "?update" in the URL simulates a new release to design the update flow.
     async updateCheck() {
       const simulate = new URLSearchParams(location.search).has("update");
