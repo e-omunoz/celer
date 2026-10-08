@@ -2,6 +2,7 @@ import { CircleAlert, CircleCheck, Info, Search, TriangleAlert, X } from "lucide
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { commands } from "../commands";
 import { library, loadLibrary, openLibraryScript } from "../library";
+import { returnFocus } from "../focus";
 import { ObjIcon } from "../icons";
 import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state } from "../state";
 
@@ -176,6 +177,15 @@ export function Palette() {
   let list: HTMLDivElement | undefined;
   const [query, setQuery] = createSignal("");
   const [active, setActive] = createSignal(0);
+
+  // What had the focus when the palette opened: it gets it back when the palette closes.
+  let opener: Element | null = null;
+  createEffect((wasOpen: boolean) => {
+    const open = state.paletteOpen;
+    if (open && !wasOpen) opener = document.activeElement;
+    if (!open && wasOpen) returnFocus(opener);
+    return open;
+  }, false);
 
   createEffect(() => {
     if (state.paletteOpen) {

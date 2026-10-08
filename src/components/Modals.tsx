@@ -2,6 +2,7 @@ import { X } from "lucide-solid";
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { isTauri } from "../api";
 import { Mark } from "../brand/Mark";
+import { returnFocus } from "../focus";
 import { themeChoices } from "../commands";
 import {
   answerParams,
@@ -135,6 +136,9 @@ function ParamsDialog(props: { ask: NonNullable<typeof state.paramAsk> }) {
 }
 
 export function Dialog(props: { title: string; onClose: () => void; children: JSX.Element; wide?: boolean; small?: boolean; class?: string }) {
+  // Read before the children render (they focus their first field): it gets the focus back on close.
+  const opener = document.activeElement;
+  onCleanup(() => returnFocus(opener));
   onMount(() => {
     const key = (event: KeyboardEvent) => {
       // A shortcut being recorded takes Esc for itself (it cancels the recording, not the dialog).
