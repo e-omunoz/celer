@@ -36,6 +36,39 @@ struct Cursor {
     peeked: Option<Item>,
 }
 
+/// Familia del servidor según `SERVERPROPERTY('EngineEdition')`: decide qué SQL de catálogo y qué DDL se escriben.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Engine {
+    /// SQL Server, Azure SQL Database y Managed Instance, Azure SQL Edge, SQL database de Fabric.
+    SqlServer,
+    /// Azure Synapse dedicated SQL pool y Analytics Platform System / PDW (EngineEdition 6): tablas distribuidas,
+    /// claves solo NOT ENFORCED, sin claves foráneas, triggers, secuencias ni FOR XML.
+    Synapse,
+    /// Synapse serverless SQL pool y Warehouse / SQL analytics endpoint de Fabric (EngineEdition 11).
+    Warehouse,
+}
+
+impl Engine {
+    /// `version` (@@VERSION) cubre un PDW que no diera la edición.
+    fn detect(edition: i64, version: &str) -> Engine {
+        match edition {
+            6 => Engine::Synapse,
+            11 => Engine::Warehouse,
+            _ if version.contains("Parallel Data Warehouse") || version.contains("SQL Data Warehouse") => Engine::Synapse,
+            _ => Engine::SqlServer,
+        }
+    }
+
+    /// Lo que se añade a la descripción del servidor (la interfaz lo busca para el plan y la actividad).
+    fn label(self) -> Option<&'static str> {
+        match self {
+            Engine::SqlServer => None,
+            Engine::Synapse => Some("Azure Synapse dedicated / PDW"),
+            Engine::Warehouse => Some("Synapse serverless / Fabric Warehouse"),
+        }
+    }
+}
+
 pub struct MssqlDriver {
     cfg: ConnConfig,
     rt: tokio::runtime::Runtime,
@@ -46,6 +79,7 @@ pub struct MssqlDriver {
     autocommit: bool,
     in_tx: bool,
     showplan: bool,
+    engine: Engine,
 }
 
 impl MssqlDriver {
@@ -64,9 +98,16 @@ impl MssqlDriver {
             autocommit: true,
             in_tx: false,
             showplan: false,
+            engine: Engine::SqlServer,
         };
         if d.database.is_empty() {
             d.database = d.current_database().unwrap_or_default();
+        }
+        let edition = d
+            .query_rows("SELECT CAST(SERVERPROPERTY('EngineEdition') AS int), @@VERSION")
+            .unwrap_or_default();
+        if let Some(r) = edition.first() {
+            d.engine = Engine::detect(cell_i64(&r[0]), &cell_str(&r[1]));
         }
         Ok(d)
     }
@@ -193,7 +234,9 @@ impl MssqlDriver {
         let sql = sql.to_string();
         let (res, client) = self.rt.block_on(async move {
             let r: Result<Vec<Vec<Cell>>> = async {
-                let rows = client.simple_query(sql).await?.into_first_result().await?;
+                // Con el mensaje del servidor, como en las consultas del usuario (sin "Token error … on server …").
+                let stream = client.simple_query(sql).await.map_err(|e| anyhow!(friendly_error(&e)))?;
+                let rows = stream.into_first_result().await.map_err(|e| anyhow!(friendly_error(&e)))?;
                 Ok(rows.into_iter().map(row_to_cells).collect())
             }
             .await;
@@ -218,6 +261,16 @@ impl MssqlDriver {
             .and_then(|r| r.first().and_then(|r| r.first()).map(cell_i64))
             .unwrap_or(0)
             > 0;
+    }
+
+    /// Si una tabla tiene la carpeta `key` ("indexes", "fks", "triggers") en este servidor: Synapse dedicated no tiene
+    /// claves foráneas ni triggers, y Fabric Warehouse no tiene triggers ni índices.
+    fn has_table_folder(&self, key: &str) -> bool {
+        match self.engine {
+            Engine::SqlServer => true,
+            Engine::Synapse => key == "indexes",
+            Engine::Warehouse => key == "fks",
+        }
     }
 
     fn obj_id(&self, o: &ObjectRef) -> String {
@@ -301,12 +354,17 @@ impl MssqlDriver {
                 columns: key_cols.remove(&cell_i64(&r[0])).unwrap_or_default(),
             })
             .collect();
-        let fks = self.query_rows(&format!(
-            "SELECT fk.object_id, fk.name, QUOTENAME(rs.name) + '.' + QUOTENAME(rt.name), \
-               fk.delete_referential_action_desc, fk.update_referential_action_desc \
-             FROM {db}.sys.foreign_keys fk JOIN {db}.sys.tables rt ON rt.object_id = fk.referenced_object_id \
-             JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id WHERE fk.parent_object_id = {oid} ORDER BY fk.name"
-        ))?;
+        // Synapse dedicated no tiene claves foráneas.
+        let fks = if self.engine == Engine::Synapse {
+            Vec::new()
+        } else {
+            self.query_rows(&format!(
+                "SELECT fk.object_id, fk.name, QUOTENAME(rs.name) + '.' + QUOTENAME(rt.name), \
+                   fk.delete_referential_action_desc, fk.update_referential_action_desc \
+                 FROM {db}.sys.foreign_keys fk JOIN {db}.sys.tables rt ON rt.object_id = fk.referenced_object_id \
+                 JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id WHERE fk.parent_object_id = {oid} ORDER BY fk.name"
+            ))?
+        };
         let (mut own, mut referenced) = if fks.is_empty() { Default::default() } else { self.fk_columns(o, true)? };
         let foreign_keys = fks
             .iter()
@@ -322,12 +380,34 @@ impl MssqlDriver {
                 }
             })
             .collect();
-        let parts = TableParts {
+        let mut parts = TableParts {
             columns,
             indexes,
             foreign_keys,
+            ..Default::default()
         };
-        Ok(build_table_ddl(&self.qualified_name(o), &parts))
+        if self.engine == Engine::Synapse {
+            let policy = self.query_rows(&format!(
+                "SELECT distribution_policy_desc FROM {db}.sys.pdw_table_distribution_properties WHERE object_id = {oid}"
+            ))?;
+            parts.distribution = policy.first().map(|r| cell_str(&r[0])).unwrap_or_default();
+            let hash = self.query_rows(&format!(
+                "SELECT c.name FROM {db}.sys.pdw_column_distribution_properties d \
+                 JOIN {db}.sys.columns c ON c.object_id = d.object_id AND c.column_id = d.column_id \
+                 WHERE d.object_id = {oid} AND d.distribution_ordinal > 0 ORDER BY d.distribution_ordinal"
+            ))?;
+            parts.distribution_columns = quoted_list(&hash);
+            // column_store_order_ordinal no existe en PDW: sin él, el índice columnar se escribe sin ORDER.
+            let order = self
+                .query_rows(&format!(
+                    "SELECT c.name FROM {db}.sys.index_columns ic \
+                     JOIN {db}.sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
+                     WHERE ic.object_id = {oid} AND ic.column_store_order_ordinal > 0 ORDER BY ic.column_store_order_ordinal"
+                ))
+                .unwrap_or_default();
+            parts.order = quoted_list(&order);
+        }
+        Ok(build_table_ddl(self.engine, &self.qualified_name(o), &parts))
     }
 }
 
@@ -344,6 +424,11 @@ fn column_lists(rows: impl IntoIterator<Item = (i64, String)>) -> HashMap<i64, S
         list.push_str(&col);
     }
     out
+}
+
+/// Los nombres de la primera columna de cada fila, entre corchetes y separados por comas.
+fn quoted_list(rows: &[Vec<Cell>]) -> String {
+    rows.iter().map(|r| qi(&cell_str(&r[0]))).collect::<Vec<_>>().join(", ")
 }
 
 /// Un índice de la tabla (también el montón, `type_code` 0), con sus columnas clave ya escritas.
@@ -368,15 +453,20 @@ struct ForeignKeyDef {
 }
 
 /// Lo que se lee del catálogo para escribir el DDL de una tabla.
+#[derive(Default)]
 struct TableParts {
     /// Filas de `columns_query`.
     columns: Vec<Vec<Cell>>,
     indexes: Vec<IndexDef>,
     foreign_keys: Vec<ForeignKeyDef>,
+    /// Synapse dedicated: HASH, ROUND_ROBIN o REPLICATE, las columnas del HASH y las del ORDER del índice columnar.
+    distribution: String,
+    distribution_columns: String,
+    order: String,
 }
 
-/// Definición de una columna para CREATE TABLE.
-fn column_ddl(r: &[Cell]) -> String {
+/// Definición de una columna para CREATE TABLE. Fabric Warehouse no admite semilla en IDENTITY ni DEFAULT.
+fn column_ddl(r: &[Cell], engine: Engine) -> String {
     let name = cell_str(&r[0]);
     if cell_i64(&r[9]) == 1 {
         return format!("    {} AS {}", qi(&name), cell_str(&r[10]));
@@ -389,22 +479,30 @@ fn column_ddl(r: &[Cell]) -> String {
     );
     let mut l = format!("    {} {}", qi(&name), ty);
     if cell_i64(&r[6]) == 1 {
-        l.push_str(" IDENTITY(1,1)");
+        l.push_str(if engine == Engine::Warehouse {
+            " IDENTITY"
+        } else {
+            " IDENTITY(1,1)"
+        });
     }
     l.push_str(if cell_i64(&r[5]) == 1 {
         " NULL"
     } else {
         " NOT NULL"
     });
-    if let Cell::Text(d) = &r[8] {
-        l.push_str(&format!(" DEFAULT {d}"));
+    match &r[8] {
+        Cell::Text(d) if engine != Engine::Warehouse => l.push_str(&format!(" DEFAULT {d}")),
+        _ => {}
     }
     l
 }
 
 /// CREATE TABLE con su clave primaria y foráneas, y después los demás índices.
-fn build_table_ddl(table: &str, t: &TableParts) -> String {
-    let mut lines: Vec<String> = t.columns.iter().map(|r| column_ddl(r)).collect();
+fn build_table_ddl(engine: Engine, table: &str, t: &TableParts) -> String {
+    if engine != Engine::SqlServer {
+        return warehouse_table_ddl(engine, table, t);
+    }
+    let mut lines: Vec<String> = t.columns.iter().map(|r| column_ddl(r, engine)).collect();
     let indexes: Vec<&IndexDef> = t.indexes.iter().filter(|i| i.type_code > 0).collect();
     for i in indexes.iter().filter(|i| i.primary) {
         let clustered = if i.type_desc.starts_with("CLUSTERED") {
@@ -448,6 +546,71 @@ fn build_table_ddl(table: &str, t: &TableParts) -> String {
             table,
             i.columns
         ));
+    }
+    out
+}
+
+/// CREATE TABLE para Synapse dedicated / PDW, con la distribución y el almacenamiento (que allí deciden el
+/// rendimiento), o para Fabric Warehouse. Las claves primarias y únicas solo existen NOT ENFORCED y se añaden con
+/// ALTER TABLE, que admite varias columnas; las foráneas no existen en Synapse, y en Fabric también son NOT ENFORCED.
+fn warehouse_table_ddl(engine: Engine, table: &str, t: &TableParts) -> String {
+    let synapse = engine == Engine::Synapse;
+    let lines: Vec<String> = t.columns.iter().map(|r| column_ddl(r, engine)).collect();
+    let mut out = format!("CREATE TABLE {} (\n{}\n)", table, lines.join(",\n"));
+    if synapse {
+        let mut options = Vec::new();
+        match t.distribution.as_str() {
+            "HASH" if !t.distribution_columns.is_empty() => {
+                options.push(format!("DISTRIBUTION = HASH({})", t.distribution_columns))
+            }
+            "ROUND_ROBIN" | "REPLICATE" => options.push(format!("DISTRIBUTION = {}", t.distribution)),
+            _ => {}
+        }
+        // El montón (0), el índice agrupado (1) o el columnar agrupado (5): la tabla tiene uno y solo uno.
+        match t.indexes.iter().find(|i| matches!(i.type_code, 0 | 1 | 5)) {
+            Some(i) if i.type_code == 0 => options.push("HEAP".into()),
+            Some(i) if i.type_code == 1 => options.push(format!("CLUSTERED INDEX ({})", i.columns)),
+            Some(_) if !t.order.is_empty() => {
+                options.push(format!("CLUSTERED COLUMNSTORE INDEX ORDER ({})", t.order))
+            }
+            Some(_) => options.push("CLUSTERED COLUMNSTORE INDEX".into()),
+            None => {}
+        }
+        if !options.is_empty() {
+            out.push_str(&format!("\nWITH (\n    {}\n)", options.join(",\n    ")));
+        }
+    }
+    out.push_str(";\n");
+    let indexes: Vec<&IndexDef> = t.indexes.iter().filter(|i| i.type_code > 0).collect();
+    for i in indexes.iter().filter(|i| i.primary) {
+        out.push_str(&format!(
+            "\nALTER TABLE {table} ADD CONSTRAINT {} PRIMARY KEY NONCLUSTERED ({}) NOT ENFORCED;",
+            qi(&i.name),
+            i.columns
+        ));
+    }
+    for i in indexes.iter().filter(|i| i.unique_constraint && !i.primary) {
+        out.push_str(&format!(
+            "\nALTER TABLE {table} ADD CONSTRAINT {} UNIQUE ({}) NOT ENFORCED;",
+            qi(&i.name),
+            i.columns
+        ));
+    }
+    if synapse {
+        // Los demás índices no agrupados (Synapse no tiene índices únicos ni columnares no agrupados).
+        for i in indexes.iter().filter(|i| i.type_code == 2 && !i.primary && !i.unique_constraint) {
+            out.push_str(&format!("\nCREATE INDEX {} ON {table} ({});", qi(&i.name), i.columns));
+        }
+    } else {
+        for fk in &t.foreign_keys {
+            out.push_str(&format!(
+                "\nALTER TABLE {table} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) NOT ENFORCED;",
+                qi(&fk.name),
+                fk.columns,
+                fk.target,
+                fk.target_columns
+            ));
+        }
     }
     out
 }
@@ -534,6 +697,12 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
 
 fn friendly_error(e: &tiberius::error::Error) -> String {
     match e {
+        // El analizador de Synapse dedicated / PDW rechaza lo que no existe allí (FOR XML, SHOWPLAN_XML, OFFSET…).
+        tiberius::error::Error::Server(t) if t.code() == 103010 => format!(
+            "Azure Synapse no admite esta sintaxis (Msg 103010, línea {}): {}",
+            t.line(),
+            t.message()
+        ),
         tiberius::error::Error::Server(t) => format!(
             "Msg {}, nivel {}, línea {}: {}",
             t.code(),
@@ -1013,6 +1182,8 @@ impl Driver for MssqlDriver {
                 ("Secuencias", "sequences"),
             ]
             .iter()
+            // Synapse y Fabric Warehouse no tienen sinónimos ni secuencias.
+            .filter(|(_, key)| self.engine == Engine::SqlServer || !matches!(*key, "synonyms" | "sequences"))
             .map(|(label, key)| {
                 MetaNode::branch(
                     *label,
@@ -1131,6 +1302,9 @@ impl Driver for MssqlDriver {
                         ("Claves foráneas", "fks"),
                         ("Triggers", "triggers"),
                     ] {
+                        if !self.has_table_folder(key) {
+                            continue;
+                        }
                         let mut p = base.clone();
                         p.push(key.to_string());
                         nodes.push(MetaNode::branch(label, "folder", p));
@@ -1142,6 +1316,9 @@ impl Driver for MssqlDriver {
                 let o = ObjectRef::new(db, schema, name, "table");
                 let d = qi(db);
                 let oid = self.obj_id(&o);
+                if !self.has_table_folder(sub) {
+                    return Ok(vec![]);
+                }
                 match *sub {
                     "indexes" => {
                         let rows = self.query_rows(&format!(
@@ -1351,12 +1528,11 @@ impl Driver for MssqlDriver {
             .unwrap_or("")
             .trim()
             .to_string();
-        Ok(format!(
-            "{} — {} ({})",
-            first,
-            cell_str(&r[1]),
-            cell_str(&r[0])
-        ))
+        let mut info = format!("{} — {} ({})", first, cell_str(&r[1]), cell_str(&r[0]));
+        if let Some(label) = self.engine.label() {
+            info.push_str(&format!(" · {label}"));
+        }
+        Ok(info)
     }
 
     fn canceller(&self) -> Canceller {
@@ -1434,10 +1610,83 @@ mod tests {
                 on_delete: "CASCADE".into(),
                 on_update: "NO_ACTION".into(),
             }],
+            ..Default::default()
         };
         assert_eq!(
-            build_table_ddl("[db].[dbo].[t]", &parts),
+            build_table_ddl(Engine::SqlServer, "[db].[dbo].[t]", &parts),
             "CREATE TABLE [db].[dbo].[t] (\n    [id] int IDENTITY(1,1) NOT NULL,\n    [nombre] nvarchar(100) NOT NULL,\n    [activo] bit NULL DEFAULT ((1)),\n    [parent_id] int NULL,\n    CONSTRAINT [PK_t] PRIMARY KEY CLUSTERED ([id]),\n    CONSTRAINT [FK_t_p] FOREIGN KEY ([parent_id]) REFERENCES [dbo].[p] ([id]) ON DELETE CASCADE\n);\n\nCREATE UNIQUE NONCLUSTERED INDEX [IX_t_nombre] ON [db].[dbo].[t] ([nombre] DESC, [activo]);"
+        );
+    }
+
+    #[test]
+    fn engine_from_the_edition() {
+        assert_eq!(Engine::detect(3, "Microsoft SQL Server 2022 (RTM) - 16.0.1000.6"), Engine::SqlServer);
+        assert_eq!(Engine::detect(5, "Microsoft SQL Azure (RTM) - 12.0.2000.8"), Engine::SqlServer);
+        assert_eq!(Engine::detect(6, "Microsoft Azure SQL Data Warehouse - 10.0.15225.0"), Engine::Synapse);
+        assert_eq!(Engine::detect(0, "Microsoft SQL Server 2016 Parallel Data Warehouse (10.0.8730.0)"), Engine::Synapse);
+        assert_eq!(Engine::detect(11, "Microsoft Azure SQL Data Warehouse 12.0.2000.8"), Engine::Warehouse);
+        assert_eq!(Engine::detect(12, "Microsoft SQL Azure (RTM) - 12.0.2000.8"), Engine::SqlServer);
+    }
+
+    /// Una tabla de hechos de Synapse: la clave foránea que no puede existir allí no se escribe.
+    fn synapse_table(distribution: &str, distribution_columns: &str, storage: IndexDef, order: &str) -> TableParts {
+        TableParts {
+            columns: vec![
+                col("id", "bigint", 8, false, true, None),
+                col("cliente", "int", 4, false, false, None),
+                col("importe", "money", 8, true, false, Some("((0))")),
+                col("alta", "date", 3, true, false, None),
+            ],
+            indexes: vec![
+                index("PK_ventas", 2, "NONCLUSTERED", true, true, "[id]"),
+                storage,
+                index("IX_ventas_alta", 2, "NONCLUSTERED", false, false, "[alta]"),
+                index("UQ_ventas", 2, "NONCLUSTERED", false, true, "[cliente], [alta]"),
+            ],
+            foreign_keys: vec![ForeignKeyDef {
+                name: "FK_ventas_cliente".into(),
+                columns: "[cliente]".into(),
+                target: "[dbo].[clientes]".into(),
+                target_columns: "[id]".into(),
+                on_delete: "NO_ACTION".into(),
+                on_update: "NO_ACTION".into(),
+            }],
+            distribution: distribution.into(),
+            distribution_columns: distribution_columns.into(),
+            order: order.into(),
+        }
+    }
+
+    const SYNAPSE_COLUMNS: &str = "CREATE TABLE [dw].[dbo].[ventas] (\n    [id] bigint IDENTITY(1,1) NOT NULL,\n    [cliente] int NOT NULL,\n    [importe] money NULL DEFAULT ((0)),\n    [alta] date NULL\n)";
+    const SYNAPSE_KEYS: &str = "\nALTER TABLE [dw].[dbo].[ventas] ADD CONSTRAINT [PK_ventas] PRIMARY KEY NONCLUSTERED ([id]) NOT ENFORCED;\nALTER TABLE [dw].[dbo].[ventas] ADD CONSTRAINT [UQ_ventas] UNIQUE ([cliente], [alta]) NOT ENFORCED;\nCREATE INDEX [IX_ventas_alta] ON [dw].[dbo].[ventas] ([alta]);";
+
+    #[test]
+    fn table_ddl_on_synapse() {
+        let cci = index("ClusteredIndex_ventas", 5, "CLUSTERED COLUMNSTORE", false, false, "");
+        let ddl = build_table_ddl(Engine::Synapse, "[dw].[dbo].[ventas]", &synapse_table("HASH", "[cliente], [alta]", cci, "[alta]"));
+        assert_eq!(ddl, format!("{SYNAPSE_COLUMNS}\nWITH (\n    DISTRIBUTION = HASH([cliente], [alta]),\n    CLUSTERED COLUMNSTORE INDEX ORDER ([alta])\n);\n{SYNAPSE_KEYS}"));
+
+        let heap = index("", 0, "HEAP", false, false, "");
+        let ddl = build_table_ddl(Engine::Synapse, "[dw].[dbo].[ventas]", &synapse_table("ROUND_ROBIN", "", heap, ""));
+        assert_eq!(ddl, format!("{SYNAPSE_COLUMNS}\nWITH (\n    DISTRIBUTION = ROUND_ROBIN,\n    HEAP\n);\n{SYNAPSE_KEYS}"));
+
+        let clustered = index("CI_ventas", 1, "CLUSTERED", false, false, "[alta] DESC, [id]");
+        let ddl = build_table_ddl(Engine::Synapse, "[dw].[dbo].[ventas]", &synapse_table("REPLICATE", "", clustered, ""));
+        assert_eq!(ddl, format!("{SYNAPSE_COLUMNS}\nWITH (\n    DISTRIBUTION = REPLICATE,\n    CLUSTERED INDEX ([alta] DESC, [id])\n);\n{SYNAPSE_KEYS}"));
+        assert!(!ddl.contains("FOREIGN KEY") && !ddl.contains("FOR XML"));
+    }
+
+    #[test]
+    fn table_ddl_on_fabric_warehouse() {
+        let heap = index("", 0, "HEAP", false, false, "");
+        let mut parts = synapse_table("", "", heap, "");
+        parts.indexes.retain(|i| i.primary || i.type_code == 0);
+        let ddl = build_table_ddl(Engine::Warehouse, "[wh].[dbo].[ventas]", &parts);
+        assert_eq!(
+            ddl,
+            "CREATE TABLE [wh].[dbo].[ventas] (\n    [id] bigint IDENTITY NOT NULL,\n    [cliente] int NOT NULL,\n    [importe] money NULL,\n    [alta] date NULL\n);\n\
+             \nALTER TABLE [wh].[dbo].[ventas] ADD CONSTRAINT [PK_ventas] PRIMARY KEY NONCLUSTERED ([id]) NOT ENFORCED;\
+             \nALTER TABLE [wh].[dbo].[ventas] ADD CONSTRAINT [FK_ventas_cliente] FOREIGN KEY ([cliente]) REFERENCES [dbo].[clientes] ([id]) NOT ENFORCED;"
         );
     }
 
