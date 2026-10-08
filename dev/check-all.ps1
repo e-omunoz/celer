@@ -31,6 +31,8 @@ Step "typescript" { & $node node_modules\typescript\bin\tsc --noEmit -p . }
 Step "sql context" { & $node --experimental-strip-types --no-warnings dev\sqlcontext-check.ts }
 Step "templates and parameters" { & $node --experimental-strip-types --no-warnings dev\snippets-check.ts }
 Step "ER layout" { & $node --experimental-strip-types --no-warnings dev\erlayout-check.ts }
+Step "plan readers" { & $node --experimental-strip-types --no-warnings dev\plan-check.ts }
+if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
 
 Restart-App -Build:(-not $NoBuild)
@@ -41,6 +43,7 @@ Step "generated scripts" { & $node dev\generate-check.mjs }
 Step "misc (startup script, pins, undo)" { & $node dev\misc-check.mjs }
 Step "Gib companion" { & $node dev\gib-companion-check.mjs "$env:TEMP\gib-companion" }
 Step "ER diagram" { & $node dev\er-check.mjs "$env:TEMP\celer-er" }
+Step "execution plans" { & $node dev\plan-view-check.mjs "$env:TEMP\celer-plan" }
 Restart-App
 Step "restore (prepare)" { & $node dev\restore-check.mjs prepare }
 $exe = "$env:CARGO_TARGET_DIR\debug\celer.exe"

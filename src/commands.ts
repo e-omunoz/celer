@@ -59,6 +59,7 @@ export function commands(): Command[] {
     { id: "run", label: "Ejecutar sentencia o selección", group: "Consulta", keys: "Ctrl+Intro", run: () => void runActive("statement"), enabled: sqlOnly },
     { id: "run-script", label: "Ejecutar script completo", group: "Consulta", keys: "Ctrl+Mayús+Intro", run: () => void runActive("script"), enabled: sqlOnly },
     { id: "explain", label: "Plan de ejecución (EXPLAIN)", group: "Consulta", keys: "Ctrl+Mayús+E", run: () => void runActive("explain"), enabled: sqlOnly },
+    { id: "explain-analyze", label: "Plan real: ejecuta y mide (EXPLAIN ANALYZE)", group: "Consulta", run: () => void runActive("analyze"), enabled: sqlOnly },
     { id: "stop", label: "Detener ejecución", group: "Consulta", keys: "Ctrl+F2", run: () => void cancelActive() },
     { id: "format", label: "Formatear SQL", group: "Consulta", keys: "Ctrl+Alt+L", run: formatActive, enabled: sqlOnly },
     { id: "commit", label: "Commit", group: "Transacción", keys: "Ctrl+Alt+Mayús+C", run: () => void commitActive(false), enabled: () => Boolean(activeSql()?.inTransaction) },

@@ -1,0 +1,25 @@
+[
+  {
+    "results": [
+      {
+        "columns": [
+          {
+            "name": "EXPLAIN",
+            "typeName": "varchar",
+            "kind": "text"
+          }
+        ],
+        "rows": [
+          [
+            "{\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost\": 0.01371187,\n    \"filesort\": {\n      \"sort_key\": \"count(0) desc\",\n      \"temporary_table\": {\n        \"nested_loop\": [\n          {\n            \"table\": {\n              \"table_name\": \"o\",\n              \"access_type\": \"index\",\n              \"possible_keys\": [\"ix_orders_customer_date\"],\n              \"key\": \"ix_orders_customer_date\",\n              \"key_length\": \"11\",\n              \"used_key_parts\": [\"customer_id\", \"ordered_at\"],\n              \"loops\": 1,\n              \"rows\": 6,\n              \"cost\": 0.00752603,\n              \"filtered\": 100,\n              \"using_index\": true\n            }\n          },\n          {\n            \"table\": {\n              \"table_name\": \"c\",\n              \"access_type\": \"eq_ref\",\n              \"possible_keys\": [\"PRIMARY\"],\n              \"key\": \"PRIMARY\",\n              \"key_length\": \"4\",\n              \"used_key_parts\": [\"id\"],\n              \"ref\": [\"celer.o.customer_id\"],\n              \"loops\": 6,\n              \"rows\": 1,\n              \"cost\": 0.00618584,\n              \"filtered\": 100\n            }\n          }\n        ]\n      }\n    }\n  }\n}"
+          ]
+        ],
+        "hasMore": false,
+        "rowsAffected": null
+      }
+    ],
+    "messages": [],
+    "elapsedMs": 107,
+    "inTransaction": false
+  }
+]

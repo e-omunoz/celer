@@ -1,0 +1,61 @@
+[
+  {
+    "results": [
+      {
+        "columns": [
+          {
+            "name": "id",
+            "typeName": "any",
+            "kind": "other"
+          },
+          {
+            "name": "parent",
+            "typeName": "any",
+            "kind": "other"
+          },
+          {
+            "name": "notused",
+            "typeName": "any",
+            "kind": "other"
+          },
+          {
+            "name": "detail",
+            "typeName": "any",
+            "kind": "other"
+          }
+        ],
+        "rows": [
+          [
+            9,
+            0,
+            139,
+            "SEARCH p USING INDEX idx_pedidos_estado (estado=?)"
+          ],
+          [
+            14,
+            0,
+            38,
+            "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)"
+          ],
+          [
+            17,
+            0,
+            0,
+            "USE TEMP B-TREE FOR GROUP BY"
+          ],
+          [
+            53,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ],
+        "hasMore": false,
+        "rowsAffected": null
+      }
+    ],
+    "messages": [],
+    "elapsedMs": 0,
+    "inTransaction": false
+  }
+]

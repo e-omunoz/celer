@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, formatSql, rowsLabel, isMutating, needsProductionConfirm, sqlLiteral, statementAt, wherePosition } from "./sql";
+import { cellText, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, sqlLiteral, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -22,6 +22,7 @@ import type {
 import { defaultSettings, emptyConn, engineOf } from "./types";
 import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
 import type { ErEdge, ErTable } from "./erLayout";
+import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, type Plan } from "./plan";
 import type { AiMessage } from "./ai";
 
 export type InspectorMode = "value" | "record" | "history" | "ai";
@@ -66,6 +67,9 @@ export interface SqlTab {
   /** The .sql file the console was opened from or saved to (Ctrl+S writes there), and its encoding. */
   filePath?: string;
   fileEncoding?: string;
+  /** The last execution plan (Ctrl+Shift+E), shown in its own result tab. */
+  plan: { plan: Plan; sql: string } | null;
+  activePlan: boolean;
   /** Results kept aside with the pin button: they survive the next runs until closed. */
   pinned: PinnedResult[];
   /** The pinned result on show instead of the current ones (null: the current ones). */
@@ -520,6 +524,8 @@ function blankSql(id: string, connId: string | null = null, sql = "", title = "c
     lastSql: "",
     runId: 0,
     resultsSql: "",
+    plan: null,
+    activePlan: false,
     pinned: [],
     activePinned: null,
   };
@@ -1167,20 +1173,12 @@ export function formatMs(ms: number | null | undefined) {
   return `${m} min ${Math.round((ms % 60000) / 1000)} s`;
 }
 
-export async function runActive(mode: "statement" | "script" | "explain") {
+export async function runActive(mode: "statement" | "script" | "explain" | "analyze") {
   const current = activeSql();
   if (!current || current.running) return;
   const conn = connectionById(current.connId);
   let sql = current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
   if (!sql) return;
-  if (mode === "explain") {
-    const prefix = explainPrefix(conn?.kind);
-    if (!prefix) {
-      notify("EXPLAIN no está disponible para este motor", "warning");
-      return;
-    }
-    sql = `${prefix} ${sql.replace(/;\s*$/, "")}`;
-  }
   // Parameters (:name, ?, ${name}): ask for their values and write them in as literals.
   if (state.settings.askParams) {
     const refs = findParams(sql, conn?.kind);
@@ -1190,6 +1188,7 @@ export async function runActive(mode: "statement" | "script" | "explain") {
       sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
     }
   }
+  if (mode === "explain" || mode === "analyze") return explainStatement(current.id, sql.replace(/;\s*$/, ""), mode === "analyze");
   if (conn?.production && state.settings.confirmMutations && needsProductionConfirm(sql, conn.kind)) {
     const ok = await confirmDialog(
       `Ejecutar en ${conn.name} (producción)`,
@@ -1224,6 +1223,7 @@ export async function runActive(mode: "statement" | "script" | "explain") {
       results: output.results,
       activeResult: firstGrid >= 0 ? firstGrid : -1,
       activePinned: null,
+      activePlan: false,
       resultsSql: sql,
       messages: output.messages,
       elapsedMs: output.elapsedMs,
@@ -1248,6 +1248,69 @@ export async function runActive(mode: "statement" | "script" | "explain") {
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
     if (message.includes("IBM_DRIVER_MISSING")) setState("settingsOpen", true);
+  }
+}
+
+/** ANALYZE runs the statement: only for reads, on engines whose analyzed plan Celer reads (PostgreSQL, MariaDB). */
+export function canAnalyze(tab: SqlTab, sql: string): boolean {
+  const kind = kindOf(tab.connId);
+  const engineOk = kind === "postgres" || (kind === "mysql" && /mariadb/i.test(tab.serverInfo || state.sessions[tab.connId ?? ""]?.serverInfo || ""));
+  return engineOk && /^(SELECT|WITH|VALUES|TABLE)$/.test(firstKeyword(sql)) && !isMutating(sql, kind);
+}
+
+/**
+ * The execution plan of a statement, as a tree in its own result tab (the current results stay). Engines
+ * without a plan reader show the raw EXPLAIN output instead.
+ */
+export async function explainStatement(tabId: string, sql: string, analyze = false) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "sql" || tab.running) return;
+  const kind = kindOf(tab.connId);
+  if (analyze && !canAnalyze(tab, sql)) {
+    notify("ANALYZE solo se ofrece para consultas de lectura en PostgreSQL y MariaDB", "warning");
+    return;
+  }
+  const prefix = explainPrefix(kind);
+  if (!prefix && kind !== "mssql") {
+    notify("El plan de ejecución no está disponible para este motor", "warning");
+    return;
+  }
+  patchTab(tabId, { running: true, startedAt: Date.now(), error: "" });
+  const token = tokenOf(tabId);
+  let session = "";
+  try {
+    const ready = await ensureSqlSession(tab);
+    session = ready.sessionId!;
+    const mariadb = /mariadb/i.test(ready.serverInfo);
+    let plan: Plan;
+    if (kind === "postgres") {
+      const out = await api().execute(session, `EXPLAIN (FORMAT JSON, VERBOSE, COSTS${analyze ? ", ANALYZE, BUFFERS" : ""}) ${sql}`, 10);
+      plan = parsePostgresPlan(String(out.results[0]?.rows[0]?.[0] ?? "[]"));
+    } else if (kind === "mysql") {
+      const out = await api().execute(session, `${analyze && mariadb ? "ANALYZE" : "EXPLAIN"} FORMAT=JSON ${sql}`, 10);
+      plan = parseMysqlPlan(String(out.results[0]?.rows[0]?.[0] ?? "{}"));
+      plan.engine = mariadb ? "MariaDB" : "MySQL";
+    } else if (kind === "sqlite") {
+      const out = await api().execute(session, `EXPLAIN QUERY PLAN ${sql}`, 10_000);
+      plan = parseSqlitePlan(out.results[0]?.rows ?? []);
+    } else {
+      // SQL Server: the XML plan, without running the statement.
+      await api().execute(session, "SET SHOWPLAN_XML ON", 1);
+      try {
+        const out = await api().execute(session, sql, 10);
+        plan = parseMssqlPlan(String(out.results.find((r) => r.columns.length)?.rows[0]?.[0] ?? ""));
+      } finally {
+        await api().execute(session, "SET SHOWPLAN_XML OFF", 1).catch(() => {});
+      }
+    }
+    if (tokenOf(tabId) !== token) return;
+    patchTab(tabId, { running: false, startedAt: null, plan: { plan, sql }, activePlan: true });
+  } catch (err) {
+    if (tokenOf(tabId) !== token) return;
+    const message = errorText(err);
+    patchTab(tabId, { running: false, startedAt: null, error: message, activePlan: false, activePinned: null, activeResult: -1 });
+    pushOutput(tabId, { at: Date.now(), sql: `EXPLAIN ${sql}`, ok: false, text: message, elapsedMs: null });
+    gib("query-error", { detail: message });
   }
 }
 
@@ -2169,7 +2232,11 @@ export function renameTab(id: string, title: string) {
 }
 
 export function setActiveResult(tabId: string, index: number) {
-  patchTab(tabId, { activeResult: index, activePinned: null });
+  patchTab(tabId, { activeResult: index, activePinned: null, activePlan: false });
+}
+
+export function showPlan(tabId: string) {
+  patchTab(tabId, { activePlan: true, activePinned: null });
 }
 
 /**
@@ -2193,7 +2260,7 @@ export function pinResult(tabId: string) {
 }
 
 export function showPinned(tabId: string, pinId: string) {
-  patchTab(tabId, { activePinned: pinId });
+  patchTab(tabId, { activePinned: pinId, activePlan: false });
 }
 
 export function unpinResult(tabId: string, pinId: string) {

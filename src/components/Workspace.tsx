@@ -1,4 +1,5 @@
 import { allSnippets } from "../snippets";
+import { PlanView } from "./PlanView";
 import {
   AlignLeft,
   ArrowDownToLine,
@@ -64,6 +65,7 @@ import {
   openScript,
   pinResult,
   revertTableChange,
+  showPlan,
   showPinned,
   unpinResult,
   reloadTable,
@@ -422,20 +424,25 @@ function SqlPane(props: { tab: SqlTab }) {
       <div class="hsplit" onMouseDown={resize} />
       <div class="results">
         <div class="results-head">
-          <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1 && !props.tab.activePinned, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
+          <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1 && !props.tab.activePinned && !props.tab.activePlan, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
             <Show when={props.tab.error} fallback={<FileCode2 size={13} />}><CircleAlert size={13} /></Show>
             Salida
             <Show when={props.tab.output.length}><small>{props.tab.output.length}</small></Show>
           </button>
           <For each={gridResults()}>
             {({ item, index }) => (
-              <button type="button" class="rtab" classList={{ on: index === props.tab.activeResult && !props.tab.activePinned }} onClick={() => setActiveResult(props.tab.id, index)}>
+              <button type="button" class="rtab" classList={{ on: index === props.tab.activeResult && !props.tab.activePinned && !props.tab.activePlan }} onClick={() => setActiveResult(props.tab.id, index)}>
                 <Show when={item.columns.length} fallback={<Rows3 size={13} />}><ObjIcon kind="table" size={13} /></Show>
                 {item.columns.length ? `Resultado ${gridResults().filter((r) => r.item.columns.length && r.index <= index).length}` : "Actualización"}
                 <small>{item.columns.length ? `${item.rows.length.toLocaleString()}${item.hasMore ? "+" : ""}` : (item.rowsAffected ?? 0).toLocaleString()}</small>
               </button>
             )}
           </For>
+          <Show when={props.tab.plan}>
+            <button type="button" class="rtab" classList={{ on: props.tab.activePlan }} title={props.tab.plan!.sql} onClick={() => showPlan(props.tab.id)}>
+              <Gauge size={13} /> Plan
+            </button>
+          </Show>
           <For each={props.tab.pinned}>
             {(pin) => (
               <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned }} title={pin.sql}>
@@ -466,7 +473,7 @@ function SqlPane(props: { tab: SqlTab }) {
           <Show when={props.tab.running}>
             <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}</span>
           </Show>
-          <Show when={!props.tab.running && result()?.columns.length}>
+          <Show when={!props.tab.running && !props.tab.activePlan && result()?.columns.length}>
             <span class="muted small">
               <Show when={filtering()} fallback={<>{rowsLabel(result()?.rows.length ?? 0, result()?.hasMore)}{pinned() ? "" : ` · ${formatMs(props.tab.elapsedMs)}`}</>}>
                 {shownRows().length.toLocaleString()} de {rowsLabel(result()?.rows.length ?? 0, result()?.hasMore)}
@@ -491,6 +498,9 @@ function SqlPane(props: { tab: SqlTab }) {
           <div class="progress-bar" />
         </Show>
         <Switch>
+          <Match when={props.tab.activePlan && props.tab.plan}>
+            {(view) => <PlanView tab={props.tab} plan={view().plan} sql={view().sql} />}
+          </Match>
           <Match when={props.tab.activeResult === -1 && !pinned()}>
             <OutputLog tab={props.tab} />
           </Match>

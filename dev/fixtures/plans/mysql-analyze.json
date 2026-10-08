@@ -1,0 +1,25 @@
+[
+  {
+    "results": [
+      {
+        "columns": [
+          {
+            "name": "ANALYZE",
+            "typeName": "varchar",
+            "kind": "text"
+          }
+        ],
+        "rows": [
+          [
+            "{\n  \"query_optimization\": {\n    \"r_total_time_ms\": 0.179564551\n  },\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost\": 0.00345856,\n    \"r_loops\": 1,\n    \"r_total_time_ms\": 0.036039223,\n    \"nested_loop\": [\n      {\n        \"table\": {\n          \"table_name\": \"events\",\n          \"access_type\": \"ref\",\n          \"possible_keys\": [\"ix_events_kind_time\"],\n          \"key\": \"ix_events_kind_time\",\n          \"key_length\": \"82\",\n          \"used_key_parts\": [\"kind\"],\n          \"ref\": [\"const\"],\n          \"loops\": 1,\n          \"r_loops\": 1,\n          \"rows\": 1,\n          \"r_rows\": 0,\n          \"cost\": 0.00345856,\n          \"r_table_time_ms\": 0.018956932,\n          \"r_other_time_ms\": 0.001904716,\n          \"r_engine_stats\": {\n            \"pages_accessed\": 2\n          },\n          \"filtered\": 100,\n          \"r_filtered\": 100,\n          \"index_condition\": \"`events`.kind = 'click'\"\n        }\n      }\n    ]\n  }\n}"
+          ]
+        ],
+        "hasMore": false,
+        "rowsAffected": null
+      }
+    ],
+    "messages": [],
+    "elapsedMs": 0,
+    "inTransaction": false
+  }
+]

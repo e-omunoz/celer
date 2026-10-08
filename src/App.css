@@ -1583,3 +1583,38 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .er-mark { fill: none; stroke: color-mix(in srgb, var(--text-muted) 75%, transparent); stroke-width: 1.4; }
 .er-head > .muted.small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .er-head > b, .er-title, .er-zoom { white-space: nowrap; flex: none; }
+
+/* ============================================================================
+   Execution plan
+   ========================================================================== */
+
+.plan-view { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+.plan-head { display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.plan-head > b { font-size: 13px; }
+.plan-head .tag.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, var(--border)); }
+.plan-warn-chip { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.plan-cols, .plan-row { display: grid; grid-template-columns: minmax(260px, 1fr) 90px 160px; align-items: center; column-gap: 12px; }
+.plan-tree.analyzed .plan-row, .plan-view:has(.plan-tree.analyzed) .plan-cols { grid-template-columns: minmax(260px, 1fr) 90px 90px 90px 160px; }
+.plan-cols { flex: none; padding: 5px 12px 5px 8px; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid var(--border); }
+.plan-tree { flex: 1; overflow: auto; padding: 4px 0 12px; }
+.plan-row { min-height: 28px; padding-right: 12px; cursor: pointer; border-left: 2px solid transparent; }
+.plan-row:hover { background: var(--hover); }
+.plan-row.selected { background: var(--selection); border-left-color: var(--accent); }
+.plan-op { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; }
+.plan-op b { font-weight: 600; white-space: nowrap; }
+.plan-target { color: var(--syntax-table, var(--text-muted)); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-twist, .plan-twist-space { flex: none; width: 16px; height: 16px; display: inline-grid; place-items: center; color: var(--text-faint); }
+.plan-twist svg { transition: transform 120ms; }
+.plan-twist.open svg { transform: rotate(90deg); }
+.plan-warn-icon { flex: none; color: var(--warning); }
+.plan-num { text-align: right; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.plan-num.off { color: var(--warning); font-weight: 600; }
+.plan-bar { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); overflow: hidden; }
+.plan-bar i { display: block; height: 100%; border-radius: 4px; background: color-mix(in srgb, var(--accent) 70%, transparent); }
+.plan-bar i.hot { background: var(--accent); }
+.plan-detail { margin: 2px 12px 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); font-size: 12px; }
+.plan-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; }
+.plan-detail dt { color: var(--text-muted); }
+.plan-detail dd { margin: 0; font-family: var(--mono); word-break: break-word; }
+.plan-warning { display: flex; align-items: flex-start; gap: 6px; margin: 0 0 8px; color: var(--warning); line-height: 1.45; }
+.plan-warning svg { flex: none; margin-top: 2px; }

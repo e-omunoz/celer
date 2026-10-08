@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan" Version="1.564" Build="16.0.1000.6">
+  <BatchSequence>
+    <Batch>
+      <Statements>
+        <StmtSimple StatementText="SELECT c.nombre, count(*) FROM dbo.clientes c JOIN dbo.pedidos p ON p.cliente_id = c.id WHERE p.estado = 'pagado' GROUP BY c.nombre" StatementId="1" StatementCompId="1" StatementType="SELECT" StatementSubTreeCost="1.27" StatementEstRows="2000">
+          <QueryPlan DegreeOfParallelism="1" CachedPlanSize="40" CompileTime="3" CompileCPU="3" CompileMemory="392">
+            <MissingIndexes>
+              <MissingIndexGroup Impact="71.38">
+                <MissingIndex Database="[celer]" Schema="[dbo]" Table="[pedidos]">
+                  <ColumnGroup Usage="EQUALITY">
+                    <Column Name="[estado]" ColumnId="5" />
+                  </ColumnGroup>
+                  <ColumnGroup Usage="INCLUDE">
+                    <Column Name="[cliente_id]" ColumnId="2" />
+                  </ColumnGroup>
+                </MissingIndex>
+              </MissingIndexGroup>
+            </MissingIndexes>
+            <RelOp NodeId="0" PhysicalOp="Hash Match" LogicalOp="Aggregate" EstimateRows="2000" EstimateIO="0" EstimateCPU="0.11" AvgRowSize="60" EstimatedTotalSubtreeCost="1.27" Parallel="0" EstimateRebinds="0" EstimateRewinds="0">
+              <OutputList />
+              <Hash>
+                <RelOp NodeId="1" PhysicalOp="Hash Match" LogicalOp="Inner Join" EstimateRows="12000" EstimateIO="0" EstimateCPU="0.3" AvgRowSize="52" EstimatedTotalSubtreeCost="1.1" Parallel="0" EstimateRebinds="0" EstimateRewinds="0">
+                  <OutputList />
+                  <Warnings>
+                    <ColumnsWithNoStatistics>
+                      <ColumnReference Database="[celer]" Schema="[dbo]" Table="[pedidos]" Column="estado" />
+                    </ColumnsWithNoStatistics>
+                  </Warnings>
+                  <Hash>
+                    <RelOp NodeId="2" PhysicalOp="Clustered Index Scan" LogicalOp="Clustered Index Scan" EstimateRows="2000" EstimateIO="0.01" EstimateCPU="0.002" AvgRowSize="40" EstimatedTotalSubtreeCost="0.02" Parallel="0" EstimateRebinds="0" EstimateRewinds="0">
+                      <OutputList />
+                      <IndexScan Ordered="0" ForcedIndex="0" ForceScan="0" NoExpandHint="0">
+                        <DefinedValues />
+                        <Object Database="[celer]" Schema="[dbo]" Table="[clientes]" Index="[PK_clientes]" Alias="[c]" IndexKind="Clustered" />
+                      </IndexScan>
+                    </RelOp>
+                    <RelOp NodeId="3" PhysicalOp="Clustered Index Scan" LogicalOp="Clustered Index Scan" EstimateRows="15000" EstimateIO="0.6" EstimateCPU="0.08" AvgRowSize="20" EstimatedTotalSubtreeCost="0.7" Parallel="0" EstimateRebinds="0" EstimateRewinds="0">
+                      <OutputList />
+                      <IndexScan Ordered="0" ForcedIndex="0" ForceScan="0" NoExpandHint="0">
+                        <DefinedValues />
+                        <Object Database="[celer]" Schema="[dbo]" Table="[pedidos]" Index="[PK_pedidos]" Alias="[p]" IndexKind="Clustered" />
+                        <Predicate>
+                          <ScalarOperator ScalarString="[celer].[dbo].[pedidos].[estado] as [p].[estado]=N'pagado'" />
+                        </Predicate>
+                      </IndexScan>
+                    </RelOp>
+                  </Hash>
+                </RelOp>
+              </Hash>
+            </RelOp>
+          </QueryPlan>
+        </StmtSimple>
+      </Statements>
+    </Batch>
+  </BatchSequence>
+</ShowPlanXML>
