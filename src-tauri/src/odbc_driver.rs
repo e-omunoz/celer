@@ -214,7 +214,8 @@ impl OdbcDriver {
         let db = self.ifx_db(&o.database);
         let tabid = self.ifx_tabid(o)?;
         let rows = self.q(&format!(
-            "SELECT TRIM(c.constrname), TRIM(c.idxname), r.ptabid, TRIM(pt.tabname), TRIM(pt.owner), TRIM(pc.idxname) \
+            // Index names as stored: the ones Informix generates for constraints start with a space (" 101_2").
+            "SELECT TRIM(c.constrname), c.idxname, r.ptabid, TRIM(pt.tabname), TRIM(pt.owner), pc.idxname \
              FROM {db}sysconstraints c, {db}sysreferences r, {db}systables pt, {db}sysconstraints pc \
              WHERE c.tabid = {tabid} AND c.constrtype = 'R' AND r.constrid = c.constrid \
                AND pt.tabid = r.ptabid AND pc.constrid = r.primary ORDER BY 1"
