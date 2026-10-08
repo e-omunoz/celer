@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, Result};
 use crate::model::*;
 use crate::mssql::{cell_i64, cell_str, fmt_rows, kind_from_type};
 use crate::odbc::*;
-use crate::session::{Canceller, Driver};
+use crate::session::{first_keyword, Canceller, Driver};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
@@ -144,6 +144,9 @@ pub struct LinkDriver<L: Link> {
     autocommit: bool,
     in_tx: bool,
     database: String,
+    /// Informix: `database` es la base en la que está la sesión (se pregunta solo si no se sabe: un DATABASE del
+    /// usuario la cambia).
+    db_known: bool,
     quote: String,
 }
 
@@ -171,7 +174,8 @@ impl<L: Link> LinkDriver<L> {
             q => q.to_string(),
         };
         let mut d = LinkDriver {
-            database: cfg.database.clone(),
+            database: cfg.database.trim().to_string(),
+            db_known: !cfg.database.trim().is_empty(),
             cfg,
             dialect,
             conn,
@@ -705,6 +709,9 @@ impl<L: Link> Driver for LinkDriver<L> {
         let t0 = Instant::now();
         self.stmt = None;
         self.pending = split_batch(sql, self.dialect).into();
+        if self.pending.iter().any(|st| matches!(first_keyword(st).as_str(), "DATABASE" | "CLOSE" | "CONNECT" | "DISCONNECT")) {
+            self.db_known = false;
+        }
         let mut out = ExecOutput::default();
         let r = self.run_pending(fetch.max(1), &mut out.results, &mut out.messages);
         out.in_transaction = self.in_tx;
@@ -1188,15 +1195,20 @@ impl<L: Link> Driver for LinkDriver<L> {
 
     fn current_database(&mut self) -> Result<String> {
         if self.dialect == Dialect::Informix {
+            if self.db_known {
+                return Ok(self.database.clone());
+            }
             let rows = self.q("SELECT TRIM(DBINFO('dbname')) FROM systables WHERE tabid = 1")?;
-            return Ok(rows.first().map(|r| cell_str(&r[0])).unwrap_or_default());
+            self.database = rows.first().map(|r| cell_str(&r[0])).unwrap_or_default();
+            self.db_known = true;
+            return Ok(self.database.clone());
         }
         Ok(self.odbc()?.info(SQL_DATABASE_NAME))
     }
 
     fn use_database(&mut self, db: &str) -> Result<()> {
-        // Informix changes database by reconnecting: not when the session is already there (asked to the server,
-        // since a DATABASE statement run by the user also moves it).
+        // Informix changes database by reconnecting: not when the session is already there (known, or asked to the
+        // server after a DATABASE statement run by the user).
         if self.dialect == Dialect::Informix && self.current_database().is_ok_and(|current| current == db) {
             self.database = db.to_string();
             return Ok(());
@@ -1209,6 +1221,7 @@ impl<L: Link> Driver for LinkDriver<L> {
             self.reconnect(Some(db))?;
         }
         self.database = db.to_string();
+        self.db_known = true;
         Ok(())
     }
 
@@ -1250,6 +1263,15 @@ impl<L: Link> Driver for LinkDriver<L> {
 
     fn canceller(&self) -> Canceller {
         self.conn.canceller()
+    }
+
+    /// Informix: la consulta más barata del catálogo. Otros orígenes ODBC: no hay una consulta que valga para todos;
+    /// sus cortes se reconocen por el SQLSTATE (08S01…).
+    fn ping(&mut self) -> Result<()> {
+        if self.dialect != Dialect::Informix || self.stmt.is_some() {
+            return Ok(());
+        }
+        self.q("SELECT 1 FROM systables WHERE tabid = 1").map(|_| ())
     }
 }
 

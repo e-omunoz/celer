@@ -93,6 +93,8 @@ pub struct PostgresDriver {
     aux: Option<(String, Client)>,
     /// Script de inicio de la conexión: se ejecuta en cada conexión principal nueva.
     startup: Vec<String>,
+    /// `server_version`, leída al conectar junto con la base (una sola ida y vuelta).
+    version: String,
 }
 
 impl PostgresDriver {
@@ -102,7 +104,7 @@ impl PostgresDriver {
         let mut client = open_client(&cfg, &cfg.database, &tls, Some(notices.clone()))?;
         let startup = crate::startup::statements(&cfg);
         run_startup(&mut client, &startup)?;
-        let database = query_current_db(&mut client)?;
+        let (database, version) = query_identity(&mut client)?;
         let token = client.cancel_token();
         Ok(PostgresDriver {
             cfg,
@@ -118,6 +120,7 @@ impl PostgresDriver {
             cursor_seq: 0,
             aux: None,
             startup,
+            version,
         })
     }
 
@@ -125,8 +128,9 @@ impl PostgresDriver {
     fn reconnect(&mut self, db: &str) -> Result<()> {
         let mut client = open_client(&self.cfg, db, &self.tls, Some(self.notices.clone()))?;
         run_startup(&mut client, &self.startup)?;
-        let database = query_current_db(&mut client)?;
+        let (database, version) = query_identity(&mut client)?;
         *self.cancel.lock() = Some(client.cancel_token());
+        self.version = version;
         self.client = client;
         self.database = database;
         self.cursor = None;
@@ -1244,8 +1248,12 @@ impl Driver for PostgresDriver {
     }
 
     fn server_info(&mut self) -> Result<String> {
-        let rows = self.meta("", "SELECT current_setting('server_version')", &[])?;
-        let ver = rows.first().map(|r| s(r, 0)).unwrap_or_else(|| "?".into());
+        let ver = if self.version.is_empty() {
+            let rows = self.meta("", "SELECT current_setting('server_version')", &[])?;
+            rows.first().map(|r| s(r, 0)).unwrap_or_else(|| "?".into())
+        } else {
+            self.version.clone()
+        };
         let ver = ver.split_whitespace().next().unwrap_or("?").to_string();
         let host = if self.cfg.host.trim().is_empty() {
             "localhost"
@@ -1257,6 +1265,15 @@ impl Driver for PostgresDriver {
             self.cfg.port.unwrap_or(DEFAULT_PORT),
             self.database
         ))
+    }
+
+    /// La consulta vacía del protocolo, con 5 s de límite.
+    fn ping(&mut self) -> Result<()> {
+        self.client.is_valid(Duration::from_secs(5)).map_err(|e| pg_err(&e, None))
+    }
+
+    fn broken(&self) -> bool {
+        self.client.is_closed()
     }
 
     fn canceller(&self) -> Canceller {
@@ -1292,7 +1309,7 @@ fn make_tls(cfg: &ConnConfig) -> Result<MakeTlsConnector> {
     Ok(MakeTlsConnector::new(b.build()?))
 }
 
-fn sslmode(encryption: &str) -> &'static str {
+pub(crate) fn sslmode(encryption: &str) -> &'static str {
     match encryption.trim().to_ascii_lowercase().as_str() {
         "off" | "disable" | "disabled" | "false" | "no" => "disable",
         "login" | "prefer" | "optional" => "prefer",
@@ -1362,6 +1379,7 @@ fn open_client(
         None => config.notice_callback(|_| {}),
     };
     config.keepalives_idle(Duration::from_secs(60));
+    config.keepalives_interval(Duration::from_secs(15));
     config.connect(tls.clone()).map_err(|e| pg_err(&e, None))
 }
 
@@ -1373,9 +1391,17 @@ fn run_startup(client: &mut Client, startup: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn query_current_db(client: &mut Client) -> Result<String> {
-    let rows = text_rows(client, "SELECT current_database()::text", &[])?;
-    Ok(rows.first().map(|r| s(r, 0)).unwrap_or_default())
+/// La base y la versión del servidor en una sola ida y vuelta (protocolo simple: sin preparar la sentencia antes).
+fn query_identity(client: &mut Client) -> Result<(String, String)> {
+    let msgs = client
+        .simple_query("SELECT current_database()::text, current_setting('server_version')")
+        .map_err(|e| pg_err(&e, None))?;
+    for m in msgs {
+        if let SimpleQueryMessage::Row(r) = m {
+            return Ok((r.get(0).unwrap_or_default().to_string(), r.get(1).unwrap_or_default().to_string()));
+        }
+    }
+    Ok((String::new(), String::new()))
 }
 
 /// Ejecuta una consulta de catálogo (protocolo extendido) y devuelve las columnas como texto.

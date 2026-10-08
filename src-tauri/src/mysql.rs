@@ -779,6 +779,8 @@ impl MysqlDriver {
             .prefer_socket(false)
             .stmt_cache_size(0)
             .tcp_nodelay(true)
+            // El sistema comprueba la conexión parada (y la mantiene viva en cortafuegos y NAT).
+            .tcp_keepalive_time_ms(Some(60_000))
             .tcp_connect_timeout(Some(
                 extra.connect_timeout.unwrap_or(Duration::from_secs(15)),
             ))
@@ -1034,6 +1036,11 @@ impl MysqlDriver {
             if !self.autocommit {
                 self.in_tx = true;
             }
+            return;
+        }
+        // La conexión se perdió: preguntar abriría otra en silencio, sin la transacción ni lo demás. Se deja como
+        // estaba para que la sesión vigilada (guard.rs) diga lo que se pierde.
+        if self.conn.is_none() {
             return;
         }
         let sql = if self.mariadb {
@@ -1499,8 +1506,9 @@ impl Driver for MysqlDriver {
         Ok(rows.iter().map(|r| cell_str(&r[0])).collect())
     }
 
+    /// Se sabe al conectar y se sigue con USE (el lector lo avisa) y al cambiar de base: solo se pregunta si no hay.
     fn current_database(&mut self) -> Result<String> {
-        if self.cursor.is_some() {
+        if self.cursor.is_some() || !self.database.is_empty() {
             return Ok(self.database.clone());
         }
         let rows = self.query("SELECT DATABASE()")?;
@@ -1541,6 +1549,24 @@ impl Driver for MysqlDriver {
             product_version(&self.version),
             self.endpoint
         ))
+    }
+
+    /// COM_PING. Sin conexión (se perdió) también es un fallo: la sesión vigilada decide si se puede abrir otra.
+    fn ping(&mut self) -> Result<()> {
+        if self.cursor.is_some() {
+            return Ok(());
+        }
+        let Some(conn) = self.conn.as_mut() else { bail!("Sin conexión con el servidor") };
+        if let Err(e) = conn.ping() {
+            self.conn = None;
+            return Err(mysql_err(e));
+        }
+        Ok(())
+    }
+
+    /// La conexión se perdió (error de E/S o de protocolo) y no hay lector con ella.
+    fn broken(&self) -> bool {
+        self.conn.is_none() && self.cursor.is_none()
     }
 
     fn canceller(&self) -> Canceller {
