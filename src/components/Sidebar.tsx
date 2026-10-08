@@ -32,6 +32,7 @@ import {
 import type { ConnSummary, MetaNode } from "../types";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
+import { compareWithMarked, isMarked, markForCompare, schemaCompare, schemaTitle } from "../schemaCompareRun";
 import { engineOf } from "../types";
 
 const ROW = 24;
@@ -288,7 +289,13 @@ export function Sidebar() {
     }
     // Diagram of a schema (or of a database on engines without schemas: Informix, ODBC).
     const schemaLevel = node.kind === "schema" || (node.kind === "database" && (kindOf(connId) === "informix" || kindOf(connId) === "odbc"));
-    if (schemaLevel) items.push({ label: "Diagrama entidad-relación", icon: "diagram", run: () => void openErDiagram(connId, node.path) }, { separator: true });
+    if (schemaLevel) {
+      const ref = { connId, path: node.path };
+      const mark = schemaCompare.mark;
+      items.push({ label: "Diagrama entidad-relación", icon: "diagram", run: () => void openErDiagram(connId, node.path) });
+      if (mark && !isMarked(ref)) items.push({ label: `Comparar con «${schemaTitle(mark)}»`, icon: "compare", run: () => void compareWithMarked(ref) });
+      items.push({ label: isMarked(ref) ? "Marcado para comparar" : "Marcar para comparar", icon: "compare", run: () => markForCompare(ref) }, { separator: true });
+    }
     items.push(
       { label: "Nueva consola aquí", icon: "console", run: () => openQuery(connId) },
       { label: "Copiar nombre", hint: "Ctrl+C", icon: "copy", run: () => void copyText(node.name) },
