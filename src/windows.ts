@@ -1096,7 +1096,7 @@ function mirrorEffects() {
   createEffect(() => {
     contextWanted();
     if (focusedWindow() !== windowLabel) return;
-    const targets = openWindows()
+    const targets: string[] = openWindows()
       .map((w) => w.label)
       .filter((label) => label === "panel-ai" || label === "panel-library");
     for (const label of [...contextSent.keys()]) if (!targets.includes(label)) contextSent.delete(label);
