@@ -393,7 +393,8 @@ export function sqlLiteral(value: string | null, kind: ColKind, dialect?: string
     if (/^(0|false|f|no|n|✗ false)$/i.test(value.trim())) return numeric ? "0" : "FALSE";
   }
   const escaped = dialect === "mysql" ? value.replace(/\\/g, "\\\\").replace(/'/g, "''") : value.replace(/'/g, "''");
-  return `'${escaped}'`;
+  // SQL Server: N'…' keeps every Unicode character (a plain '…' turns those outside the code page into "?").
+  return dialect === "mssql" ? `N'${escaped}'` : `'${escaped}'`;
 }
 
 export function quoteIdent(name: string): string {

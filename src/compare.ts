@@ -23,12 +23,31 @@ export interface Comparison {
 
 const keyText = (cell: Cell) => (cell === null || cell === undefined ? "\u0000NULL" : typeof cell === "number" ? String(cell) : String(cell));
 
+/** The column called `name`, or one called the same in another case (id / Id between engines). */
+export function columnIndex(columns: { name: string }[], name: string): number {
+  const exact = columns.findIndex((c) => c.name === name);
+  return exact >= 0 ? exact : columns.findIndex((c) => c.name.toLowerCase() === name.toLowerCase());
+}
+
+/** Whether `key` (column names) identifies each row of `r` (no repeated values, nulls included). */
+export function keyIsUnique(r: ResultSet, key: string[]): boolean {
+  const idx = key.map((k) => columnIndex(r.columns, k));
+  if (!idx.length || idx.some((i) => i < 0)) return false;
+  const seen = new Set<string>();
+  for (const row of r.rows) {
+    const k = idx.map((i) => keyText(row[i])).join("\u0001");
+    if (seen.has(k)) return false;
+    seen.add(k);
+  }
+  return true;
+}
+
 /** The first column whose values are unique and not null in both results, as a natural key. */
 export function guessKey(a: ResultSet, b: ResultSet): string[] {
-  const shared = a.columns.map((c) => c.name).filter((name) => b.columns.some((c) => c.name === name));
+  const shared = a.columns.map((c) => c.name).filter((name) => columnIndex(b.columns, name) >= 0);
   for (const name of shared) {
     const unique = (r: ResultSet) => {
-      const i = r.columns.findIndex((c) => c.name === name);
+      const i = columnIndex(r.columns, name);
       const seen = new Set<string>();
       for (const row of r.rows) {
         const v = row[i];
@@ -50,10 +69,11 @@ export function guessKey(a: ResultSet, b: ResultSet): string[] {
  */
 export function compareResults(before: ResultSet, after: ResultSet, key: string[] = guessKey(before, after)): Comparison {
   const names = after.columns.map((c) => c.name);
-  const shared = names.filter((name) => before.columns.some((c) => c.name === name));
-  const idxA = (name: string) => before.columns.findIndex((c) => c.name === name);
-  const idxB = (name: string) => after.columns.findIndex((c) => c.name === name);
-  const usedKey = key.filter((k) => shared.includes(k));
+  const idxA = (name: string) => columnIndex(before.columns, name);
+  const idxB = (name: string) => columnIndex(after.columns, name);
+  const shared = names.filter((name) => idxA(name) >= 0);
+  // Key names as the new result writes them.
+  const usedKey = key.map((k) => shared.find((s) => s === k) ?? shared.find((s) => s.toLowerCase() === k.toLowerCase())).filter((k): k is string => Boolean(k));
   const keyOf = (row: Cell[], side: "a" | "b", cols: string[]) => cols.map((c) => keyText(row[side === "a" ? idxA(c) : idxB(c)])).join("\u0001");
   const keyCols = usedKey.length ? usedKey : shared;
 
@@ -109,7 +129,7 @@ export function compareResults(before: ResultSet, after: ResultSet, key: string[
     newFrom,
     counts: { equal, changed: changedRows, gone: gone.length, added: added.length },
     key: usedKey,
-    onlyOld: before.columns.map((c) => c.name).filter((n) => !names.includes(n)),
-    onlyNew: names.filter((n) => !before.columns.some((c) => c.name === n)),
+    onlyOld: before.columns.map((c) => c.name).filter((n) => columnIndex(after.columns, n) < 0),
+    onlyNew: names.filter((n) => idxA(n) < 0),
   };
 }

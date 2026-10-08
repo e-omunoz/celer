@@ -834,10 +834,18 @@ export function DataGrid(props: GridProps) {
     try {
       const items = await session.search(text);
       if (seq !== lookupSeq) return;
-      // Highlight the value typed (or the cell's) when it is in the list.
-      const at = items.findIndex((item) => item.value === highlight);
+      // Highlight the value typed (or the cell's) when it is in the list, and only if it is still what the cell
+      // holds: an answer that arrives after more typing must not bring an old value back under Enter.
+      const at = editor()?.value === highlight ? items.findIndex((item) => item.value === highlight) : -1;
       setLookup((l) => l && { ...l, items, index: at, loading: false, error: "" });
     } catch (err) {
+      // A session that failed (connection lost…) is not reused: the next edit opens a new one.
+      for (const [col, entry] of lookupCache) {
+        if (await entry.session.catch(() => null) === session) {
+          lookupCache.delete(col);
+          session.close();
+        }
+      }
       if (seq === lookupSeq) setLookup((l) => l && { ...l, loading: false, error: err instanceof Error ? err.message : String(err) });
     }
   }

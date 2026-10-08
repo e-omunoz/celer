@@ -455,8 +455,11 @@ export async function boot() {
       setState("settings", { ...defaultSettings, ...(loaded as Settings) });
     }
   } catch (err) {
-    // Defaults this time (a damaged file was set aside, or it could not be read: the message says which).
-    notify("No se pudieron leer los ajustes: se usan los de serie", "error", errorText(err));
+    // Defaults this time (a damaged file was set aside, or it could not be read: the message says which). One
+    // that is still there is not written over by this session's changes.
+    const message = errorText(err);
+    if (!message.includes(".unreadable-")) settingsUnreadable = true;
+    notify("No se pudieron leer los ajustes: se usan los de serie", "error", message);
   }
   applyTheme();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -635,10 +638,17 @@ export async function beforeClose(): Promise<boolean> {
   return true;
 }
 
+/** settings.json could not be read at start-up but is still there: changes apply only to this session. */
+let settingsUnreadable = false;
+
 export async function saveSettings(patch: Partial<Settings>) {
   const settings = { ...state.settings, ...patch };
   setState("settings", settings);
   applyTheme(settings);
+  if (settingsUnreadable) {
+    notify("Los ajustes no se guardan en esta sesión: no se pudo leer el fichero que ya había", "warning");
+    return;
+  }
   await api().saveJson("settings", settings);
 }
 

@@ -35,7 +35,9 @@ export async function openFkLookup(tab: TableTab, column: string): Promise<Looku
     if (fk.target.database) await api().useDatabase(sid, fk.target.database).catch(() => {});
     const [columns, info] = await Promise.all([api().tableColumns(sid, fk.target), api().objectSql(sid, fk.target)]);
     const keyName = fk.targetColumns[0];
-    const labelName = pickLabelColumn(columns, keyName);
+    // Informix cannot compare or sort its large objects (TEXT, CLOB): they never label a row.
+    const usable = kindOf(tab.connId) === "informix" ? columns.filter((c) => !/^(text|clob|byte|blob)\b/i.test(c.typeName.trim())) : columns;
+    const labelName = pickLabelColumn(usable, keyName);
     const [qKey, qLabel] = await api().quoteIdents(sid, labelName ? [keyName, labelName] : [keyName]);
     const kind = kindOf(tab.connId);
     const run = async (text: string): Promise<LookupItem[]> => {

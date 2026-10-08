@@ -170,9 +170,9 @@ impl Store {
     pub fn load_json(&self, name: &str) -> Result<serde_json::Value> {
         let path = self.path(name);
         let mut attempt = 0;
-        let text = loop {
-            match fs::read_to_string(&path) {
-                Ok(text) => break text,
+        let bytes = loop {
+            match fs::read(&path) {
+                Ok(bytes) => break bytes,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::Value::Null),
                 // A short lock (an antivirus scan, a backup) usually goes away.
                 Err(_) if attempt < 3 => {
@@ -182,7 +182,9 @@ impl Store {
                 Err(e) => return Err(anyhow!("No se pudo leer {name}: {e}")),
             }
         };
-        match serde_json::from_str(&text) {
+        // Not UTF-8 is damaged too (set aside like a file that does not parse).
+        let parsed = String::from_utf8(bytes).map_err(|e| e.to_string()).and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
+        match parsed {
             Ok(value) => Ok(value),
             Err(e) => {
                 let stamp = std::time::SystemTime::now()

@@ -20,7 +20,7 @@ assert.equal(
   lookupSql("postgres", "public.customers", '"id"', '"name"', " Ana "),
   `SELECT "id", "name" FROM public.customers WHERE LOWER("id"::text) LIKE '%ana%' ESCAPE '!' OR LOWER("name"::text) LIKE '%ana%' ESCAPE '!' ORDER BY "name" LIMIT 50`,
 );
-assert.equal(lookupSql("mssql", "[dbo].[t]", "[id]", null, "7"), "SELECT TOP 50 [id] FROM [dbo].[t] WHERE LOWER(CAST([id] AS NVARCHAR(4000))) LIKE '%7%' ESCAPE '!' ORDER BY [id]");
+assert.equal(lookupSql("mssql", "[dbo].[t]", "[id]", null, "7"), "SELECT TOP 50 [id] FROM [dbo].[t] WHERE LOWER(CAST([id] AS NVARCHAR(4000))) LIKE N'%7%' ESCAPE '!' ORDER BY [id]");
 // SQL Server and Informix sort a (maybe long-text) label as text.
 assert.match(lookupSql("mssql", "[dbo].[t]", "[id]", "[descripcion]", ""), /ORDER BY CAST\(\[descripcion\] AS NVARCHAR\(4000\)\)$/);
 assert.equal(lookupSql("informix", "t", "id", "nombre", ""), "SELECT FIRST 50 id, nombre FROM t ORDER BY CAST(nombre AS VARCHAR(255))");
@@ -29,7 +29,7 @@ assert.equal(lookupSql("odbc", "t", "id", null, ""), "SELECT id FROM t ORDER BY 
 // Quotes are literals; %, _ and ! are searched for as such (and [ on SQL Server).
 assert.match(lookupSql("sqlite", "t", '"id"', '"n"', "o'brien"), /LIKE '%o''brien%' ESCAPE '!'/);
 assert.match(lookupSql("postgres", "t", "id", null, "50%_x!"), /LIKE '%50!%!_x!!%' ESCAPE '!'/);
-assert.match(lookupSql("mssql", "t", "id", null, "[a]"), /LIKE '%!\[a]%' ESCAPE '!'/);
+assert.match(lookupSql("mssql", "t", "id", null, "[a]"), /LIKE N'%!\[a]%' ESCAPE '!'/);
 assert.match(lookupSql("mysql", "t", "id", "n", "a\\b"), /LIKE '%a\\\\b%'/, "MySQL backslashes are escaped");
 
 console.log("fklookup-check: all good");

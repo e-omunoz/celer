@@ -570,11 +570,32 @@ fn column_info(c: &tiberius::Column) -> ColumnInfo {
     }
 }
 
-fn fmt_dt(v: Option<chrono::NaiveDateTime>) -> Cell {
+fn fmt_dt(v: Option<chrono::NaiveDateTime>, digits: u32) -> Cell {
     match v {
-        Some(d) => Cell::Text(d.format("%Y-%m-%d %H:%M:%S%.f").to_string()),
+        Some(d) => {
+            let (d, frac) = round_fraction(d, digits);
+            Cell::Text(format!("{}{frac}", d.format("%Y-%m-%d %H:%M:%S")))
+        }
         None => Cell::Null,
     }
+}
+
+/// The value rounded to `digits` decimal places of a second (3 for datetime, 7 for datetime2 and time: what
+/// SQL Server reads back from a string) and that fraction as text (".123", trailing zeros dropped, "" if none).
+fn round_fraction<T>(value: T, digits: u32) -> (T, String)
+where
+    T: chrono::Timelike + std::ops::Add<chrono::Duration, Output = T> + Copy,
+{
+    let unit = 10u32.pow(9 - digits);
+    let nanos = value.nanosecond() % 1_000_000_000;
+    let rounded = (nanos + unit / 2) / unit * unit;
+    let value = value + chrono::Duration::nanoseconds(rounded as i64 - nanos as i64);
+    let n = value.nanosecond() % 1_000_000_000;
+    if n == 0 {
+        return (value, String::new());
+    }
+    let text = format!("{:09}", n);
+    (value, format!(".{}", text[..digits as usize].trim_end_matches('0')))
 }
 
 fn convert(cd: ColumnData<'static>) -> Cell {
@@ -602,18 +623,23 @@ fn convert(cd: ColumnData<'static>) -> Cell {
             _ => Cell::Null,
         },
         ColumnData::Time(_) => match chrono::NaiveTime::from_sql(&cd) {
-            Ok(Some(t)) => Cell::Text(t.format("%H:%M:%S%.f").to_string()),
+            Ok(Some(t)) => {
+                let (t, frac) = round_fraction(t, 7);
+                Cell::Text(format!("{}{frac}", t.format("%H:%M:%S")))
+            }
             _ => Cell::Null,
         },
         ColumnData::DateTimeOffset(_) => {
             match chrono::DateTime::<chrono::FixedOffset>::from_sql(&cd) {
-                Ok(Some(d)) => Cell::Text(d.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()),
+                Ok(Some(d)) => {
+                    let (d, frac) = round_fraction(d, 7);
+                    Cell::Text(format!("{}{frac} {}", d.format("%Y-%m-%d %H:%M:%S"), d.format("%:z")))
+                }
                 _ => Cell::Null,
             }
         }
-        ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_) => {
-            fmt_dt(chrono::NaiveDateTime::from_sql(&cd).ok().flatten())
-        }
+        ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) => fmt_dt(chrono::NaiveDateTime::from_sql(&cd).ok().flatten(), 3),
+        ColumnData::DateTime2(_) => fmt_dt(chrono::NaiveDateTime::from_sql(&cd).ok().flatten(), 7),
     }
 }
 
@@ -1236,5 +1262,25 @@ impl Driver for MssqlDriver {
                 t.cancel();
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_fraction;
+    use chrono::{NaiveDate, NaiveTime};
+
+    #[test]
+    fn fractions_round_to_what_sql_server_reads_back() {
+        let at = |h, m, s, n| NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_nano_opt(h, m, s, n).unwrap();
+        // datetime ticks are 1/300 s: .003333333 is written .003.
+        assert_eq!(round_fraction(at(10, 0, 0, 3_333_333), 3).1, ".003");
+        assert_eq!(round_fraction(at(10, 0, 0, 0), 3).1, "");
+        assert_eq!(round_fraction(at(10, 0, 0, 123_456_700), 7).1, ".1234567");
+        assert_eq!(round_fraction(at(10, 0, 0, 500_000_000), 7).1, ".5");
+        // Rounding up carries into the seconds.
+        let (carried, frac) = round_fraction(at(10, 0, 59, 999_800_000), 3);
+        assert_eq!((carried.format("%H:%M:%S").to_string(), frac), ("10:01:00".to_string(), String::new()));
+        assert_eq!(round_fraction(NaiveTime::from_hms_nano_opt(8, 30, 0, 250_000_000).unwrap(), 7).1, ".25");
     }
 }

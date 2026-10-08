@@ -43,7 +43,10 @@ export function DataCompareView() {
                   <span class="muted small">{cmp().key.length ? `Filas emparejadas por ${cmp().key.join(", ")}` : "Sin clave: se comparan filas enteras"}</span>
                 </div>
                 <Show when={dataCompare.truncated}>
-                  <p class="compare-note">Una de las tablas tiene más de {DATA_LIMIT.toLocaleString()} filas: solo se comparan las primeras.</p>
+                  <p class="compare-note">Una de las tablas tiene más de {DATA_LIMIT.toLocaleString()} filas: solo se comparan las primeras (por orden de clave).</p>
+                </Show>
+                <Show when={dataCompare.blocked && !dataCompare.truncated}>
+                  <p class="compare-note">{dataCompare.blocked}</p>
                 </Show>
                 <Show when={cmp().onlyOld.length || cmp().onlyNew.length}>
                   <p class="compare-note">No se comparan las columnas que solo están en una de las dos: {[...cmp().onlyOld.map((n) => `${n} (destino)`), ...cmp().onlyNew.map((n) => `${n} (origen)`)].join(", ")}.</p>
@@ -70,7 +73,7 @@ export function DataCompareView() {
         <span class="muted small">Cambiadas: el valor del origen (el del destino, al pasar el ratón). Tachadas: solo en el destino. Al final: solo en el origen.</span>
         <span class="spacer" />
         <button type="button" class="btn" onClick={closeDataCompare}>Cerrar</button>
-        <button type="button" class="btn primary" disabled={dataCompare.loading || Boolean(dataCompare.error) || !changes()} onClick={openDataSyncScript}>
+        <button type="button" class="btn primary" disabled={dataCompare.loading || Boolean(dataCompare.error) || Boolean(dataCompare.blocked) || !changes()} title={dataCompare.blocked || undefined} onClick={openDataSyncScript}>
           <FileCode2 size={14} /> Script para igualar el destino
         </button>
       </footer>

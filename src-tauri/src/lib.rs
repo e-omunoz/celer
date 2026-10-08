@@ -467,7 +467,8 @@ fn clear_history(state: State<'_, Arc<AppState>>) -> CmdResult<()> {
     state.store.clear_history().map_err(err)
 }
 
-#[tauri::command]
+// Off the main thread: a locked file is retried for a moment.
+#[tauri::command(async)]
 fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_json::Value> {
     if !matches!(name.as_str(), "settings" | "workspace" | "library") {
         return Err("Nombre no permitido".into());
