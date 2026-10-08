@@ -44,6 +44,7 @@ Step "misc (startup script, pins, undo)" { & $node dev\misc-check.mjs }
 Step "Gib companion" { & $node dev\gib-companion-check.mjs "$env:TEMP\gib-companion" }
 Step "ER diagram" { & $node dev\er-check.mjs "$env:TEMP\celer-er" }
 Step "execution plans" { & $node dev\plan-view-check.mjs "$env:TEMP\celer-plan" }
+Step "server activity" { & $node dev\activity-check.mjs "$env:TEMP\celer-activity" }
 Restart-App
 Step "restore (prepare)" { & $node dev\restore-check.mjs prepare }
 $exe = "$env:CARGO_TARGET_DIR\debug\celer.exe"

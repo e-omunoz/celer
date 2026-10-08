@@ -1618,3 +1618,31 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .plan-detail dd { margin: 0; font-family: var(--mono); word-break: break-word; }
 .plan-warning { display: flex; align-items: flex-start; gap: 6px; margin: 0 0 8px; color: var(--warning); line-height: 1.45; }
 .plan-warning svg { flex: none; margin-top: 2px; }
+/* ============================================================================
+   Server activity
+   ========================================================================== */
+
+.dialog.activity-dialog { width: min(1180px, calc(100vw - 40px)); max-width: none; }
+.activity-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.activity-search { width: 240px; }
+.activity-error { margin: 0 0 10px; color: var(--danger); font-size: 12.5px; }
+.activity-table { max-height: 62vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.activity-row { display: grid; grid-template-columns: 64px 110px 100px 150px 150px 80px minmax(200px, 1fr) 62px; align-items: center; gap: 10px; min-height: 30px; padding: 0 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
+.activity-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-row.head { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: default; }
+.activity-row:not(.head):hover { background: var(--hover); }
+.activity-row:not(.busy):not(.head) { color: var(--text-muted); }
+.activity-row.busy > span:first-child { box-shadow: inset 3px 0 0 var(--success); }
+.activity-row.slow .num { color: var(--warning); font-weight: 600; }
+.activity-row.blocked > span:first-child, .activity-row.blocking > span:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+.activity-row.self { font-style: italic; }
+.activity-row.open { background: var(--selection); }
+.activity-row .mono { font-family: var(--mono); font-size: 12px; }
+.activity-row .num { text-align: right; }
+.activity-row small { color: var(--text-faint); }
+.activity-actions { display: flex; gap: 2px; justify-content: flex-end; }
+.icon-btn.danger:hover { color: var(--danger); }
+.activity-detail { padding: 8px 12px 12px 84px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.activity-detail pre { margin: 0; max-height: 220px; overflow: auto; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+.activity-warn { margin: 0 0 6px; color: var(--danger); font-size: 12px; }
+.activity-empty { padding: 16px; margin: 0; }

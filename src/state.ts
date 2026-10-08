@@ -23,6 +23,7 @@ import { defaultSettings, emptyConn, engineOf } from "./types";
 import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
 import type { ErEdge, ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, type Plan } from "./plan";
+import { activitySpec, readSessions, type ServerSession } from "./activity";
 import type { AiMessage } from "./ai";
 
 export type InspectorMode = "value" | "record" | "history" | "ai";
@@ -290,6 +291,8 @@ export const [state, setState] = createStore({
   paramAsk: null as ParamAsk | null,
   /** The entity-relationship diagram on show (a schema's tables and their foreign keys). */
   er: null as ErState | null,
+  /** Server activity monitor on show: the sessions of a server and what they run. */
+  activity: null as ActivityState | null,
   paletteOpen: false,
   paletteMode: "all" as "all" | "actions" | "tables",
   menu: null as { x: number; y: number; items: MenuItem[] } | null,
@@ -694,6 +697,94 @@ export async function openErDiagram(connId: string, path: string[]) {
 export function closeErDiagram() {
   erToken++;
   setState("er", null);
+}
+
+export interface ActivityState {
+  connId: string;
+  title: string;
+  /** The monitor's own side session (and its id on the server, to mark it). */
+  sessionId: string;
+  selfId: string;
+  loading: boolean;
+  error: string;
+  sessions: ServerSession[];
+  updatedAt: number;
+  canCancel: boolean;
+  canKill: boolean;
+}
+
+/** Opens the server activity monitor of a connection, on its own side session. */
+export async function openActivity(connId: string) {
+  const conn = connectionById(connId);
+  const spec = activitySpec(conn?.kind);
+  if (!conn || !spec) {
+    notify("La actividad del servidor no está disponible para este motor", "warning");
+    return;
+  }
+  setState("activity", { connId, title: conn.name, sessionId: "", selfId: "", loading: true, error: "", sessions: [], updatedAt: 0, canCancel: Boolean(spec.cancel), canKill: Boolean(spec.kill) });
+  const opened = await openSessionFor(connId).catch((err) => {
+    setState("activity", { loading: false, error: errorText(err) });
+    return null;
+  });
+  if (!opened) return;
+  if (state.activity?.connId !== connId) {
+    void api().closeSession(opened.sessionId).catch(() => {});
+    return;
+  }
+  const self = await api()
+    .execute(opened.sessionId, spec.self, 1)
+    .then((out) => String(out.results[0]?.rows[0]?.[0] ?? ""))
+    .catch(() => "");
+  setState("activity", { sessionId: opened.sessionId, selfId: self });
+  await refreshActivity();
+}
+
+export async function refreshActivity() {
+  const current = state.activity;
+  const spec = activitySpec(kindOf(current?.connId));
+  if (!current?.sessionId || !spec) return;
+  setState("activity", "loading", true);
+  try {
+    const out = await api().execute(current.sessionId, spec.list, 5000);
+    await api().closeCursor(current.sessionId).catch(() => {});
+    if (state.activity?.sessionId !== current.sessionId) return;
+    setState("activity", { sessions: readSessions(out.results.find((r) => r.columns.length), current.selfId), loading: false, error: "", updatedAt: Date.now() });
+  } catch (err) {
+    if (state.activity?.sessionId === current.sessionId) setState("activity", { loading: false, error: errorText(err) });
+  }
+}
+
+/** Cancels a session's running statement, or ends the session (asks first; says so on production). */
+export async function activityAction(id: string, action: "cancel" | "kill") {
+  const current = state.activity;
+  const spec = activitySpec(kindOf(current?.connId));
+  const make = action === "cancel" ? spec?.cancel : spec?.kill;
+  if (!current?.sessionId || !make) return;
+  const conn = connectionById(current.connId);
+  const target = current.sessions.find((s) => s.id === id);
+  const who = target ? `${target.user}${target.database ? ` en ${target.database}` : ""}${target.app ? ` (${target.app})` : ""}. ` : "";
+  const what = action === "cancel" ? "La sentencia en curso se detiene; la sesión sigue abierta." : "Se cierra su conexión y se deshace lo que no haya confirmado.";
+  const ok = await confirmDialog(
+    action === "cancel" ? `Cancelar la consulta de la sesión ${id}` : `Terminar la sesión ${id}`,
+    `${who}${what}${conn?.production ? " Es una conexión de producción." : ""}`,
+    action === "cancel" ? "Cancelar consulta" : "Terminar sesión",
+    true,
+  );
+  if (!ok) return;
+  try {
+    await api().execute(current.sessionId, make(id), 1);
+    await api().closeCursor(current.sessionId).catch(() => {});
+    notify(action === "cancel" ? `Consulta de la sesión ${id} cancelada` : `Sesión ${id} terminada`, "success");
+  } catch (err) {
+    notify(action === "cancel" ? "No se pudo cancelar" : "No se pudo terminar la sesión", "error", errorText(err));
+  }
+  await refreshActivity();
+}
+
+export function closeActivity() {
+  const sessionId = state.activity?.sessionId;
+  setState("activity", null);
+  if (sessionId) void api().closeSession(sessionId).catch(() => {});
 }
 
 /** What the parameters dialog edits; values are remembered per console. */

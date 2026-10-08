@@ -12,6 +12,7 @@ import {
   duplicateConnection,
   generateSql,
   kindOf,
+  openActivity,
   openErDiagram,
   moveConnection,
   openConnDialog,
@@ -245,6 +246,7 @@ export function Sidebar() {
       { label: "Duplicar", run: () => void duplicateConnection(conn.id) },
       { label: "Copiar nombre", run: () => void copyText(conn.name) },
       { label: "Copiar esquema para IA", disabled: !connected, run: () => void copySchemaForAi(conn.id) },
+      ...(conn.kind === "sqlite" || conn.kind === "odbc" ? [] : [{ label: "Actividad del servidor…", icon: "activity", run: () => void openActivity(conn.id) }]),
       { separator: true },
       { label: "Eliminar conexión", hint: "Supr", icon: "trash", danger: true, run: () => void removeConnection(conn.id) },
     ]);
