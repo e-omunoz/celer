@@ -417,6 +417,12 @@ export function createDemoBackend(): Backend {
     async restoreConnection(cfg) {
       return self.saveConnection(cfg);
     },
+    async duplicateConnection(id, name) {
+      const source = loadConns().find((item) => item.id === id);
+      if (!source) throw new Error("Conexión no encontrada");
+      const secrets = readJson<Record<string, string>>("celer.secrets", {});
+      return self.saveConnection({ ...source, id: "", name, password: secrets[id] ?? "" });
+    },
     async testConnection(cfg) {
       const t0 = performance.now();
       if (cfg.kind !== "sqlite") {

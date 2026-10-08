@@ -26,6 +26,8 @@ export interface Backend {
   deleteConnection(id: string): Promise<void>;
   /** Undo of a delete: saves the connection again with the password it had. */
   restoreConnection(cfg: ConnConfig): Promise<ConnConfig>;
+  /** A copy of a saved connection under a new id and name, with its saved password. */
+  duplicateConnection(id: string, name: string): Promise<ConnConfig>;
   /** "Probar conexión": every step timed. Rejects only when the connection cannot even be attempted (driver missing…). */
   testConnection(cfg: ConnConfig): Promise<ConnTestReport>;
   openSession(connId: string, password?: string, options?: OpenSessionOptions): Promise<SessionInfo>;
@@ -114,6 +116,7 @@ function tauriBackend(): Backend {
     reorderConnections: (ids) => invoke("reorder_connections", { ids }),
     deleteConnection: (id) => invoke("delete_connection", { id }),
     restoreConnection: (cfg) => invoke("restore_connection", { cfg: { ...cfg, password: cfg.password || null } }),
+    duplicateConnection: (id, name) => invoke("duplicate_connection", { id, name }),
     testConnection: (cfg) => invoke("test_connection", { cfg }),
     openSession: (connId, password, options) =>
       invoke("open_session", { connId: connId, password: password ?? null, database: options?.database || null, autocommit: options?.autocommit ?? null }),
