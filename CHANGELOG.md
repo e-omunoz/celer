@@ -6,6 +6,20 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Informix over JDBC (SQLI)**: Celer connects like DBeaver does, with IBM's JDBC driver, to servers that only listen on SQLI (`onsoctcp`, port 9088) and without the Client SDK.
+  - The connection form has a new protocol, **Automático** (the default for new connections): the Client SDK when its ODBC driver is installed, JDBC otherwise. Saved connections keep their protocol.
+  - Java 11 or newer is found on its own (Settings, `JAVA_HOME`, DBeaver's JRE, the `PATH`), and so is the JDBC driver (DBeaver's cache). What is missing can be downloaded, only when you ask, into Celer's data folder: Eclipse Temurin JRE 21 and the driver from Maven Central, each checked against its SHA-256, with progress and cancel. No administrator rights are needed.
+  - One Java process serves every JDBC connection; it starts while the password is asked. Results come in compact binary batches, with real cancel, transactions, paging and database switching, and the same explorer, DDL, editing and scripts as the other Informix protocols.
+  - "Probar conexión" says which way it connected.
+- **Settings › Drivers** shows what each Informix protocol has (IBM CLI, Java and the JDBC driver, the Client SDK), with download buttons, "Usar" for DBeaver's copies and a check that starts Java.
+- **Guide for Informix connections** in the app, shown instead of the raw error when a driver is missing or the server name, port or locale are wrong (`IM002`, `CLI0199E`, `SQL30081N`, -908, -761, -25596, -23101, -23197).
+
+### Fixed
+- **Informix**: importing a DBeaver or DbVisualizer connection keeps its `informixserver` and the other URL properties ("Parámetros extra"), and uses "Automático" instead of DRDA.
+- **Informix**: an empty database no longer sends `DATABASE=;` to the driver; DRDA asks for the database before connecting.
+- Driver downloads use the system's proxy (Windows Internet settings or `HTTPS_PROXY`) and can be cancelled.
+
 ## [2.0.1] - 2026-10-08
 
 ### Fixed

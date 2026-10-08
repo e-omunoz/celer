@@ -13,7 +13,7 @@ Full plan: [docs/ROADMAP.md](docs/ROADMAP.md) · drivers: [docs/DRIVERS.md](docs
     functions, sequences), dollar-quote aware script splitter, error position (line/column).
   - `mysql.rs`: MySQL / MariaDB. Streaming reader thread with a bounded channel (1,024 rows) so large results
     never load into memory, `KILL QUERY` cancellation, DELIMITER-aware splitter, TLS modes, SHOW CREATE DDL.
-  - `mssql.rs` (tiberius), `sqlite.rs` (embedded), `odbc.rs` + `odbc_driver.rs` (Informix, generic ODBC).
+  - `mssql.rs` (tiberius), `sqlite.rs` (embedded), `odbc.rs` + `odbc_driver.rs` (Informix, generic ODBC), `jdbc.rs` + `bridge/` (JDBC bridge: Informix over SQLI).
 - **Tests**: `cargo test --lib` — 27 tests, including integration tests against live PostgreSQL 17 and
   MariaDB 11.4 when `CELER_PG_TEST` / `CELER_MYSQL_TEST` are set (see "Test databases").
 - **Interface** (redesigned, Claude-warm palette with DataGrip density):

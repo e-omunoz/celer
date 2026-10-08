@@ -171,7 +171,7 @@ The exit code is 0 on success; errors are written to `%TEMP%\celer-setup.log`.
 | MySQL / MariaDB | native: streaming, `KILL QUERY`, `DELIMITER` | ✅ |
 | SQL Server | native (TDS), Windows authentication | ✅ |
 | SQLite | embedded | ✅ |
-| Informix | IBM CLI / Client SDK, loaded on demand | ✅ |
+| Informix | JDBC (Celer's bridge, Java found or downloaded on demand), Client SDK or IBM CLI | ✅ |
 | Any ODBC source | ODBC driver manager | ✅ |
 | Oracle, Db2, DuckDB, ClickHouse, Snowflake… | — | planned |
 

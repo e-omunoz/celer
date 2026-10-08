@@ -13,6 +13,7 @@
 │  export.rs     Streaming export (CSV, TSV, JSON, SQL, XLSX)                 │
 │  store.rs      Connections, settings, workspace, history; OS credential store│
 │  drivers.rs    Discovery and on-demand download of vendor client libraries  │
+│  jdbc.rs       JDBC bridge: one shared JVM over stdin/stdout (bridge/*.java) │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,7 +66,7 @@ connection dialog generically instead of hard-coding one per engine.
 | Passwords | Windows Credential Manager / macOS Keychain / Secret Service |
 | Settings and open tabs | `settings.json`, `workspace.json` |
 | Query history | `history.jsonl` (append-only, compacted at 5,000 entries) |
-| Downloaded drivers | `%APPDATA%\es.celer.app\drivers\` |
+| Downloaded drivers (IBM CLI, JDBC jars, Java) and the JDBC bridge | `%APPDATA%\es.celer.app\drivers\` |
 
 ## Security
 

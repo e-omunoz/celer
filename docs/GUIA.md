@@ -19,7 +19,8 @@ La ventana tiene tres zonas:
 ## Conexiones
 
 **Nuevo › Conexión** (Ctrl+Alt+N) abre el formulario. PostgreSQL, MySQL/MariaDB, SQL Server y SQLite son nativos;
-Informix usa el driver IBM (Celer lo descarga si hace falta) y cualquier otra base de datos entra por ODBC.
+Informix conecta por JDBC, por el Client SDK o por el driver IBM CLI (ver [Drivers de Informix](#drivers-de-informix)),
+y cualquier otra base de datos entra por ODBC.
 
 - **Probar** comprueba la conexión antes de guardarla.
 - **Producción** pide confirmación antes de un UPDATE/DELETE sin WHERE, DROP, TRUNCATE o ALTER.
@@ -29,7 +30,8 @@ Informix usa el driver IBM (Celer lo descarga si hace falta) y cualquier otra ba
 - Las contraseñas se guardan en el almacén de credenciales del sistema operativo, nunca en un fichero.
 
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver (también sus contraseñas, si quieres)
-y DbVisualizer, con carpetas y marcas de producción. Las carpetas se reorganizan arrastrando las conexiones.
+y DbVisualizer, con carpetas y marcas de producción. De una conexión Informix se traen también el `informixserver` y
+el resto de propiedades de la URL (van a *Parámetros extra*). Las carpetas se reorganizan arrastrando las conexiones.
 
 **Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta, cambios sin guardar
 en una tabla o una exportación en curso, lo pregunta antes.
@@ -141,11 +143,76 @@ le molestas mientras espera, aparta el cursor como a una mosca.
 
 En *Ajustes › Apariencia* se puede poner en silencio o apagar, y las animaciones se reducen si el sistema lo pide.
 
+## Drivers de Informix
+
+Informix habla dos protocolos: **SQLI**, el suyo (normalmente el puerto 9088), y **DRDA** (a menudo el 9089), que solo
+existe si los DBA lo han activado. En el formulario, *Opciones avanzadas › Protocolo*:
+
+| Protocolo | Qué usa | Qué necesitas |
+|---|---|---|
+| **Automático** (recomendado) | El Client SDK si está instalado; si no, JDBC | Lo de la opción que elija |
+| SQLI (JDBC) | El driver JDBC de IBM, como DBeaver | Java 11 o superior y el driver: Celer los busca y, si faltan, los descarga cuando se lo pides |
+| SQLI (Client SDK / ODBC) | El driver ODBC del Informix Client SDK | El Client SDK instalado |
+| DRDA (IBM CLI) | El IBM Data Server Driver | Un listener DRDA en el servidor; Celer descarga el driver |
+
+Por SQLI, el campo **INFORMIXSERVER** es obligatorio: el nombre del servidor (su DBSERVERNAME o un alias). En DBeaver
+aparece en la URL como `informixserver=…`. **Probar conexión** dice por qué vía ha conectado.
+
+### JDBC: Java y el driver
+
+Celer no instala nada en el sistema ni pide permisos de administrador. Busca, por este orden:
+
+- **Java**: la ruta de *Ajustes › Drivers*, `JAVA_HOME`, el Java que trae DBeaver, el `java` del `PATH` y el que haya
+  descargado Celer. Vale cualquier Java 11 o superior.
+- **Driver JDBC**: la ruta de *Ajustes › Drivers*, el que ya descargó DBeaver y el que haya descargado Celer.
+
+Si falta algo, Celer lo dice y ofrece descargarlo a su carpeta de datos, siempre después de que lo confirmes: el driver
+(1,5 MB, de Maven Central) y, solo si no hay ningún Java, Eclipse Temurin JRE 21 (unos 50 MB, de Adoptium). Cada
+descarga se comprueba con su firma SHA-256, muestra el progreso y se puede cancelar. Las descargas usan el proxy del
+sistema.
+
+En *Ajustes › Drivers* se ve qué ha encontrado, se puede elegir el de DBeaver con **Usar** y **Comprobar** arranca Java
+y carga el driver.
+
+Java se arranca una sola vez para todas las conexiones JDBC (mientras escribes la contraseña) y no abre ningún puerto:
+habla con Celer por su entrada y salida estándar.
+
+### Client SDK (ODBC)
+
+No hace falta si conectas por JDBC. Si prefieres el driver ODBC:
+
+1. Descárgalo de [Actian ESD](https://esd.actian.com/product/HCL_Informix/14.10/Windows_64-Bit/Client) (pide registrarse) o
+   de IBM Fix Central / las descargas de Informix (con IBMid y suscripción). Elige siempre la versión de **64 bits**.
+2. En el instalador, marca **ODBC Driver**. La instalación pide permisos de administrador.
+3. Compruébalo en `odbcad32` (orígenes de datos ODBC de 64 bits › Controladores): debe aparecer
+   **IBM INFORMIX ODBC DRIVER (64-bit)**.
+4. Elige el protocolo «Automático» o «SQLI (Client SDK / ODBC)».
+
+### DRDA
+
+Solo funciona si el servidor escucha en DRDA. Si no (error `SQL30081N`), usa «Automático» o «SQLI (JDBC)», o pide a los
+DBA un alias `drsoctcp` en `sqlhosts` (por ejemplo `miservidor_dr drsoctcp host 9089`) y su nombre en
+`DBSERVERALIASES`. Por DRDA hay que indicar siempre la base de datos.
+
+### Errores frecuentes
+
+| Error | Qué pasa | Qué hacer |
+|---|---|---|
+| `IM002` | El driver ODBC del Client SDK no está instalado | Protocolo «Automático» o «SQLI (JDBC)», o instalar el Client SDK |
+| `CLI0199E` | El driver IBM CLI rechaza la cadena de conexión | Revisa la base de datos y los *Parámetros extra* |
+| `SQL30081N` | No hay listener DRDA en ese puerto | SQLI (JDBC), o un alias DRDA |
+| -908, -761, -25596 | Servidor, puerto o INFORMIXSERVER incorrectos | SQLI suele ser el 9088; INFORMIXSERVER es el DBSERVERNAME o un alias |
+| -23101, -23197 | El locale de la conexión no es el de la base | `DB_LOCALE=es_ES.819` (el de tu base) en *Parámetros extra* |
+
+El locale de cada base se consulta con `SELECT dbs_dbsname, dbs_collate FROM sysmaster:sysdbslocale`. Celer muestra
+estas explicaciones (y una guía) en lugar del error del driver.
+
 ## Dónde guarda Celer sus datos
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | Ajustes, conexiones, historial, biblioteca | `%APPDATA%\es.celer.app` | `~/Library/Application Support/es.celer.app` | `~/.local/share/es.celer.app` (o `$XDG_DATA_HOME`) |
 | Contraseñas | Administrador de credenciales | Llavero | Secret Service (GNOME Keyring, KWallet) |
+| Drivers descargados (IBM CLI, JDBC, Java) y el puente JDBC | `…\es.celer.app\drivers` | `…/es.celer.app/drivers` | `…/es.celer.app/drivers` |
 
 Si uno de esos ficheros se daña, Celer lo aparta con el sufijo `.unreadable-…` y avisa, en lugar de sobrescribirlo.
