@@ -2,7 +2,7 @@
 //   node --experimental-strip-types dev/sqlgen-check.ts
 import assert from "node:assert/strict";
 import { fitInformixDatetime, quoteIdentFor, sqlLiteral } from "../src/sql.ts";
-import { changesSql, filterSql, fitValue } from "../src/sqlgen.ts";
+import { binaryKeysWritable, binaryLiteral, changesSql, filterSql, fitValue } from "../src/sqlgen.ts";
 import type { TableColumn } from "../src/types.ts";
 
 // Informix DATETIME takes exactly its qualifier's fields.
@@ -38,6 +38,18 @@ assert.match(sql, /INSERT INTO t \(id, momento\) VALUES \(2, '2025-01-01 08:00'\
 // A DATETIME key is fitted in the WHERE of the edited row too.
 const keyed = { columnsMeta: [col("momento", "datetime year to minute", "date", true), col("n", "integer", "number")], quoted: ["momento", "n"], qualified: "t" };
 assert.match(changesSql({ ...keyed, rows: [["2024-03-15 10:20:00", 1]], edits: { "0:1": "2" }, deleted: [], inserts: [] }, "informix"), /WHERE momento = '2024-03-15 10:20';/);
+
+// A binary key compares as bytes, in each engine's literal (as text "0x…" it matched no row).
+const uuidKeyed = { columnsMeta: [col("id", "binary(16)", "binary", true), col("n", "integer", "number")], quoted: ["id", "n"], qualified: "t" };
+const binEdit = (engine: "mysql" | "sqlite" | "postgres" | "mssql") =>
+  changesSql({ ...uuidKeyed, rows: [["0x00ff10ab", 1], ["0x01", 2]], edits: { "0:1": "5" }, deleted: [1], inserts: [] }, engine);
+assert.equal(binEdit("mysql"), "DELETE FROM t WHERE id = X'01';\nUPDATE t SET n = 5 WHERE id = X'00FF10AB';");
+assert.match(binEdit("sqlite"), /WHERE id = X'00FF10AB';/);
+assert.match(binEdit("postgres"), /WHERE id = decode\('00FF10AB', 'hex'\);/);
+assert.match(binEdit("mssql"), /WHERE id = 0x00FF10AB;/);
+assert.equal(binaryLiteral("0x0102…", "mysql"), null, "a cut preview is not the value");
+assert.equal(binaryKeysWritable("informix"), false);
+assert.equal(binaryKeysWritable("postgres"), true);
 
 // Informix BOOLEAN takes 't' / 'f' (not 1 / 0); SQL Server bit takes 1 / 0.
 assert.equal(sqlLiteral("true", "bool", "informix"), "'t'");

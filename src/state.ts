@@ -22,7 +22,7 @@ import type {
   ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
-import { changesSql, explainPrefix, paramNamesFor, selectLimit, upsertSql, whereOf } from "./sqlgen";
+import { binaryKeysWritable, changeStatements, explainPrefix, paramNamesFor, selectLimit, upsertSql, whereOf } from "./sqlgen";
 import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
 import type { ErEdge, ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, parseSynapsePlan, type Plan } from "./plan";
@@ -2295,7 +2295,7 @@ export function revertTable(tabId: string) {
 }
 
 export function buildChanges(tab: TableTab): string {
-  return changesSql(tab, kindOf(tab.connId));
+  return changeStatements(tab, kindOf(tab.connId)).join("\n");
 }
 
 export async function saveTable(tabId: string) {
@@ -2306,7 +2306,9 @@ export async function saveTable(tabId: string) {
     notify("Esta tabla no tiene clave primaria: no se pueden generar UPDATE ni DELETE seguros.", "warning");
     return;
   }
-  const sql = buildChanges(tab);
+  const kind = kindOf(tab.connId);
+  const statements = changeStatements(tab, kind);
+  const sql = statements.join("\n");
   setState({
     previewSql: sql,
     previewRun: async () => {
@@ -2319,7 +2321,14 @@ export async function saveTable(tabId: string) {
       await api().setAutocommit(session, false);
       let output;
       try {
-        output = await api().execute(session, sql, 1);
+        const ran = await api().execute(session, sql, 1);
+        output = ran;
+        // A keyed UPDATE or DELETE that matched no row (changed or deleted meanwhile, or a key that does not compare)
+        // saved nothing: undo it all. MySQL counts only changed rows, so an UPDATE to the same value says 0 there.
+        if (ran.results.length === statements.length) {
+          const missed = statements.findIndex((statement, i) => ran.results[i].rowsAffected === 0 && (statement.startsWith("DELETE ") || (statement.startsWith("UPDATE ") && kind !== "mysql")));
+          if (missed >= 0) throw new Error(`La fila ya no está en la tabla o su clave no coincide:\n${statements[missed]}`);
+        }
         await api().commit(session);
       } catch (err) {
         await api().rollback(session).catch(() => {});
@@ -2347,7 +2356,13 @@ export async function runPreview() {
 
 export function canEdit(tab: TableTab) {
   const conn = connectionById(tab.connId);
-  return tab.obj.kind !== "view" && !conn?.readOnly && tab.columnsMeta.some((col) => col.primaryKey);
+  return (
+    tab.obj.kind !== "view" &&
+    !conn?.readOnly &&
+    tab.columnsMeta.some((col) => col.primaryKey) &&
+    // A binary key needs the engine's binary literal to find its row.
+    (binaryKeysWritable(kindOf(tab.connId)) || !tab.columnsMeta.some((col) => col.primaryKey && col.kind === "binary"))
+  );
 }
 
 // ---------------------------------------------------------------- object actions

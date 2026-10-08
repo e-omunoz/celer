@@ -65,18 +65,45 @@ export function whereOf(tab: TableShape & { where: string; filters: ColumnFilter
   return parts.join(" AND ");
 }
 
+/**
+ * A binary value as the grid shows it (0x…) as the engine's own literal, so a key compares as bytes and not as the
+ * text "0x…". Null when it cannot be written: a cut preview (…) or an engine without a known literal.
+ */
+export function binaryLiteral(value: string, engine: DbKind): string | null {
+  const match = /^0x([0-9a-f]*)$/i.exec(value.trim());
+  if (!match) return null;
+  const hex = match[1].toUpperCase();
+  if (engine === "mysql" || engine === "sqlite") return `X'${hex}'`;
+  if (engine === "postgres") return `decode('${hex}', 'hex')`;
+  if (engine === "mssql") return `0x${hex}`;
+  return null;
+}
+
+/** Whether rows keyed on a binary column can be written for the engine (its key needs a binary literal). */
+export function binaryKeysWritable(engine: DbKind): boolean {
+  return binaryLiteral("0x", engine) !== null;
+}
+
 export function literalOf(value: Cell, col: TableColumn, dialect: DbKind) {
   if (value === null || value === undefined) return "NULL";
+  if (col.kind === "binary") {
+    const binary = binaryLiteral(String(value), dialect);
+    if (binary) return binary;
+  }
   return sqlLiteral(fitValue(String(value), col, dialect), col.kind, dialect);
 }
 
 const editLiteral = (value: string | null, col: TableColumn, engine: DbKind) => (value === null ? "NULL" : sqlLiteral(fitValue(value, col, engine), col.kind, engine));
 
+type ChangesShape = TableShape & { rows: Cell[][]; edits: Record<string, string | null>; deleted: number[]; inserts: (string | null)[][] };
+
 /** The pending changes of a table tab: DELETE, UPDATE and INSERT statements keyed on the primary key. */
-export function changesSql(
-  tab: TableShape & { rows: Cell[][]; edits: Record<string, string | null>; deleted: number[]; inserts: (string | null)[][] },
-  engine: DbKind,
-): string {
+export function changesSql(tab: ChangesShape, engine: DbKind): string {
+  return changeStatements(tab, engine).join("\n");
+}
+
+/** The statements of changesSql, one per change, in order: DELETEs, UPDATEs, then INSERTs. */
+export function changeStatements(tab: ChangesShape, engine: DbKind): string[] {
   const pk = tab.columnsMeta.map((col, index) => ({ col, index })).filter((item) => item.col.primaryKey);
   const lines: string[] = [];
   const whereFor = (row: number) => pk.map((item) => `${tab.quoted[item.index]} = ${literalOf(tab.rows[row][item.index], item.col, engine)}`).join(" AND ");
@@ -98,7 +125,7 @@ export function changesSql(
     const values = usable.map((item) => editLiteral(insert[item.index], item.col, engine)).join(", ");
     lines.push(usable.length ? `INSERT INTO ${tab.qualified} (${names}) VALUES (${values});` : `INSERT INTO ${tab.qualified} DEFAULT VALUES;`);
   }
-  return lines.join("\n");
+  return lines;
 }
 
 /** A :name parameter for a column (letters, digits and _; numbered when two columns clash). */
