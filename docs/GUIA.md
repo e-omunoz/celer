@@ -22,16 +22,94 @@ La ventana tiene tres zonas:
 Informix conecta por JDBC, por el Client SDK o por el driver IBM CLI (ver [Drivers de Informix](#drivers-de-informix)),
 y cualquier otra base de datos entra por ODBC.
 
-- **Probar** comprueba la conexión antes de guardarla.
 - **Producción** pide confirmación antes de un UPDATE/DELETE sin WHERE, DROP, TRUNCATE o ALTER.
 - **Solo lectura** rechaza en el núcleo cualquier sentencia que modifique datos.
 - **Avanzado › Script de inicio**: sentencias que se ejecutan en cada conexión que abre Celer, también al reconectar
   (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
 - Las contraseñas se guardan en el almacén de credenciales del sistema operativo, nunca en un fichero.
 
+### El formulario
+
+- **URL JDBC**: pega una URL en este campo, o directamente en *Servidor*, y Celer reconoce el motor y rellena
+  servidor, puerto, instancia o INFORMIXSERVER, base de datos, usuario, cifrado y los parámetros que entiende:
+  `jdbc:sqlserver`, `jdbc:jtds:sqlserver`, `jdbc:informix-sqli`, `jdbc:ids` (Informix por DRDA), `jdbc:postgresql`,
+  `jdbc:mysql`, `jdbc:mariadb` y `jdbc:sqlite`. Debajo resume lo que ha rellenado y lo que no usa. La contraseña de la
+  URL no se copia nunca: escríbela en su campo.
+- **Solo los campos que aplican**: la instancia solo en SQL Server, INFORMIXSERVER y el protocolo solo en Informix, el
+  usuario y la contraseña desaparecen con la autenticación de Windows, el cifrado solo donde existe.
+- **Cada campo dice lo que le falta o le sobra**, debajo: un puerto metido en el servidor (con un botón para
+  separarlo), un puerto fuera de 1–65535, la base que exige DRDA, una cadena ODBC sin `DSN=` ni `DRIVER=`, unos
+  parámetros extra que no son `clave=valor`… Con errores no deja guardar ni probar; los avisos (un nombre repetido)
+  no bloquean.
+
+### Probar conexión
+
+**Probar conexión** enseña cada paso con su tiempo:
+
+| Paso | Qué mira |
+|---|---|
+| Resolver el nombre | El DNS del servidor (o que es una IP) |
+| Abrir el puerto | Que algo escucha en ese puerto, con 5 s de límite |
+| TLS | PostgreSQL negocia el cifrado aquí; MySQL dice en su saludo si lo admite; SQL Server lo negocia dentro del inicio de sesión |
+| Inicio de sesión | El login con el driver de verdad, y por qué vía (driver, protocolo, Java…) |
+| Base de datos | Una consulta de prueba en la base elegida |
+
+Si falla, dice qué significa y qué hacer (nombre que no resuelve o VPN caída, puerto cerrado, cortafuegos, usuario o
+contraseña, base que no existe, certificado, `pg_hba.conf`, ERROR 1130 de MySQL…) y deja el error original del driver
+para copiarlo.
+
+### Organizar las conexiones
+
+En el explorador:
+
+- **Carpetas**, que se pueden anidar (`Clientes/Egarsat`): créalas con Ctrl+Mayús+N o el botón de carpeta, aunque
+  estén vacías; renómbralas con F2 y arrastra conexiones y carpetas para moverlas. Al borrar una carpeta, su contenido
+  sube un nivel.
+- **Conexiones**: F2 renombra, Ctrl+D duplica (con la contraseña guardada), F4 abre sus propiedades y Supr la borra.
+  Renombrar, mover y borrar se deshacen desde el aviso que aparece abajo.
+- **Favoritas** (estrella o Ctrl+Mayús+F), arriba del todo; el botón del reloj lista las **recientes**.
+- **Buscar** (Ctrl+F, o empezar a escribir en el árbol): cada palabra se busca en el nombre, servidor, puerto, base,
+  usuario, carpeta y motor (`pg`, `sqlserver`, `ifx`…). Los filtros rápidos dejan ver solo las favoritas, las
+  conectadas, las de producción o las de un motor.
+- **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
+- **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON sin contraseñas, para compartirlas o
+  llevarlas a otro equipo; al importar no se repiten las que ya existen.
+- Todo está en el menú contextual (también con la tecla Menú o Mayús+F10), con su atajo al lado.
+
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver (también sus contraseñas, si quieres)
 y DbVisualizer, con carpetas y marcas de producción. De una conexión Informix se traen también el `informixserver` y
-el resto de propiedades de la URL (van a *Parámetros extra*). Las carpetas se reorganizan arrastrando las conexiones.
+el resto de propiedades de la URL (van a *Parámetros extra*).
+
+### Conectar rápido
+
+- Una consola conecta **en segundo plano** en cuanto se abre o se muestra: la primera ejecución no espera al login.
+  Si su conexión no está conectada y no pide contraseña, también se conecta sola.
+- Cada sesión entra **directamente en su base de datos y con su modo de transacción**, sin `USE` ni idas y vueltas
+  después (en PostgreSQL, sin abrir una segunda conexión).
+- Las conexiones de las sesiones que se cierran sin nada propio (una tabla, un recuento) quedan **libres unos minutos**
+  para la siguiente de la misma configuración, que se ahorra el login. Nunca una con transacción, tablas temporales o
+  `SET` propios; al desconectar o editar la conexión se cierran.
+- El tiempo de conexión aparece en el tooltip de la conexión y de la pestaña, y en la salida de la primera sentencia
+  de una consola que tuvo que conectar.
+
+### Reconexión
+
+Una conexión puede caerse con el equipo suspendido, un corte de VPN o un servidor que cierra las sesiones paradas.
+Celer lo detecta y vuelve a conectar solo:
+
+- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse; además, el sistema
+  mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con keepalive de TCP.
+- Al volver de una suspensión o de un corte de red, Celer comprueba todas las sesiones abiertas.
+- Si se cortó y no había nada que perder, la consulta sigue en la conexión nueva y la salida lo dice («Conexión
+  recuperada…»). Una sentencia que modifica datos no se repite nunca, porque no se sabe si llegó a ejecutarse: Celer
+  vuelve a conectar y te lo dice.
+- **Si había una transacción abierta, tablas temporales o `SET` de la sesión, no se reconecta en silencio**: la
+  sentencia no se ejecuta, la consola avisa de lo que se ha perdido (el servidor ya ha deshecho la transacción) y un
+  COMMIT pendiente da error en lugar de fingir que guardó.
+- Los fallos pasajeros al conectar (red que vuelve, servidor arrancando, errores transitorios de Azure) se reintentan
+  con espera.
+- El punto de la conexión en el explorador y en la pestaña dice el estado: ámbar que late mientras conecta, ámbar
+  fijo si se reconectó, rojo si se perdió estado o no hay conexión; el tooltip lo explica.
 
 **Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta, cambios sin guardar
 en una tabla o una exportación en curso, lo pregunta antes.
@@ -146,7 +224,7 @@ En *Ajustes › Apariencia* se puede poner en silencio o apagar, y las animacion
 ## Drivers de Informix
 
 Informix habla dos protocolos: **SQLI**, el suyo (normalmente el puerto 9088), y **DRDA** (a menudo el 9089), que solo
-existe si los DBA lo han activado. En el formulario, *Opciones avanzadas › Protocolo*:
+existe si los DBA lo han activado. En el formulario, *Protocolo*:
 
 | Protocolo | Qué usa | Qué necesitas |
 |---|---|---|

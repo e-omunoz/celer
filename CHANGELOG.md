@@ -7,6 +7,25 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Connections reconnect on their own** (every engine): a session idle for more than a minute is checked with a cheap round trip before use, and every open session is checked when the computer wakes up or the network comes back.
+  - With nothing to lose, the statement goes on in the new connection and the output says so; a statement that writes is never repeated (it is not known whether it ran).
+  - **Never in silence with a transaction, #temp tables or `SET` of the session**: the statement does not run and the console says what was lost; a pending COMMIT fails instead of pretending it saved.
+  - Transient failures when connecting (network coming back, a server starting, Azure's transient errors) are retried with a wait.
+  - TCP keepalive on SQL Server, PostgreSQL and MySQL connections, so firewalls and NAT do not drop them while idle.
+- **Connection state** on the explorer's connection dot and on each tab (connecting, reconnected, session lost, no connection), with the connect time in the tooltip.
+- **Faster connections on every engine**:
+  - a console connects in the background as soon as it opens or is shown, and its connection too when it needs no password;
+  - each session starts straight in its database and transaction mode (no `USE` or extra round trips; on PostgreSQL, no second connection);
+  - the connection of a closed session without state of its own is kept for a few minutes and reused by the next session with the same settings (PostgreSQL, MySQL, Informix, ODBC; SQL Server already did), and closed on disconnect;
+  - fewer round trips on connect: PostgreSQL reads its database and version at once, MySQL and Informix remember the current database, the database list comes from the explorer's first level and autocompletion loads after the tree;
+  - the time spent connecting shows in the output of the first statement of a console that had to connect.
+- **"Probar conexión" step by step**: resolving the name, opening the port, TLS (negotiated on PostgreSQL, read from MySQL's greeting), logging in and a test query in the database, each one timed, the driver or route used and, on failure, what it means and what to do next to the driver's original error.
+- **Connection form, paste a JDBC URL**: the engine and every field are filled from `jdbc:sqlserver`, `jdbc:jtds:sqlserver`, `jdbc:informix-sqli`, `jdbc:ids`, `jdbc:postgresql`, `jdbc:mysql`, `jdbc:mariadb` and `jdbc:sqlite` URLs; the URL's password is never copied, and unused properties are listed.
+- **Connection form, field by field**: clear messages under each field (server, port, file, ODBC string, Informix database and INFORMIXSERVER, user, extra parameters, repeated name), with one-click fixes; errors block saving and testing. Fields an engine or option does not use are hidden, and the Informix protocol moves out of the advanced options.
+- **Explorer folders**: nested folders ("Clientes/Egarsat") that can be created empty, renamed, dragged into each other and deleted (their contents move up), with undo; manual or alphabetical order.
+- **Connection management in the explorer**: rename in place (F2), duplicate with the saved password (Ctrl+D), delete with undo (Delete), favourites on top (Ctrl+Shift+F) and recent connections; full context menus and keyboard shortcuts.
+- **Search and quick filters** for connections by name, host, database, user, folder or engine, plus favourites, connected, production and per-engine filters (Ctrl+F).
+- **Export and import connections** as a portable JSON without passwords; importing skips the connections that already exist.
 - **Informix over JDBC (SQLI)**: Celer connects like DBeaver does, with IBM's JDBC driver, to servers that only listen on SQLI (`onsoctcp`, port 9088) and without the Client SDK.
   - The connection form has a new protocol, **Automático** (the default for new connections): the Client SDK when its ODBC driver is installed, JDBC otherwise. Saved connections keep their protocol.
   - Java 11 or newer is found on its own (Settings, `JAVA_HOME`, DBeaver's JRE, the `PATH`), and so is the JDBC driver (DBeaver's cache). What is missing can be downloaded, only when you ask, into Celer's data folder: Eclipse Temurin JRE 21 and the driver from Maven Central (15.0.1.4, which also reads Informix 15 servers), each checked against its SHA-256, with progress and cancel. No administrator rights are needed.
@@ -28,6 +47,9 @@ All notable changes to Celer are documented here. The format follows
   - the output shows the time spent connecting or cutting the previous result when there was any; with `CELER_MSSQL_TRACE` set, every statement's times also go to the standard error.
 
 ### Fixed
+- **MySQL / MariaDB**: a connection that dropped was reopened in silence on the next statement, losing an open transaction, temporary tables and session variables without a word.
+- **SQL Server**: a connection that dropped with a transaction open was replaced on the next statement and the loss only showed in the timing line.
+- "Probar conexión" on a saved connection with the password left as it was ("sin cambios") tried an empty password instead of the saved one.
 - **Informix**: importing a DBeaver or DbVisualizer connection keeps its `informixserver` and the other URL properties ("Parámetros extra"), and uses "Automático" instead of DRDA.
 - **Informix**: an empty database no longer sends `DATABASE=;` to the driver; DRDA asks for the database before connecting.
 - Driver downloads use the system's proxy (Windows Internet settings or `HTTPS_PROXY`) and can be cancelled.
