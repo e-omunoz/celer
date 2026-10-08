@@ -32,6 +32,7 @@ Step "sql context" { & $node --experimental-strip-types --no-warnings dev\sqlcon
 Step "templates and parameters" { & $node --experimental-strip-types --no-warnings dev\snippets-check.ts }
 Step "ER layout" { & $node --experimental-strip-types --no-warnings dev\erlayout-check.ts }
 Step "plan readers" { & $node --experimental-strip-types --no-warnings dev\plan-check.ts }
+Step "result comparison" { & $node --experimental-strip-types --no-warnings dev\compare-check.ts }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
 

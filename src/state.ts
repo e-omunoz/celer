@@ -75,6 +75,8 @@ export interface SqlTab {
   pinned: PinnedResult[];
   /** The pinned result on show instead of the current ones (null: the current ones). */
   activePinned: string | null;
+  /** A pinned result compared with the current one (key: columns that match rows; null: guessed). */
+  compare: { pinId: string; key: string[] | null } | null;
 }
 
 export interface PinnedResult {
@@ -531,6 +533,7 @@ function blankSql(id: string, connId: string | null = null, sql = "", title = "c
     activePlan: false,
     pinned: [],
     activePinned: null,
+    compare: null,
   };
 }
 
@@ -2323,11 +2326,11 @@ export function renameTab(id: string, title: string) {
 }
 
 export function setActiveResult(tabId: string, index: number) {
-  patchTab(tabId, { activeResult: index, activePinned: null, activePlan: false });
+  patchTab(tabId, { activeResult: index, activePinned: null, activePlan: false, compare: null });
 }
 
 export function showPlan(tabId: string) {
-  patchTab(tabId, { activePlan: true, activePinned: null });
+  patchTab(tabId, { activePlan: true, activePinned: null, compare: null });
 }
 
 /**
@@ -2351,13 +2354,44 @@ export function pinResult(tabId: string) {
 }
 
 export function showPinned(tabId: string, pinId: string) {
-  patchTab(tabId, { activePinned: pinId, activePlan: false });
+  patchTab(tabId, { activePinned: pinId, activePlan: false, compare: null });
 }
 
 export function unpinResult(tabId: string, pinId: string) {
   const tab = state.tabs[tabIndex(tabId)];
   if (tab?.kind !== "sql") return;
-  patchTab(tabId, { pinned: tab.pinned.filter((pin) => pin.id !== pinId), activePinned: tab.activePinned === pinId ? null : tab.activePinned });
+  patchTab(tabId, {
+    pinned: tab.pinned.filter((pin) => pin.id !== pinId),
+    activePinned: tab.activePinned === pinId ? null : tab.activePinned,
+    compare: tab.compare?.pinId === pinId ? null : tab.compare,
+  });
+}
+
+/** The result a pinned one is compared with: the current result on show, else the first one with rows. */
+export function currentResultOf(tab: SqlTab): ResultSet | undefined {
+  const active = tab.activeResult >= 0 ? tab.results[tab.activeResult] : undefined;
+  return active?.columns.length ? active : tab.results.find((r) => r.columns.length);
+}
+
+/** Compares a pinned result with the current one (in the results area, until closed). */
+export function compareWithCurrent(tabId: string, pinId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql") return;
+  if (!currentResultOf(tab)) {
+    notify("No hay un resultado actual con filas para comparar", "warning", "Ejecuta la consulta (otra vez, o una distinta) y compara el resultado fijado con el nuevo.");
+    return;
+  }
+  patchTab(tabId, { compare: { pinId, key: null }, activePinned: null, activePlan: false });
+}
+
+export function setCompareKey(tabId: string, key: string[] | null) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql" || !tab.compare) return;
+  patchTab(tabId, { compare: { ...tab.compare, key } });
+}
+
+export function closeCompare(tabId: string) {
+  patchTab(tabId, { compare: null });
 }
 
 // ---------------------------------------------------------------- history / inspector

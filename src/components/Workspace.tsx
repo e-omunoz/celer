@@ -1,5 +1,6 @@
 import { allSnippets } from "../snippets";
 import { PlanView } from "./PlanView";
+import { CompareView } from "./CompareView";
 import {
   AlignLeft,
   ArrowDownToLine,
@@ -13,6 +14,7 @@ import {
   Filter,
   FolderOpen,
   Gauge,
+  GitCompare,
   ListFilter,
   Lightbulb,
   Minus,
@@ -64,6 +66,8 @@ import {
   openQuery,
   openScript,
   pinResult,
+  closeCompare,
+  compareWithCurrent,
   revertTableChange,
   showPlan,
   showPinned,
@@ -424,14 +428,14 @@ function SqlPane(props: { tab: SqlTab }) {
       <div class="hsplit" onMouseDown={resize} />
       <div class="results">
         <div class="results-head">
-          <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1 && !props.tab.activePinned && !props.tab.activePlan, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
+          <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1 && !props.tab.activePinned && !props.tab.activePlan && !props.tab.compare, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
             <Show when={props.tab.error} fallback={<FileCode2 size={13} />}><CircleAlert size={13} /></Show>
             Salida
             <Show when={props.tab.output.length}><small>{props.tab.output.length}</small></Show>
           </button>
           <For each={gridResults()}>
             {({ item, index }) => (
-              <button type="button" class="rtab" classList={{ on: index === props.tab.activeResult && !props.tab.activePinned && !props.tab.activePlan }} onClick={() => setActiveResult(props.tab.id, index)}>
+              <button type="button" class="rtab" classList={{ on: index === props.tab.activeResult && !props.tab.activePinned && !props.tab.activePlan && !props.tab.compare }} onClick={() => setActiveResult(props.tab.id, index)}>
                 <Show when={item.columns.length} fallback={<Rows3 size={13} />}><ObjIcon kind="table" size={13} /></Show>
                 {item.columns.length ? `Resultado ${gridResults().filter((r) => r.item.columns.length && r.index <= index).length}` : "Actualización"}
                 <small>{item.columns.length ? `${item.rows.length.toLocaleString()}${item.hasMore ? "+" : ""}` : (item.rowsAffected ?? 0).toLocaleString()}</small>
@@ -445,12 +449,13 @@ function SqlPane(props: { tab: SqlTab }) {
           </Show>
           <For each={props.tab.pinned}>
             {(pin) => (
-              <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned }} title={pin.sql}>
+              <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned || pin.id === props.tab.compare?.pinId }} title={pin.sql}>
                 <button type="button" class="rtab-main" onClick={() => showPinned(props.tab.id, pin.id)}>
                   <Pin size={12} />
                   {pin.title}
                   <small>{pin.result.rows.length.toLocaleString()}</small>
                 </button>
+                <button type="button" class="rtab-close" classList={{ on: props.tab.compare?.pinId === pin.id }} title="Comparar con el resultado actual" onClick={() => (props.tab.compare?.pinId === pin.id ? closeCompare(props.tab.id) : compareWithCurrent(props.tab.id, pin.id))}><GitCompare size={11} /></button>
                 <button type="button" class="rtab-close" title="Quitar este resultado fijado" onClick={() => unpinResult(props.tab.id, pin.id)}><X size={11} /></button>
               </span>
             )}
@@ -473,7 +478,7 @@ function SqlPane(props: { tab: SqlTab }) {
           <Show when={props.tab.running}>
             <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}</span>
           </Show>
-          <Show when={!props.tab.running && !props.tab.activePlan && result()?.columns.length}>
+          <Show when={!props.tab.running && !props.tab.activePlan && !props.tab.compare && result()?.columns.length}>
             <span class="muted small">
               <Show when={filtering()} fallback={<>{rowsLabel(result()?.rows.length ?? 0, result()?.hasMore)}{pinned() ? "" : ` · ${formatMs(props.tab.elapsedMs)}`}</>}>
                 {shownRows().length.toLocaleString()} de {rowsLabel(result()?.rows.length ?? 0, result()?.hasMore)}
@@ -498,6 +503,9 @@ function SqlPane(props: { tab: SqlTab }) {
           <div class="progress-bar" />
         </Show>
         <Switch>
+          <Match when={props.tab.compare}>
+            <CompareView tab={props.tab} />
+          </Match>
           <Match when={props.tab.activePlan && props.tab.plan}>
             {(view) => <PlanView tab={props.tab} plan={view().plan} sql={view().sql} />}
           </Match>
