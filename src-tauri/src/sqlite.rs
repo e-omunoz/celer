@@ -183,16 +183,22 @@ impl SqliteDriver {
             .collect()
     }
 
-    fn step_change(&self, stmt: *mut rusqlite::ffi::sqlite3_stmt) -> Result<i64> {
+    /// Runs a statement without rows: the rows it changed, or None when it changes none by nature (DDL, BEGIN, PRAGMA…).
+    /// changes() keeps the count of the last INSERT/UPDATE/DELETE, so it is only read for one of those.
+    fn step_change(&self, stmt: *mut rusqlite::ffi::sqlite3_stmt, kw: &str) -> Result<Option<i64>> {
+        let db = unsafe { self.conn.handle() };
+        let before = unsafe { rusqlite::ffi::sqlite3_total_changes64(db) };
         let rc = unsafe { rusqlite::ffi::sqlite3_step(stmt) };
         if rc != rusqlite::ffi::SQLITE_DONE && rc != rusqlite::ffi::SQLITE_OK {
-            return self.fail(rc).map(|_| 0);
+            return self.fail(rc).map(|_| None);
         }
-        Ok(self.conn.changes() as i64)
+        let changed = unsafe { rusqlite::ffi::sqlite3_total_changes64(db) } != before;
+        let dml = matches!(kw, "INSERT" | "UPDATE" | "DELETE" | "REPLACE");
+        Ok((dml || changed).then(|| self.conn.changes() as i64))
     }
 
     /// Ejecuta el lote. El primer resultado que no cabe en `fetch` queda abierto.
-    fn run_batch(&mut self, sql: &str, fetch: usize) -> Result<Vec<ResultSet>> {
+    fn run_batch(&mut self, sql: &str, fetch: usize, messages: &mut Vec<String>) -> Result<Vec<ResultSet>> {
         let mut results = Vec::new();
         let mut rest = sql.to_string();
         while !rest.trim().is_empty() {
@@ -208,7 +214,7 @@ impl SqliteDriver {
                 }
             }
             if prep.ncols == 0 {
-                let changed = match self.step_change(prep.stmt) {
+                let changed = match self.step_change(prep.stmt, &kw) {
                     Ok(n) => n,
                     Err(e) => {
                         Self::finalize_stmt(prep.stmt);
@@ -216,7 +222,13 @@ impl SqliteDriver {
                     }
                 };
                 Self::finalize_stmt(prep.stmt);
-                results.push(ResultSet::count(changed));
+                messages.push(match changed {
+                    Some(1) => "1 fila afectada".into(),
+                    Some(n) => format!("{n} filas afectadas"),
+                    None if kw.is_empty() => "Sentencia ejecutada".into(),
+                    None => format!("{kw} ejecutado"),
+                });
+                results.push(ResultSet::count(changed.unwrap_or(0)));
                 continue;
             }
             let columns = self.columns_of(prep.stmt, prep.ncols);
@@ -345,7 +357,7 @@ impl SqliteDriver {
         let extra = if rest.trim().is_empty() {
             vec![]
         } else {
-            self.run_batch(&rest, n)?
+            self.run_batch(&rest, n, &mut Vec::new())?
         };
         Ok(FetchOutput {
             rows,
@@ -374,20 +386,11 @@ impl Driver for SqliteDriver {
         self.close_cursor()?;
         let t0 = std::time::Instant::now();
         self.enter();
-        let results = self.run_batch(sql, fetch.max(1));
-        self.leave();
-        let results = results?;
         let mut messages: Vec<String> =
             crate::session::discarded_note(std::mem::take(&mut self.discarded)).into_iter().collect();
-        for r in &results {
-            if let Some(n) = r.rows_affected {
-                messages.push(if n == 1 {
-                    "1 fila afectada".into()
-                } else {
-                    format!("{n} filas afectadas")
-                });
-            }
-        }
+        let results = self.run_batch(sql, fetch.max(1), &mut messages);
+        self.leave();
+        let results = results?;
         if let Some(c) = &self.cursor {
             messages.extend(crate::session::pending_note(count_statements(&c.rest)));
         }
@@ -1016,6 +1019,17 @@ mod tests {
         d.completion("main").unwrap();
         assert!(d.fetch(10).is_err());
         assert_eq!(count_statements("CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET flag = 2; END; SELECT 1"), 2);
+    }
+
+    #[test]
+    fn counts_only_rows_a_statement_changed() {
+        let mut d = mem();
+        let out = d
+            .execute("CREATE TABLE t (x); INSERT INTO t VALUES (1),(2),(3); CREATE INDEX ix ON t (x); BEGIN; DELETE FROM t WHERE x > 5; COMMIT", 10)
+            .unwrap();
+        let counts: Vec<Option<i64>> = out.results.iter().map(|r| r.rows_affected).collect();
+        assert_eq!(counts, [Some(0), Some(3), Some(0), Some(0), Some(0), Some(0)]);
+        assert_eq!(out.messages, ["CREATE ejecutado", "3 filas afectadas", "CREATE ejecutado", "BEGIN ejecutado", "0 filas afectadas", "COMMIT ejecutado"]);
     }
 
     #[test]
