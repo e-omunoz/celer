@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "panels",
+  "description": "Paneles en su propia ventana (biblioteca, asistente IA, plan, diagrama E-R, comparaciones): su ventana y los diálogos de abrir y guardar, sin abrir enlaces ni carpetas",
+  "windows": ["panel-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-theme",
+    "core:window:allow-show",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-focus",
+    "dialog:default"
+  ]
+}
