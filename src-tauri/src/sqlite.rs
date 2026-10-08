@@ -53,6 +53,9 @@ pub struct SqliteDriver {
     busy_guard: StdCell<bool>,
     /// Statements of a script dropped with its open result, told in the next execute's messages.
     discarded: usize,
+    /// The session's transaction mode. In manual mode (false) each statement outside a transaction opens one first,
+    /// so a COMMIT or ROLLBACK (the console's buttons or typed) does not leave it in autocommit.
+    autocommit: bool,
 }
 
 impl SqliteDriver {
@@ -89,6 +92,7 @@ impl SqliteDriver {
             conn,
             busy_guard: StdCell::new(false),
             discarded: 0,
+            autocommit: true,
         })
     }
 
@@ -192,10 +196,17 @@ impl SqliteDriver {
         let mut results = Vec::new();
         let mut rest = sql.to_string();
         while !rest.trim().is_empty() {
+            let kw = crate::session::first_keyword(&rest);
             let Some(prep) = self.prepare_next(&rest)? else {
                 break;
             };
             rest = prep.rest;
+            if !self.autocommit && self.conn.is_autocommit() && !no_implicit_tx(&kw) {
+                if let Err(e) = self.conn.execute_batch("BEGIN") {
+                    Self::finalize_stmt(prep.stmt);
+                    return Err(e.into());
+                }
+            }
             if prep.ncols == 0 {
                 let changed = match self.step_change(prep.stmt) {
                     Ok(n) => n,
@@ -409,13 +420,11 @@ impl Driver for SqliteDriver {
 
     fn set_autocommit(&mut self, on: bool) -> Result<bool> {
         self.close_cursor()?;
-        if on {
-            if !self.conn.is_autocommit() {
-                self.conn.execute_batch("COMMIT")?;
-            }
-        } else if self.conn.is_autocommit() {
-            self.conn.execute_batch("BEGIN")?;
+        if on && !self.conn.is_autocommit() {
+            self.conn.execute_batch("COMMIT")?;
         }
+        // Manual mode opens the transaction with the next statement (run_batch).
+        self.autocommit = on;
         Ok(!self.conn.is_autocommit())
     }
 
@@ -761,6 +770,14 @@ fn qi(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
+/// Statements that control the transaction themselves or cannot run inside one: manual mode opens none for them.
+fn no_implicit_tx(kw: &str) -> bool {
+    matches!(
+        kw,
+        "BEGIN" | "COMMIT" | "END" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" | "VACUUM" | "ATTACH" | "DETACH" | "PRAGMA"
+    )
+}
+
 /// Statements in the rest of a script (pieces with only comments do not count). `sqlite3_complete` says where
 /// one ends, so a `;` inside a string or a trigger body does not split it.
 fn count_statements(sql: &str) -> usize {
@@ -967,10 +984,23 @@ mod tests {
         let mut d = mem();
         d.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", 10)
             .unwrap();
-        assert!(d.set_autocommit(false).unwrap());
-        d.execute("INSERT INTO t(name) VALUES ('x')", 10).unwrap();
+        assert!(!d.set_autocommit(false).unwrap());
+        assert!(d.execute("INSERT INTO t(name) VALUES ('x')", 10).unwrap().in_transaction);
         assert!(d.rollback().unwrap() == false);
         let out = d.execute("SELECT COUNT(*) FROM t", 10).unwrap();
         assert_eq!(cell_i64(&out.results[0].rows[0][0]), 0);
+        // Still manual after a commit, a rollback, or a COMMIT typed in the console.
+        d.execute("INSERT INTO t(name) VALUES ('a')", 10).unwrap();
+        d.commit().unwrap();
+        assert!(d.execute("INSERT INTO t(name) VALUES ('b')", 10).unwrap().in_transaction);
+        d.rollback().unwrap();
+        d.execute("INSERT INTO t(name) VALUES ('c'); COMMIT; INSERT INTO t(name) VALUES ('d')", 10).unwrap();
+        d.rollback().unwrap();
+        let out = d.execute("SELECT group_concat(name, '') FROM (SELECT name FROM t ORDER BY id)", 10).unwrap();
+        assert_eq!(cell_string(&out.results[0].rows[0][0]), "ac");
+        d.rollback().unwrap();
+        // Back to autocommit: nothing waits for a commit.
+        assert!(!d.set_autocommit(true).unwrap());
+        assert!(!d.execute("INSERT INTO t(name) VALUES ('e')", 10).unwrap().in_transaction);
     }
 }
