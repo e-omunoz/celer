@@ -485,14 +485,26 @@ impl Guarded {
         lost.join(", ")
     }
 
-    /// Si un error es un corte: el driver lo sabe, o el mensaje lo dice y la conexión no responde.
+    /// Si un error es un corte: el driver lo sabe, o el mensaje lo dice y la conexión no responde. Informix (ODBC/CLI
+    /// y JDBC) no sabe por sí solo si su conexión sigue y sus errores de red cambian con el driver: ante cualquier
+    /// error se comprueba (una consulta barata, solo cuando algo falla).
     fn is_lost(&mut self, e: &anyhow::Error) -> bool {
+        let kind = self.kind;
         let Some(d) = self.inner.as_deref_mut() else { return true };
         if d.broken() {
             return true;
         }
         let text = e.to_string();
-        looks_lost(&text) && (surely_lost(&text) || d.ping().is_err())
+        if surely_lost(&text) {
+            return true;
+        }
+        (looks_lost(&text) || kind == DbKind::Informix) && d.ping().is_err()
+    }
+
+    /// Para las pruebas: como si la sesión llevara `idle` sin usarse.
+    #[cfg(test)]
+    pub(crate) fn pretend_idle(&mut self, idle: Duration) {
+        self.last_used = Instant::now() - idle;
     }
 
     /// Otra conexión en lugar de la que se cortó, en la base y con el modo de transacción de la sesión. El estado que
