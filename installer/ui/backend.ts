@@ -77,7 +77,9 @@ export const setup = {
   pickDir: (current: string): Promise<string | null> => (isTauri() ? invoke("pick_dir", { current }) : Promise.resolve("D:\\Apps\\Celer")),
   install: (options: InstallOptions): Promise<string> =>
     isTauri() ? invoke("install", { options }) : simulate(["prepare", "extract", "shortcuts", "register", "finish"], new URLSearchParams(location.search).has("fail")).then(() => `${options.dir}\\celer.exe`),
-  uninstall: (keepData: boolean): Promise<void> => (isTauri() ? invoke("uninstall", { options: { keepData } }) : simulate(["prepare", "shortcuts", "register", "finish"])),
+  /** Resolves to the uninstall.exe left in the folder (it is the running process), if any. */
+  uninstall: (keepData: boolean): Promise<string | null> =>
+    isTauri() ? invoke("uninstall", { options: { keepData } }) : simulate(["prepare", "shortcuts", "register", "finish"]).then(() => "C:\\Users\\oscar\\AppData\\Local\\Programs\\Celer\\uninstall.exe"),
   launch: (path: string): Promise<void> => (isTauri() ? invoke("launch", { path }) : Promise.resolve()),
   quit: (): Promise<void> => (isTauri() ? invoke("quit") : Promise.resolve()),
   onProgress: async (cb: (p: Progress) => void): Promise<() => void> => {

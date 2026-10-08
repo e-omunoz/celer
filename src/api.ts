@@ -84,6 +84,8 @@ export interface Backend {
   driverDownloadCancel(): Promise<void>;
   appInfo(): Promise<{ version: string; dataDir: string }>;
   migrationSources(): Promise<MigrationSource[]>;
+  /** DBeaver's encrypted credentials next to a listed data-sources.json (hex), only when the user asks for passwords. */
+  migrationDbeaverCredentials(path: string): Promise<string | null>;
   updateCheck(): Promise<UpdateInfo>;
   updateDownload(url: string, name: string, sumsUrl: string): Promise<string>;
   updateInstall(path: string, relaunch: boolean): Promise<void>;
@@ -167,6 +169,7 @@ function tauriBackend(): Backend {
     driverDownloadCancel: () => invoke("driver_download_cancel"),
     appInfo: () => invoke("app_info"),
     migrationSources: () => invoke("migration_sources"),
+    migrationDbeaverCredentials: (path) => invoke("migration_dbeaver_credentials", { path }),
     updateCheck: () => invoke("update_check"),
     updateDownload: (url, name, sumsUrl) => invoke("update_download", { url, name, sumsUrl }),
     updateInstall: (path, relaunch) => invoke("update_install", { path, relaunch }),

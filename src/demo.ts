@@ -740,6 +740,9 @@ export function createDemoBackend(): Backend {
     async migrationSources() {
       return [];
     },
+    async migrationDbeaverCredentials() {
+      return null;
+    },
     // Browser demo: "?update" in the URL simulates a new release to design the update flow.
     async updateCheck() {
       const simulate = new URLSearchParams(location.search).has("update");
@@ -751,7 +754,7 @@ export function createDemoBackend(): Backend {
         publishedAt: new Date().toISOString(),
         htmlUrl: "https://github.com/e-omunoz/celer/releases",
         assetUrl: "",
-        assetName: "Celer-Setup-1.2.0.exe",
+        assetName: "Celer-Setup-Windows.exe",
         assetSize: 12_538_880,
         sumsUrl: "",
         installed: true,

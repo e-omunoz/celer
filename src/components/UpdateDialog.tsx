@@ -2,7 +2,7 @@ import { ArrowDownToLine, CircleAlert, ExternalLink, RefreshCw, RotateCcw, Shiel
 import { Match, Show, Switch } from "solid-js";
 import { Gib, type GibMood } from "../gib/Gib";
 import { saveSettings, state } from "../state";
-import { checkForUpdates, downloadUpdate, formatMb, installUpdate, openReleasePage, setUpdate, skipVersion, update } from "../update";
+import { checkForUpdates, downloadUpdate, formatMb, installLater, installUpdate, openReleasePage, setUpdate, skipVersion, update } from "../update";
 import { Dialog } from "./Modals";
 import { Markdown } from "./Markdown";
 
@@ -91,10 +91,10 @@ export function UpdateDialog() {
       <Show when={info()?.available && update.status !== "error"}>
         <p class="upd-fine">
           {{
-            setup: "Celer se cerrará, el instalador se actualizará solo y volverá a abrirlo. Tus conexiones, consultas y ajustes se conservan.",
-            portable: "Esta copia es portable: se abrirá Celer Setup para que elijas dónde instalar la nueva versión. Tus conexiones y ajustes se conservan.",
-            msi: "Celer se instaló con el paquete MSI: descarga el .msi nuevo desde GitHub e instálalo encima (tus datos se conservan).",
-            other: "Descarga el paquete de tu sistema (.dmg, .deb, .rpm o AppImage) desde GitHub. Tus conexiones y ajustes se conservan.",
+            setup: "Al pulsar Actualizar, Celer descarga el instalador, comprueba su SHA-256, se cierra y vuelve a abrirse con la versión nueva. Tus conexiones, consultas y ajustes se conservan.",
+            portable: "Esta copia es portable y no se actualiza sola: descarga Celer-Portable-Windows.exe o Celer-Setup-Windows.exe desde la página de la versión. Tus conexiones y ajustes se conservan.",
+            msi: "Celer se instaló con el antiguo paquete MSI, que ya no se publica: desinstálalo e instala Celer-Setup-Windows.exe desde la página de la versión (tus datos se conservan).",
+            other: "Descarga el paquete de tu sistema (.dmg, .deb, .rpm o AppImage) desde la página de la versión. Tus conexiones y ajustes se conservan.",
           }[info()!.installKind ?? "setup"]}
         </p>
       </Show>
@@ -107,7 +107,7 @@ export function UpdateDialog() {
             <span class="spacer" />
             <button type="button" class="btn" onClick={close}>Más tarde</button>
             <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void downloadUpdate()}>
-              <ArrowDownToLine size={14} /> {info()?.assetUrl ? "Descargar e instalar" : "Descargar desde GitHub"}
+              <ArrowDownToLine size={14} /> {info()?.assetUrl ? "Actualizar" : "Descargar desde GitHub"}
             </button>
           </Match>
           <Match when={update.status === "downloading"}>
@@ -116,7 +116,7 @@ export function UpdateDialog() {
           </Match>
           <Match when={update.status === "ready"}>
             <span class="spacer" />
-            <button type="button" class="btn" onClick={close}>Al cerrar Celer</button>
+            <button type="button" class="btn" onClick={installLater}>Al cerrar Celer</button>
             <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void installUpdate()}>
               <RotateCcw size={14} /> Instalar y reiniciar
             </button>

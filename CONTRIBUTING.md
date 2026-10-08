@@ -75,21 +75,36 @@ Versions follow [Semantic Versioning](https://semver.org):
 - **minor:** new features;
 - **major:** incompatible changes to saved data or the MCP interface.
 
-The maintainer publishes a release with one command:
+Everything is built on GitHub Actions; nothing is compiled on the maintainer's machine. Pushing a `vX.Y.Z` tag runs
+`.github/workflows/release-desktop.yml`, which:
+
+1. Checks that the tag matches the version in `package.json`, both `tauri.conf.json` and both `Cargo.toml`.
+2. Builds Windows (Celer and Celer Setup, and runs the installer's tests), macOS (universal) and Linux in parallel.
+3. Checks that exactly these files came out and writes one `SHA256SUMS.txt` for all of them:
+   `Celer-Setup-Windows.exe`, `Celer-Portable-Windows.exe`, `Celer-macOS.dmg`, `Celer-Linux.deb`, `Celer-Linux.rpm`,
+   `Celer-Portable-Linux.AppImage`.
+4. Publishes the GitHub Release *Celer X.Y.Z*, with the *X.Y.Z* section of `CHANGELOG.md` as its notes and a download
+   table. The files are uploaded to a draft that is published once they are all there.
+
+The file names carry no version, so `https://github.com/e-omunoz/celer/releases/latest/download/<file>` always serves
+the latest one: the README buttons and the in-app updater (which looks for `Celer-Setup-Windows.exe` and
+`SHA256SUMS.txt`) rely on it. Keep the names stable.
+
+To prepare the tag, `dev\release.ps1` bumps the version everywhere, moves the *Unreleased* notes of `CHANGELOG.md` under
+the new version, commits, tags and pushes. It builds nothing:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File dev\release.ps1 -Bump minor   # or -Version 1.2.0, -Draft, -NoPublish
+powershell -ExecutionPolicy Bypass -File dev\release.ps1 -Bump minor   # or -Version 1.2.0; -NoPush to only tag locally
 ```
 
-The script then:
+Doing it by hand is the same: bump the five manifests, update `CHANGELOG.md`, commit, then
+`git tag -a vX.Y.Z -m "Celer X.Y.Z"` and `git push origin main vX.Y.Z`.
 
-1. Bumps the version everywhere.
-2. Moves the *Unreleased* notes into the new version.
-3. Runs the checks.
-4. Builds the app, the NSIS installer, the portable `.exe` and Celer Setup.
-5. Tags `vX.Y.Z` and publishes a GitHub Release with the files and their SHA-256 sums.
+To try the packages of a branch without publishing anything, run the workflow by hand (*Actions › Release › Run
+workflow*, or `gh workflow run release-desktop.yml --ref <branch>`): it builds the same files and leaves them, with
+`SHA256SUMS.txt`, in the run's `celer-release` artifact.
 
-Installed copies of Celer find the new release on their own.
+Installed copies of Celer find the new release on their own and update when the user presses *Actualizar*.
 
 ## README media
 

@@ -31,6 +31,7 @@
   "bundle": {
     "active": false,
     "publisher": "Celer",
+    "copyright": "Copyright (c) Celer contributors",
     "icon": ["icons/icon.ico"]
   }
 }

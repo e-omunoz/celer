@@ -1077,6 +1077,13 @@ async fn migration_sources() -> Vec<migrate::SourceFile> {
     tauri::async_runtime::spawn_blocking(migrate::find_sources).await.unwrap_or_default()
 }
 
+/// DBeaver's encrypted credentials next to a listed data-sources.json: only when the user ticked «Importar también las
+/// contraseñas guardadas» and pressed Importar.
+#[tauri::command]
+async fn migration_dbeaver_credentials(path: String) -> CmdResult<Option<String>> {
+    tauri::async_runtime::spawn_blocking(move || migrate::dbeaver_credentials(&path)).await.map_err(err)?
+}
+
 // ───────────── Actualizaciones ─────────────
 
 #[tauri::command]
@@ -1084,11 +1091,22 @@ async fn update_check() -> CmdResult<update::UpdateInfo> {
     tauri::async_runtime::spawn_blocking(update::check).await.map_err(err)?.map_err(err)
 }
 
+/// Where updates are downloaded: `updates` in Celer's local data folder (%LOCALAPPDATA%\es.celer.app on Windows: not
+/// the roaming profile, and not the system's temp folder). Debug builds with `CELER_DATA_DIR` use that folder.
+fn updates_dir(app: &tauri::AppHandle) -> PathBuf {
+    let base = dev_data_dir()
+        .or_else(|| app.path().app_local_data_dir().ok())
+        .unwrap_or_else(|| app.state::<Arc<AppState>>().store.dir.clone());
+    base.join(update::DOWNLOAD_SUBDIR)
+}
+
+/// Runs only when the user presses «Actualizar» in the update dialog.
 #[tauri::command]
 async fn update_download(app: tauri::AppHandle, url: String, name: String, sums_url: String) -> CmdResult<String> {
+    let dir = updates_dir(&app);
     tauri::async_runtime::spawn_blocking(move || {
         let last = std::cell::Cell::new(0u64);
-        update::download(&url, &name, &sums_url, |done, total| {
+        update::download(&dir, &url, &name, &sums_url, |done, total| {
             if done - last.get() > 256 * 1024 || done == total {
                 last.set(done);
                 let _ = app.emit("update-download", DownloadProgress { done, total, what: String::new() });
@@ -1105,7 +1123,7 @@ async fn update_download(app: tauri::AppHandle, url: String, name: String, sums_
 /// El front ya ha pasado por la guarda de cierre (transacciones abiertas, ediciones sin guardar).
 #[tauri::command]
 fn update_install(app: tauri::AppHandle, path: String, relaunch: bool) -> CmdResult<()> {
-    update::launch_installer(std::path::Path::new(&path), relaunch).map_err(err)?;
+    update::launch_installer(&updates_dir(&app), std::path::Path::new(&path), relaunch).map_err(err)?;
     if !relaunch {
         // The window is already closing on its own.
         return Ok(());
@@ -1296,6 +1314,7 @@ pub fn run() {
             driver_download_cancel,
             app_info,
             migration_sources,
+            migration_dbeaver_credentials,
             update_check,
             update_download,
             update_install,

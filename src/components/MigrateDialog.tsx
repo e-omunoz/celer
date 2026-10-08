@@ -19,7 +19,7 @@ export function MigrateDialog() {
   });
   const importable = () => migration.candidates.filter((c) => c.status !== "unsupported");
   const chosen = () => importable().filter((c) => migration.selected[c.key]).length;
-  const withPasswords = () => migration.candidates.some((c) => c.cfg.password);
+  const hasDbeaver = () => migration.candidates.some((c) => c.tool === "dbeaver" && c.status !== "unsupported");
   const hasDbvis = () => migration.candidates.some((c) => c.tool === "dbvisualizer");
   const setAll = (on: boolean) => {
     const selected: Record<string, boolean> = {};
@@ -75,7 +75,7 @@ export function MigrateDialog() {
                         <small>{c.status === "unsupported" ? c.driver : where(c)}</small>
                       </span>
                       <span class="spacer" />
-                      <Show when={c.cfg.password && c.status !== "unsupported"}><KeyRound size={12} class="mig-key" /></Show>
+                      <Show when={c.savedPassword && c.status !== "unsupported"}><span class="mig-key" title="DBeaver guarda su contraseña"><KeyRound size={12} /></span></Show>
                       <Show when={c.status !== "new"}><span class="tag" classList={{ warn: c.status === "unsupported" }}>{c.status === "exists" ? "Ya existe" : "No soportado"}</span></Show>
                       <Show when={c.cfg.production}><span class="tag prod tiny">PROD</span></Show>
                     </label>
@@ -85,11 +85,15 @@ export function MigrateDialog() {
             )}
           </For>
         </div>
-        <Show when={withPasswords()}>
+        <Show when={hasDbeaver()}>
           <label class="toggle-line mig-pass">
             <input type="checkbox" checked={migration.passwords} disabled={migration.importing} onChange={(event) => setMigration({ passwords: event.currentTarget.checked })} />
-            <span>Importar las contraseñas guardadas en DBeaver (van al almacén de credenciales del sistema)</span>
+            <span>Importar también las contraseñas guardadas</span>
           </label>
+          <p class="mig-note">
+            Solo si la marcas, Celer lee el fichero cifrado de credenciales de DBeaver (usuario y contraseña) al importar, y las contraseñas van al
+            almacén de credenciales del sistema. Sin marcarla, Celer te pedirá la contraseña la primera vez que conectes.
+          </p>
         </Show>
         <Show when={hasDbvis()}>
           <p class="mig-note">Las contraseñas de DbVisualizer no se importan: Celer te las pedirá la primera vez que conectes.</p>

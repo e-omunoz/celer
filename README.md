@@ -23,6 +23,21 @@
   <a href="README.es.md">Español</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Setup-Windows.exe"><img alt="Download for Windows (Celer-Setup-Windows.exe)" src="docs/media/download-windows.svg" width="250" /></a>
+  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-macOS.dmg"><img alt="Download for macOS (Celer-macOS.dmg)" src="docs/media/download-macos.svg" width="250" /></a>
+  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Portable-Linux.AppImage"><img alt="Download for Linux (Celer-Portable-Linux.AppImage)" src="docs/media/download-linux.svg" width="250" /></a>
+  <br/>
+  <sub>
+    Portable: <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Portable-Windows.exe">Windows</a> ·
+    <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Portable-Linux.AppImage">Linux</a> ·
+    Packages: <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Linux.deb">.deb</a> ·
+    <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Linux.rpm">.rpm</a> ·
+    <a href="https://github.com/e-omunoz/celer/releases/latest/download/SHA256SUMS.txt">SHA256SUMS.txt</a> ·
+    <a href="https://github.com/e-omunoz/celer/releases/latest">release notes</a>
+  </sub>
+</p>
+
 Open Celer, double-click a table and you are looking at its rows before you notice it loaded. Write a query and
 completion offers the columns of the tables you are using. Ctrl+click a table name to open it, Ctrl+click a
 foreign key to jump to the row it points to. Load 200,000 rows and the window keeps responding; if anything takes
@@ -118,50 +133,58 @@ without administrator rights, and keeps itself up to date.
 
 ## Installation
 
-1. Download **`Celer-Setup-x.y.z.exe`** from the [latest release](https://github.com/e-omunoz/celer/releases/latest)
-   and run it.
+The buttons at the top always download the latest version. Every release has the same file names:
+
+| System | File |
+|---|---|
+| Windows | `Celer-Setup-Windows.exe` (installer) · `Celer-Portable-Windows.exe` (runs without installing) |
+| macOS | `Celer-macOS.dmg` (Apple silicon and Intel) |
+| Linux | `Celer-Portable-Linux.AppImage` · `Celer-Linux.deb` · `Celer-Linux.rpm` |
+| All | `SHA256SUMS.txt` with the SHA-256 of every file |
+
+### Windows
+
+1. Download **`Celer-Setup-Windows.exe`** (the Windows button above, or from the
+   [latest release](https://github.com/e-omunoz/celer/releases/latest)) and run it.
 2. Choose the folder and shortcuts (or just click *Instalar*).
 3. Open Celer: a short guide shows you around and can create a sample database to play with.
 
 Celer installs to `%LOCALAPPDATA%\Programs\Celer`, adds a Start menu entry and appears in *Settings › Apps* for
-uninstalling. It runs on Windows 10 and 11 (WebView2, included with Windows). To update, accept the notice in the
-app, or run a newer installer.
+uninstalling. It runs on Windows 10 and 11 (WebView2, included with Windows). When there is a new version, Celer
+tells you; nothing is downloaded until you press *Actualizar*. You can also run a newer installer over it.
 
 Because the executables are not code-signed yet, SmartScreen may warn the first time (*More info › Run anyway*).
 Every release can be verified with its `SHA256SUMS.txt`, as described in [SECURITY.md](SECURITY.md).
 
-Also in every release: `Celer-x.y.z-portable.exe` (runs without installing) and `Celer-x.y.z-nsis-setup.exe`
-(classic installer).
+`Celer-Portable-Windows.exe` runs from any folder without installing. It does not update itself: when there is a new
+version, Celer opens its release page.
 
 ### macOS and Linux
 
-Releases also carry `Celer-x.y.z-macos-universal.dmg` (Apple silicon and Intel) and, for Linux,
-`Celer-x.y.z-linux-x86_64.AppImage`, `.deb` and `.rpm`. They are not signed: on macOS open it the first time with
-right click › *Open*; on Linux make the AppImage executable (`chmod +x`). Updates inside the app are for Windows;
-on macOS and Linux download the new package.
+`Celer-macOS.dmg` is universal (Apple silicon and Intel). For Linux there are `Celer-Portable-Linux.AppImage`,
+`Celer-Linux.deb` and `Celer-Linux.rpm`. They are not signed: on macOS open it the first time with right click ›
+*Open*; on Linux make the AppImage executable (`chmod +x`). Updates inside the app are for Windows; on macOS and Linux
+Celer opens the release page so you can download the new package.
 
 ### Deploying in an organization
 
-Every release includes `Celer-x.y.z-x64.msi`, a Windows Installer package for Intune, Configuration Manager or any
-other deployment tool. It installs per machine (administrator rights) under *Program Files*.
-
-| | |
-|---|---|
-| Install | `msiexec /i Celer-x.y.z-x64.msi /qn` |
-| Uninstall | `msiexec /x Celer-x.y.z-x64.msi /qn` (or from *Settings › Apps*) |
-| Upgrade | Deploy the newer MSI; settings and connections are kept |
-| Updates | Copies installed with the MSI don't update themselves: the app points to the new package instead |
-
-<details>
-<summary>Silent installation with Celer Setup</summary>
+Celer Setup installs silently, for the user that runs it and without administrator rights, so a deployment tool
+(Intune, Configuration Manager…) must run it in the user's context. The link
+`https://github.com/e-omunoz/celer/releases/latest/download/Celer-Setup-Windows.exe` always serves the latest version.
 
 ```bat
-Celer-Setup-x.y.z.exe --silent [--dir "C:\Tools\Celer"] [--desktop] [--no-start-menu] [--associate-sql] [--launch]
+Celer-Setup-Windows.exe --silent [--dir "C:\Tools\Celer"] [--desktop] [--no-start-menu] [--associate-sql] [--launch]
 "%LOCALAPPDATA%\Programs\Celer\uninstall.exe" --uninstall --silent [--purge-data]
 ```
 
-The exit code is 0 on success; errors are written to `%TEMP%\celer-setup.log`.
-</details>
+| | |
+|---|---|
+| Upgrade | Run the newer `Celer-Setup-Windows.exe --silent`; settings and connections are kept |
+| Exit code | 0 on success; errors are written to `%TEMP%\celer-setup.log` |
+| Uninstall | Removes everything except `uninstall.exe` itself (Windows does not let a running program delete itself); the next installation removes it, or delete it by hand |
+
+Up to 2.0.1 there was also an MSI package. It is no longer published: copies installed with it keep working; to move
+to Celer Setup, uninstall the MSI copy (your data is kept) and install `Celer-Setup-Windows.exe`.
 
 ## Databases
 
@@ -235,8 +258,8 @@ npm install
 npm run tauri dev
 ```
 
-`npm run dev` runs the same interface in a browser against an in-memory SQLite demo. Releases are built with
-`dev\release.ps1` (see [CONTRIBUTING.md](CONTRIBUTING.md#releases)).
+`npm run dev` runs the same interface in a browser against an in-memory SQLite demo. Releases are built and published
+by GitHub Actions when a `vX.Y.Z` tag is pushed (see [CONTRIBUTING.md](CONTRIBUTING.md#releases)).
 
 | Folder | Contents |
 |---|---|

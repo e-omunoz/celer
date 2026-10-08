@@ -4,8 +4,8 @@ Fast desktop SQL client: Tauri 2 + Rust core + SolidJS interface.
 Full plan: [docs/ROADMAP.md](docs/ROADMAP.md) · drivers: [docs/DRIVERS.md](docs/DRIVERS.md).
 
 ## Done
-- **Windows build works** with the MSVC toolchain (Visual Studio Build Tools 2022). Release installer (NSIS,
-  per-user) via `npm run tauri build`.
+- **Windows build works** with the MSVC toolchain (Visual Studio Build Tools 2022). Releases (Celer Setup, portable,
+  macOS and Linux packages) are built by GitHub Actions on a `vX.Y.Z` tag (`.github/workflows/release-desktop.yml`).
 - **Drivers** (all native, nothing to install):
   - `postgres.rs`: PostgreSQL (sync `postgres` crate). Server-side cursors (`DECLARE … NO SCROLL CURSOR`) for
     paging, cancel token, manual/auto transactions with exact `in_transaction`, multi-database tree with a cached
