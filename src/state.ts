@@ -1554,6 +1554,11 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       kind: conn?.kind,
     });
     pushOutput(tab.id, { at: Date.now(), sql, ok: true, text: [summary, ...output.messages].join("\n"), elapsedMs: output.elapsedMs });
+    // Statements of a script that wait behind a paged result, or that were dropped with one (the core's notes).
+    const dropped = output.messages.find((message) => /^No se ejecutó|^No se ejecutaron \d+ sentencias del script/.test(message));
+    const pending = output.messages.find((message) => /^Quedan? \d+ sentencias? del script/.test(message));
+    if (dropped) notify(dropped, "warning");
+    if (pending) notify(pending, "info");
     const rows = output.results.find((result) => result.columns.length)?.rows.length ?? output.results.find((result) => result.rowsAffected !== null)?.rowsAffected ?? null;
     if (isMutating(sql, conn?.kind) && /\b(create|drop|alter|rename)\b/i.test(sql)) {
       void loadCompletion(tab.id);

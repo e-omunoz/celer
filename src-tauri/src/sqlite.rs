@@ -51,6 +51,8 @@ pub struct SqliteDriver {
     path: String,
     conn: Connection,
     busy_guard: StdCell<bool>,
+    /// Statements of a script dropped with its open result, told in the next execute's messages.
+    discarded: usize,
 }
 
 impl SqliteDriver {
@@ -86,6 +88,7 @@ impl SqliteDriver {
             path,
             conn,
             busy_guard: StdCell::new(false),
+            discarded: 0,
         })
     }
 
@@ -363,7 +366,8 @@ impl Driver for SqliteDriver {
         let results = self.run_batch(sql, fetch.max(1));
         self.leave();
         let results = results?;
-        let mut messages = Vec::new();
+        let mut messages: Vec<String> =
+            crate::session::discarded_note(std::mem::take(&mut self.discarded)).into_iter().collect();
         for r in &results {
             if let Some(n) = r.rows_affected {
                 messages.push(if n == 1 {
@@ -372,6 +376,9 @@ impl Driver for SqliteDriver {
                     format!("{n} filas afectadas")
                 });
             }
+        }
+        if let Some(c) = &self.cursor {
+            messages.extend(crate::session::pending_note(count_statements(&c.rest)));
         }
         let in_transaction = !self.conn.is_autocommit();
         Ok(ExecOutput {
@@ -394,7 +401,9 @@ impl Driver for SqliteDriver {
     }
 
     fn close_cursor(&mut self) -> Result<()> {
-        self.cursor = None;
+        if let Some(c) = self.cursor.take() {
+            self.discarded += count_statements(&c.rest);
+        }
         Ok(())
     }
 
@@ -752,6 +761,24 @@ fn qi(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
+/// Statements in the rest of a script (pieces with only comments do not count). `sqlite3_complete` says where
+/// one ends, so a `;` inside a string or a trigger body does not split it.
+fn count_statements(sql: &str) -> usize {
+    let complete = |chunk: &str| {
+        CString::new(chunk).is_ok_and(|c| unsafe { rusqlite::ffi::sqlite3_complete(c.as_ptr()) } != 0)
+    };
+    let code = |chunk: &str| !crate::session::first_keyword(chunk).is_empty();
+    let mut n = 0;
+    let mut start = 0;
+    for (i, ch) in sql.char_indices() {
+        if ch == ';' && complete(&sql[start..=i]) {
+            n += usize::from(code(&sql[start..=i]));
+            start = i + 1;
+        }
+    }
+    n + usize::from(code(&sql[start..]))
+}
+
 fn kind_from_decl(decl: &str) -> ColKind {
     let t = decl.to_ascii_lowercase();
     if t.contains("int") {
@@ -911,6 +938,28 @@ mod tests {
             vec!["id".to_string(), "name".to_string()]
         );
         assert!(d.server_info().unwrap().starts_with("SQLite"));
+    }
+
+    #[test]
+    fn tells_statements_left_behind_an_open_result() {
+        let mut d = mem();
+        d.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, flag INT DEFAULT 0); INSERT INTO t(id) VALUES (1),(2),(3)", 10)
+            .unwrap();
+        let out = d
+            .execute("SELECT * FROM t; UPDATE t SET flag = 1; -- fin\nSELECT ';'; /* x */", 2)
+            .unwrap();
+        assert!(out.results[0].has_more);
+        assert!(out.messages.iter().any(|m| m.starts_with("Quedan 2 sentencias")), "{:?}", out.messages);
+        let out = d.execute("SELECT SUM(flag) FROM t", 10).unwrap();
+        assert_eq!(cell_i64(&out.results[0].rows[0][0]), 0);
+        assert!(out.messages.iter().any(|m| m.starts_with("No se ejecutaron 2 sentencias")), "{:?}", out.messages);
+        // Read to the end, they run and nothing is reported as dropped.
+        d.execute("SELECT * FROM t; UPDATE t SET flag = 1", 2).unwrap();
+        d.fetch(10).unwrap();
+        let out = d.execute("SELECT SUM(flag) FROM t", 10).unwrap();
+        assert_eq!(cell_i64(&out.results[0].rows[0][0]), 3);
+        assert!(out.messages.iter().all(|m| !m.contains("sentencia")), "{:?}", out.messages);
+        assert_eq!(count_statements("CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET flag = 2; END; SELECT 1"), 2);
     }
 
     #[test]

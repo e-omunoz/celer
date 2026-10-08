@@ -21,7 +21,7 @@
 //! `[database, schema, "tables"|"views", nombre]`.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -675,8 +675,11 @@ fn run_statement(conn: &mut Conn, sql: &str, tx: &SyncSender<Item>) -> Outcome {
 }
 
 /// Ejecuta las sentencias en orden. Devuelve la conexión si sigue siendo utilizable.
-fn worker(mut conn: Conn, stmts: Vec<String>, tx: &SyncSender<Item>) -> Option<Conn> {
-    for stmt in stmts {
+fn worker(mut conn: Conn, stmts: Vec<String>, tx: &SyncSender<Item>, left: &AtomicUsize) -> Option<Conn> {
+    let total = stmts.len();
+    for (i, stmt) in stmts.into_iter().enumerate() {
+        // Statements not started yet: those a closed cursor drops.
+        left.store(total - i - 1, Ordering::Relaxed);
         match run_statement(&mut conn, &stmt, tx) {
             Outcome::Done => {}
             Outcome::Aborted => return Some(conn),
@@ -725,6 +728,8 @@ struct Cursor {
     peeked: Option<Item>,
     /// El lector devuelve aquí la conexión al terminar (se cierra sin enviar si se rompió).
     done: Receiver<Conn>,
+    /// Statements of the batch the reader has not started.
+    left: Arc<AtomicUsize>,
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -742,6 +747,8 @@ pub struct MysqlDriver {
     in_tx: bool,
     /// Solo MySQL (sin `@@in_transaction`): hubo sentencias desde el último COMMIT/ROLLBACK.
     dirty: bool,
+    /// Statements of a script dropped with its open result, told in the next execute's messages.
+    discarded: usize,
     database: String,
     mariadb: bool,
     version: String,
@@ -832,6 +839,7 @@ impl MysqlDriver {
             autocommit: true,
             in_tx: false,
             dirty: false,
+            discarded: 0,
             database: db.to_string(),
             mariadb: false,
             version: String::new(),
@@ -903,11 +911,13 @@ impl MysqlDriver {
             .ok_or_else(|| anyhow!("Sin conexión con el servidor"))?;
         let (tx, rx) = mpsc::sync_channel::<Item>(CHANNEL_ROWS);
         let (done_tx, done_rx) = mpsc::channel::<Conn>();
+        let left = Arc::new(AtomicUsize::new(stmts.len()));
+        let worker_left = left.clone();
         self.busy.store(true, Ordering::Relaxed);
         let spawned = std::thread::Builder::new()
             .name("celer-mysql-reader".into())
             .spawn(move || {
-                let conn = worker(conn, stmts, &tx);
+                let conn = worker(conn, stmts, &tx, &worker_left);
                 drop(tx);
                 if let Some(c) = conn {
                     let _ = done_tx.send(c);
@@ -921,6 +931,7 @@ impl MysqlDriver {
             rx,
             peeked: None,
             done: done_rx,
+            left,
         });
         Ok(())
     }
@@ -953,7 +964,7 @@ impl MysqlDriver {
         let Some(cur) = self.cursor.take() else {
             return;
         };
-        let Cursor { rx, done, .. } = cur;
+        let Cursor { rx, done, left, .. } = cur;
         drop(rx);
         self.conn = match done.recv_timeout(Duration::from_millis(250)) {
             Ok(c) => Some(c),
@@ -963,6 +974,7 @@ impl MysqlDriver {
                 done.recv_timeout(Duration::from_secs(10)).ok()
             }
         };
+        self.discarded += left.load(Ordering::Relaxed);
         self.busy.store(false, Ordering::Relaxed);
     }
 
@@ -1081,6 +1093,8 @@ impl Driver for MysqlDriver {
         let t0 = Instant::now();
         let stmts = split_statements(sql);
         let mut out = ExecOutput::default();
+        out.messages
+            .extend(crate::session::discarded_note(std::mem::take(&mut self.discarded)));
         if stmts.is_empty() {
             out.in_transaction = self.in_tx;
             return Ok(out);
@@ -1102,6 +1116,10 @@ impl Driver for MysqlDriver {
         // saveTable rolls back on the error instead of committing the statements before it.
         if let Some(e) = error {
             bail!(e);
+        }
+        if let Some(cur) = &self.cursor {
+            out.messages
+                .extend(crate::session::pending_note(cur.left.load(Ordering::Relaxed)));
         }
         Ok(out)
     }
@@ -1882,6 +1900,14 @@ mod tests {
         d.execute("SELECT * FROM events", 10).unwrap();
         let out = d.execute("SELECT 1", 10).unwrap();
         assert_eq!(cell_i64(&out.results[0].rows[0][0]), 1);
+
+        // Statements behind a paged result: told when it opens, and when they are dropped.
+        let out = d.execute("SELECT * FROM events; SELECT 1; SELECT 2", 10).unwrap();
+        assert!(out.messages.iter().any(|m| m.starts_with("Quedan 2 sentencias")), "{:?}", out.messages);
+        let out = d.execute("SELECT 3", 10).unwrap();
+        assert!(out.messages.iter().any(|m| m.starts_with("No se ejecutaron 2 sentencias")), "{:?}", out.messages);
+        let out = d.execute("SELECT 4", 10).unwrap();
+        assert!(out.messages.is_empty(), "{:?}", out.messages);
     }
 
     #[test]

@@ -224,6 +224,25 @@ pub fn first_keyword(sql: &str) -> String {
     sql[start..end].to_ascii_uppercase()
 }
 
+/// Message for a script whose statements wait behind a result left open (PostgreSQL, MySQL, SQLite): they run
+/// only when that result is read to the end.
+pub fn pending_note(n: usize) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some("Queda 1 sentencia del script sin ejecutar: se ejecuta al leer este resultado hasta el final; si ejecutas otra cosa antes, se descarta.".into()),
+        n => Some(format!("Quedan {n} sentencias del script sin ejecutar: se ejecutan al leer este resultado hasta el final; si ejecutas otra cosa antes, se descartan.")),
+    }
+}
+
+/// Message for statements of the previous script dropped when its open result was closed before its end.
+pub fn discarded_note(n: usize) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some("No se ejecutó 1 sentencia del script anterior: su resultado se cerró antes de leerlo hasta el final.".into()),
+        n => Some(format!("No se ejecutaron {n} sentencias del script anterior: su resultado se cerró antes de leerlo hasta el final.")),
+    }
+}
+
 /// Indica si un lote modifica datos o estructura (para conexiones de solo lectura).
 pub fn is_mutating(sql: &str) -> bool {
     matches!(

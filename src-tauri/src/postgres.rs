@@ -89,6 +89,8 @@ pub struct PostgresDriver {
     in_tx: bool,
     cursor: Option<PgCursor>,
     cursor_seq: u64,
+    /// Statements of a script dropped with its open result, told in the next execute's messages.
+    discarded: usize,
     /// Conexión secundaria para metadatos de otra base (o de la actual con transacción abierta).
     aux: Option<(String, Client)>,
     /// Script de inicio de la conexión: se ejecuta en cada conexión principal nueva.
@@ -118,6 +120,7 @@ impl PostgresDriver {
             in_tx: false,
             cursor: None,
             cursor_seq: 0,
+            discarded: 0,
             aux: None,
             startup,
             version,
@@ -727,6 +730,7 @@ impl Driver for PostgresDriver {
         let t0 = std::time::Instant::now();
         let mut messages = Vec::new();
         self.close_cursor()?;
+        messages.extend(crate::session::discarded_note(std::mem::take(&mut self.discarded)));
         self.ensure_connected(&mut messages)?;
         let _ = self.take_notices();
         let stmts: VecDeque<Stmt> = split_statements(sql).into();
@@ -735,6 +739,7 @@ impl Driver for PostgresDriver {
         self.busy.store(false, Ordering::SeqCst);
         self.refresh_tx_state();
         let results = result?;
+        messages.extend(crate::session::pending_note(self.cursor.as_ref().map_or(0, |c| c.rest.len())));
         Ok(ExecOutput {
             results,
             messages,
@@ -758,6 +763,7 @@ impl Driver for PostgresDriver {
 
     fn close_cursor(&mut self) -> Result<()> {
         if let Some(c) = self.cursor.take() {
+            self.discarded += c.rest.len();
             if let Source::Portal { name, owns_tx } = c.source {
                 if owns_tx {
                     // COMMIT cierra el cursor; si la transacción falló equivale a ROLLBACK.
@@ -2171,6 +2177,14 @@ mod tests {
         assert_eq!(txt(&out.results[0].rows[0][0]), "200000");
         assert!(!out.in_transaction);
         assert!(!server_in_tx(&mut d));
+
+        // Statements behind a paged result: told when it opens, and when they are dropped.
+        let out = d.execute("SELECT * FROM public.events; SELECT 1; SELECT 2", 10).unwrap();
+        assert!(out.messages.iter().any(|m| m.starts_with("Quedan 2 sentencias")), "{:?}", out.messages);
+        let out = d.execute("SELECT 3", 10).unwrap();
+        assert!(out.messages.iter().any(|m| m.starts_with("No se ejecutaron 2 sentencias")), "{:?}", out.messages);
+        let out = d.execute("SELECT 4", 10).unwrap();
+        assert!(out.messages.is_empty(), "{:?}", out.messages);
     }
 
     #[test]
