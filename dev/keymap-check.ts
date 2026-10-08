@@ -64,7 +64,7 @@ assert.deepEqual(chordsFor("run", {}), ["Ctrl+Enter"]);
 assert.deepEqual(chordsFor("run", { run: ["ctrl+r"] }), ["Ctrl+R"]);
 assert.deepEqual(chordsFor("run", { run: [] }), []);
 assert.deepEqual(chordsFor("save", { run: [] }), DEFAULT_KEYS.save);
-assert.deepEqual(chordsFor("library", {}), []);
+assert.deepEqual(chordsFor("guide", {}), []);
 
 // Display and CodeMirror notation.
 assert.deepEqual(chordParts("Ctrl+Shift+Enter"), ["Ctrl", "Mayús", "Intro"]);
