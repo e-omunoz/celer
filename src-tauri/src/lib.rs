@@ -2,6 +2,7 @@ mod drivers;
 #[cfg(test)]
 mod engine_tests;
 mod export;
+mod jdbc;
 mod mcp;
 mod migrate;
 mod model;
@@ -17,6 +18,7 @@ mod startup;
 mod store;
 mod update;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -64,48 +66,147 @@ impl AppState {
 }
 
 fn ibm_driver_setting(store: &Store) -> Option<String> {
+    setting(store, "ibmDriverPath")
+}
+
+/// A text setting of settings.json (driver paths), when it is not empty.
+fn setting(store: &Store, key: &str) -> Option<String> {
     // A plain read: setting a damaged file aside is for the interface's load, which tells the user.
     let settings: serde_json::Value = serde_json::from_str(&store.read("settings.json")?).ok()?;
-    settings.get("ibmDriverPath").and_then(|v| v.as_str()).map(|s| s.to_string())
+    settings.get(key).and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.trim().is_empty())
+}
+
+/// Informix: the protocol a connection really uses. "auto" takes the Client SDK when its ODBC driver is registered
+/// and JDBC otherwise; connections saved before there was a choice (no mode) keep DRDA.
+fn informix_mode(cfg: &ConnConfig) -> &'static str {
+    match cfg.informix_mode.as_str() {
+        "sqli" => "sqli",
+        "jdbc" => "jdbc",
+        "auto" if odbc::informix_odbc_drivers().iter().any(|d| d.eq_ignore_ascii_case(odbc::IFX_ODBC_DRIVER)) => "sqli",
+        "auto" => "jdbc",
+        _ => "drda",
+    }
+}
+
+fn source_label(source: &str) -> &str {
+    match source {
+        "settings" => "Ajustes",
+        "DBeaver" => "de DBeaver",
+        "Celer" => "descargado por Celer",
+        other => other,
+    }
+}
+
+/// What Informix over JDBC runs on, or what is missing: `JDBC_SETUP:<java,jdbc>:` lets the interface offer to
+/// download it.
+fn jdbc_runtime(store: &Store) -> CmdResult<(jdbc::Runtime, String)> {
+    if !jdbc::bridge_included() {
+        return Err("JDBC_BRIDGE_MISSING: Esta compilación de Celer no incluye el puente JDBC (se compiló sin un JDK). Usa una versión publicada de Celer o elige otro protocolo.".into());
+    }
+    let javas = drivers::find_java(setting(store, "javaPath").as_deref(), &store.dir, false);
+    let java = drivers::pick_java(&javas).cloned();
+    let jdbc = drivers::find_jdbc(&drivers::INFORMIX_JDBC, setting(store, "informixJdbcPath").as_deref(), &store.dir).into_iter().next();
+    match (java, jdbc) {
+        (Some(java), Some(jdbc)) => {
+            let jar = PathBuf::from(&jdbc.jars[0]).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let label = format!("Java {} ({}) · {jar} ({})", java.version, source_label(java.source), source_label(jdbc.source));
+            let rt = jdbc::Runtime {
+                java: PathBuf::from(&java.path),
+                java_major: java.major,
+                driver_class: drivers::INFORMIX_JDBC.class.into(),
+                jars: jdbc.jars.iter().map(PathBuf::from).collect(),
+                dir: store.dir.clone(),
+            };
+            Ok((rt, label))
+        }
+        (java, jdbc) => {
+            let (mut missing, mut what) = (Vec::new(), Vec::new());
+            if java.is_none() {
+                missing.push("java");
+                what.push(match javas.first() {
+                    Some(old) => format!("Java {} o superior (el de {} es Java {})", drivers::JAVA_MIN, old.path, old.major),
+                    None => format!("Java {} o superior", drivers::JAVA_MIN),
+                });
+            }
+            if jdbc.is_none() {
+                missing.push("jdbc");
+                what.push("el driver JDBC de Informix".to_string());
+            }
+            Err(format!("JDBC_SETUP:{}: Para conectar por JDBC falta {}. Celer puede descargarlo.", missing.join(","), what.join(" y ")))
+        }
+    }
 }
 
 /// Prepara la conexión (contraseña del almacén, driver IBM/ODBC). La usan la interfaz y el
 /// servidor MCP, que no tiene `State` de Tauri.
 pub(crate) fn make_connector(
     store: &Store,
-    mut cfg: ConnConfig,
+    cfg: ConnConfig,
 ) -> CmdResult<impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static> {
+    Ok(connector_and_route(store, cfg)?.0)
+}
+
+/// The connector, and for Informix the way it reaches the server ("Probar conexión" shows it).
+fn connector_and_route(
+    store: &Store,
+    mut cfg: ConnConfig,
+) -> CmdResult<(impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static, String)> {
     if cfg.password.is_none() && !cfg.integrated_auth {
         cfg.password = store.get_password(&cfg.id);
     }
     let kind = cfg.kind;
+    let mut route = String::new();
+    let mut jdbc_rt: Option<jdbc::Runtime> = None;
     let odbc_lib = match kind {
         DbKind::Mssql | DbKind::Sqlite | DbKind::Postgres | DbKind::Mysql => None,
-        DbKind::Informix if cfg.informix_mode == "drda" => {
-            let dll = drivers::find_cli(ibm_driver_setting(store).as_deref(), &store.dir).ok_or_else(|| {
-                "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
-            })?;
-            drivers::prepare_env(&dll);
-            Some(dll.to_string_lossy().to_string())
+        DbKind::Informix => {
+            let prefix = if cfg.informix_mode == "auto" { "Automático → " } else { "" };
+            let mode = informix_mode(&cfg);
+            cfg.informix_mode = mode.to_string();
+            match mode {
+                "drda" => {
+                    if cfg.database.trim().is_empty() {
+                        return Err("Por DRDA hay que indicar la base de datos: el driver IBM CLI no conecta sin ella.".into());
+                    }
+                    let dll = drivers::find_cli(ibm_driver_setting(store).as_deref(), &store.dir).ok_or_else(|| {
+                        "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
+                    })?;
+                    drivers::prepare_env(&dll);
+                    route = format!("{prefix}DRDA · IBM Data Server Driver (CLI)");
+                    Some(dll.to_string_lossy().to_string())
+                }
+                "jdbc" => {
+                    let (rt, label) = jdbc_runtime(store)?;
+                    route = format!("{prefix}SQLI por JDBC · {label}");
+                    jdbc_rt = Some(rt);
+                    None
+                }
+                _ => {
+                    route = format!("{prefix}SQLI · Informix Client SDK (ODBC)");
+                    Some(odbc::system_manager().to_string())
+                }
+            }
         }
-        DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
+        DbKind::Odbc => Some(odbc::system_manager().to_string()),
     };
     // The startup script runs inside each driver, on every connection it opens; a read-only connection
     // refuses one that writes before connecting at all.
     startup::check(&cfg).map_err(err)?;
-    Ok(move || -> anyhow::Result<Box<dyn Driver>> {
-        let driver: Box<dyn Driver> = match kind {
-            DbKind::Sqlite => Box::new(sqlite::SqliteDriver::connect(cfg)?),
-            DbKind::Mssql => Box::new(mssql::MssqlDriver::connect(cfg)?),
-            DbKind::Postgres => Box::new(postgres::PostgresDriver::connect(cfg)?),
-            DbKind::Mysql => Box::new(mysql::MysqlDriver::connect(cfg)?),
-            DbKind::Informix | DbKind::Odbc => {
+    let connector = move || -> anyhow::Result<Box<dyn Driver>> {
+        let driver: Box<dyn Driver> = match (kind, jdbc_rt) {
+            (DbKind::Sqlite, _) => Box::new(sqlite::SqliteDriver::connect(cfg)?),
+            (DbKind::Mssql, _) => Box::new(mssql::MssqlDriver::connect(cfg)?),
+            (DbKind::Postgres, _) => Box::new(postgres::PostgresDriver::connect(cfg)?),
+            (DbKind::Mysql, _) => Box::new(mysql::MysqlDriver::connect(cfg)?),
+            (DbKind::Informix, Some(rt)) => Box::new(jdbc::connect(cfg, rt)?),
+            (DbKind::Informix | DbKind::Odbc, _) => {
                 let path = odbc_lib.unwrap_or_else(|| odbc::system_manager().to_string());
                 Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
             }
         };
         Ok(driver)
-    })
+    };
+    Ok((connector, route))
 }
 
 #[derive(Serialize)]
@@ -172,7 +273,9 @@ fn delete_connection(state: State<'_, Arc<AppState>>, id: String) -> CmdResult<(
 
 #[tauri::command]
 async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<String> {
-    let connector = state.make_connector(cfg)?;
+    // Off the async runtime: finding the drivers may list the ODBC ones or ask a Java its version.
+    let app = state.inner().clone();
+    let (connector, route) = tauri::async_runtime::spawn_blocking(move || connector_and_route(&app.store, cfg)).await.map_err(err)??;
     let t0 = std::time::Instant::now();
     let h = SessionHandle::open("test".into(), connector)
         .await
@@ -180,10 +283,28 @@ async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> Cm
     let connect_ms = t0.elapsed().as_millis();
     let t1 = std::time::Instant::now();
     let info = h.run(|d| d.server_info()).await.map_err(err)?;
+    let via = if route.is_empty() { String::new() } else { format!("\nVía: {route}") };
     Ok(format!(
-        "{info}\nConexión: {connect_ms} ms · ida y vuelta: {} ms",
+        "{info}{via}\nConexión: {connect_ms} ms · ida y vuelta: {} ms",
         t1.elapsed().as_millis()
     ))
+}
+
+/// An Informix connection over JDBC is about to open: Java starts now, while the user types the password.
+#[tauri::command]
+fn jdbc_prewarm(state: State<'_, Arc<AppState>>, conn_id: String) {
+    let Ok(cfg) = state.conn(&conn_id) else { return };
+    if cfg.kind != DbKind::Informix || !matches!(cfg.informix_mode.as_str(), "jdbc" | "auto") {
+        return;
+    }
+    let app = state.inner().clone();
+    std::thread::spawn(move || {
+        if informix_mode(&cfg) == "jdbc" {
+            if let Ok((rt, _)) = jdbc_runtime(&app.store) {
+                jdbc::prewarm(rt);
+            }
+        }
+    });
 }
 
 #[derive(Serialize)]
@@ -676,6 +797,8 @@ fn ibm_driver_status(state: State<'_, Arc<AppState>>) -> Option<String> {
 struct DownloadProgress {
     done: u64,
     total: u64,
+    /// What is being downloaded, for the drivers (several files in a row).
+    what: String,
 }
 
 #[tauri::command]
@@ -689,7 +812,7 @@ async fn ibm_driver_download(
         drivers::download(&dir, |done, total| {
             if done - last.get() > 512 * 1024 || done == total {
                 last.set(done);
-                let _ = app.emit("driver-download", DownloadProgress { done, total });
+                let _ = app.emit("driver-download", DownloadProgress { done, total, what: "IBM Data Server Driver".into() });
             }
         })
         .map(|p| p.to_string_lossy().to_string())
@@ -697,6 +820,90 @@ async fn ibm_driver_download(
     .await
     .map_err(err)?
     .map_err(err)
+}
+
+/// Informix drivers on this machine, for Settings › Drivers: IBM CLI, Java and the JDBC driver (every one found, and
+/// the one connections use), and the Client SDK's ODBC driver.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InformixDrivers {
+    cli: Option<String>,
+    java: Vec<drivers::JavaFound>,
+    java_used: Option<drivers::JavaFound>,
+    java_min: u32,
+    jdbc: Vec<drivers::JdbcFound>,
+    jdbc_used: Option<drivers::JdbcFound>,
+    jdbc_version: &'static str,
+    odbc: Vec<String>,
+    /// The Client SDK's driver is registered under the name Celer uses: "Automático" takes it.
+    sdk_ready: bool,
+    /// The JDBC bridge is part of this build.
+    bridge: bool,
+    /// Celer can download a JRE for this system.
+    jre_download: bool,
+}
+
+#[tauri::command(async)]
+fn informix_drivers(state: State<'_, Arc<AppState>>) -> InformixDrivers {
+    let store = &state.store;
+    let java = drivers::find_java(setting(store, "javaPath").as_deref(), &store.dir, true);
+    let jdbc = drivers::find_jdbc(&drivers::INFORMIX_JDBC, setting(store, "informixJdbcPath").as_deref(), &store.dir);
+    let odbc = odbc::informix_odbc_drivers();
+    InformixDrivers {
+        cli: drivers::find_cli(ibm_driver_setting(store).as_deref(), &store.dir).map(|p| p.to_string_lossy().to_string()),
+        java_used: drivers::pick_java(&java).cloned(),
+        java,
+        java_min: drivers::JAVA_MIN,
+        jdbc_used: jdbc.first().cloned(),
+        jdbc,
+        jdbc_version: drivers::INFORMIX_JDBC.jar.version,
+        sdk_ready: odbc.iter().any(|d| d.eq_ignore_ascii_case(odbc::IFX_ODBC_DRIVER)),
+        odbc,
+        bridge: jdbc::bridge_included(),
+        jre_download: drivers::adoptium_platform().is_some(),
+    }
+}
+
+/// Downloads what Informix over JDBC needs, only when the user asks for it: "java" (Temurin JRE 21, which the
+/// interface offers only when no Java was found) or "jdbc" (the driver, from Maven Central). Nothing is run here.
+#[tauri::command]
+async fn jdbc_download(app: tauri::AppHandle, state: State<'_, Arc<AppState>>, what: String) -> CmdResult<String> {
+    let dir = state.store.dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let last = std::cell::Cell::new(0u64);
+        let progress = |label: &str, done: u64, total: u64| {
+            if done < last.get() || done - last.get() > 256 * 1024 || done == total {
+                last.set(done);
+                let _ = app.emit("driver-download", DownloadProgress { done, total, what: label.to_string() });
+            }
+        };
+        match what.as_str() {
+            "java" => drivers::download_jre(&dir, progress).map(|p| p.to_string_lossy().to_string()),
+            "jdbc" => drivers::download_jdbc(&drivers::INFORMIX_JDBC, &dir, progress).map(|f| f.jars.join("\n")),
+            _ => Err(anyhow::anyhow!("Descarga desconocida: {what}")),
+        }
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+fn driver_download_cancel() {
+    drivers::cancel_download();
+}
+
+/// Starts the bridge with the Java and driver connections would use and loads the driver: what it answers.
+#[tauri::command]
+async fn jdbc_check(state: State<'_, Arc<AppState>>) -> CmdResult<String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (rt, label) = jdbc_runtime(&app.store)?;
+        let version = jdbc::check(&rt).map_err(err)?;
+        Ok(format!("{label} · driver {version} cargado"))
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
@@ -729,7 +936,7 @@ async fn update_download(app: tauri::AppHandle, url: String, name: String, sums_
         update::download(&url, &name, &sums_url, |done, total| {
             if done - last.get() > 256 * 1024 || done == total {
                 last.set(done);
-                let _ = app.emit("update-download", DownloadProgress { done, total });
+                let _ = app.emit("update-download", DownloadProgress { done, total, what: String::new() });
             }
         })
         .map(|p| p.to_string_lossy().to_string())
@@ -919,6 +1126,11 @@ pub fn run() {
             odbc_dsns,
             ibm_driver_status,
             ibm_driver_download,
+            informix_drivers,
+            jdbc_download,
+            jdbc_check,
+            jdbc_prewarm,
+            driver_download_cancel,
             app_info,
             migration_sources,
             update_check,
