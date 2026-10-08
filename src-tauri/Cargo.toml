@@ -48,6 +48,10 @@ rust_decimal = { version = "1", features = ["db-postgres"] }
 mysql = { version = "26", default-features = false, features = ["minimal-rust", "native-tls"] }
 calamine = { version = "0.36.1", features = ["dates"] }
 
+[target.'cfg(windows)'.dependencies]
+# Proxy of the system's Internet settings for driver downloads (src/drivers.rs)
+winreg = "0.56"
+
 [profile.dev]
 debug = "line-tables-only"
 

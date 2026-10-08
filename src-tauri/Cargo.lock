@@ -606,6 +606,7 @@ dependencies = [
  "tokio-util",
  "ureq",
  "uuid",
+ "winreg",
  "zip",
 ]
 
