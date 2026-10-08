@@ -1,0 +1,87 @@
+# Integration tests against real SQL Server 2022 and Informix (developer edition) servers, in containers.
+# Runs src-tauri/src/engine_tests.rs: the drivers themselves and the exact SQL the interface writes for each
+# engine (dev/engine-sql.ts). Manual only (Actions → Run workflow, or `gh workflow run engines.yml`).
+name: Engines (SQL Server, Informix)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  engines:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      MSSQL_PASSWORD: "Celer_Test_2026!"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Start the database servers
+        run: |
+          docker run -d --name mssql -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$MSSQL_PASSWORD" -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+          docker run -d --name ifx -h ifx --privileged -e LICENSE=accept -p 9088:9088 -p 9089:9089 icr.io/informix/informix-developer-database:latest
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev libssl-dev
+
+      - name: IBM Data Server Driver (CLI), as Celer downloads it
+        run: |
+          curl -fsSL https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/linuxx64_odbc_cli.tar.gz | tar xz
+          ls clidriver/lib | head
+
+      - name: Build the tests
+        working-directory: src-tauri
+        run: cargo test --lib --no-run
+
+      - name: Wait for SQL Server
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_PASSWORD" -Q "SELECT 1" >/dev/null 2>&1; then echo ready; exit 0; fi
+            sleep 5
+          done
+          docker logs mssql | tail -50; exit 1
+
+      - name: Wait for Informix and create the test database
+        run: |
+          for i in $(seq 1 90); do
+            if docker exec ifx bash -lc "echo 'SELECT COUNT(*) FROM systables' | dbaccess sysmaster -" >/dev/null 2>&1; then echo ready; break; fi
+            sleep 5
+          done
+          docker exec ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster -"
+          docker exec ifx bash -lc "cat \$INFORMIXDIR/etc/\$ONCONFIG | grep -E '^(DBSERVERNAME|DBSERVERALIASES)'; cat \$INFORMIXSQLHOSTS" || true
+
+      - name: Integration tests
+        working-directory: src-tauri
+        env:
+          CELER_MSSQL_TEST: "host=localhost port=1433 user=sa password=${{ env.MSSQL_PASSWORD }}"
+          CELER_INFORMIX_TEST: "host=localhost port=9089 user=informix password=in4mix database=celer"
+          CELER_IBM_LIB: ${{ github.workspace }}/clidriver/lib/libdb2.so
+          LD_LIBRARY_PATH: ${{ github.workspace }}/clidriver/lib
+          CELER_NODE: node
+        run: cargo test --lib engine_tests -- --nocapture --test-threads=1
+
+      - name: Execution plans and server logs
+        if: always()
+        run: |
+          mkdir -p out
+          cp target-showplan-*.xml out/ 2>/dev/null || true
+          docker logs mssql > out/mssql.log 2>&1 || true
+          docker logs ifx > out/informix.log 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engines
+          path: out/
+          retention-days: 7

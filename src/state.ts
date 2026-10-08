@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, codeOnly, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, sqlLiteral, statementAt, wherePosition } from "./sql";
+import { cellText, codeOnly, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -20,6 +20,7 @@ import type {
   ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
+import { changesSql, explainPrefix, limitClause, paramNamesFor, upsertSql, whereOf } from "./sqlgen";
 import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
 import type { ErEdge, ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, type Plan } from "./plan";
@@ -1489,13 +1490,6 @@ export async function explainStatement(tabId: string, sql: string, analyze = fal
   }
 }
 
-function explainPrefix(kind: DbKind | undefined) {
-  if (kind === "postgres") return "EXPLAIN (ANALYZE false, VERBOSE, COSTS)";
-  if (kind === "mysql") return "EXPLAIN";
-  if (kind === "sqlite") return "EXPLAIN QUERY PLAN";
-  return "";
-}
-
 /** Runs a given SQL text in the active console without touching what the user wrote. */
 export async function runText(sql: string) {
   const tab = activeSql();
@@ -1917,46 +1911,6 @@ export async function setTableFilter(tabId: string, where: string, orderBy: stri
   void reloadTable(tabId);
 }
 
-function filterSql(tab: TableTab, filter: ColumnFilter): string | null {
-  const index = tab.columnsMeta.findIndex((col) => col.name === filter.col);
-  if (index < 0) return null;
-  const ident = tab.quoted[index] ?? filter.col;
-  const kind = tab.columnsMeta[index].kind;
-  const engine = kindOf(tab.connId);
-  const lit = (value: string) => sqlLiteral(value, kind, engine);
-  const text = (value: string) => sqlLiteral(value, "text", engine);
-  const like = engine === "postgres" ? "ILIKE" : "LIKE";
-  const esc = (value: string) => value.replace(/[!%_]/g, (m) => `!${m}`).replace(/\[/g, engine === "mssql" ? "![" : "[");
-  const asText = engine === "postgres" ? `${ident}::text` : engine === "mssql" ? `CAST(${ident} AS NVARCHAR(MAX))` : ident;
-  switch (filter.op) {
-    case "eq": return `${ident} = ${lit(filter.value)}`;
-    case "ne": return `${ident} <> ${lit(filter.value)}`;
-    case "gt": return `${ident} > ${lit(filter.value)}`;
-    case "gte": return `${ident} >= ${lit(filter.value)}`;
-    case "lt": return `${ident} < ${lit(filter.value)}`;
-    case "lte": return `${ident} <= ${lit(filter.value)}`;
-    // The value is literal text: % and _ (and [ on SQL Server) are escaped so they don't act as wildcards.
-    case "contains": return `${asText} ${like} ${text(`%${esc(filter.value)}%`)} ESCAPE '!'`;
-    case "not-contains": return `${asText} NOT ${like} ${text(`%${esc(filter.value)}%`)} ESCAPE '!'`;
-    case "starts": return `${asText} ${like} ${text(`${esc(filter.value)}%`)} ESCAPE '!'`;
-    case "ends": return `${asText} ${like} ${text(`%${esc(filter.value)}`)} ESCAPE '!'`;
-    case "null": return `${ident} IS NULL`;
-    case "not-null": return `${ident} IS NOT NULL`;
-    case "empty": return `(${ident} IS NULL OR ${ident} = '')`;
-    case "between": return `${ident} BETWEEN ${lit(filter.value)} AND ${lit(filter.value2)}`;
-    case "in":
-    case "not-in": {
-      if (!filter.values.length) return null;
-      const hasNull = filter.values.includes("\u0000NULL");
-      const list = filter.values.filter((value) => value !== "\u0000NULL").map(lit);
-      const parts: string[] = [];
-      if (list.length) parts.push(`${ident} ${filter.op === "in" ? "IN" : "NOT IN"} (${list.join(", ")})`);
-      if (hasNull) parts.push(`${ident} ${filter.op === "in" ? "IS NULL" : "IS NOT NULL"}`);
-      return parts.length > 1 ? `(${parts.join(filter.op === "in" ? " OR " : " AND ")})` : parts[0];
-    }
-  }
-}
-
 export function filterLabel(filter: ColumnFilter) {
   const op = FILTER_OPS.find((item) => item.op === filter.op);
   if (!op) return filter.col;
@@ -1970,9 +1924,7 @@ export function filterLabel(filter: ColumnFilter) {
 }
 
 export function tableWhere(tab: TableTab) {
-  const parts = tab.filters.filter((filter) => filter.enabled).map((filter) => filterSql(tab, filter)).filter((part): part is string => Boolean(part));
-  if (tab.where.trim()) parts.unshift(parts.length ? `(${tab.where.trim()})` : tab.where.trim());
-  return parts.join(" AND ");
+  return whereOf(tab, kindOf(tab.connId));
 }
 
 function tableOrderBy(tab: TableTab) {
@@ -2134,28 +2086,7 @@ export function revertTable(tabId: string) {
 }
 
 export function buildChanges(tab: TableTab): string {
-  const pk = tab.columnsMeta.map((col, index) => ({ col, index })).filter((item) => item.col.primaryKey);
-  const lines: string[] = [];
-  const whereFor = (row: number) => pk.map((item) => `${tab.quoted[item.index]} = ${literalOf(tab.rows[row][item.index], item.col.kind, kindOf(tab.connId))}`).join(" AND ");
-  for (const rowIndex of tab.deleted) lines.push(`DELETE FROM ${tab.qualified} WHERE ${whereFor(rowIndex)};`);
-  const byRow = new Map<number, number[]>();
-  for (const key of Object.keys(tab.edits)) {
-    const [rowText, colText] = key.split(":");
-    const row = Number(rowText);
-    if (tab.deleted.includes(row)) continue;
-    byRow.set(row, [...(byRow.get(row) ?? []), Number(colText)]);
-  }
-  for (const [row, cols] of byRow) {
-    const sets = cols.map((col) => `${tab.quoted[col]} = ${sqlLiteral(tab.edits[`${row}:${col}`], tab.columnsMeta[col].kind, kindOf(tab.connId))}`).join(", ");
-    lines.push(`UPDATE ${tab.qualified} SET ${sets} WHERE ${whereFor(row)};`);
-  }
-  for (const insert of tab.inserts) {
-    const usable = tab.columnsMeta.map((col, index) => ({ col, index })).filter((item) => !(item.col.identity && (insert[item.index] === null || insert[item.index] === "")) && !(insert[item.index] === null && item.col.default));
-    const names = usable.map((item) => tab.quoted[item.index]).join(", ");
-    const values = usable.map((item) => sqlLiteral(insert[item.index], item.col.kind, kindOf(tab.connId))).join(", ");
-    lines.push(usable.length ? `INSERT INTO ${tab.qualified} (${names}) VALUES (${values});` : `INSERT INTO ${tab.qualified} DEFAULT VALUES;`);
-  }
-  return lines.join("\n");
+  return changesSql(tab, kindOf(tab.connId));
 }
 
 export async function saveTable(tabId: string) {
@@ -2196,11 +2127,6 @@ export async function saveTable(tabId: string) {
   });
 }
 
-function literalOf(value: Cell, kind: TableColumn["kind"], dialect?: string) {
-  if (value === null || value === undefined) return "NULL";
-  return sqlLiteral(String(value), kind, dialect);
-}
-
 export async function runPreview() {
   try {
     await state.previewRun?.();
@@ -2218,19 +2144,6 @@ export function canEdit(tab: TableTab) {
 // ---------------------------------------------------------------- object actions
 
 export type GenerateKind = "select" | "select-join" | "insert" | "update" | "delete" | "upsert" | "drop" | "ddl" | "count";
-
-/** A :name parameter for a column (letters, digits and _; numbered when two columns clash). */
-function paramNamesFor(columns: string[]): string[] {
-  const used = new Set<string>();
-  return columns.map((name, i) => {
-    let base = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
-    if (!/^[a-z_]/.test(base)) base = `p${i + 1}${base ? `_${base}` : ""}`;
-    let candidate = base;
-    for (let n = 2; used.has(candidate); n++) candidate = `${base}${n}`;
-    used.add(candidate);
-    return `:${candidate}`;
-  });
-}
 
 /**
  * Writes a statement for a table or view in the console (the active one of the same connection, else a new
@@ -2311,39 +2224,6 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: Generate
   } finally {
     void api().closeSession(opened.sessionId).catch(() => {});
   }
-}
-
-/**
- * Insert-or-update in each engine's own syntax, keyed on the primary key. `cols` are the columns written (keys
- * included); `insertable` the ones MERGE may insert (identity columns are generated by the database).
- */
-function upsertSql(dialect: DbKind, q: string, quoted: string[], params: string[], cols: number[], keys: number[], identityKey: boolean, insertable: number[]) {
-  const names = cols.map((i) => quoted[i]);
-  const values = cols.map((i) => params[i]);
-  const updatable = cols.filter((i) => !keys.includes(i));
-  const keyNames = keys.map((i) => quoted[i]).join(", ");
-  if (dialect === "postgres" || dialect === "sqlite") {
-    const action = updatable.length ? `DO UPDATE SET ${updatable.map((i) => `${quoted[i]} = EXCLUDED.${quoted[i]}`).join(",\n    ")}` : "DO NOTHING";
-    // A GENERATED ALWAYS identity key only accepts a value with OVERRIDING SYSTEM VALUE (harmless otherwise).
-    const overriding = dialect === "postgres" && identityKey ? "\nOVERRIDING SYSTEM VALUE" : "";
-    return `INSERT INTO ${q} (${names.join(", ")})${overriding}\nVALUES (${values.join(", ")})\nON CONFLICT (${keyNames}) ${action};`;
-  }
-  if (dialect === "mysql") {
-    const set = (updatable.length ? updatable : keys).map((i) => `${quoted[i]} = VALUES(${quoted[i]})`).join(",\n    ");
-    return `INSERT INTO ${q} (${names.join(", ")})\nVALUES (${values.join(", ")})\nON DUPLICATE KEY UPDATE ${set};`;
-  }
-  // SQL Server, Informix and others: standard MERGE from a one-row source.
-  const source = dialect === "mssql" ? `(VALUES (${values.join(", ")})) AS s (${names.join(", ")})` : `(SELECT ${cols.map((i) => `${params[i]} AS ${quoted[i]}`).join(", ")} FROM ${dialect === "informix" ? "sysmaster:sysdual" : "(VALUES (1)) AS one"}) s`;
-  const on = keys.map((i) => `t.${quoted[i]} = s.${quoted[i]}`).join(" AND ");
-  const update = updatable.length ? `\nWHEN MATCHED THEN\n  UPDATE SET ${updatable.map((i) => `${quoted[i]} = s.${quoted[i]}`).join(", ")}` : "";
-  const inserted = cols.filter((i) => insertable.includes(i));
-  return `MERGE INTO ${q} ${dialect === "mssql" ? "AS t" : "t"}\nUSING ${source}\nON ${on}${update}\nWHEN NOT MATCHED THEN\n  INSERT (${inserted.map((i) => quoted[i]).join(", ")}) VALUES (${inserted.map((i) => `s.${quoted[i]}`).join(", ")});`;
-}
-
-function limitClause(kind: DbKind, n: number) {
-  if (kind === "mssql") return `ORDER BY 1 OFFSET 0 ROWS FETCH NEXT ${n} ROWS ONLY`;
-  if (kind === "informix") return "";
-  return `LIMIT ${n}`;
 }
 
 export async function copyText(text: string, label = "Copiado") {

@@ -1,4 +1,6 @@
 mod drivers;
+#[cfg(test)]
+mod engine_tests;
 mod export;
 mod mcp;
 mod migrate;
