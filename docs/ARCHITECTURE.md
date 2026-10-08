@@ -8,6 +8,7 @@
                                 │ invoke() / events (JSON, paged)
 ┌─ Core: Rust (src-tauri) ──────┴─────────────────────────────────────────────┐
 │  lib.rs        Tauri commands, app state                                    │
+│  windows.rs    Several windows: inboxes, layout file, tab drag, focus       │
 │  session.rs    Driver trait · one OS thread per session · job queue         │
 │  drivers       mssql.rs · odbc.rs + odbc_driver.rs · (postgres, mysql, …)   │
 │  export.rs     Streaming export (CSV, TSV, JSON, SQL, XLSX)                 │
@@ -63,9 +64,83 @@ connection dialog generically instead of hard-coding one per engine.
 |---|---|
 | Connections (without passwords) | `%APPDATA%\es.celer.app\connections.json` |
 | Passwords | Windows Credential Manager / macOS Keychain / Secret Service |
-| Settings and open tabs | `settings.json`, `workspace.json` |
+| Settings and open tabs | `settings.json`, `workspace.json` (every window: its tabs, panels, place and monitor) |
 | Query history | `history.jsonl` (append-only, compacted at 5,000 entries) |
 | Downloaded drivers | `%APPDATA%\es.celer.app\drivers\` |
+
+## Windows
+
+Celer can have several windows: full windows (`main`, and `win-2`, `win-3`… opened with Ctrl+Shift+N or by dragging
+a tab out of its tab bar) and panel windows (`panel-library`, `panel-ai`, `panel-plan-N`, `panel-er-N`,
+`panel-compare-N`, `panel-schema-compare-N`, `panel-data-compare-N`).
+
+```
+┌ main ──────────────┐  ┌ win-2 ─────────────┐  ┌ panel-library ─┐
+│ state.ts: its tabs,│  │ state.ts: its tabs,│  │ the library,   │
+│ explorer, panels   │  │ explorer, panels   │  │ for the focused│
+└─────────┬──────────┘  └─────────┬──────────┘  └───────┬────────┘
+          │ invoke · events celer://inbox, shared, focus, windows, drag
+┌─────────┴────────────── core: windows.rs, lib.rs ──────┴──────────┐
+│ sessions (no window owns them) · one inbox per window              │
+│ workspace.json · settings.json · library.json · connections.json   │
+│ (one writer: the core)                                             │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**State.** Every window is its own page with its own copy of `state.ts`. Its store is split in two:
+
+- *shared by every window*: saved connections, settings (theme and shortcuts included), the script library and
+  Gib's memory. The core owns the files: settings are saved as a patch that the core merges into `settings.json`
+  (two windows changing different settings never undo each other), the library as a whole file, connections through
+  their commands. After each write the core emits `celer://shared` and the other windows take the new value.
+  Gib's memory lives in the webview storage, which all windows share; only the window that shows Gib writes it and
+  the others read it again on the `storage` event;
+- *this window's own*: its tabs and their sessions, its explorer (the connections it opened, each with its own
+  metadata session), its side panels, focus, dialogs and the passwords typed in it.
+
+**Sessions** live in the core (`AppState.sessions`), not in a window. Moving a tab is moving its state: the source
+window sends the tab as it is (text, results loaded so far, pending edits, plan, pinned results, session id and the
+password typed for its connection) to the target window's inbox, the target adds it with the same session and the
+source drops it without closing the session. The connection, an open transaction, a cursor with rows still to fetch
+and `#temp` tables go on as they were. A tab cannot move while it runs, loads or connects (its answer would arrive in
+the old window). Disconnecting in one window closes only that window's sessions while other windows are open.
+
+**Inboxes.** `window_post` leaves a message for another window (or for all) and the core rings it with
+`celer://inbox`; the window drains its inbox with `window_inbox`. A window that is still loading finds its messages
+when it starts. Tab moves, panel contents, a panel's actions, Gib's events and the questions asked when Celer quits
+all travel this way.
+
+**Dragging a tab out.** `dragstart` calls `tab_drag_start` (the other windows highlight their tab bar). A drop on
+another window's tab bar claims the tab with its position (`tab_drag_claim`). On `dragend` the source waits a moment
+for that claim and calls `tab_drag_end`, which returns the claim, the pointer and every window's frame;
+`dropTarget` (windowModel.ts) decides: the window that claimed it, else the window under the pointer, else a new
+window where the tab was let go, or nothing over its own window.
+
+**Panels in their own window.** The library and the assistant exist once and work with the active console of the
+last focused full window: that window sends them its console (text, connection, database, error, completion) and
+the consoles linked to library scripts, and they ask it to insert, replace, run or open (`forwardFromPanel`). A plan,
+an E-R diagram or a comparison is sent by the window it was on; plans and schema or data comparisons are sent again
+when they change, and what needs a session (plan again, swap the sides, open the script, open a table) is done by
+that window. "Acoplar" sends the panel back and closes its window.
+
+**Layout.** `workspace.json` version 2 has one entry per window (the main one first): its tabs, its explorer and
+side panel, and its place (physical position and size of the normal frame, maximized, monitor and its scale). The
+first window's tabs are also at the top level, as version 1 had them, so an older Celer still opens them. Each window
+sends its entry (`window_report`) and the core writes the whole file. At start the main window takes the first entry
+and opens the others again; `placeOnScreen` moves a window whose monitor is gone to one that is there, centred and
+fitted. Plans, diagrams and comparisons are not restored (they need the session that made them).
+
+**Closing.** The last full window closes Celer as before (open transactions and unsaved edits are confirmed). Another
+window asks about its tabs with work that would be lost (transaction, table edits, a console not saved to a file or
+the library): move them to the main window with their sessions, or discard them; then it is forgotten. The main
+window with others open asks whether to quit Celer or close only itself. "Salir de Celer" asks every window about its
+risks, has every window write its entry and ends, so all of them come back next time. Gib lives in one window at a
+time (the focused full window, else the main one): `celer://focus` moves him, and the other windows send him their
+events.
+
+**Logic without the app around it**, tested by `dev/windows-check.ts`: `windowModel.ts` (labels, the layout file,
+monitors, the drop target, what a closing window would lose, Gib's window). The core's composition of the file is
+tested in `windows.rs`.
 
 ## Security
 
@@ -73,3 +148,9 @@ connection dialog generically instead of hard-coding one per engine.
 - Connections can be marked as production: the UI confirms `UPDATE` / `DELETE` without `WHERE`.
 - Passwords never touch disk in plain text.
 - Release builds are code-signed.
+- Windows are opened only by the core, with the app's own page and labels `win-*` or `panel-*`. Each kind has its
+  capability: full windows the same permissions as the main one except changing the title
+  (`capabilities/windows.json`); panels neither open links nor folders (`capabilities/panels.json`). Placing a
+  window, reading the monitors and following a drag are app commands that act on the calling window. No new
+  processes, and nothing is written outside Celer's data folder.
+- Native file drops are off (`dragDropEnabled: false`): drag and drop is the page's own HTML5 one.

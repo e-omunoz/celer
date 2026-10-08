@@ -392,6 +392,15 @@ action name **and its shortcut**.
 Connection colour strip on top, icon by type (console, table, script), modified dot, pin, close on hover.
 Middle-click closes. Drag to reorder or split the editor (vertical / horizontal). Overflow goes to a dropdown.
 
+### Windows
+Several windows share connections, library, settings and Gib; each has its own tabs, explorer and side panel.
+A tab dragged out of the tab bar opens a new window where it is dropped; dragged onto another window's tab bar it
+moves there (that tab bar takes the accent tint while a tab from another window is in the air). The tab's menu and
+the palette offer the same ("Mover a una ventana nueva", "Mover a la ventana 2"). The library, the assistant, a plan,
+the E-R diagram and the comparisons have an "own window" button (external-link icon) and come back with *Acoplar*.
+A panel window has a slim title bar: the panel's name, *Acoplar* and the window buttons. Gib appears in one window
+only, the one in use. Closing a window that is not the last asks only when tabs would lose work.
+
 ### Data grid (canvas)
 - Header: column name (600 weight) + type in `--text-faint`, sort indicator, resize handle,
   key icon for PK/FK columns. Double-click the border auto-fits the column.
@@ -500,6 +509,7 @@ Motion explains **where things come from and where they go**; it is never decora
 | Move line up/down | Ctrl+Shift+↑ / ↓ |
 | Multiple cursors | Alt+Click, Alt+J |
 | New console | Ctrl+Shift+L |
+| New window | Ctrl+Shift+N |
 | Commit / rollback | Ctrl+Alt+Shift+C / Ctrl+Alt+Shift+R |
 | Toggle explorer / results | Alt+1 / Alt+4 |
 | Recent tabs | Ctrl+E |

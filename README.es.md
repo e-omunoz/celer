@@ -183,6 +183,7 @@ Devuelve 0 si todo va bien; los errores se escriben en `%TEMP%\celer-setup.log`.
 | `Ctrl+N` | Ir a tabla |
 | `Ctrl+Shift+A` | Acciones |
 | `Ctrl+Shift+L` | Nueva consola |
+| `Ctrl+Shift+N` | Ventana nueva (arrastra una pestaña fuera de la barra para llevarla a otra) |
 | `Ctrl+Alt+N` | Nueva conexión |
 | `Ctrl+Alt+L` | Formatear SQL |
 | `Ctrl+Shift+E` | Plan de ejecución |

@@ -7,6 +7,18 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Several windows** (desktop app):
+  - **Ctrl+Shift+N** opens a new window, with its own explorer and tabs, connected to what the first one is;
+  - drag a tab out of the tab bar and it opens in a new window where you drop it, or drag it onto another window's
+    tab bar; the tab's menu and the palette also move it ("Mover a una ventana nueva", "Mover a la ventana 2");
+  - a moved console keeps its session: same connection, open transaction, rows still to fetch and `#temp` tables;
+  - the library, the AI assistant, the execution plan, the E-R diagram and the comparisons can go to a window of their
+    own and come back ("Acoplar"); the library and the assistant work with the last window you used;
+  - connections, library, settings, theme, shortcuts and Gib are the same in every window, and Gib lives in one of
+    them at a time;
+  - closing a window that is not the last asks what to do with tabs that would lose work (move them to the main
+    window or discard them); "Salir de Celer" closes them all and the next start opens every window again, with its
+    tabs, size, place and monitor (on another monitor if that one is gone).
 - **Script library**, now useful beyond saving (Alt+8, or the book in the side bar):
   - folders and subfolders, tags and an optional connection per script; drag scripts and folders to move them;
   - search by name, folder, tag (`#tag`) and SQL; library scripts also appear in the palette;
@@ -31,6 +43,9 @@ All notable changes to Celer are documented here. The format follows
   - the output shows the time spent connecting or cutting the previous result when there was any; with `CELER_MSSQL_TRACE` set, every statement's times also go to the standard error.
 
 ### Changed
+- `workspace.json` moves to version 2 (one entry per window); the main window's tabs stay where older versions read
+  them. Settings are saved as the keys that changed, merged by the core, so two windows never undo each other.
+- Drag and drop inside Celer no longer goes through the native file drop handler.
 - The library file moves to version 2 (folders and tags); version 1 files are read as they are, nothing is lost, and older Celer versions can still read the new file.
 - Gib remembers the tips you have seen and shows the others first; warnings come once per session and tips at most twice. "Gib: volver a contar los consejos desde el principio" resets that.
 - A tip Gib volunteers closes when you type, stays while the pointer is over it, and offers "No más consejos".

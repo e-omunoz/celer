@@ -12,7 +12,7 @@ Puedes volver a verla desde la paleta: *Guía de inicio*.
 La ventana tiene tres zonas:
 
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
-- **Pestañas** (centro): consolas SQL y tablas abiertas.
+- **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
 - **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
   (Alt+8) y el asistente de IA.
 
@@ -140,6 +140,33 @@ datos, nunca tus filas. Necesita una clave de API de Anthropic (*Ajustes › IA 
 El **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y otros clientes MCP usen tus conexiones
 con un nivel de permiso por conexión (ninguno, solo estructura, lectura o escritura), límites de filas y de tiempo,
 columnas enmascaradas y un registro de auditoría.
+
+## Varias ventanas
+
+Celer puede tener varias ventanas, por ejemplo una en cada monitor. Todas comparten las conexiones guardadas, la
+biblioteca, los ajustes, el tema, los atajos y a Gib; cada una tiene sus pestañas, su explorador y su panel derecho.
+
+- **Ventana nueva**: **Ctrl+Mayús+N** (o *Nuevo › Nueva ventana*). Se abre conectada a lo mismo que la ventana desde
+  la que la abres.
+- **Sacar una pestaña**: arrástrala fuera de la barra de pestañas y suéltala donde quieras: la ventana nueva aparece
+  ahí. También con el botón derecho sobre la pestaña: *Mover a una ventana nueva*.
+- **Llevarla a otra ventana**: arrástrala a la barra de pestañas de otra ventana de Celer (se marca al pasar por
+  encima) o elige *Mover a la ventana…* en el menú de la pestaña o en la paleta.
+- **La sesión no se toca**: una consola movida sigue con la misma conexión, la transacción abierta, las filas que
+  faltaban por cargar y las tablas `#temp`. Mientras ejecuta o carga no se puede mover; espera o detenla.
+- **Paneles en su propia ventana**: la biblioteca, el asistente de IA, el plan de ejecución, el diagrama E-R y las
+  comparaciones tienen un botón *Abrir en su propia ventana* (y *Abrir el panel en su propia ventana* en la paleta).
+  La biblioteca y el asistente trabajan con la consola activa de la última ventana de Celer que usaste. *Acoplar* lo
+  devuelve a su sitio.
+- **Cerrar**: al cerrar una ventana que no es la última, Celer pregunta qué hacer con las pestañas que perderían
+  trabajo (una transacción abierta, cambios en una tabla, una consola sin guardar): moverlas a la ventana principal o
+  descartarlas. Cerrar la ventana principal con otras abiertas pregunta si quieres salir de Celer o cerrar solo esa.
+  Cerrar la última sale de Celer, como siempre.
+- **Al volver**: *Salir de Celer* (paleta) cierra todas las ventanas y la próxima vez se abren como estaban, con sus
+  pestañas, en su sitio y en su monitor. Si un monitor ya no está, la ventana aparece en uno que sí. Cerrar las
+  ventanas una a una hace que solo vuelva la última.
+
+Gib vive en una sola ventana: la que estás usando.
 
 ## Personalizar
 
