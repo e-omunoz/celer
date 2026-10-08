@@ -60,7 +60,7 @@ pub fn export(
     d: &mut dyn Driver,
     sql: &str,
     o: &ExportOptions,
-    mssql: bool,
+    engine: DbKind,
     progress: &dyn Fn(u64),
 ) -> Result<u64> {
     let out = d.execute(sql, PAGE)?;
@@ -101,7 +101,7 @@ pub fn export(
     let mut rows = first.rows;
     loop {
         for r in &rows {
-            write_row(&mut sink, &cols, r, o, &sql_cols, &xml_tags, mssql)?;
+            write_row(&mut sink, &cols, r, o, &sql_cols, &xml_tags, engine)?;
         }
         total += rows.len() as u64;
         progress(total);
@@ -189,20 +189,47 @@ fn json_value(c: &Cell) -> serde_json::Value {
     }
 }
 
-fn sql_literal(c: &Cell, kind: ColKind, mssql: bool) -> String {
+/// A value as a literal the same engine reads back as it was.
+fn sql_literal(c: &Cell, kind: ColKind, engine: DbKind) -> String {
+    let mssql = engine == DbKind::Mssql;
     match c {
         Cell::Null => "NULL".into(),
         Cell::Bool(b) if mssql => (if *b { "1" } else { "0" }).into(),
         Cell::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).into(),
         Cell::Int(i) => i.to_string(),
-        Cell::Num(f) => f.to_string(),
-        Cell::Text(s) if kind == ColKind::Number && s.parse::<f64>().is_ok() => s.clone(),
-        Cell::Text(s) if kind == ColKind::Binary && s.starts_with("0x") && mssql => s.clone(),
-        Cell::Text(s) => format!(
-            "{}'{}'",
-            if mssql { "N" } else { "" },
-            s.replace('\'', "''")
-        ),
+        Cell::Num(f) if f.is_finite() => f.to_string(),
+        // NaN and the infinities (PostgreSQL) only as quoted text: bare they are column names.
+        Cell::Text(s) if kind == ColKind::Number && s.parse::<f64>().is_ok_and(f64::is_finite) => s.clone(),
+        Cell::Text(s) if kind == ColKind::Binary => match binary_literal(s, engine) {
+            Some(lit) => lit,
+            None => text_literal(s, engine),
+        },
+        Cell::Num(f) => text_literal(&f.to_string(), engine),
+        Cell::Text(s) => text_literal(s, engine),
+    }
+}
+
+fn text_literal(s: &str, engine: DbKind) -> String {
+    match engine {
+        DbKind::Mssql => format!("N'{}'", s.replace('\'', "''")),
+        // MySQL reads \ as an escape in a string (unless NO_BACKSLASH_ESCAPES), as mysqldump writes it.
+        DbKind::Mysql => format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''")),
+        _ => format!("'{}'", s.replace('\'', "''")),
+    }
+}
+
+/// A binary value as the grid shows it (0x…) as the engine's binary literal; None for a cut preview or an engine
+/// without one.
+fn binary_literal(s: &str, engine: DbKind) -> Option<String> {
+    let hex = s.strip_prefix("0x")?;
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    match engine {
+        DbKind::Mssql => Some(s.to_string()),
+        DbKind::Mysql | DbKind::Sqlite => Some(format!("X'{hex}'")),
+        DbKind::Postgres => Some(format!("decode('{hex}', 'hex')")),
+        _ => None,
     }
 }
 
@@ -268,7 +295,7 @@ fn write_row(
     o: &ExportOptions,
     sql_cols: &str,
     xml_tags: &[String],
-    mssql: bool,
+    engine: DbKind,
 ) -> Result<()> {
     match sink {
         Sink::Text { w, first, batch } => match o.format.as_str() {
@@ -299,7 +326,7 @@ fn write_row(
                 let vals = r
                     .iter()
                     .zip(cols)
-                    .map(|(c, col)| sql_literal(c, col.kind, mssql))
+                    .map(|(c, col)| sql_literal(c, col.kind, engine))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let per = o.sql_batch.clamp(1, 1000);
@@ -443,9 +470,21 @@ mod tests {
 
     #[test]
     fn literals_and_escaping() {
-        assert_eq!(sql_literal(&Cell::Bool(true), ColKind::Bool, false), "TRUE");
-        assert_eq!(sql_literal(&Cell::Bool(false), ColKind::Bool, true), "0");
-        assert_eq!(sql_literal(&Cell::Text("O'Hara".into()), ColKind::Text, false), "'O''Hara'");
+        assert_eq!(sql_literal(&Cell::Bool(true), ColKind::Bool, DbKind::Postgres), "TRUE");
+        assert_eq!(sql_literal(&Cell::Bool(false), ColKind::Bool, DbKind::Mssql), "0");
+        assert_eq!(sql_literal(&Cell::Text("O'Hara".into()), ColKind::Text, DbKind::Postgres), "'O''Hara'");
+        // Round trip in the same engine: MySQL backslashes, binary values, PostgreSQL NaN and infinities.
+        let path = Cell::Text(r"C:\dir\new".into());
+        assert_eq!(sql_literal(&path, ColKind::Text, DbKind::Mysql), r"'C:\\dir\\new'");
+        assert_eq!(sql_literal(&path, ColKind::Text, DbKind::Postgres), r"'C:\dir\new'");
+        let bin = Cell::Text("0x00FF10AB".into());
+        assert_eq!(sql_literal(&bin, ColKind::Binary, DbKind::Mysql), "X'00FF10AB'");
+        assert_eq!(sql_literal(&bin, ColKind::Binary, DbKind::Sqlite), "X'00FF10AB'");
+        assert_eq!(sql_literal(&bin, ColKind::Binary, DbKind::Postgres), "decode('00FF10AB', 'hex')");
+        assert_eq!(sql_literal(&bin, ColKind::Binary, DbKind::Mssql), "0x00FF10AB");
+        assert_eq!(sql_literal(&Cell::Text("NaN".into()), ColKind::Number, DbKind::Postgres), "'NaN'");
+        assert_eq!(sql_literal(&Cell::Text("-Infinity".into()), ColKind::Number, DbKind::Postgres), "'-Infinity'");
+        assert_eq!(sql_literal(&Cell::Text("12.50".into()), ColKind::Number, DbKind::Postgres), "12.50");
         assert_eq!(md_cell("a|b\nc"), "a\\|b c");
         assert_eq!(html_escape("<b>&\"</b>"), "&lt;b&gt;&amp;&quot;&lt;/b&gt;");
     }

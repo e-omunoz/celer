@@ -686,7 +686,7 @@ async fn export_query(
 ) -> CmdResult<u64> {
     let cfg = state.conn(&conn_id)?;
     check_read_only(&cfg, &sql)?;
-    let mssql = cfg.kind == DbKind::Mssql;
+    let engine = cfg.kind;
     let connector = state.make_connector(cfg)?;
     let h = SessionHandle::open(conn_id, connector).await.map_err(err)?;
     let h = Arc::new(h);
@@ -699,7 +699,7 @@ async fn export_query(
                 let _ = d.use_database(&database);
             }
             let last = std::cell::Cell::new(std::time::Instant::now());
-            export::export(d, &sql, &options, mssql, &|rows| {
+            export::export(d, &sql, &options, engine, &|rows| {
                 if last.get().elapsed().as_millis() > 250 {
                     last.set(std::time::Instant::now());
                     let _ = app.emit(
