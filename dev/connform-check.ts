@@ -175,6 +175,12 @@ assert.deepEqual(withInstanceName(conn({ kind: "mssql", port: 1500 }), "SQLEXPRE
 assert.deepEqual(withInstanceName(conn({ kind: "informix", port: 9088 }), "ol_x"), { instance: "ol_x" });
 assert.equal(defaultPort(conn({ kind: "mssql", instance: "SQLEXPRESS" })), null);
 assert.equal(defaultPort(conn({ kind: "mssql" })), 1433);
+// An instance with 1433 typed back in: a warning offering to empty the port; another port is the user's choice.
+issue = validateConn(conn({ kind: "mssql", instance: "SQLEXPRESS", port: 1433 })).find((i) => i.field === "port")!;
+assert.equal(issue.level, "warning");
+assert.deepEqual(issue.fix, { port: null });
+assert.deepEqual(validateConn(conn({ kind: "mssql", instance: "SQLEXPRESS", port: 1500 })), []);
+assert.deepEqual(validateConn(conn({ kind: "mssql", instance: "SQLEXPRESS", port: null })), []);
 assert.equal(applyJdbcUrl(conn({ kind: "mssql" }), "jdbc:sqlserver://srv\\SQLEXPRESS:1500;databaseName=x")?.cfg.port, 1500);
 assert.equal(applyJdbcUrl(conn({ kind: "mssql" }), "jdbc:sqlserver://srv;databaseName=x")?.cfg.port, 1433);
 assert.deepEqual(fieldsWith(conn({ kind: "postgres", host: "sql\\EXPRESS" }), "error"), ["host"]);

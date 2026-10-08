@@ -104,6 +104,10 @@ export function validateConn(cfg: ConnConfig, others: { id: string; name: string
   if (show.port && cfg.port !== null && cfg.port !== undefined) {
     const port = cfg.port;
     if (!Number.isInteger(port) || port < 1 || port > 65535) error("port", "El puerto es un número entero entre 1 y 65535.");
+    // A port wins over the instance (as in mssql-jdbc): 1433 with an instance is usually the default left behind.
+    else if (cfg.kind === "mssql" && cfg.instance.trim() && port === engineOf("mssql").port) {
+      warn("port", "Con instancia y el puerto 1433 conecta a ese puerto, no al de la instancia. Déjalo vacío y SQL Server Browser da el suyo.", { port: null }, "Vaciar");
+    }
   }
 
   if (show.user && isNetwork(cfg.kind) && !cfg.user.trim()) error("user", "Indica el usuario.");
