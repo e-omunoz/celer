@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="340" height="84" viewBox="0 0 340 84" role="img" aria-label="Download Celer for Windows: Celer-Setup-Windows.exe">
+  <title>Download Celer for Windows (Celer-Setup-Windows.exe)</title>
+  <defs>
+    <linearGradient id="ember" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFA15C"/>
+      <stop offset=".55" stop-color="#F26B2A"/>
+      <stop offset="1" stop-color="#D9481C"/>
+    </linearGradient>
+  </defs>
+  <rect x=".5" y=".5" width="339" height="83" rx="14" fill="#101826" stroke="#2E333D"/>
+  <g transform="translate(24 26) scale(1.3333)" fill="#F7F8FA">
+    <path d="M2 3.5 10.5 2.3V11H2zM11.5 2.15 22 .7V11H11.5zM2 12h8.5v8.7L2 19.5zM11.5 12H22v10.3l-10.5-1.45z"/>
+  </g>
+  <text x="76" y="40" fill="#F7F8FA" font-family="Inter, 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="23" font-weight="600" letter-spacing="-0.2">Windows</text>
+  <text x="76" y="62" fill="#8B93A1" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5">Celer-Setup-Windows.exe</text>
+  <circle cx="312" cy="42" r="16" fill="url(#ember)"/>
+  <path d="M312 34v14m-6-6 6 6 6-6" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

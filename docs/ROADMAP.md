@@ -59,7 +59,7 @@
 - [ ] Elasticsearch / OpenSearch
 
 ## Phase 6 — Release
-- [x] Windows installers (Celer Setup, NSIS, MSI) and portable build — code signing still to come
+- [x] Windows installer (Celer Setup) and portable build, built on GitHub Actions — code signing still to come
 - [x] Auto-update (Windows)
 - [x] Linux (AppImage, deb, rpm) and macOS (universal dmg) builds
 - [x] User documentation ([GUIA.md](GUIA.md))

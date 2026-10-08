@@ -29,8 +29,10 @@ y cualquier otra base de datos entra por ODBC.
   (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
 - Las contraseñas se guardan en el almacén de credenciales del sistema operativo, nunca en un fichero.
 
-¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver (también sus contraseñas, si quieres)
-y DbVisualizer, con carpetas y marcas de producción. De una conexión Informix se traen también el `informixserver` y
+¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas
+de producción. Las contraseñas guardadas en DBeaver solo se traen si marcas **Importar también las contraseñas
+guardadas** (desmarcada de entrada): solo entonces, y al pulsar *Importar*, Celer lee el fichero cifrado de credenciales
+de DBeaver; al listar las conexiones no lo abre. De una conexión Informix se traen también el `informixserver` y
 el resto de propiedades de la URL (van a *Parámetros extra*). Las carpetas se reorganizan arrastrando las conexiones.
 
 **Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta, cambios sin guardar
@@ -207,6 +209,29 @@ DBA un alias `drsoctcp` en `sqlhosts` (por ejemplo `miservidor_dr drsoctcp host 
 El locale de cada base se consulta con `SELECT dbs_dbsname, dbs_collate FROM sysmaster:sysdbslocale`. Celer muestra
 estas explicaciones (y una guía) en lugar del error del driver.
 
+## Instalar y actualizar
+
+Los ficheros de cada versión tienen siempre el mismo nombre, y
+`https://github.com/e-omunoz/celer/releases/latest/download/<fichero>` descarga el de la última:
+
+| Sistema | Fichero |
+|---|---|
+| Windows | `Celer-Setup-Windows.exe` (instalador, para tu usuario y sin administrador) · `Celer-Portable-Windows.exe` (sin instalar) |
+| macOS | `Celer-macOS.dmg` (Apple silicon e Intel) |
+| Linux | `Celer-Portable-Linux.AppImage` · `Celer-Linux.deb` · `Celer-Linux.rpm` |
+
+`SHA256SUMS.txt` trae el SHA-256 de todos (ver [SECURITY.md](../SECURITY.md)).
+
+Celer comprueba al arrancar, y cada pocas horas, si hay una versión nueva (se desactiva en el diálogo de
+actualizaciones). Solo avisa: no descarga ni ejecuta nada hasta que pulsas **Actualizar**. Entonces, en una copia
+instalada con Celer Setup, descarga `Celer-Setup-Windows.exe` a su carpeta de datos local, comprueba su SHA-256 con el
+`SHA256SUMS.txt` de la versión, se cierra (preguntando antes si hay trabajo sin guardar) y lo ejecuta, que actualiza con
+las mismas opciones y vuelve a abrir Celer. Con **Al cerrar Celer**, la actualización se instala cuando cierres. La copia
+portable, macOS y Linux no ejecutan nada: abren la página de la versión para que descargues el fichero.
+
+Al desinstalar, el propio `uninstall.exe` se queda en la carpeta de Celer, porque Windows no deja borrar un programa
+mientras se ejecuta; lo quita la siguiente instalación, o puedes borrarlo a mano.
+
 ## Dónde guarda Celer sus datos
 
 | | Windows | macOS | Linux |
@@ -214,5 +239,6 @@ estas explicaciones (y una guía) en lugar del error del driver.
 | Ajustes, conexiones, historial, biblioteca | `%APPDATA%\es.celer.app` | `~/Library/Application Support/es.celer.app` | `~/.local/share/es.celer.app` (o `$XDG_DATA_HOME`) |
 | Contraseñas | Administrador de credenciales | Llavero | Secret Service (GNOME Keyring, KWallet) |
 | Drivers descargados (IBM CLI, JDBC, Java) y el puente JDBC | `…\es.celer.app\drivers` | `…/es.celer.app/drivers` | `…/es.celer.app/drivers` |
+| Actualización descargada (Celer Setup) | `%LOCALAPPDATA%\es.celer.app\updates` | — | — |
 
 Si uno de esos ficheros se daña, Celer lo aparta con el sufijo `.unreadable-…` y avisa, en lugar de sobrescribirlo.

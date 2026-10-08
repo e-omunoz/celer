@@ -15,6 +15,15 @@ All notable changes to Celer are documented here. The format follows
 - **Settings › Drivers** shows what each Informix protocol has (IBM CLI, Java and the JDBC driver, the Client SDK), with download buttons, "Usar" for DBeaver's copies and a check that starts Java.
 - **Guide for Informix connections** in the app, shown instead of the raw error when a driver is missing or the server name, port or locale are wrong (`IM002`, `CLI0199E`, `SQL30081N`, -908, -761, -25596, -23101, -23197).
 
+### Changed
+- **Releases are built entirely on GitHub Actions**, for Windows too: pushing a `vX.Y.Z` tag builds the three systems and publishes the release. `dev\release.ps1` only bumps the version, tags and pushes.
+- **One file per kind, always with the same name**, so `releases/latest/download/<file>` and the README's Windows, macOS and Linux buttons always give the latest version: `Celer-Setup-Windows.exe`, `Celer-Portable-Windows.exe`, `Celer-macOS.dmg`, `Celer-Linux.deb`, `Celer-Linux.rpm`, `Celer-Portable-Linux.AppImage` and a single `SHA256SUMS.txt`. The version is in the release title, its tag and its notes.
+- The Tauri NSIS installer and the MSI package are no longer published. Celer Setup covers both (also silently, for deployments); copies installed with them keep working.
+- **Updates only when you ask**: Celer still checks for new versions, but downloads and runs nothing until you press *Actualizar*. The installer is downloaded to Celer's local data folder (`%LOCALAPPDATA%\es.celer.app\updates`, no longer the temp folder), it must match the release's `SHA256SUMS.txt`, it is checked again right before it runs, and it runs directly, without a command interpreter. The portable copy no longer opens Celer Setup: it opens the release page, like macOS and Linux. A downloaded update installs on close only if you chose *Al cerrar Celer*.
+- **DBeaver passwords only on request**: *Importar conexiones* has the option *Importar también las contraseñas guardadas*, off by default. Only with it ticked, and when you press *Importar*, Celer reads DBeaver's encrypted `credentials-config.json`; listing the connections never opens it.
+- **Uninstalling no longer starts a hidden `cmd`** to delete `uninstall.exe` after it closes. The running `uninstall.exe` stays in its folder (Windows does not let a program delete itself), the last screen says so, and the next installation removes it.
+- The Windows executables carry a complete version resource (company, description, product, copyright).
+
 ### Fixed
 - **Informix**: importing a DBeaver or DbVisualizer connection keeps its `informixserver` and the other URL properties ("Parámetros extra"), and uses "Automático" instead of DRDA.
 - **Informix**: an empty database no longer sends `DATABASE=;` to the driver; DRDA asks for the database before connecting.
