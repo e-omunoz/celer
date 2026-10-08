@@ -53,6 +53,12 @@ jobs:
       - name: Connection import checks
         run: node --experimental-strip-types --no-warnings dev/migrate-check.ts
 
+      - name: Connection form checks
+        run: node --experimental-strip-types --no-warnings dev/connform-check.ts
+
+      - name: Explorer checks
+        run: node --experimental-strip-types --no-warnings dev/explorer-check.ts
+
       - name: Rust tests
         working-directory: src-tauri
         run: |
