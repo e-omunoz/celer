@@ -403,6 +403,13 @@ fn cancel(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<()> 
     Ok(())
 }
 
+/// What a session is doing besides the statement itself (reading the rest of a result to keep the session), while
+/// it runs.
+#[tauri::command]
+fn session_progress(state: State<'_, Arc<AppState>>, session_id: String) -> Option<String> {
+    state.sessions.get(&session_id).ok().and_then(|h| h.progress())
+}
+
 #[tauri::command]
 async fn set_autocommit(
     state: State<'_, Arc<AppState>>,
@@ -1103,6 +1110,7 @@ pub fn run() {
             fetch,
             close_cursor,
             cancel,
+            session_progress,
             set_autocommit,
             commit,
             rollback,

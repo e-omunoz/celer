@@ -31,7 +31,27 @@ export interface ActivitySpec {
 
 const int = (id: string) => String(Number.parseInt(id, 10));
 
-export function activitySpec(kind: DbKind | undefined): ActivitySpec | null {
+/**
+ * Si la descripción del servidor es la de Azure Synapse dedicated SQL pool o PDW (el driver de SQL Server la marca a
+ * partir de SERVERPROPERTY('EngineEdition')): allí no hay SHOWPLAN_XML ni sys.dm_exec_requests.
+ */
+export function synapseDedicated(serverInfo: string | undefined): boolean {
+  return /Azure Synapse dedicated/.test(serverInfo ?? "");
+}
+
+/** Synapse dedicated / PDW: sesiones y peticiones del nodo de control (identificadores 'SID…' y 'QID…'). */
+const SYNAPSE: ActivitySpec = {
+  list: `SELECT s.session_id, s.login_name, COALESCE(DB_NAME(r.database_id), ''), COALESCE(s.app_name, ''), COALESCE(s.client_id, ''),
+    COALESCE(r.status, s.status), '', r.total_elapsed_time, COALESCE(r.command, ''), ''
+    FROM sys.dm_pdw_exec_sessions s LEFT JOIN sys.dm_pdw_exec_requests r ON r.session_id = s.session_id AND r.status IN ('Running', 'Suspended')
+    WHERE s.status NOT IN ('CLOSED', 'TERMINATED') ORDER BY CASE WHEN r.request_id IS NULL THEN 1 ELSE 0 END, r.submit_time`,
+  cancel: null,
+  kill: (id) => `KILL '${id.replace(/[^A-Za-z0-9]/g, "")}'`,
+  self: "SELECT SESSION_ID()",
+};
+
+/** `serverInfo` (la descripción del servidor) distingue Azure Synapse dedicated / PDW dentro de SQL Server. */
+export function activitySpec(kind: DbKind | undefined, serverInfo?: string): ActivitySpec | null {
   switch (kind) {
     case "postgres":
       return {
@@ -52,6 +72,7 @@ export function activitySpec(kind: DbKind | undefined): ActivitySpec | null {
         self: "SELECT CONNECTION_ID()",
       };
     case "mssql":
+      if (synapseDedicated(serverInfo)) return SYNAPSE;
       return {
         list: `SELECT s.session_id, s.login_name, COALESCE(DB_NAME(COALESCE(r.database_id, s.database_id)), ''), COALESCE(s.program_name, ''),
           COALESCE(s.host_name, ''), COALESCE(r.status, s.status), COALESCE(r.wait_type, ''),

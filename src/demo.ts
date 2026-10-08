@@ -524,6 +524,9 @@ export function createDemoBackend(): Backend {
       if (session) session.cursor = null;
     },
     async cancel() {},
+    async sessionProgress() {
+      return null;
+    },
     async setAutocommit(sessionId, on) {
       const session = requireSession(sessionId);
       try {

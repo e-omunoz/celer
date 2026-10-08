@@ -29,7 +29,7 @@ Legend: ✅ done · 🟡 planned · ⚪ via generic layer only
 
 | Engine | Also covers | Strategy | Crate / library | Status |
 |---|---|---|---|---|
-| SQL Server | Azure SQL, Azure SQL MI, Synapse dedicated | Native | `tiberius` | ✅ written |
+| SQL Server | Azure SQL, Azure SQL MI, Synapse dedicated / PDW, Fabric Warehouse (edition from `SERVERPROPERTY('EngineEdition')`: own DDL, plan and activity on Synapse) | Native | `tiberius` | ✅ written |
 | Informix | — | IBM JDBC driver (SQLI, through Celer's JDBC bridge), Informix CSDK (SQLI, via ODBC) or IBM CLI (DRDA) | `com.ibm.informix:jdbc` / ODBC / `db2cli64.dll` | ✅ written |
 | PostgreSQL | CockroachDB, YugabyteDB, TimescaleDB, Citus, Neon, Supabase, AlloyDB, Greenplum | Native | `tokio-postgres` | 🟡 |
 | MySQL / MariaDB | Aurora MySQL, TiDB, SingleStore, PlanetScale, Percona | Native | `mysql_async` | 🟡 |
