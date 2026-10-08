@@ -984,7 +984,9 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .pal-foot { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--text-faint); flex: none; }
 .pal-foot kbd { margin-right: 3px; }
 
-.toasts { position: fixed; right: 16px; bottom: 40px; z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+.toasts { position: fixed; right: 16px; bottom: 40px; z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; transition: bottom var(--dur-med) var(--ease-out); }
+/* Above a table's changes bar (38px), so Revertir and Revisar y guardar stay clickable. */
+.toasts.raised { bottom: 84px; }
 .toast {
   display: flex; align-items: flex-start; gap: 10px; width: 360px; max-width: calc(100vw - 32px); padding: 10px 10px 10px 12px;
   background: var(--popover); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-lg);

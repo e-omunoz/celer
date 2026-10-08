@@ -4,7 +4,7 @@ import { commands } from "../commands";
 import { library, loadLibrary, openLibraryScript } from "../library";
 import { returnFocus } from "../focus";
 import { ObjIcon } from "../icons";
-import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state } from "../state";
+import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty } from "../state";
 
 // ---------------------------------------------------------------- context menu
 
@@ -103,8 +103,13 @@ export function ContextMenu() {
 // ---------------------------------------------------------------- toasts
 
 export function Toasts() {
+  // A table with pending changes shows its changes bar at the bottom: the toasts go above it, not over its buttons.
+  const raised = () => {
+    const tab = state.tabs.find((item) => item.id === state.activeTabId);
+    return tab?.kind === "table" && tab.section === "data" && tableDirty(tab);
+  };
   return (
-    <div class="toasts" aria-live="polite">
+    <div class="toasts" classList={{ raised: raised() }} aria-live="polite">
       <For each={state.toasts}>
         {(toast) => (
           <div class={`toast ${toast.kind}`} role="status">
