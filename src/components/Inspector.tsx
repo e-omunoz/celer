@@ -1,8 +1,9 @@
-import { BookMarked, BookmarkPlus, Braces, Copy, History, Pencil, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
+import { BookMarked, BookmarkPlus, Braces, Code2, Copy, History, Pencil, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
 import { AiPanel } from "./AiPanel";
 import { createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { cancelNaming, deleteLibraryScript, filteredScripts, finishNaming, library, loadLibrary, openLibraryScript, renameLibraryScript, saveToLibrary, setLibrary, type LibraryScript } from "../library";
 import { shortcutLabel, withShortcut } from "../commands";
+import { prettyXml } from "../prettyXml";
 import { cellText, isNullCell, prettyJson } from "../sql";
 import { activeSql, clearHistory, confirmDialog, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory } from "../state";
 
@@ -39,20 +40,25 @@ function ValueView() {
     const v = value();
     if (!v || isNullCell(v.value)) return "";
     const raw = cellText(v.value);
-    return formatJson() ? prettyJson(raw) ?? raw : raw;
+    return formatJson() ? prettyJson(raw) ?? prettyXml(raw) ?? raw : raw;
   });
-  const isJson = () => {
+  /** JSON or XML that can be shown indented. */
+  const structured = createMemo((): "JSON" | "XML" | null => {
     const v = value();
-    return Boolean(v && !isNullCell(v.value) && prettyJson(cellText(v.value)) !== null);
-  };
+    if (!v || isNullCell(v.value)) return null;
+    const raw = cellText(v.value);
+    return prettyJson(raw) !== null ? "JSON" : prettyXml(raw) !== null ? "XML" : null;
+  });
   return (
     <Show when={value()} fallback={<p class="inspector-empty">Selecciona una celda para ver su valor completo.</p>}>
       <div class="value-head">
         <b>{value()!.column}</b>
         <span class="muted">{value()!.typeName}</span>
         <span class="spacer" />
-        <Show when={isJson()}>
-          <button type="button" class="icon-btn" classList={{ on: formatJson() }} title="Formatear JSON" onClick={() => setFormatJson(!formatJson())}><Braces size={14} /></button>
+        <Show when={structured()}>
+          <button type="button" class="icon-btn" classList={{ on: formatJson() }} title={`Formatear ${structured()}`} onClick={() => setFormatJson(!formatJson())}>
+            {structured() === "XML" ? <Code2 size={14} /> : <Braces size={14} />}
+          </button>
         </Show>
         <button type="button" class="icon-btn" classList={{ on: wrap() }} title="Ajuste de línea" onClick={() => setWrap(!wrap())}><WrapText size={14} /></button>
         <button type="button" class="icon-btn" title="Copiar valor" onClick={() => void copyText(text() || "NULL")}><Copy size={14} /></button>
