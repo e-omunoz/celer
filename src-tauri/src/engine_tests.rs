@@ -515,7 +515,7 @@ fn informix_engine() {
                INSERT INTO dc_b VALUES (1, 'Ana', 't', MDY(1, 1, 2024), 1.50, NULL);
                INSERT INTO dc_b VALUES (2, 'Luís', 't', NULL, 3.00, NULL);
                INSERT INTO dc_b VALUES (3, 'Viejo', 't', NULL, NULL, NULL)", 10).unwrap();
-    let dc_b = ObjectRef { database: "celer".into(), schema: String::new(), name: "dc_b".into(), kind: "table".into() };
+    let dc_b = ObjectRef { database: "celer".into(), schema: obj.schema.clone(), name: "dc_b".into(), kind: "table".into() };
     shape["data"] = json!({
         "source": result_set(d, "SELECT * FROM dc_a ORDER BY id"),
         "target": result_set(d, "SELECT * FROM dc_b ORDER BY id"),
