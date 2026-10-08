@@ -4,7 +4,7 @@
 import { quoteIdentFor } from "./sql.ts";
 import type { DbKind, TableColumn } from "./types";
 
-export type CompareColumn = Pick<TableColumn, "name" | "typeName" | "nullable" | "primaryKey">;
+export type CompareColumn = Pick<TableColumn, "name" | "typeName" | "nullable" | "primaryKey"> & Partial<Pick<TableColumn, "default" | "identity">>;
 
 export interface SchemaTable {
   name: string;
@@ -50,10 +50,14 @@ const SYNONYMS: Record<string, string> = {
 /** A type name compared loosely: case, spaces and the usual synonyms (int4 = integer, varchar = character varying). */
 export function normalizeType(typeName: string): string {
   const t = typeName.trim().toLowerCase().replace(/\s+/g, " ").replace(/\s*\(\s*/g, "(").replace(/\s*,\s*/g, ",").replace(/\s*\)/g, ")");
-  const match = /^([a-z0-9_ ]+?)(\(.*\))?(\[\])?$/.exec(t);
+  const match = /^([a-z0-9_ ]+?)(\([^)]*\))?((?: unsigned| zerofill)*)(\[\])?$/.exec(t);
   if (!match) return t;
   const base = SYNONYMS[match[1]] ?? match[1];
-  return `${base}${match[2] ?? ""}${match[3] ?? ""}`;
+  let size = match[2] ?? "";
+  // MySQL 5.7 writes int(11), 8.0 just int: an integer's display width is not part of its type (tinyint(1) is
+  // MySQL's boolean and keeps it).
+  if (/^(smallint|mediumint|integer|bigint)$/.test(base) || (base === "tinyint" && size !== "(1)")) size = "";
+  return `${base}${size}${match[3] ?? ""}${match[4] ?? ""}`;
 }
 
 function byName<T extends { name: string }>(items: T[]): { exact: Map<string, T>; folded: Map<string, T> } {
@@ -175,7 +179,12 @@ export function syncScript(diffs: TableDiff[], options: SyncOptions): string {
         if (dialect === "postgres") {
           if (c.change === "type") lines.push(`ALTER TABLE ${t} ALTER COLUMN ${col} TYPE ${s.typeName};`);
           if (s.nullable !== c.target.nullable) lines.push(`ALTER TABLE ${t} ALTER COLUMN ${col} ${s.nullable ? "DROP" : "SET"} NOT NULL;`);
-        } else if (dialect === "mysql") lines.push(`ALTER TABLE ${t} MODIFY COLUMN ${col} ${s.typeName} ${nullSql(s)};`);
+        } else if (dialect === "mysql") {
+          // MODIFY redefines the whole column: what it had besides type and NULL must be written again.
+          const kept = [c.target.default != null && c.target.default !== "" ? `DEFAULT ${c.target.default}` : "", c.target.identity ? "AUTO_INCREMENT" : ""].filter(Boolean);
+          if (kept.length) lines.push(`-- ${c.target.name} tiene ${kept.join(" y ")}: MODIFY lo quita si no se repite (revisa también COMMENT y COLLATE)`);
+          lines.push(`ALTER TABLE ${t} MODIFY COLUMN ${col} ${s.typeName} ${nullSql(s)};`);
+        }
         else if (dialect === "mssql") lines.push(`ALTER TABLE ${t} ALTER COLUMN ${col} ${s.typeName} ${nullSql(s)};`);
         else if (dialect === "informix") lines.push(`ALTER TABLE ${t} MODIFY (${col} ${s.typeName}${s.nullable ? "" : " NOT NULL"});`);
         else lines.push(`-- ${engineLabel(dialect)} no cambia el tipo de una columna con ALTER: ${c.target.name} ${c.target.typeName} → ${s.typeName}${s.nullable === c.target.nullable ? "" : `, ${nullSql(s)}`} (hay que recrear la tabla)`);

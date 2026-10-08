@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::model::ConnConfig;
@@ -164,21 +164,34 @@ impl Store {
         }
     }
 
-    /// The JSON file `name`, or Null when it does not exist. A file that does not parse is kept aside as
-    /// `name.unreadable-<time>` (the next save would otherwise overwrite what it held) and reads as Null.
-    pub fn load_json(&self, name: &str) -> serde_json::Value {
-        let Some(text) = self.read(name) else {
-            return serde_json::Value::Null;
+    /// The JSON file `name`, or Null when it does not exist. Errors (and the caller must then not save over it):
+    /// a file that cannot be read (locked, not UTF-8…), and one that does not parse, which is first kept aside as
+    /// `name.unreadable-<time>` so that the next save starts clean without destroying it.
+    pub fn load_json(&self, name: &str) -> Result<serde_json::Value> {
+        let path = self.path(name);
+        let mut attempt = 0;
+        let text = loop {
+            match fs::read_to_string(&path) {
+                Ok(text) => break text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::Value::Null),
+                // A short lock (an antivirus scan, a backup) usually goes away.
+                Err(_) if attempt < 3 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                }
+                Err(e) => return Err(anyhow!("No se pudo leer {name}: {e}")),
+            }
         };
         match serde_json::from_str(&text) {
-            Ok(value) => value,
-            Err(_) => {
+            Ok(value) => Ok(value),
+            Err(e) => {
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let _ = fs::rename(self.path(name), self.path(&format!("{name}.unreadable-{stamp}")));
-                serde_json::Value::Null
+                let aside = format!("{name}.unreadable-{stamp}");
+                fs::rename(&path, self.path(&aside)).map_err(|err| anyhow!("{name} está dañado ({e}) y no se pudo apartar: {err}"))?;
+                Err(anyhow!("{name} estaba dañado ({e}): se ha guardado aparte como {aside} y se empieza de cero"))
             }
         }
     }
@@ -246,13 +259,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("celer-store-{}", std::process::id()));
         let store = Store::new(dir.clone());
         std::fs::write(dir.join("library.json"), "{ \"scripts\": [ broken").unwrap();
-        assert!(store.load_json("library.json").is_null());
+        let err = store.load_json("library.json").unwrap_err().to_string();
+        assert!(err.contains("library.json.unreadable-"), "{err}");
         assert!(!dir.join("library.json").exists(), "the broken file is not left to be overwritten");
         let kept = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("library.json.unreadable-"));
         assert!(kept, "it is kept next to it");
         std::fs::write(dir.join("ok.json"), "{\"a\":1}").unwrap();
-        assert_eq!(store.load_json("ok.json")["a"], 1);
-        assert!(store.load_json("missing.json").is_null());
+        assert_eq!(store.load_json("ok.json").unwrap()["a"], 1);
+        assert!(store.load_json("missing.json").unwrap().is_null());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

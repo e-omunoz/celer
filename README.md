@@ -12,7 +12,7 @@
   <a href="https://github.com/e-omunoz/celer/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/e-omunoz/celer?style=flat-square&color=F26B2A&label=release"></a>
   <a href="https://github.com/e-omunoz/celer/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/e-omunoz/celer/total?style=flat-square&color=4C88B8&label=downloads"></a>
   <a href="https://github.com/e-omunoz/celer/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/e-omunoz/celer/ci.yml?branch=main&style=flat-square&label=build"></a>
-  <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20·%2011-2B2724?style=flat-square">
+  <img alt="Windows, macOS and Linux" src="https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-2B2724?style=flat-square">
 </p>
 
 <p align="center">
@@ -46,22 +46,35 @@ without administrator rights, and keeps itself up to date.
 - **An editor that knows your schema.** Completion offers tables after `FROM`/`JOIN`, the columns of the tables in
   the statement everywhere else, and `alias.` or `schema.` narrow the list. **Ctrl+click** (or F4 / Ctrl+B) on a
   table opens it. The statement under the caret is highlighted; Ctrl+Enter runs it.
+  Live templates (`sel`, `ins`, `cte`…), query parameters (`:name`, `?`) asked before running, and a warning on a
+  `DELETE` or `UPDATE` without `WHERE`.
 - **Tables you can explore.** Filter chips per column (equals, contains, between, value lists…), your own `WHERE`
   and `ORDER BY` with live help (it warns when `"text"` would be read as a column name and fixes it in one click),
-  sorting on the server and an exact count on demand. Edit cells and save everything in one transaction.
+  sorting on the server and an exact count on demand. Edit cells with editors that know the type (a true/false
+  picker, a calendar, the referenced rows of a foreign key) and save everything in one transaction.
 - **Foreign keys you can follow.** FK columns are marked in the header; Ctrl+click a value to open the referenced
   row, or open the referenced table from the *Claves* tab.
+- **See why a query is slow.** Execution plans as a tree for every engine, with real rows and times (EXPLAIN
+  ANALYZE) and warnings worth acting on. Server activity shows the sessions and running queries, with cancel and
+  kill.
+- **Understand and compare schemas.** An entity-relationship diagram of any schema (export to SVG), and a schema
+  comparison between two connections that writes the script to make them match.
+- **Results you can keep.** Pin a result, run again and compare both: changed cells and new or missing rows are
+  marked. Quick filter over the loaded rows.
 - **Never frozen.** Long operations show Gib at his laptop with live progress and **Cancelar**: loading every row
   stops after the chunk in flight and keeps what arrived; server queries are cancelled on the server.
-- **Export and import.** Stream CSV, TSV, Excel, JSON, SQL `INSERT`s, Markdown or HTML straight to disk; import
-  CSV/TSV with column mapping in a single transaction.
+- **Export and import.** Stream CSV, TSV, Excel, JSON, XML, SQL `INSERT`s, Markdown or HTML straight to disk;
+  import CSV, JSON or Excel / OpenDocument sheets with column mapping in a single transaction. Generate SELECT with
+  joins, INSERT, UPDATE, UPSERT/MERGE and DDL from the explorer.
 - **AI with permissions.** An assistant that writes, explains, fixes and optimises SQL with Claude using your schema,
   never your rows. An **MCP server** (`celer.exe --mcp`) lets Claude Desktop, Claude Code and other clients use your
   connections with a permission level per connection, row and time limits, masked columns and an audit log.
 - **Bring your connections.** Import them from **DBeaver** (saved passwords included, if you want) and
   **DbVisualizer**, with folders and production flags. Drag connections between folders in the explorer.
-- **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift), a guided
-  tour, and **Gib**: he thinks while queries run, has an idea when a long one finishes and shares tips.
+- **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift),
+  shortcuts you can change, a script library, a startup script per connection, and **Gib**: he thinks while queries
+  run, has an idea when a long one finishes, goes for a coffee or juggles when you are away, and swats the cursor if
+  you poke him while he waits.
 - **Updates in the app.** Celer checks GitHub for new releases, shows what's new and installs them in one click,
   after verifying the download against the release's SHA-256 sums.
 
@@ -73,6 +86,14 @@ without administrator rights, and keeps itself up to date.
   <tr>
     <td><img src="docs/media/table.png" alt="Table viewer with a filter chip" /><br/><sub>Table viewer with column filters</sub></td>
     <td><img src="docs/media/keys.png" alt="Keys tab with a button to open the referenced table" /><br/><sub>Foreign keys: jump to the referenced table or row</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/plan.png" alt="Execution plan as a tree with real rows and times" /><br/><sub>Execution plan with real rows and times</sub></td>
+    <td><img src="docs/media/er.png" alt="Entity-relationship diagram of a schema" /><br/><sub>Entity-relationship diagram</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/schemas.png" alt="Schema comparison with the columns that differ" /><br/><sub>Schema comparison and sync script</sub></td>
+    <td><img src="docs/media/shortcuts.png" alt="Keyboard shortcuts settings" /><br/><sub>Shortcuts you can change</sub></td>
   </tr>
   <tr>
     <td><img src="docs/media/busy.png" alt="Gib at his laptop while 200,000 rows load, with a Cancel button" /><br/><sub>Loading 200,000 rows, cancellable</sub></td>

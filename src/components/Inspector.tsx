@@ -61,7 +61,8 @@ function ValueView() {
           </button>
         </Show>
         <button type="button" class="icon-btn" classList={{ on: wrap() }} title="Ajuste de línea" onClick={() => setWrap(!wrap())}><WrapText size={14} /></button>
-        <button type="button" class="icon-btn" title="Copiar valor" onClick={() => void copyText(text() || "NULL")}><Copy size={14} /></button>
+        {/* The stored value, not the indented view (XML and JSON would come back altered). */}
+        <button type="button" class="icon-btn" title="Copiar valor" onClick={() => void copyText(isNullCell(value()!.value) ? "NULL" : cellText(value()!.value))}><Copy size={14} /></button>
       </div>
       <Show when={!isNullCell(value()!.value)} fallback={<div class="value-null">NULL</div>}>
         <pre class="value-text" classList={{ nowrap: !wrap() }}>{text()}</pre>

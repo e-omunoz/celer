@@ -69,12 +69,16 @@ export async function runCompare(source: SchemaRef, target: SchemaRef) {
       if (ref.path[0]) await api().useDatabase(opened.sessionId, ref.path[0]).catch(() => {});
       return opened.sessionId;
     };
-    const [sourceSid, targetSid] = await Promise.all([open(source), open(target)]);
+    // Both opened before going on (allSettled: a side that fails must not leave the other one's session open).
+    const opened = await Promise.allSettled([open(source), open(target)]);
+    const failed = opened.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+    const [sourceSid, targetSid] = opened.map((r) => (r as PromiseFulfilledResult<string>).value);
     const [sourceTables, targetTables] = await Promise.all([listTables(sourceSid, source), listTables(targetSid, target)]);
     if (!live()) return;
     setSchemaCompare("total", sourceTables.length + targetTables.length);
     const tick = () => live() && setSchemaCompare("done", (n) => n + 1);
-    const [sourceSide, targetSide] = await Promise.all([readColumns(sourceSid, sourceTables, tick), readColumns(targetSid, targetTables, tick)]);
+    const [sourceSide, targetSide] = await Promise.all([readColumns(sourceSid, sourceTables, tick, live), readColumns(targetSid, targetTables, tick, live)]);
     if (!live()) return;
     const diffs = compareSchemas(sourceSide, targetSide);
     // The source's DDL of the tables to create (for the script).
@@ -101,10 +105,17 @@ async function listTables(sid: string, ref: SchemaRef): Promise<ObjectRef[]> {
   return (await api().metaChildren(sid, folder.path)).filter((node) => node.obj?.kind === "table").map((node) => node.obj!);
 }
 
-async function readColumns(sid: string, tables: ObjectRef[], tick: () => void): Promise<SchemaTable[]> {
+/**
+ * Every table's columns, stopping when the comparison is closed or replaced. A table whose columns cannot be
+ * read fails the comparison: shown as empty it would look like a table to rebuild.
+ */
+async function readColumns(sid: string, tables: ObjectRef[], tick: () => void, live: () => boolean): Promise<SchemaTable[]> {
   const out: SchemaTable[] = [];
   for (const obj of tables) {
-    const columns = await api().tableColumns(sid, obj).catch(() => []);
+    if (!live()) break;
+    const columns = await api().tableColumns(sid, obj).catch((err) => {
+      throw new Error(`No se pudieron leer las columnas de ${obj.name}: ${errorText(err)}`);
+    });
     out.push({ name: obj.name, columns });
     tick();
   }

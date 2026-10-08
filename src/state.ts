@@ -454,8 +454,9 @@ export async function boot() {
     if (loaded && typeof loaded === "object") {
       setState("settings", { ...defaultSettings, ...(loaded as Settings) });
     }
-  } catch {
-    /* empty settings */
+  } catch (err) {
+    // Defaults this time (a damaged file was set aside, or it could not be read: the message says which).
+    notify("No se pudieron leer los ajustes: se usan los de serie", "error", errorText(err));
   }
   applyTheme();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -501,8 +502,11 @@ export async function boot() {
       const active = state.tabs.some((tab) => tab.id === workspace.activeTabId) ? workspace.activeTabId : state.tabs[0]?.id ?? "";
       setState("activeTabId", active);
     }
-  } catch {
-    /* no workspace */
+  } catch (err) {
+    const message = errorText(err);
+    // Not read but still there (locked…): this session must not write over it. A damaged one was set aside.
+    if (!message.includes(".unreadable-")) workspaceUnreadable = true;
+    notify("No se pudieron restaurar las pestañas de la última sesión", "error", message);
   }
   setState("ready", true);
   void api().onExportProgress((progress) => {
@@ -598,9 +602,13 @@ export function persistSoon() {
   saveTimer = window.setTimeout(persistNow, 400);
 }
 
+/** The workspace file could not be read at start-up: it is left as it is (not replaced by this session's tabs). */
+let workspaceUnreadable = false;
+
 /** Writes the workspace file right away (used before the window closes). */
 export function persistNow() {
   window.clearTimeout(saveTimer);
+  if (workspaceUnreadable) return Promise.resolve();
   const file: WorkspaceFile = {
     activeTabId: state.activeTabId,
     sidebarWidth: state.settings.sidebarWidth,

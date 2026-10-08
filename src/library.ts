@@ -41,11 +41,13 @@ export function loadLibrary(): Promise<void> {
       setLibrary({ loaded: true, scripts });
     })
     .catch((err) => {
-      // Not read: never write over it (the scripts may still be there). The next load tries again.
-      loadFailed = true;
-      loading = null;
-      setLibrary("loaded", true);
-      notify("No se pudo leer la biblioteca de scripts", "error", errorText(err));
+      const message = errorText(err);
+      // Not read but still there (locked…): never write over it; the next load tries again. A damaged file was
+      // set aside by the core, so starting a new one is safe.
+      loadFailed = !message.includes(".unreadable-");
+      if (loadFailed) loading = null;
+      setLibrary({ loaded: true, scripts: [] });
+      notify("No se pudo leer la biblioteca de scripts", "error", message);
     });
   return loading;
 }

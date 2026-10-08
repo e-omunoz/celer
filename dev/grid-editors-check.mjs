@@ -132,8 +132,16 @@ await press("ArrowDown");
 await press("Enter");
 await sleep(400);
 check("↓ Enter takes the row; the editor and the list close", !(await js(`return !!pane().querySelector('.cell-editor, .cell-lookup');`)), "");
-const sessionsAfter = Number(await js(`await sleep(500); ` + celerSessions.slice(0)));
-check("the lookup's side session opens and closes with the editor", during === sessionsBefore + 1 && sessionsAfter === sessionsBefore, JSON.stringify({ sessionsBefore, during, sessionsAfter }));
+check("the lookup uses one side session", during === sessionsBefore + 1, JSON.stringify({ sessionsBefore, during }));
+// The next row of the same column reuses it; typing a value and Enter keeps what was typed (not a highlight).
+await press("F2");
+await js(`await until(() => pane().querySelector('.cell-lookup-list button'), 8000); await sleep(100);`);
+const reused = Number(await js(celerSessions));
+await js(`const i = pane().querySelector('.cell-editor input'); i.select();`);
+await app.send("Input.insertText", { text: "3" });
+await press("Enter");
+await sleep(300);
+check("the next cell of the column reuses the session", reused === sessionsBefore + 1, JSON.stringify({ sessionsBefore, reused }));
 
 // ---------------------------------------------------------------- save and read back
 await js(`
@@ -144,7 +152,17 @@ await js(`
   await sleep(300);
 `);
 const saved = await js(`return (await sql("SELECT id, parent_id, activo, alta::text, to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') FROM ge_child ORDER BY id")).results[0].rows;`);
-check("saved values read back from the database", JSON.stringify(saved) === JSON.stringify([[1, 77, false, "2025-02-28", "2026-07-04 08:30"], [2, 2, true, null, null]]), JSON.stringify(saved));
+check("saved values read back from the database (the typed 3 included)", JSON.stringify(saved) === JSON.stringify([[1, 77, false, "2025-02-28", "2026-07-04 08:30"], [2, 3, true, null, null]]), JSON.stringify(saved));
+// Closing the table closes the lookup's session.
+await js(`
+  const tab = [...document.querySelectorAll('.tab')].find((t) => /ge_child/.test(t.textContent));
+  tab?.querySelector('button[title^="Cerrar"]')?.click();
+  await sleep(300);
+  const discard = [...document.querySelectorAll('.dialog button')].find((b) => /No guardar|Descartar|Cerrar/.test(b.textContent)); discard?.click();
+  await sleep(800);
+`);
+const sessionsClosed = Number(await js(celerSessions));
+check("closing the table closes the lookup's session", sessionsClosed === sessionsBefore - 1, JSON.stringify({ sessionsBefore, sessionsClosed }));
 
 await js(`await sql("DROP TABLE IF EXISTS ge_child; DROP TABLE IF EXISTS ge_parent");`);
 app.close?.();

@@ -23,8 +23,9 @@ export function pickLabelColumn(columns: Pick<TableColumn, "name" | "kind">[], k
 }
 
 /**
- * The SELECT for a search: key and label of up to `rows` rows whose key or label contains `text` (any case),
- * ordered by the label. `key` and `label` come quoted, `table` qualified.
+ * The SELECT for a search: key and label of up to `rows` rows whose key or label contains `text` (any case,
+ * taken literally: % and _ are not wildcards), ordered by the label. `key` and `label` come quoted, `table`
+ * qualified. The label is compared as text, so long-text types (SQL Server ntext, Informix TEXT) work too.
  */
 export function lookupSql(kind: DbKind, table: string, key: string, label: string | null, text: string, rows = LOOKUP_ROWS): string {
   const asText = (expr: string) => {
@@ -37,8 +38,10 @@ export function lookupSql(kind: DbKind, table: string, key: string, label: strin
   const top = kind === "mssql" ? `TOP ${rows} ` : kind === "informix" ? `FIRST ${rows} ` : "";
   const limit = kind === "postgres" || kind === "mysql" || kind === "sqlite" ? ` LIMIT ${rows}` : "";
   const cols = label ? `${key}, ${label}` : key;
-  const needle = text.trim().toLowerCase();
-  const pattern = sqlLiteral(`%${needle}%`, "text", kind);
-  const where = needle ? ` WHERE LOWER(${asText(key)}) LIKE ${pattern}${label ? ` OR LOWER(${label}) LIKE ${pattern}` : ""}` : "";
-  return `SELECT ${top}${cols} FROM ${table}${where} ORDER BY ${label ?? key}${limit}`;
+  const needle = text.trim().toLowerCase().replace(kind === "mssql" ? /[!%_[]/g : /[!%_]/g, "!$&");
+  const like = `LIKE ${sqlLiteral(`%${needle}%`, "text", kind)} ESCAPE '!'`;
+  const where = needle ? ` WHERE LOWER(${asText(key)}) ${like}${label ? ` OR LOWER(${asText(label)}) ${like}` : ""}` : "";
+  // Long-text labels cannot be sorted as they are on SQL Server and Informix.
+  const order = label && (kind === "mssql" || kind === "informix" || kind === "odbc") ? asText(label) : (label ?? key);
+  return `SELECT ${top}${cols} FROM ${table}${where} ORDER BY ${order}${limit}`;
 }

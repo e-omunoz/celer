@@ -129,6 +129,11 @@ async function newConsole() {
 async function cleanSlate() {
   await js(`await until(() => document.querySelector('.app.ready') && !document.querySelector('.splash'), 15000);`);
   if (await js(`return !!document.querySelector('.onboarding');`)) await press("Escape");
+  // Dialogs left open (a comparison, a diagram…).
+  for (let i = 0; i < 4 && (await js(`return !!document.querySelector('.dialog, .er-view, .palette');`)); i++) {
+    await press("Escape");
+    await sleep(250);
+  }
   for (let i = 0; i < 30 && (await js(`return document.querySelectorAll('.tab').length;`)); i++) {
     await cmd("Cerrar pestaña");
     // A console with text or an edited table asks first: discard (the sample data is disposable).
@@ -299,6 +304,78 @@ if (want("mcp")) {
     await sleep(400);
   `);
   await still("mcp");
+  await press("Escape");
+  await sleep(250);
+}
+
+// Execution plan of the hero query, measured (EXPLAIN ANALYZE), with a step selected.
+if (want("plan")) {
+  await newConsole();
+  await typeSql(HERO_SQL, 400);
+  await cmd("Plan real: ejecuta y mide (EXPLAIN ANALYZE)");
+  await js(`
+    await until(() => pane().querySelector('.plan-view .plan-row'), 15000); await sleep(300);
+    const rows = [...pane().querySelectorAll('.plan-row')];
+    (rows.find((r) => /Seq Scan|Hash Join/.test(r.textContent)) ?? rows[1])?.click(); await sleep(300);
+  `);
+  await still("plan");
+}
+
+const menuOn = (text, item) => js(`
+  rowByText(${JSON.stringify(text)}).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 160, clientY: 220 }));
+  const it = await until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => ${item}.test(b.textContent)), 3000);
+  it?.click(); return !!it;
+`);
+
+// Entity-relationship diagram of the sample schema.
+if (want("er")) {
+  await menuOn("public", "/^Diagrama entidad/");
+  await js(`await until(() => document.querySelector('.er-view') && !document.querySelector('.er-progress') && document.querySelector('.er-view svg g'), 15000); await sleep(1200);`);
+  await still("er");
+  await press("Escape");
+  await sleep(300);
+}
+
+// Schema comparison between two throwaway schemas.
+if (want("schemas")) {
+  await js(`
+    const inv = (c, a) => window.__TAURI_INTERNALS__.invoke(c, a);
+    const c = (await inv('list_connections')).find((x) => x.name === 'Postgres local');
+    const s = await inv('open_session', { connId: c.id, password: null });
+    await inv('execute', { sessionId: s.sessionId, fetch: 1, sql: "DROP SCHEMA IF EXISTS shop_v1 CASCADE; DROP SCHEMA IF EXISTS shop_v2 CASCADE; CREATE SCHEMA shop_v1; CREATE SCHEMA shop_v2; " +
+      "CREATE TABLE shop_v2.customers (id int PRIMARY KEY, name varchar(160) NOT NULL, email text NOT NULL, vip boolean DEFAULT false); CREATE TABLE shop_v2.orders (id int PRIMARY KEY, customer_id int REFERENCES shop_v2.customers, total numeric(12,2) NOT NULL, placed_at timestamptz); CREATE TABLE shop_v2.invoices (id int PRIMARY KEY, order_id int, amount numeric(12,2)); CREATE TABLE shop_v2.products (sku text PRIMARY KEY, title text); " +
+      "CREATE TABLE shop_v1.customers (id int PRIMARY KEY, name varchar(120) NOT NULL, email text, legacy_code text); CREATE TABLE shop_v1.orders (id int PRIMARY KEY, customer_id int, total numeric(10,2), placed_at timestamptz); CREATE TABLE shop_v1.products (sku text PRIMARY KEY, title text); CREATE TABLE shop_v1.old_log (id bigint PRIMARY KEY)" });
+    await inv('close_session', { sessionId: s.sessionId });
+    const conn = [...document.querySelectorAll('.tree-row.conn')].find((e) => e.textContent.includes('Postgres local'));
+    conn.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 160, clientY: 220 }));
+    (await until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => /^Actualizar/.test(b.textContent)), 3000))?.click();
+    await until(() => rowByText('shop_v1') && rowByText('shop_v2'), 10000);
+  `);
+  await menuOn("shop_v2", "/^Marca/");
+  await sleep(300);
+  await menuOn("shop_v1", "/^Comparar con/");
+  await js(`await until(() => document.querySelector('.schema-compare') && !document.querySelector('.sc-progress'), 20000); await sleep(400); document.querySelectorAll('.toast .icon-btn').forEach((b) => b.click()); await sleep(300);`);
+  await still("schemas");
+  await press("Escape");
+  await js(`
+    const inv = (c, a) => window.__TAURI_INTERNALS__.invoke(c, a);
+    const c = (await inv('list_connections')).find((x) => x.name === 'Postgres local');
+    const s = await inv('open_session', { connId: c.id, password: null });
+    await inv('execute', { sessionId: s.sessionId, fetch: 1, sql: "DROP SCHEMA IF EXISTS shop_v1 CASCADE; DROP SCHEMA IF EXISTS shop_v2 CASCADE" });
+    await inv('close_session', { sessionId: s.sessionId });
+    // The explorer forgets them too.
+    const conn = [...document.querySelectorAll('.tree-row.conn')].find((e) => e.textContent.includes('Postgres local'));
+    conn.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 160, clientY: 220 }));
+    (await until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => /^Actualizar/.test(b.textContent)), 3000))?.click();
+    await until(() => !rowByText('shop_v1'), 10000);
+  `);
+}
+
+// Settings › Atajos de teclado.
+if (want("shortcuts")) {
+  await cmd("Atajos de teclado…");
+  await js(`await until(() => document.querySelector('.keymap-row')); await sleep(400);`);
+  await still("shortcuts");
   await press("Escape");
   await sleep(250);
 }

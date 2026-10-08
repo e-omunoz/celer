@@ -62,11 +62,9 @@ impl AppState {
 }
 
 fn ibm_driver_setting(store: &Store) -> Option<String> {
-    store
-        .load_json("settings.json")
-        .get("ibmDriverPath")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    // A plain read: setting a damaged file aside is for the interface's load, which tells the user.
+    let settings: serde_json::Value = serde_json::from_str(&store.read("settings.json")?).ok()?;
+    settings.get("ibmDriverPath").and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
 /// Prepara la conexión (contraseña del almacén, driver IBM/ODBC). La usan la interfaz y el
@@ -474,7 +472,7 @@ fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_j
     if !matches!(name.as_str(), "settings" | "workspace" | "library") {
         return Err("Nombre no permitido".into());
     }
-    Ok(state.store.load_json(&format!("{name}.json")))
+    state.store.load_json(&format!("{name}.json")).map_err(err)
 }
 
 #[tauri::command]

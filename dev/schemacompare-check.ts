@@ -13,6 +13,15 @@ assert.equal(normalizeType("decimal(10,2)"), "numeric(10,2)");
 assert.equal(normalizeType("timestamp without time zone"), "timestamp");
 assert.equal(normalizeType("int4[]"), "integer[]");
 assert.notEqual(normalizeType("varchar(100)"), normalizeType("varchar(120)"));
+// MySQL 5.7 vs 8.0: integer display widths do not count; tinyint(1) (boolean) does; unsigned does.
+assert.equal(normalizeType("int(11)"), normalizeType("int"));
+assert.equal(normalizeType("bigint(20) unsigned"), "bigint unsigned");
+assert.notEqual(normalizeType("int unsigned"), normalizeType("int"));
+assert.equal(normalizeType("tinyint(1)"), "tinyint(1)");
+assert.equal(normalizeType("tinyint(4)"), "tinyint");
+// MySQL MODIFY warns about what it would drop.
+const modify = syncScript(compareSchemas([{ name: "t", columns: [{ ...col("id", "bigint", false), identity: true }] }], [{ name: "t", columns: [{ ...col("id", "int", false), identity: true, default: null }] }]), { dialect: "mysql", schema: "", sourceDialect: "mysql", sourceDdl: {} });
+assert.match(modify, /-- id tiene AUTO_INCREMENT: MODIFY lo quita si no se repite/);
 
 const source: SchemaTable[] = [
   { name: "customers", columns: [col("id", "integer", false, true), col("name", "varchar(120)", false), col("email", "text"), col("vip", "boolean")] },

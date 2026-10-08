@@ -746,34 +746,72 @@ export function DataGrid(props: GridProps) {
   let lookupSession: LookupSession | null = null;
   let lookupSeq = 0;
   let lookupTimer = 0;
+  /**
+   * One side session per column, kept while cells of that column are being edited (Enter, Enter down a column
+   * does not open a connection per row) and closed after a quiet minute, a reload of the grid or its unmount.
+   */
+  const lookupCache = new Map<number, { session: Promise<LookupSession | null>; idle: number }>();
+  const LOOKUP_IDLE_MS = 60_000;
+
+  function lookupFor(col: number): Promise<LookupSession | null> | null {
+    let entry = lookupCache.get(col);
+    if (!entry) {
+      const pending = props.lookup?.(col);
+      if (!pending) return null;
+      entry = { session: pending, idle: 0 };
+      lookupCache.set(col, entry);
+      // A failed open is not kept: the next edit tries again.
+      pending.catch(() => lookupCache.get(col)?.session === pending && lookupCache.delete(col));
+    }
+    window.clearTimeout(entry.idle);
+    return entry.session;
+  }
+
+  function releaseLookups() {
+    for (const [col, entry] of lookupCache) {
+      window.clearTimeout(entry.idle);
+      entry.idle = window.setTimeout(() => {
+        if (lookupCache.get(col) !== entry) return;
+        lookupCache.delete(col);
+        void entry.session.then((s) => s?.close(), () => {});
+      }, LOOKUP_IDLE_MS);
+    }
+  }
+
+  function dropLookups() {
+    for (const entry of lookupCache.values()) {
+      window.clearTimeout(entry.idle);
+      void entry.session.then((s) => s?.close(), () => {});
+    }
+    lookupCache.clear();
+  }
 
   function closeLookup() {
     lookupSeq++;
     window.clearTimeout(lookupTimer);
-    lookupSession?.close();
     lookupSession = null;
     setLookup(null);
+    releaseLookups();
   }
 
   async function openLookup(col: number, text: string) {
-    const pending = props.lookup?.(col);
+    const pending = lookupFor(col);
     if (!pending) return;
     const seq = ++lookupSeq;
     setLookup({ title: "", items: [], index: -1, loading: true, error: "" });
     try {
       const session = await pending;
-      if (seq !== lookupSeq) {
-        session?.close();
-        return;
-      }
+      if (seq !== lookupSeq) return;
       if (!session) {
         setLookup(null);
         return;
       }
       lookupSession = session;
       setLookup((l) => l && { ...l, title: session.title });
-      // The first rows of the referenced table, with the cell's current value highlighted if it is among them.
-      await searchLookup("", seq, text);
+      // The first rows of the referenced table with the cell's value highlighted; if something was typed while
+      // the session opened, that search instead (nothing highlighted: Enter keeps what was typed).
+      const typed = editor()?.value ?? text;
+      await (typed === text ? searchLookup("", seq, text) : searchLookup(typed, seq, ""));
     } catch (err) {
       if (seq === lookupSeq) setLookup((l) => l && { ...l, loading: false, error: err instanceof Error ? err.message : String(err) });
     }
@@ -809,11 +847,18 @@ export function DataGrid(props: GridProps) {
       },
     ),
   );
-  onCleanup(closeLookup);
+  onCleanup(() => {
+    closeLookup();
+    dropLookups();
+  });
+  // Another table or a reload (columns and keys may have changed): sessions opened for the old one go.
+  createEffect(on(() => props.resetKey, dropLookups, { defer: true }));
 
   /** Typing in a foreign-key cell searches the referenced table (a moment after the last key). */
   function lookupInput(text: string) {
     if (!lookup()) return;
+    // What was typed is the value until a row is chosen again with ↑ / ↓.
+    setLookup((l) => l && { ...l, index: -1 });
     window.clearTimeout(lookupTimer);
     const seq = lookupSeq;
     lookupTimer = window.setTimeout(() => void searchLookup(text, seq), 220);
@@ -1357,6 +1402,11 @@ export function DataGrid(props: GridProps) {
                   <input
                     value={editor()!.value}
                     spellcheck={false}
+                    role={lookup() ? "combobox" : undefined}
+                    aria-autocomplete={lookup() ? "list" : undefined}
+                    aria-expanded={lookup() ? true : undefined}
+                    aria-controls={lookup() ? "cell-lookup" : undefined}
+                    aria-activedescendant={lookup() && lookup()!.index >= 0 ? `cell-lookup-${lookup()!.index}` : undefined}
                     onInput={(event) => {
                       setEditor({ ...editor()!, value: event.currentTarget.value });
                       lookupInput(event.currentTarget.value);
@@ -1399,10 +1449,12 @@ export function DataGrid(props: GridProps) {
                 </>
               }
             >
-              <div class="cell-bool" tabIndex={0} role="radiogroup" aria-label="Valor" onKeyDown={(event) => {
+              <div class="cell-bool" tabIndex={0} role="radiogroup" aria-label={`Valor: ${editor()!.value || "NULL"} (t, f o espacio para cambiarlo)`} onKeyDown={(event) => {
                 const current = editor()!;
-                if (/^[t1sy]$/i.test(event.key)) return editorKey(event, "true", true);
-                if (/^[f0n]$/i.test(event.key) && !event.ctrlKey && !event.metaKey) return editorKey(event, "false", true);
+                // Plain letters only: Ctrl+S, Ctrl+Shift+N… keep their meaning.
+                const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+                if (plain && /^[t1sy]$/i.test(event.key)) return editorKey(event, "true", true);
+                if (plain && /^[f0n]$/i.test(event.key)) return editorKey(event, "false", true);
                 if (event.key === " " || event.key === "ArrowLeft" || event.key === "ArrowRight") {
                   event.preventDefault();
                   event.stopPropagation();
@@ -1436,23 +1488,23 @@ export function DataGrid(props: GridProps) {
             return { left: `${Math.max(0, box.left)}px`, top: `${below ? box.top + box.height + 2 : box.top - LIST_H - 2}px`, width: `${Math.max(box.width, 280)}px` };
           };
           return (
-            <div class="cell-lookup" style={place()} role="listbox" aria-label="Valores de la tabla referenciada" onMouseDown={(event) => event.preventDefault()}>
+            <div class="cell-lookup" id="cell-lookup" style={place()} role="listbox" aria-label="Valores de la tabla referenciada" onMouseDown={(event) => event.preventDefault()}>
               <div class="cell-lookup-head">
                 <span>{l().title || "Tabla referenciada"}</span>
                 <Show when={l().loading}><span class="muted">buscando…</span></Show>
               </div>
               <Show when={l().error}><div class="cell-lookup-note error">{l().error}</div></Show>
               <Show when={!l().loading && !l().error && !l().items.length}><div class="cell-lookup-note">Ninguna fila coincide.</div></Show>
-              <div class="cell-lookup-list">
+              <div class="cell-lookup-list" role="presentation">
                 <For each={l().items}>
                   {(item, i) => (
                     <button
                       type="button"
                       role="option"
+                      id={`cell-lookup-${i()}`}
                       tabIndex={-1}
                       aria-selected={l().index === i()}
                       classList={{ on: l().index === i() }}
-                      onMouseEnter={() => setLookup({ ...l(), index: i() })}
                       onClick={() => {
                         const current = editor();
                         commitEditor(item.value, current ? { row: current.row + 1, col: current.col } : undefined);

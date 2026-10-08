@@ -6,6 +6,56 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Execution plans as a tree** for every engine (Ctrl+Mayús+E, and "Analizar" to run and measure):
+  - PostgreSQL and MariaDB with real rows and times;
+  - MySQL, SQLite and SQL Server;
+  - warnings worth acting on: big full scans, estimates far from reality, sorts spilling to disk, missing indexes suggested by SQL Server.
+- **Entity-relationship diagram** of a schema:
+  - tables laid out by dependency, crow's-foot relations, search;
+  - hover to light a table's relations, double-click to open it;
+  - export to SVG.
+- **Schema comparison**: mark a schema in the explorer, then "Comparar con…" on another one (same or another connection).
+  - Lists the tables that exist on only one side, and columns with another type or nullability.
+  - Writes a script that makes the target match the source, in a console of the target, to review before running it.
+  - Anything that would delete data stays commented out.
+- **Server activity**: sessions and running queries, with cancel and kill (PostgreSQL, MySQL/MariaDB, SQL Server, Informix).
+- **Compare results**: pin a result, run again and compare. Changed cells, new rows and rows that are gone are marked, matched by a key that is guessed or chosen.
+- **Pinned results** that survive new runs, and a **quick filter** over the loaded rows.
+- **Script library** (Biblioteca): named scripts saved in the app (Ctrl+Alt+B), to open, rename, update and delete from the side panel.
+- **Configurable keyboard shortcuts** (Ajustes › Atajos de teclado):
+  - record new keys, remove keys, reset one command or all;
+  - conflicts offer to move the key;
+  - the editor's own keys are flagged;
+  - AltGr characters (€, @, #) are never taken as shortcuts.
+- **Live templates** (sel, selw, ins, upd, cte, …) with linked fields, editable in Ajustes › Plantillas.
+- **Query parameters** (`:name`, `?`, `${name}`) asked before running.
+- **Typed cell editors** in the table viewer:
+  - booleans with t / f / space or a true–false picker;
+  - dates with a calendar that keeps the time and the zone;
+  - foreign keys with the referenced rows to pick from, searched by key or by a name-like column.
+- **Import JSON and Excel / OpenDocument** (.xlsx, .xls, .ods, with a sheet chooser), next to CSV.
+- **More generated scripts**: SELECT with JOINs of the foreign keys, UPSERT / MERGE, DROP, COUNT, `:name` parameters.
+- **Startup script per connection** (SET search_path, SET LOCK MODE…). It runs on every connection the driver opens, reconnects included.
+- Export and copy as **XML**; the value viewer indents XML as well as JSON.
+- Scripts keep their **encoding** (UTF-8, UTF-8 with BOM, UTF-16, Windows-1252) and **line endings** when saved in place (Ctrl+S, "Guardar como…" Ctrl+Mayús+S).
+- Undo a pending table edit per cell or per row.
+- Table tabs, console cursors, autocommit mode and files are restored with the workspace.
+- **Gib** has a life of his own when you are idle:
+  - yawns, goes for a coffee, codes on his laptop, dozes, juggles, reads, dances…
+  - swats the cursor like a fly if you poke him while he waits;
+  - follows the system's reduced-motion setting, or Ajustes › Animaciones.
+
+### Fixed
+- **Desconectar** did nothing: the session stayed in the store. It now closes every session of the connection, cancels running exports and asks first when there is an open transaction or unsaved edits.
+- The start-up guide was lost when its "import from DBeaver" step opened the import assistant.
+- "Actualizar" in the explorer did not reload folders already expanded below the node: a table created elsewhere did not show up.
+- A DELETE or UPDATE inside a CTE (`WITH d AS (DELETE …) SELECT …`) is now warned about and confirmed in production.
+- Big integers in JSON imports are kept exactly (no rounding past 2^53).
+- A settings, workspace or library file that cannot be read is set aside instead of being overwritten.
+- The console toolbar no longer paints over the side panel in narrow windows; side panel tabs show icons only when narrow.
+- Many smaller fixes from three review passes (explain cursors and transactions, SQL Server DML plans, MySQL subqueries in plans, PostgreSQL parallel times, Informix database switching…).
+
 ## [1.3.1] - 2026-10-08
 
 ### Added

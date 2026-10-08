@@ -50,6 +50,7 @@ Step "misc (startup script, pins, undo)" { & $node dev\misc-check.mjs }
 Step "import (Excel, JSON)" { & $node dev\import-e2e-check.mjs }
 Step "grid editors (bool, date, FK lookup) and explorer refresh" { & $node dev\grid-editors-check.mjs }
 Step "schema comparison" { & $node dev\schema-compare-check.mjs }
+Step "keyboard shortcuts (desktop)" { & $node dev\keymap-e2e-check.mjs }
 Step "startup script (MariaDB, SQLite)" { & $node dev\startup-engines-check.mjs }
 Step "Gib companion" { & $node dev\gib-companion-check.mjs "$env:TEMP\gib-companion" }
 Step "ER diagram" { & $node dev\er-check.mjs "$env:TEMP\celer-er" }

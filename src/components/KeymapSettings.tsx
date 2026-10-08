@@ -56,7 +56,8 @@ export function KeymapSettings() {
     const id = recording();
     if (!id) return;
     event.preventDefault();
-    event.stopPropagation();
+    // Immediate: the dialog's own Esc listener sits on the same window.
+    event.stopImmediatePropagation();
     if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
       setRecording(null);
       return;
