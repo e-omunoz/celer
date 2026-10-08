@@ -20,7 +20,7 @@ import type {
   ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
-import { changesSql, explainPrefix, limitClause, paramNamesFor, upsertSql, whereOf } from "./sqlgen";
+import { changesSql, explainPrefix, paramNamesFor, selectLimit, upsertSql, whereOf } from "./sqlgen";
 import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
 import type { ErEdge, ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, parseSynapsePlan, type Plan } from "./plan";
@@ -1017,6 +1017,9 @@ export async function connect(connId: string, password?: string) {
       openQuery(connId, "");
     } else if (current.kind === "sql" && !current.connId) {
       setState("tabs", tabIndex(current.id), { connId, database: opened.database, serverInfo: opened.serverInfo, title: current.title === "console" ? conn.name : current.title });
+      warmSqlSession(current.id);
+    } else if (current.kind === "sql" && current.connId === connId) {
+      warmSqlSession(current.id);
     }
     persistSoon();
   } catch (err) {
@@ -1197,6 +1200,7 @@ export function openQuery(connId: string | null, sql = "", title?: string) {
   setState("tabs", [...state.tabs, tab]);
   setState("activeTabId", tab.id);
   persistSoon();
+  warmSqlSession(tab.id);
   return tab.id;
 }
 
@@ -1224,6 +1228,7 @@ export function setTabConnection(tabId: string, connId: string) {
     title: tab.title === "console" || connectionById(tab.connId)?.name === tab.title ? conn?.name ?? tab.title : tab.title,
   } as Partial<SqlTab>);
   if (!session) void connect(connId);
+  else warmSqlSession(tabId);
   persistSoon();
 }
 
@@ -1246,7 +1251,28 @@ export function insertIntoActive(text: string) {
   persistSoon();
 }
 
-async function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
+/** One session per console: the warm-up when it opens and a run that starts meanwhile share it. */
+const openingSql = new Map<string, Promise<SqlTab>>();
+function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
+  const pending = openingSql.get(tab.id);
+  if (pending) return pending;
+  const job = openSqlSession(tab);
+  openingSql.set(tab.id, job);
+  void job.finally(() => openingSql.delete(tab.id)).catch(() => {});
+  return job;
+}
+
+/**
+ * Opens the session of a console of a connected connection in the background, as soon as the console opens: the
+ * first run does not pay the login (TLS included), as when a tool keeps its connection open.
+ */
+function warmSqlSession(tabId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId || !state.sessions[tab.connId]) return;
+  void ensureSqlSession(tab).catch(() => {});
+}
+
+async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   if (!tab.connId) throw new Error("Elige una conexión para esta consola");
   if (!state.sessions[tab.connId]) await connect(tab.connId);
   if (!state.sessions[tab.connId]) throw new Error("Sin conexión");
@@ -2180,8 +2206,9 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: Generate
     const keyCols = pk.length ? pk : indexed.slice(0, 1);
     const where = keyCols.map((item) => `${quoted[item.index]} = ${params[item.index]}`).join("\n  AND ");
     const writable = indexed.filter((item) => !item.col.identity);
+    const limit = selectLimit(dialect, 100, opened.serverInfo);
     let sql = "";
-    if (kind === "select") sql = `SELECT ${quoted.length ? quoted.join(",\n       ") : "*"}\nFROM ${q}\n${limitClause(dialect, 100)};`;
+    if (kind === "select") sql = `SELECT ${limit.top}${quoted.length ? quoted.join(",\n       ") : "*"}\nFROM ${q}\n${limit.tail};`;
     if (kind === "count") sql = `SELECT COUNT(*) FROM ${q};`;
     if (kind === "insert") sql = `INSERT INTO ${q} (${writable.map((item) => quoted[item.index]).join(", ")})\nVALUES (${writable.map((item) => params[item.index]).join(", ")});`;
     if (kind === "update") {
@@ -2211,14 +2238,14 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: Generate
     if (kind === "select-join") {
       const base = [obj.database || opened.database || "main", obj.schema || "main", obj.kind === "view" ? "views" : "tables", obj.name, "fks"];
       const fks = parseForeignKeys(await api().metaChildren(opened.sessionId, base).catch(() => [] as MetaNode[]), obj).filter((fk) => fk.columns.length && fk.columns.length === fk.targetColumns.length);
-      const lines = [`SELECT t0.*${fks.map((_, i) => `,\n       t${i + 1}.*`).join("")}`, `FROM ${q} t0`];
+      const lines = [`SELECT ${limit.top}t0.*${fks.map((_, i) => `,\n       t${i + 1}.*`).join("")}`, `FROM ${q} t0`];
       for (const [i, fk] of fks.entries()) {
         const target = await api().objectSql(opened.sessionId, fk.target).then((r) => r.qualified).catch(() => fk.target.name);
         const left = await api().quoteIdents(opened.sessionId, fk.columns);
         const right = await api().quoteIdents(opened.sessionId, fk.targetColumns);
         lines.push(`LEFT JOIN ${target} t${i + 1} ON ${left.map((col, j) => `t${i + 1}.${right[j]} = t0.${col}`).join(" AND ")}`);
       }
-      sql = `${lines.join("\n")}\n${limitClause(dialect, 100)};`;
+      sql = `${lines.join("\n")}\n${limit.tail};`;
       if (!fks.length) notify(`«${obj.name}» no tiene claves foráneas: es un SELECT normal`, "info");
     }
     const tab = activeSql();
