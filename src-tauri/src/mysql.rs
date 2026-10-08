@@ -746,8 +746,6 @@ pub struct MysqlDriver {
     mariadb: bool,
     version: String,
     endpoint: String,
-    /// Se abrió una conexión nueva (ver `Driver::take_reconnected`).
-    reconnected: bool,
 }
 
 impl MysqlDriver {
@@ -764,6 +762,9 @@ impl MysqlDriver {
             init.push("SET SESSION TRANSACTION READ ONLY".into());
         }
         init.extend(extra.init.iter().cloned());
+        // The connection's startup script: the driver runs `init` on every connection it opens (reconnects
+        // included), before anything else.
+        init.extend(crate::startup::statements(&cfg));
         let db = cfg.database.trim();
         let mut base = OptsBuilder::new()
             .ip_or_hostname(Some(host.clone()))
@@ -833,7 +834,6 @@ impl MysqlDriver {
             mariadb: false,
             version: String::new(),
             endpoint: format!("{host}:{port}"),
-            reconnected: false,
         };
         let rows = d.query("SELECT VERSION(), DATABASE(), @@autocommit")?;
         if let Some(r) = rows.first() {
@@ -859,7 +859,6 @@ impl MysqlDriver {
             self.in_tx = false;
             self.dirty = false;
             self.conn = Some(c);
-            self.reconnected = true;
         }
         self.conn
             .as_mut()
@@ -1070,10 +1069,6 @@ impl Drop for MysqlDriver {
 }
 
 impl Driver for MysqlDriver {
-    fn take_reconnected(&mut self) -> bool {
-        std::mem::take(&mut self.reconnected)
-    }
-
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         self.release_cursor();
         let t0 = Instant::now();

@@ -49,6 +49,23 @@ assert.ok(sqNodes.some((n) => n.op === "Búsqueda por clave primaria"));
 assert.ok(sqNodes.some((n) => n.op === "Ordenación temporal" && n.warnings.length));
 assert.deepEqual(parseSqlitePlan([[2, 0, 0, "SCAN t"]]).root.children[0].warnings.length, 1, "a full scan is flagged");
 
+const rightPart = parseSqlitePlan([[3, 0, 0, "USE TEMP B-TREE FOR RIGHT PART OF ORDER BY"]]).root.children[0];
+assert.equal(rightPart.op, "Ordenación temporal", "RIGHT PART OF ORDER BY is a temporary sort too");
+assert.equal(parseSqlitePlan([[3, 0, 0, "USE TEMP B-TREE FOR LAST TERM OF ORDER BY"]]).root.children[0].op, "Ordenación temporal");
+
+// No plan: an error, not an empty tree.
+assert.throws(() => parseMysqlPlan("{}"), /no devolvió un plan/);
+
+// MySQL: subqueries attached to a table hang from it.
+const attached = parseMysqlPlan(JSON.stringify({ query_block: { select_id: 1, table: { table_name: "a", access_type: "ALL", rows: 5, attached_subqueries: [{ query_block: { select_id: 2, table: { table_name: "b", access_type: "ref", key: "ix", rows: 1 } } }] } } }));
+const tableA = flatten(attached.root).find((n) => n.target === "a")!;
+assert.ok(flatten(tableA).some((n) => n.target.startsWith("b")), "attached subquery under its table");
+
+// PostgreSQL parallel: the workers' loops overlap, the wall time is not per-loop × loops.
+const parallel = parsePostgresPlan(JSON.stringify([{ Plan: { "Node Type": "Gather", "Workers Launched": 2, "Actual Total Time": 100, "Actual Loops": 1, "Actual Rows": 30, "Plan Rows": 30, Plans: [{ "Node Type": "Seq Scan", "Parallel Aware": true, "Relation Name": "t", "Actual Total Time": 90, "Actual Loops": 3, "Actual Rows": 10, "Plan Rows": 10 }] } }]));
+assert.equal(parallel.root.children[0].timeMs, 90, "3 loops in 3 processes take one loop's time");
+assert.equal(parallel.root.children[0].actualRows, 30);
+
 // Text form.
 const asText = planText(pga);
 assert.ok(asText.startsWith(pga.root.op) && asText.includes("Ejecución:"));

@@ -91,8 +91,8 @@ pub struct PostgresDriver {
     cursor_seq: u64,
     /// Conexión secundaria para metadatos de otra base (o de la actual con transacción abierta).
     aux: Option<(String, Client)>,
-    /// Se abrió una conexión principal nueva (ver `Driver::take_reconnected`).
-    reconnected: bool,
+    /// Script de inicio de la conexión: se ejecuta en cada conexión principal nueva.
+    startup: Vec<String>,
 }
 
 impl PostgresDriver {
@@ -100,6 +100,8 @@ impl PostgresDriver {
         let tls = make_tls(&cfg)?;
         let notices = Arc::new(Mutex::new(Vec::new()));
         let mut client = open_client(&cfg, &cfg.database, &tls, Some(notices.clone()))?;
+        let startup = crate::startup::statements(&cfg);
+        run_startup(&mut client, &startup)?;
         let database = query_current_db(&mut client)?;
         let token = client.cancel_token();
         Ok(PostgresDriver {
@@ -115,20 +117,20 @@ impl PostgresDriver {
             cursor: None,
             cursor_seq: 0,
             aux: None,
-            reconnected: false,
+            startup,
         })
     }
 
     /// Sustituye la conexión principal por una nueva a `db`.
     fn reconnect(&mut self, db: &str) -> Result<()> {
         let mut client = open_client(&self.cfg, db, &self.tls, Some(self.notices.clone()))?;
+        run_startup(&mut client, &self.startup)?;
         let database = query_current_db(&mut client)?;
         *self.cancel.lock() = Some(client.cancel_token());
         self.client = client;
         self.database = database;
         self.cursor = None;
         self.in_tx = false;
-        self.reconnected = true;
         if self.aux.as_ref().is_some_and(|(d, _)| *d == self.database) {
             self.aux = None;
         }
@@ -717,10 +719,6 @@ impl PostgresDriver {
 // ───────────────────────────── Driver ─────────────────────────────
 
 impl Driver for PostgresDriver {
-    fn take_reconnected(&mut self) -> bool {
-        std::mem::take(&mut self.reconnected)
-    }
-
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = std::time::Instant::now();
         let mut messages = Vec::new();
@@ -1365,6 +1363,14 @@ fn open_client(
     };
     config.keepalives_idle(Duration::from_secs(60));
     config.connect(tls.clone()).map_err(|e| pg_err(&e, None))
+}
+
+/// El script de inicio, sentencia a sentencia, con el protocolo simple (sin transacción implícita).
+fn run_startup(client: &mut Client, startup: &[String]) -> Result<()> {
+    for sql in startup {
+        client.batch_execute(sql).map_err(|e| crate::startup::failed(sql, pg_err(&e, None)))?;
+    }
+    Ok(())
 }
 
 fn query_current_db(client: &mut Client) -> Result<String> {

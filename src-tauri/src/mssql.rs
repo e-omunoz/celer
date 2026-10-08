@@ -44,8 +44,7 @@ pub struct MssqlDriver {
     database: String,
     autocommit: bool,
     in_tx: bool,
-    /// Se abrió una conexión nueva (ver `Driver::take_reconnected`).
-    reconnected: bool,
+    showplan: bool,
 }
 
 impl MssqlDriver {
@@ -63,7 +62,7 @@ impl MssqlDriver {
             cancel: Arc::new(Mutex::new(None)),
             autocommit: true,
             in_tx: false,
-            reconnected: false,
+            showplan: false,
         };
         if d.database.is_empty() {
             d.database = d.current_database().unwrap_or_default();
@@ -91,7 +90,7 @@ impl MssqlDriver {
             })?;
         }
         self.in_tx = false;
-        self.reconnected = true;
+        self.showplan = false;
         Ok(c)
     }
 
@@ -414,10 +413,15 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
         }
         bail!("Demasiadas redirecciones del servidor")
     };
-    match tokio::time::timeout(Duration::from_secs(20), fut).await {
-        Ok(r) => r,
+    let mut client = match tokio::time::timeout(Duration::from_secs(20), fut).await {
+        Ok(r) => r?,
         Err(_) => bail!("Tiempo de espera agotado al conectar con {host}"),
+    };
+    for sql in crate::startup::statements(cfg) {
+        let run = async { client.simple_query(sql.as_str()).await?.into_results().await };
+        run.await.map_err(|e| crate::startup::failed(&sql, friendly_error(&e)))?;
     }
+    Ok(client)
 }
 
 fn friendly_error(e: &tiberius::error::Error) -> String {
@@ -709,19 +713,23 @@ pub fn fmt_rows(n: i64) -> String {
 }
 
 impl Driver for MssqlDriver {
-    fn take_reconnected(&mut self) -> bool {
-        std::mem::take(&mut self.reconnected)
-    }
-
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
         let kw = first_keyword(sql);
         let upper = sql.trim_end().trim_end_matches(';').to_ascii_uppercase();
+        // With SHOWPLAN_XML on, a DML statement answers with its plan as a result set, not a row count.
         let dml = matches!(kw.as_str(), "INSERT" | "UPDATE" | "DELETE" | "MERGE")
+            && !self.showplan
             && !upper.contains("OUTPUT")
             && !upper.contains(';')
             && !upper.contains("\nGO");
         self.start(sql.to_string(), dml)?;
+        if kw == "SET" {
+            let words: Vec<&str> = upper.split_whitespace().collect();
+            if words.get(1) == Some(&"SHOWPLAN_XML") {
+                self.showplan = words.get(2) == Some(&"ON");
+            }
+        }
         let mut out = ExecOutput::default();
         out.results = self.pump(fetch.max(1), &mut out.messages);
         if out.results.is_empty() && !out.messages.is_empty() && self.cursor.is_none() {

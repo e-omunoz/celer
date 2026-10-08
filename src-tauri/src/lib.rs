@@ -9,6 +9,7 @@ mod odbc;
 mod odbc_driver;
 mod postgres;
 mod session;
+mod sheets;
 mod sqlite;
 mod startup;
 mod store;
@@ -89,8 +90,9 @@ pub(crate) fn make_connector(
         }
         DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
     };
-    // What the startup script needs (it runs on every new session and again after internal reconnects).
-    let startup_cfg = ConnConfig { password: None, ..cfg.clone() };
+    // The startup script runs inside each driver, on every connection it opens; a read-only connection
+    // refuses one that writes before connecting at all.
+    startup::check(&cfg).map_err(err)?;
     Ok(move || -> anyhow::Result<Box<dyn Driver>> {
         let driver: Box<dyn Driver> = match kind {
             DbKind::Sqlite => Box::new(sqlite::SqliteDriver::connect(cfg)?),
@@ -102,7 +104,7 @@ pub(crate) fn make_connector(
                 Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
             }
         };
-        startup::wrap(driver, &startup_cfg)
+        Ok(driver)
     })
 }
 
@@ -644,6 +646,15 @@ fn write_text_file(path: String, content: String, encoding: Option<String>) -> C
     Ok(used.to_string())
 }
 
+/// Una hoja de un libro Excel u OpenDocument, para importarla.
+#[tauri::command]
+async fn read_spreadsheet(path: String, sheet: Option<String>) -> CmdResult<sheets::Sheet> {
+    tauri::async_runtime::spawn_blocking(move || sheets::read(&path, sheet.as_deref()))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
 #[tauri::command]
 fn odbc_drivers() -> CmdResult<Vec<String>> {
     odbc::list_drivers().map_err(err)
@@ -879,6 +890,7 @@ pub fn run() {
             open_session,
             close_session,
             close_connection_sessions,
+            read_spreadsheet,
             execute,
             fetch,
             close_cursor,

@@ -72,6 +72,9 @@ impl SqliteDriver {
             Connection::open_with_flags(&path, flags)?
         };
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        for sql in crate::startup::statements(&cfg) {
+            conn.execute_batch(&sql).map_err(|e| crate::startup::failed(&sql, e))?;
+        }
         let cancel = Arc::new(SharedCancel {
             handle: conn.get_interrupt_handle(),
             busy: AtomicBool::new(false),
@@ -843,6 +846,20 @@ mod tests {
         cfg.kind = DbKind::Sqlite;
         cfg.file_path = ":memory:".into();
         SqliteDriver::connect(cfg).unwrap()
+    }
+
+    #[test]
+    fn runs_the_startup_script() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        cfg.startup_sql = "-- inicio\nCREATE TEMP TABLE boot(x); INSERT INTO boot VALUES ('a;b');".into();
+        let mut d = SqliteDriver::connect(cfg.clone()).unwrap();
+        let out = d.execute("SELECT x FROM boot", 10).unwrap();
+        assert_eq!(out.results[0].rows.len(), 1);
+        cfg.startup_sql = "SELEC 1".into();
+        let err = SqliteDriver::connect(cfg).err().expect("script erróneo");
+        assert!(err.to_string().contains("script de inicio"), "{err}");
     }
 
     #[test]

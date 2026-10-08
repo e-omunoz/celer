@@ -47,4 +47,17 @@ assert.equal(columnY(wide, "c29"), ER.header / 2);
 assert.equal(columnY(wide, "c0"), ER.header + ER.row / 2);
 // Paths are valid SVG path data.
 assert.match(edgePath(boxes["public.orders"], 40, boxes["public.customers"], 40), /^M [\d.]+ [\d.]+ C /);
+// A table referencing itself loops out on its right side, and is visible even to the same row.
+const self = boxes["public.orders"];
+const loop = edgePath(self, 40, self, 40);
+const xs = [...loop.matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map((m) => Number(m[1]));
+assert.ok(xs.every((v) => v >= self.x + self.w), `self loop stays on the right: ${loop}`);
+assert.notEqual(loop.split(/[ ,]+/)[5], loop.split(/[ ,]+/)[2], "the loop opens up");
+// A hub referenced by many tables wraps its layer into several columns instead of one endless one.
+const spokes = Array.from({ length: 60 }, (_, i) => table(`s${i}`));
+const hub = layoutEr([table("hub"), ...spokes], spokes.map((s) => edge(s.name, "hub")));
+const spokeXs = new Set(spokes.map((s) => hub.boxes[s.id].x));
+assert.ok(spokeXs.size > 1, "the layer wraps");
+assert.ok(hub.height < 60 * (ER.header + ER.row + ER.pad + ER.gapY) / 2, "and is not 60 boxes tall");
+assert.ok(spokes.every((s) => hub.boxes[s.id].x > hub.boxes["public.hub"].x), "still to the right of what they reference");
 console.log("erlayout-check: all good");

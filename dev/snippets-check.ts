@@ -65,6 +65,15 @@ assert.equal(hasUnfilteredWrite("DELETE t FROM t JOIN u ON u.id = t.uid", "mysql
 assert.equal(hasUnfilteredWrite("UPDATE t SET a = u.a FROM t JOIN u ON u.id = t.id", "mssql"), false, "and in SQL Server");
 assert.equal(hasUnfilteredWrite("UPDATE STATISTICS MEDIUM FOR TABLE clientes", "informix"), false, "UPDATE STATISTICS is not a write");
 assert.equal(hasUnfilteredWrite("UPDATE STATISTICS dbo.t", "mssql"), false);
+assert.equal(hasUnfilteredWrite("WITH d AS (DELETE FROM t RETURNING *) SELECT count(*) FROM d", "postgres"), true, "a data-modifying CTE deletes too");
+assert.equal(hasUnfilteredWrite("WITH d AS MATERIALIZED (UPDATE t SET a = 1 RETURNING id) SELECT * FROM d", "postgres"), true);
+assert.equal(hasUnfilteredWrite("WITH d AS (DELETE FROM t WHERE id = 1 RETURNING *) SELECT * FROM d", "postgres"), false);
+assert.equal(hasUnfilteredWrite("WITH a AS (SELECT CAST(x AS int) FROM u), d AS (SELECT (DELETE)) SELECT 1", "postgres"), false, "only CTE bodies that start with the write");
+{
+  const sql = "WITH a AS (SELECT 1), d AS (\n  DELETE FROM t RETURNING *) SELECT * FROM d";
+  const [cte] = unfilteredWrites(sql, "postgres");
+  assert.equal(sql.slice(cte.from, cte.to), "DELETE", "marks the DELETE inside the CTE");
+}
 const text = "SELECT 1;\n-- delete everything\nDELETE FROM t;";
 const [w] = unfilteredWrites(text, "postgres");
 assert.equal(text.slice(w.from, w.to), "DELETE", "the keyword itself is marked, not a word in a comment");

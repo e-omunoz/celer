@@ -28,8 +28,6 @@ pub struct OdbcDriver {
     in_tx: bool,
     database: String,
     quote: String,
-    /// Se abrió una conexión nueva (ver `Driver::take_reconnected`).
-    reconnected: bool,
 }
 
 impl OdbcDriver {
@@ -41,6 +39,7 @@ impl OdbcDriver {
         };
         let api = Api::load(&lib_path)?;
         let conn = OdbcConn::connect(api, &conn_string(&cfg, None), 20)?;
+        run_startup(&conn, &cfg)?;
         let quote = match conn.info(SQL_IDENTIFIER_QUOTE_CHAR).trim() {
             "" => "\"".to_string(),
             q => q.to_string(),
@@ -56,7 +55,6 @@ impl OdbcDriver {
             autocommit: true,
             in_tx: false,
             quote,
-            reconnected: false,
         };
         if d.database.is_empty() {
             d.database = d.current_database().unwrap_or_default();
@@ -283,14 +281,22 @@ impl OdbcDriver {
         self.stmt = None;
         let api = Api::load(&self.lib_path)?;
         let conn = OdbcConn::connect(api, &conn_string(&self.cfg, database), 20)?;
+        run_startup(&conn, &self.cfg)?;
         if !self.autocommit {
             conn.set_autocommit(false)?;
         }
         self.conn = conn;
         self.in_tx = false;
-        self.reconnected = true;
         Ok(())
     }
+}
+
+/// El script de inicio de la conexión, en cada conexión nueva (todavía en autocommit).
+fn run_startup(conn: &OdbcConn, cfg: &ConnConfig) -> Result<()> {
+    for sql in crate::startup::statements(cfg) {
+        conn.alloc_stmt()?.exec(&sql).map_err(|e| crate::startup::failed(&sql, e))?;
+    }
+    Ok(())
 }
 
 /// Construye la cadena de conexión según el tipo de conexión.
@@ -457,10 +463,6 @@ const IFX_SYSTEM_DBS: [&str; 6] = [
 ];
 
 impl Driver for OdbcDriver {
-    fn take_reconnected(&mut self) -> bool {
-        std::mem::take(&mut self.reconnected)
-    }
-
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
         self.stmt = None;
@@ -936,6 +938,9 @@ impl Driver for OdbcDriver {
     }
 
     fn use_database(&mut self, db: &str) -> Result<()> {
+        if db == self.database {
+            return Ok(());
+        }
         if self.dialect == Dialect::Generic {
             self.stmt = None;
             self.conn.set_catalog(db)?;

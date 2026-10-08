@@ -46,6 +46,7 @@ native-tls = "0.2"
 rust_decimal = { version = "1", features = ["db-postgres"] }
 # MySQL / MariaDB — owned by src/mysql.rs
 mysql = { version = "26", default-features = false, features = ["minimal-rust", "native-tls"] }
+calamine = { version = "0.36.1", features = ["dates"] }
 
 [profile.dev]
 debug = "line-tables-only"

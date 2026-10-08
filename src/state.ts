@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, sqlLiteral, statementAt, wherePosition } from "./sql";
+import { cellText, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, sqlLiteral, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -68,6 +68,8 @@ export interface SqlTab {
   /** The .sql file the console was opened from or saved to (Ctrl+S writes there), and its encoding. */
   filePath?: string;
   fileEncoding?: string;
+  /** The file's line endings, written back on save (the editor works with \n). */
+  fileCrlf?: boolean;
   /** The last execution plan (Ctrl+Shift+E), shown in its own result tab. */
   plan: { plan: Plan; sql: string } | null;
   activePlan: boolean;
@@ -186,6 +188,7 @@ interface SavedSqlTab {
   autocommit?: boolean;
   filePath?: string;
   fileEncoding?: string;
+  fileCrlf?: boolean;
 }
 
 interface SavedTableTab {
@@ -483,6 +486,7 @@ export async function boot() {
                   autocommit: tab.autocommit ?? true,
                   filePath: tab.filePath,
                   fileEncoding: tab.fileEncoding,
+                  fileCrlf: tab.fileCrlf,
                 },
           ),
       );
@@ -595,7 +599,7 @@ export function persistNow() {
     tabs: state.tabs.map(
       (tab): SavedSqlTab | SavedTableTab =>
         tab.kind === "sql"
-          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding }
+          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf }
           : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
     ),
   };
@@ -655,12 +659,20 @@ export async function openErDiagram(connId: string, path: string[]) {
   // "main · main" (SQLite, MySQL: database and schema share the name) reads as just "main".
   const title = path.filter((part, i) => part !== path[i - 1]).join(" · ");
   setState("er", { connId, title, loading: true, done: 0, total: 0, error: "", truncated: 0, tables: [], edges: [], objects: {} });
+  const current = () => token === erToken && state.er !== null;
   const opened = await openSessionFor(connId).catch((err) => {
-    setState("er", { loading: false, error: errorText(err) });
+    if (current()) setState("er", { loading: false, error: errorText(err) });
     return null;
   });
-  if (!opened) return;
-  const current = () => token === erToken && state.er !== null;
+  if (!opened) {
+    // Disconnected meanwhile (no error): not left loading forever.
+    if (current() && state.er!.loading) setState("er", { loading: false, error: state.er!.error || "La conexión se cerró" });
+    return;
+  }
+  if (!current()) {
+    void api().closeSession(opened.sessionId).catch(() => {});
+    return;
+  }
   try {
     if (path[0]) await api().useDatabase(opened.sessionId, path[0]).catch(() => {});
     const folders = await api().metaChildren(opened.sessionId, path);
@@ -1282,7 +1294,12 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
     }
   }
-  if (mode === "explain" || mode === "analyze") return explainStatement(current.id, sql.replace(/;\s*$/, ""), mode === "analyze");
+  if (mode === "explain" || mode === "analyze") {
+    // One plan: the first statement of a selection (the others would run, not be explained).
+    const parts = splitSql(sql, conn?.kind);
+    if (parts.length > 1) notify("La selección tiene varias sentencias: se muestra el plan de la primera", "info");
+    return explainStatement(current.id, parts[0]?.sql ?? sql, mode === "analyze");
+  }
   if (conn?.production && state.settings.confirmMutations && needsProductionConfirm(sql, conn.kind)) {
     const ok = await confirmDialog(
       `Ejecutar en ${conn.name} (producción)`,
@@ -1337,7 +1354,7 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     if (tokenOf(current.id) !== token) return;
     const message = errorText(err);
     const at = tabIndex(current.id);
-    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1, activePinned: null });
+    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1, activePinned: null, activePlan: false, compare: null });
     pushOutput(current.id, { at: Date.now(), sql, ok: false, text: message, elapsedMs: null });
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
@@ -1350,6 +1367,19 @@ export function canAnalyze(tab: SqlTab, sql: string): boolean {
   const kind = kindOf(tab.connId);
   const engineOk = kind === "postgres" || (kind === "mysql" && /mariadb/i.test(tab.serverInfo || state.sessions[tab.connId ?? ""]?.serverInfo || ""));
   return engineOk && /^(SELECT|WITH|VALUES|TABLE)$/.test(firstKeyword(sql)) && !isMutating(sql, kind);
+}
+
+/**
+ * A statement run on the tab's session besides its results (EXPLAIN) closes the open cursor: the kept results
+ * can no longer fetch more rows. Also the transaction state the session reported, when it did.
+ */
+function afterSideStatement(tabId: string, inTransaction: boolean | null): Partial<SqlTab> {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "sql") return {};
+  const patch: Partial<SqlTab> = {};
+  if (tab.results.some((result) => result.hasMore)) patch.results = tab.results.map((result) => (result.hasMore ? { ...result, hasMore: false } : result));
+  if (inTransaction !== null) patch.inTransaction = inTransaction;
+  return patch;
 }
 
 /**
@@ -1377,15 +1407,19 @@ export async function explainStatement(tabId: string, sql: string, analyze = fal
     session = ready.sessionId!;
     const mariadb = /mariadb/i.test(ready.serverInfo);
     let plan: Plan;
+    let inTx: boolean | null = null;
     if (kind === "postgres") {
       const out = await api().execute(session, `EXPLAIN (FORMAT JSON, VERBOSE, COSTS${analyze ? ", ANALYZE, BUFFERS" : ""}) ${sql}`, 10);
+      inTx = out.inTransaction;
       plan = parsePostgresPlan(String(out.results[0]?.rows[0]?.[0] ?? "[]"));
     } else if (kind === "mysql") {
       const out = await api().execute(session, `${analyze && mariadb ? "ANALYZE" : "EXPLAIN"} FORMAT=JSON ${sql}`, 10);
+      inTx = out.inTransaction;
       plan = parseMysqlPlan(String(out.results[0]?.rows[0]?.[0] ?? "{}"));
       plan.engine = mariadb ? "MariaDB" : "MySQL";
     } else if (kind === "sqlite") {
       const out = await api().execute(session, `EXPLAIN QUERY PLAN ${sql}`, 10_000);
+      inTx = out.inTransaction;
       plan = parseSqlitePlan(out.results[0]?.rows ?? []);
     } else {
       // SQL Server: the XML plan, without running the statement.
@@ -1394,15 +1428,16 @@ export async function explainStatement(tabId: string, sql: string, analyze = fal
         const out = await api().execute(session, sql, 10);
         plan = parseMssqlPlan(String(out.results.find((r) => r.columns.length)?.rows[0]?.[0] ?? ""));
       } finally {
-        await api().execute(session, "SET SHOWPLAN_XML OFF", 1).catch(() => {});
+        const off = await api().execute(session, "SET SHOWPLAN_XML OFF", 1).catch(() => null);
+        if (off) inTx = off.inTransaction;
       }
     }
     if (tokenOf(tabId) !== token) return;
-    patchTab(tabId, { running: false, startedAt: null, plan: { plan, sql }, activePlan: true });
+    patchTab(tabId, { running: false, startedAt: null, plan: { plan, sql }, activePlan: true, activePinned: null, compare: null, ...afterSideStatement(tabId, inTx) });
   } catch (err) {
     if (tokenOf(tabId) !== token) return;
     const message = errorText(err);
-    patchTab(tabId, { running: false, startedAt: null, error: message, activePlan: false, activePinned: null, activeResult: -1 });
+    patchTab(tabId, { running: false, startedAt: null, error: message, activePlan: false, activePinned: null, activeResult: -1, ...afterSideStatement(tabId, null) });
     pushOutput(tabId, { at: Date.now(), sql: `EXPLAIN ${sql}`, ok: false, text: message, elapsedMs: null });
     gib("query-error", { detail: message });
   }
@@ -2638,14 +2673,16 @@ export async function openScript() {
   const path = await api().pickOpenPath([{ name: "SQL", extensions: ["sql", "txt"] }]);
   if (!path) return;
   try {
-    const { text: sql, encoding } = await api().readTextFile(path);
+    const { text, encoding } = await api().readTextFile(path);
+    const fileCrlf = text.includes("\r\n");
+    const sql = text.replace(/\r\n?/g, "\n");
     const tab = activeSql();
     const title = path.split(/[\\/]/).pop() || "script.sql";
     if (tab && !tab.sql.trim()) {
-      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title, filePath: path, fileEncoding: encoding } as Partial<SqlTab>);
+      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title, filePath: path, fileEncoding: encoding, fileCrlf } as Partial<SqlTab>);
     } else {
       const id = openQuery(tab?.connId ?? null, sql, title);
-      patchTab(id, { filePath: path, fileEncoding: encoding });
+      patchTab(id, { filePath: path, fileEncoding: encoding, fileCrlf });
     }
     persistSoon();
   } catch (err) {
@@ -2667,7 +2704,8 @@ export async function saveScript(saveAs = false) {
     path = picked;
   }
   try {
-    const used = await api().writeTextFile(path, tab.sql, tab.fileEncoding);
+    const lf = tab.sql.replace(/\r\n?/g, "\n");
+    const used = await api().writeTextFile(path, tab.fileCrlf ? lf.replace(/\n/g, "\r\n") : lf, tab.fileEncoding);
     const title = path.split(/[\\/]/).pop() || tab.title;
     patchTab(tab.id, { filePath: isTauri() ? path : undefined, fileEncoding: used, title });
     persistSoon();

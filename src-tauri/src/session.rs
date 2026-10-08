@@ -37,11 +37,6 @@ pub trait Driver: Send {
     fn server_info(&mut self) -> Result<String>;
     /// Función para cancelar desde otro hilo la operación en curso.
     fn canceller(&self) -> Canceller;
-    /// Verdadero (una vez) si el driver abrió una conexión nueva por su cuenta desde la última llamada
-    /// (cambio de base, conexión perdida): el script de inicio de la conexión debe volver a ejecutarse.
-    fn take_reconnected(&mut self) -> bool {
-        false
-    }
 }
 
 pub type Canceller = Arc<dyn Fn() + Send + Sync>;

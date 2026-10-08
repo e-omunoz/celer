@@ -106,7 +106,14 @@ export function ErDiagram() {
 
   async function exportSvg() {
     if (!svg) return;
+    // The whole diagram, not the hover or search highlight of the moment.
+    const searched = query();
+    setHover(null);
+    setQuery("");
+    // Past the highlight transitions (160 ms).
+    await new Promise((done) => setTimeout(done, 220));
     const markup = standaloneSvg(svg, layout().width, layout().height);
+    setQuery(searched);
     const name = `${er().title.replace(/[^\w.-]+/g, "_") || "diagrama"}.svg`;
     if (isTauri()) {
       const path = await api().pickSavePath([{ name: "SVG", extensions: ["svg"] }]);
@@ -259,9 +266,10 @@ function standaloneSvg(live: SVGSVGElement, width: number, height: number): stri
   source.forEach((el, i) => {
     const style = getComputedStyle(el);
     const out = target[i] as SVGElement;
-    for (const prop of ["fill", "stroke", "stroke-width", "stroke-dasharray", "opacity", "font-family", "font-size", "font-weight"]) {
+    // Not opacity: in the diagram it only dims what the hover or the search leaves out.
+    for (const prop of ["fill", "stroke", "stroke-width", "stroke-dasharray", "font-family", "font-size", "font-weight"]) {
       const value = style.getPropertyValue(prop);
-      if (value && value !== "none" && value !== "normal") out.setAttribute(prop, value);
+      if (value && value !== "none" && value !== "normal") out.setAttribute(prop, prop === "fill" || prop === "stroke" ? plainColor(value) : value);
       else if (value === "none") out.setAttribute(prop, "none");
     }
     out.removeAttribute("class");
@@ -271,7 +279,24 @@ function standaloneSvg(live: SVGSVGElement, width: number, height: number): stri
   copy.setAttribute("width", String(Math.ceil(width)));
   copy.setAttribute("height", String(Math.ceil(height)));
   copy.setAttribute("viewBox", `0 0 ${Math.ceil(width)} ${Math.ceil(height)}`);
-  const background = getComputedStyle(live.parentElement!).backgroundColor;
+  const background = plainColor(getComputedStyle(live.parentElement!).backgroundColor);
   copy.insertAdjacentHTML("afterbegin", `<rect width="100%" height="100%" fill="${background}"/>`);
   return `<?xml version="1.0" encoding="UTF-8"?>\n${copy.outerHTML}`;
+}
+
+let swatch: CanvasRenderingContext2D | null = null;
+/**
+ * A colour other SVG viewers understand: the theme's color-mix() / color(srgb …) values become rgba() (painted
+ * on a 1×1 canvas and read back). url(#marker) references and plain colours pass through.
+ */
+function plainColor(value: string): string {
+  if (!/^(color|oklch|oklab|lab|lch)/i.test(value.trim())) return value;
+  swatch ??= Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
+  if (!swatch) return value;
+  swatch.clearRect(0, 0, 1, 1);
+  swatch.fillStyle = "#000";
+  swatch.fillStyle = value;
+  swatch.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = swatch.getImageData(0, 0, 1, 1).data;
+  return a === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
 }

@@ -146,6 +146,8 @@ export function unfilteredWrites(sql: string, dialect?: string): UnfilteredWrite
     let top = topLevel(code);
     let kw = firstKeyword(part.sql);
     if (kw === "WITH") {
+      // PostgreSQL: WITH d AS (DELETE FROM t RETURNING *) SELECT … deletes too.
+      for (const write of cteWrites(codeOnly(sql.slice(part.start, part.end), dialect))) out.push({ keyword: write.keyword, from: part.start + write.at, to: part.start + write.at + write.keyword.length });
       // The main statement after the CTEs (their bodies are blanked out): its first keyword decides. A SELECT …
       // FOR UPDATE or an INSERT … ON CONFLICT DO UPDATE is not a DELETE/UPDATE.
       const main = /\b(select|insert|update|delete|merge|values|table)\b/i.exec(top);
@@ -160,6 +162,33 @@ export function unfilteredWrites(sql: string, dialect?: string): UnfilteredWrite
     // Where the keyword is in the text (comments before it are blanked out, so they cannot match).
     const at = part.start + Math.max(0, topLevel(codeOnly(sql.slice(part.start, part.end), dialect)).search(new RegExp(`\\b${kw}\\b`, "i")));
     out.push({ keyword: kw, from: at, to: at + kw.length });
+  }
+  return out;
+}
+
+/** DELETE / UPDATE CTE bodies (`name AS [NOT] [MATERIALIZED] ( … )` at the top level) without WHERE or LIMIT. */
+function cteWrites(code: string): { keyword: string; at: number }[] {
+  const out: { keyword: string; at: number }[] = [];
+  const re = /\bas\s+(?:not\s+)?(?:materialized\s+)?\(/gi;
+  let depth = 0;
+  let scanned = 0;
+  for (let m = re.exec(code); m; m = re.exec(code)) {
+    for (; scanned < m.index; scanned++) depth += code[scanned] === "(" ? 1 : code[scanned] === ")" ? -1 : 0;
+    if (depth !== 0) continue;
+    const open = m.index + m[0].length - 1;
+    let close = code.length;
+    for (let i = open, d = 0; i < code.length; i++) {
+      if (code[i] === "(") d++;
+      else if (code[i] === ")" && --d === 0) {
+        close = i;
+        break;
+      }
+    }
+    const body = topLevel(code.slice(open + 1, close));
+    const kw = /^\s*(delete|update)\b/i.exec(body);
+    if (kw && !/\bwhere\b/i.test(body) && !/\blimit\s+\d+/i.test(body)) out.push({ keyword: kw[1].toUpperCase(), at: open + 1 + body.search(/\S/) });
+    re.lastIndex = close;
+    scanned = close + 1;
   }
   return out;
 }

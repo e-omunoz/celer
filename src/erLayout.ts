@@ -121,7 +121,10 @@ export function layoutEr(tables: ErTable[], edges: ErEdge[]): { boxes: Record<st
   const boxes: Record<string, ErBox> = {};
   let x = ER.margin;
   let height = ER.margin;
-  for (const l of compact) {
+  // A very full layer (a hub referenced by many tables) wraps into several columns instead of one endless one.
+  const perColumn = Math.max(10, Math.ceil(Math.sqrt(related.length) * 2));
+  const columns = compact.flatMap((l) => Array.from({ length: Math.ceil(l.length / perColumn) }, (_, i) => l.slice(i * perColumn, (i + 1) * perColumn)));
+  for (const l of columns) {
     const sizes = l.map((id) => boxSize(byId.get(id)!));
     const colWidth = Math.max(...sizes.map((s) => s.w));
     let y = ER.margin;
@@ -158,15 +161,16 @@ export function layoutEr(tables: ErTable[], edges: ErEdge[]): { boxes: Record<st
 export function edgePath(from: ErBox, fromY: number, to: ErBox, toY: number): string {
   const y1 = from.y + fromY;
   const y2 = to.y + toY;
+  if (Math.abs(from.x - to.x) < 5) {
+    // Same column (or a table referencing itself): loop out on the right; a loop to the same row opens up.
+    const out = Math.max(from.x + from.w, to.x + to.w) + 40;
+    const lift = Math.abs(y1 - y2) < 10 ? 24 : 0;
+    return `M ${from.x + from.w} ${y1} C ${out} ${y1 - lift}, ${out} ${y2 + lift}, ${to.x + to.w} ${y2}`;
+  }
   // Leave from the side that faces the other table.
   const rightward = to.x + to.w / 2 > from.x + from.w / 2;
   const x1 = rightward ? from.x + from.w : from.x;
   const x2 = rightward ? to.x : to.x + to.w;
-  if (Math.abs(x2 - x1) < 30 && Math.abs(from.x - to.x) < 5) {
-    // Same column: loop out on the right.
-    const out = Math.max(from.x + from.w, to.x + to.w) + 40;
-    return `M ${from.x + from.w} ${y1} C ${out} ${y1}, ${out} ${y2}, ${to.x + to.w} ${y2}`;
-  }
   const bend = Math.max(40, Math.abs(x2 - x1) / 2);
   const c1 = rightward ? x1 + bend : x1 - bend;
   const c2 = rightward ? x2 - bend : x2 + bend;

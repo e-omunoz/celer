@@ -54,7 +54,11 @@ export function parsePostgresPlan(json: string): Plan {
 
 const PG_DETAILS = ["Index Cond", "Recheck Cond", "Filter", "Join Filter", "Hash Cond", "Merge Cond", "Sort Key", "Group Key", "Presorted Key", "Strategy", "Partial Mode", "Scan Direction", "Rows Removed by Filter", "Rows Removed by Index Recheck", "Rows Removed by Join Filter", "Sort Method", "Sort Space Used", "Sort Space Type", "Peak Memory Usage", "Workers Planned", "Workers Launched", "Shared Hit Blocks", "Shared Read Blocks", "Temp Read Blocks", "Temp Written Blocks", "Heap Fetches", "Subplan Name", "Parent Relationship", "Output"];
 
-function pgNode(p: PgNode, underLimit = false): PlanNode {
+/**
+ * `procs`: processes running this node at the same time (under a Gather: the workers plus the leader). Their
+ * loops overlap, so the wall time is the per-loop average × loops ÷ processes.
+ */
+function pgNode(p: PgNode, underLimit = false, procs = 1): PlanNode {
   const type = text(p["Node Type"]);
   const join = p["Join Type"] && p["Join Type"] !== "Inner" ? ` (${text(p["Join Type"])})` : "";
   const op = `${type}${join}${p["Parallel Aware"] === true ? " paralelo" : ""}`;
@@ -67,7 +71,7 @@ function pgNode(p: PgNode, underLimit = false): PlanNode {
   const perLoop = num(p["Actual Rows"]);
   n.actualRows = perLoop === null ? null : perLoop * (n.loops ?? 1);
   const time = num(p["Actual Total Time"]);
-  n.timeMs = time === null ? null : time * (n.loops ?? 1);
+  n.timeMs = time === null ? null : time * Math.max(1, (n.loops ?? 1) / procs);
   const KB = new Set(["Sort Space Used", "Peak Memory Usage"]);
   for (const key of PG_DETAILS) if (p[key] !== undefined) n.details.push([key, `${text(p[key])}${KB.has(key) ? " kB" : ""}`]);
   // Warnings worth acting on.
@@ -93,7 +97,8 @@ function pgNode(p: PgNode, underLimit = false): PlanNode {
   }
   if (p["Sort Space Type"] === "Disk" || /external/i.test(text(p["Sort Method"]))) n.warnings.push("La ordenación no cabe en memoria (work_mem) y usa disco.");
   if ((num(p["Temp Written Blocks"]) ?? 0) > 0 && !n.warnings.some((w) => w.includes("disco"))) n.warnings.push("Escribe datos temporales en disco.");
-  n.children = (p.Plans ?? []).map((child) => pgNode(child, underLimit || type === "Limit"));
+  const gather = /^Gather/.test(type) ? (num(p["Workers Launched"]) ?? num(p["Workers Planned"]) ?? 0) + 1 : procs;
+  n.children = (p.Plans ?? []).map((child) => pgNode(child, underLimit || type === "Limit", gather));
   return n;
 }
 
@@ -119,7 +124,8 @@ const ACCESS: Record<string, string> = {
 /** EXPLAIN FORMAT=JSON (MySQL 8, MariaDB) and MariaDB's ANALYZE FORMAT=JSON. */
 export function parseMysqlPlan(json: string): Plan {
   const parsed = JSON.parse(json) as Json;
-  const block = parsed.query_block as Json;
+  const block = parsed.query_block as Json | undefined;
+  if (!block || typeof block !== "object") throw new Error("El servidor no devolvió un plan para esta sentencia");
   const analyzed = block?.r_loops !== undefined || block?.r_total_time_ms !== undefined;
   const root = mysqlNode("query_block", block);
   const total = num((parsed.query_optimization as Json | undefined)?.r_total_time_ms);
@@ -159,17 +165,20 @@ function mysqlNode(key: string, value: unknown): PlanNode {
   if (obj.using_temporary_table === true) n.details.push(["Tabla temporal", "sí"]);
   for (const [k, v] of Object.entries(obj)) {
     if (k === "table") n.children.push(mysqlTable(v as Json));
-    else if (Array.isArray(v)) {
-      // nested_loop: [{ table }…]; subqueries: [{ query_block }…]
-      const list = node(MYSQL_WRAPPERS[k] ?? k.replace(/_/g, " "));
-      for (const item of v) {
-        if (item && typeof item === "object") for (const [ik, iv] of Object.entries(item as Json)) if (iv && typeof iv === "object") list.children.push(mysqlNode(ik, iv));
-      }
-      if (k === "nested_loop" && list.children.length) n.children.push(list);
-      else n.children.push(...(list.children.length === 1 ? list.children : list.children.length ? [list] : []));
-    } else if (v && typeof v === "object" && k in MYSQL_WRAPPERS) n.children.push(mysqlNode(k, v));
+    else if (Array.isArray(v)) n.children.push(...mysqlList(k, v));
+    else if (v && typeof v === "object" && k in MYSQL_WRAPPERS) n.children.push(mysqlNode(k, v));
   }
   return n;
+}
+
+/** nested_loop: [{ table }…]; subqueries: [{ query_block }…]. Arrays of plain values (used_columns…) give nothing. */
+function mysqlList(key: string, items: unknown[]): PlanNode[] {
+  const list = node(MYSQL_WRAPPERS[key] ?? key.replace(/_/g, " "));
+  for (const item of items) {
+    if (item && typeof item === "object") for (const [ik, iv] of Object.entries(item as Json)) if (iv && typeof iv === "object" && !Array.isArray(iv)) list.children.push(mysqlNode(ik, iv));
+  }
+  if (key === "nested_loop" && list.children.length) return [list];
+  return list.children.length === 1 ? list.children : list.children.length ? [list] : [];
 }
 
 function mysqlTable(t: Json): PlanNode {
@@ -197,7 +206,12 @@ function mysqlTable(t: Json): PlanNode {
   if (n.actualRows !== null && n.rows !== null && Math.max(n.rows, n.actualRows) >= 100 && (n.actualRows > n.rows * 10 || n.rows > Math.max(n.actualRows, 1) * 10)) {
     n.warnings.push(`Se esperaban ${fmt(n.rows)} filas y salieron ${fmt(n.actualRows)}: ANALYZE TABLE actualiza las estadísticas.`);
   }
-  for (const [k, v] of Object.entries(t)) if (v && typeof v === "object" && !Array.isArray(v) && k in MYSQL_WRAPPERS) n.children.push(mysqlNode(k, v));
+  for (const [k, v] of Object.entries(t)) {
+    if (!(k in MYSQL_WRAPPERS)) continue;
+    // attached_subqueries hang from the table that runs them.
+    if (Array.isArray(v)) n.children.push(...mysqlList(k, v));
+    else if (v && typeof v === "object") n.children.push(mysqlNode(k, v));
+  }
   return n;
 }
 
@@ -226,10 +240,12 @@ function sqliteNode(detail: string): PlanNode {
   else if (scan) {
     n = node(scan[2] ? "Recorrido de índice" : "Recorrido completo", [scan[1], scan[2] ? `índice ${scan[2]}` : ""].filter(Boolean).join(" · "));
     if (!scan[2]) n.warnings.push("Recorre la tabla entera: si filtras por una columna, un índice sobre ella lo evitaría.");
-  } else if (/USE TEMP B-TREE FOR (ORDER BY|GROUP BY|DISTINCT)/.test(detail)) {
-    const what = /FOR (.*)$/.exec(detail)![1];
+  } else if (/USE TEMP B-TREE FOR (?:(?:RIGHT PART|LAST TERM) OF )?(ORDER BY|GROUP BY|DISTINCT)/.test(detail)) {
+    // "RIGHT PART OF ORDER BY" / "LAST TERM OF ORDER BY": an index already gives the first columns of the order.
+    const [, part, what] = /FOR (?:((?:RIGHT PART|LAST TERM)) OF )?(ORDER BY|GROUP BY|DISTINCT)/.exec(detail)!;
     n = node(what === "ORDER BY" ? "Ordenación temporal" : what === "GROUP BY" ? "Agrupación temporal" : "DISTINCT temporal");
-    n.warnings.push(`Ordena en una estructura temporal: un índice que siga el ${what} se la ahorraría.`);
+    if (part) n.target = "solo las últimas columnas";
+    n.warnings.push(`Ordena en una estructura temporal: un índice que siga ${part ? "todo " : ""}el ${what} se la ahorraría.`);
   } else if (/^(CO-ROUTINE|MATERIALIZE|SUBQUERY|CORRELATED|COMPOUND|UNION|MULTI-INDEX)/.test(detail)) n = node(detail.split(" ")[0].replace(/-/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()), detail.split(" ").slice(1).join(" "));
   else n = node(detail);
   n.details.push(["Detalle", detail]);
@@ -242,9 +258,10 @@ function sqliteNode(detail: string): PlanNode {
 export function parseMssqlPlan(xml: string, parser: { parseFromString(s: string, type: string): Document } = new DOMParser()): Plan {
   const doc = parser.parseFromString(xml, "application/xml");
   const plan = doc.getElementsByTagName("QueryPlan")[0];
-  const top = plan ? childRelOps(plan)[0] : undefined;
+  if (!plan) throw new Error("SQL Server no devolvió un plan para esta sentencia");
+  const top = childRelOps(plan)[0];
   const root = top ? mssqlNode(top) : node("Consulta");
-  const missing = plan ? [...plan.getElementsByTagName("MissingIndexGroup")] : [];
+  const missing = [...plan.getElementsByTagName("MissingIndexGroup")];
   for (const group of missing) {
     const impact = group.getAttribute("Impact");
     const index = group.getElementsByTagName("MissingIndex")[0];
