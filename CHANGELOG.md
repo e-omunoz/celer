@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-08
+
 ### Added
 - **Execution plans as a tree** for every engine (Ctrl+Mayús+E, and "Analizar" to run and measure):
   - PostgreSQL and MariaDB with real rows and times;
@@ -169,7 +171,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/e-omunoz/celer/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/e-omunoz/celer/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/e-omunoz/celer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/e-omunoz/celer/compare/v1.1.0...v1.2.0
