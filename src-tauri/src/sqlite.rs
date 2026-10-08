@@ -62,7 +62,7 @@ impl SqliteDriver {
     pub fn connect(cfg: ConnConfig) -> Result<SqliteDriver> {
         let path = sqlite_path(&cfg)?;
         let conn = if path == ":memory:" {
-            Connection::open_in_memory()?
+            open_memory(&cfg.id)?
         } else {
             if let Some(parent) = std::path::Path::new(&path).parent() {
                 if !parent.as_os_str().is_empty() && !cfg.read_only {
@@ -766,6 +766,41 @@ fn sqlite_path(cfg: &ConnConfig) -> Result<String> {
     Ok(raw.to_string())
 }
 
+/// One handle per in-memory connection, so its database lives while the connection is open (SQLite drops a memory
+/// database with its last handle) and not only while some session has it.
+fn memory_keepers() -> &'static std::sync::Mutex<std::collections::HashMap<String, Connection>> {
+    static KEEPERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Connection>>> =
+        std::sync::OnceLock::new();
+    KEEPERS.get_or_init(Default::default)
+}
+
+/// A ':memory:' database shared by every session of the connection (explorer, consoles, tables): a named in-memory
+/// database with a shared cache. Without a connection id (a connection test) it is a private one.
+fn open_memory(conn_id: &str) -> Result<Connection> {
+    let name: String = conn_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    if name.is_empty() {
+        return Ok(Connection::open_in_memory()?);
+    }
+    let uri = format!("file:celer-mem-{name}?mode=memory&cache=shared");
+    let open = || {
+        Connection::open_with_flags(
+            &uri,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI,
+        )
+    };
+    let mut keepers = memory_keepers().lock().unwrap_or_else(|e| e.into_inner());
+    if !keepers.contains_key(&name) {
+        keepers.insert(name, open()?);
+    }
+    Ok(open()?)
+}
+
+/// Disconnecting an in-memory connection drops its database (once its sessions close too).
+pub fn forget_memory(conn_id: &str) {
+    let name: String = conn_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    memory_keepers().lock().unwrap_or_else(|e| e.into_inner()).remove(&name);
+}
+
 fn qi(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
@@ -981,6 +1016,34 @@ mod tests {
         d.completion("main").unwrap();
         assert!(d.fetch(10).is_err());
         assert_eq!(count_statements("CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET flag = 2; END; SELECT 1"), 2);
+    }
+
+    #[test]
+    fn memory_is_shared_by_the_connection_sessions() {
+        let open = |id: &str| {
+            let mut cfg = ConnConfig::default();
+            cfg.kind = DbKind::Sqlite;
+            cfg.id = id.into();
+            cfg.database = ":memory:".into();
+            SqliteDriver::connect(cfg).unwrap()
+        };
+        let mut console = open("mem-test-a");
+        console.execute("CREATE TABLE t (x); INSERT INTO t VALUES (1)", 10).unwrap();
+        let mut explorer = open("mem-test-a");
+        let tables = explorer.children(&["main".into(), "main".into(), "tables".into()]).unwrap();
+        assert_eq!(tables.len(), 1);
+        // Every session closing does not drop it while the connection is open.
+        drop(console);
+        drop(explorer);
+        let mut again = open("mem-test-a");
+        assert_eq!(cell_i64(&again.execute("SELECT COUNT(*) FROM t", 10).unwrap().results[0].rows[0][0]), 1);
+        // Another connection has its own; disconnecting drops it.
+        assert!(open("mem-test-b").execute("SELECT * FROM t", 10).is_err());
+        forget_memory("mem-test-a");
+        drop(again);
+        assert!(open("mem-test-a").execute("SELECT * FROM t", 10).is_err());
+        forget_memory("mem-test-a");
+        forget_memory("mem-test-b");
     }
 
     #[test]

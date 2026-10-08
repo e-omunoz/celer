@@ -481,6 +481,7 @@ fn close_connection_sessions(state: State<'_, Arc<AppState>>, conn_id: String) -
     for h in &closed {
         h.cancel();
     }
+    sqlite::forget_memory(&conn_id);
     // Las sesiones se cierran en sus hilos (y dejan su conexión libre si pueden): las libres se cierran un poco
     // después, cuando ya han llegado.
     let id = conn_id.clone();
