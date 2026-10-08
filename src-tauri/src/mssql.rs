@@ -1,12 +1,22 @@
 //! Driver nativo de SQL Server (protocolo TDS con `tiberius`, sin drivers externos).
 //!
 //! Conexiones: todas viven en un runtime compartido (`rt`). Un resultado que se deja a medias (la interfaz pide 500
-//! filas y después lanza otra consulta) no se lee entero: se corta con la señal ATTENTION de TDS, como hace
-//! mssql-jdbc, y la conexión sigue siendo la misma. Las conexiones de las sesiones que se cierran sin estado propio
-//! quedan libres un rato (`pool`) para la siguiente sesión de la misma configuración, que se ahorra el login (con su
-//! TLS). Con `CELER_MSSQL_TRACE` en el entorno, los tiempos de cada lote salen también por la salida de error.
+//! filas y después lanza otra consulta) no se espera:
+//! - si la sesión no tiene nada propio, sigue al momento en su conexión de reserva, abierta en segundo plano mientras
+//!   el cursor estaba abierto, y la vieja se corta (ATTENTION) y se cierra en segundo plano;
+//! - con transacción, modo manual, tablas #temporales o SET del usuario, la conexión se conserva: se lee el resto,
+//!   con progreso (`progress`) y Detener como única forma de cortarlo.
+//!
+//! tiberius 0.13 manda ATTENTION (`cancel_query`), pero en las pruebas con SQL Server 2022 la conexión no quedó
+//! utilizable después: por eso no se usa para conservar la sesión, solo para que el servidor deje de trabajar en la
+//! conexión que se deja. Cómo fue (y su error) sale en los tiempos de la sentencia siguiente.
+//!
+//! Las conexiones de las sesiones que se cierran sin estado propio quedan libres un rato (`pool`) para la siguiente
+//! sesión de la misma configuración, que se ahorra el login (con su TLS). Con `CELER_MSSQL_TRACE` en el entorno, los
+//! tiempos de cada lote salen también por la salida de error.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -24,7 +34,7 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::*;
-use crate::session::{first_keyword, Canceller, Driver};
+use crate::session::{first_keyword, Canceller, Driver, Progress};
 
 type Cli = Client<Compat<TcpStream>>;
 
@@ -32,17 +42,8 @@ const BINARY_PREVIEW: usize = 4096;
 
 /// Tamaño de paquete TDS que se pide al conectar (el de mssql-jdbc; tiberius pide 4096): menos paquetes por resultado.
 const PACKET_SIZE: u32 = 8000;
-/// Al dejar un resultado a medias: lo que se sigue leyendo antes de mandar ATTENTION. Un resto pequeño, que ya
-/// viaja por la red, acaba en ese tiempo y la conexión queda limpia sin cortar nada.
-const DRAIN_BUDGET: Duration = Duration::from_millis(50);
-/// Lo que se espera a la siguiente fila para cortar el resultado entre dos filas (no a mitad de una).
-const STUCK_CAP: Duration = Duration::from_secs(30);
-/// Lo que se espera el acuse del ATTENTION.
+/// Lo que se espera el acuse del ATTENTION al cortar en segundo plano la conexión que se deja.
 const ATTENTION_CAP: Duration = Duration::from_secs(10);
-/// Sin estado de sesión que conservar, lo que se espera al corte antes de seguir con una conexión libre del pool…
-const PATIENCE: Duration = Duration::from_millis(250);
-/// … y, si no hay ninguna libre, antes de abrir otra.
-const PATIENCE_MAX: Duration = Duration::from_secs(5);
 /// Conexiones libres: cuánto se guardan, a partir de cuándo se comprueban antes de usarlas y cuántas por configuración.
 const IDLE_TTL: Duration = Duration::from_secs(300);
 const IDLE_PING: Duration = Duration::from_secs(20);
@@ -59,8 +60,11 @@ struct Cursor {
     rx: mpsc::Receiver<Item>,
     done: oneshot::Receiver<Finished>,
     peeked: Option<Item>,
-    /// Pide al lector que deje el resultado (lo corta con ATTENTION).
+    /// Pide al lector que deje el resultado: lo corta (ATTENTION) y la conexión se cierra. Si se cierra el cursor sin
+    /// pedirlo, el lector lee el resto y la conexión se conserva.
     abandon: CancellationToken,
+    /// Filas leídas al vaciar el resto, para el progreso.
+    drained: Arc<AtomicU64>,
 }
 
 /// Cómo terminó el lector de un lote: con la conexión (None si se perdió) y, si el resultado se dejó a medias, cómo
@@ -70,11 +74,18 @@ struct Finished {
     cut: Option<Cut>,
 }
 
-/// Un resultado dejado a medias: las filas que aún se leyeron y si hizo falta ATTENTION.
-#[derive(Clone, Copy, Debug)]
+/// Un resultado dejado a medias: las filas que aún se leyeron y, si se cortó con ATTENTION, su error.
+#[derive(Debug, Default)]
 struct Cut {
     rows: u64,
-    attention: bool,
+    error: Option<String>,
+}
+
+/// Lo que se muestra mientras se lee el resto de un resultado para conservar la sesión.
+struct Drain {
+    why: String,
+    rows: Arc<AtomicU64>,
+    since: Instant,
 }
 
 /// El runtime de todas las conexiones de SQL Server, con hilos propios: el lector de un resultado sigue trayendo
@@ -146,10 +157,6 @@ fn put_idle(key: String, idle: Idle) {
     }
 }
 
-fn has_idle(key: &str, wanted: &str) -> bool {
-    pool().lock().iter().any(|(k, i)| k == key && i.facts.serves(wanted) && i.since.elapsed() < IDLE_TTL)
-}
-
 /// Una conexión libre para la base `wanted`, la más reciente. Si lleva un rato parada se comprueba antes con un
 /// SELECT 1: un cortafuegos puede haberla cerrado sin avisar.
 fn take_idle(key: &str, wanted: &str) -> Option<Idle> {
@@ -160,17 +167,22 @@ fn take_idle(key: &str, wanted: &str) -> Option<Idle> {
             let at = pool.iter().rposition(|(k, i)| k == key && i.facts.serves(wanted))?;
             pool.remove(at).1
         };
-        if idle.since.elapsed() < IDLE_PING {
-            return Some(idle);
-        }
-        let alive = rt().block_on(async {
-            let ping = async { idle.client.simple_query("SELECT 1").await?.into_results().await };
-            matches!(tokio::time::timeout(Duration::from_secs(5), ping).await, Ok(Ok(_)))
-        });
-        if alive {
+        if alive(&mut idle) {
             return Some(idle);
         }
     }
+}
+
+/// Si una conexión parada sigue viva: si lleva un rato sin usarse se comprueba con un SELECT 1, porque un
+/// cortafuegos puede haberla cerrado sin avisar.
+fn alive(idle: &mut Idle) -> bool {
+    if idle.since.elapsed() < IDLE_PING {
+        return true;
+    }
+    rt().block_on(async {
+        let ping = async { idle.client.simple_query("SELECT 1").await?.into_results().await };
+        matches!(tokio::time::timeout(Duration::from_secs(5), ping).await, Ok(Ok(_)))
+    })
 }
 
 /// Abre una conexión en la base `database` ("" = la predeterminada del login) con el script de inicio, y lee de una
@@ -388,8 +400,14 @@ pub struct MssqlDriver {
     showplan: bool,
     engine: Engine,
     info: String,
-    /// Lo que pasó en el lote además de la consulta (conectar, cortar el resultado anterior), para la salida.
+    /// Lo que pasó en el lote además de la consulta (conectar, dejar el resultado anterior), para la salida.
     notes: Vec<String>,
+    /// Lo que se supo después en segundo plano (cómo se cortó la conexión que se dejó): sale en la sentencia siguiente.
+    late: Arc<Mutex<Vec<String>>>,
+    /// La conexión de reserva de la sesión, abriéndose o abierta, para seguir al momento si se deja un resultado.
+    reserve: Option<oneshot::Receiver<Option<Idle>>>,
+    /// Mientras se lee el resto de un resultado para conservar la sesión, para `progress`.
+    drain: Arc<Mutex<Option<Drain>>>,
 }
 
 impl MssqlDriver {
@@ -411,6 +429,9 @@ impl MssqlDriver {
             engine: Engine::SqlServer,
             info: String::new(),
             notes: Vec::new(),
+            late: Arc::new(Mutex::new(Vec::new())),
+            reserve: None,
+            drain: Arc::new(Mutex::new(None)),
         };
         let home = d.cfg.database.clone();
         d.attach(&home)?;
@@ -495,17 +516,45 @@ impl MssqlDriver {
         self.client.take().ok_or_else(|| anyhow!("Sin conexión con el servidor"))
     }
 
-    /// Deja una conexión de reserva abierta en segundo plano para la base actual, si el pool no tiene ya una.
-    fn ensure_reserve(&self) {
-        if has_idle(&self.key, &self.database) {
+    /// Abre en segundo plano la conexión de reserva de la sesión, si no la tiene: en la base actual, con el script de
+    /// inicio (una libre del pool si la hay). Se pide mientras un resultado queda abierto sin estado de sesión.
+    fn ensure_reserve(&mut self) {
+        if self.reserve.is_some() {
             return;
         }
+        let (tx, rx) = oneshot::channel();
         let (cfg, key, wanted) = (self.cfg.clone(), self.key.clone(), self.database.clone());
-        let _ = std::thread::Builder::new().name("celer-mssql-reserve".into()).spawn(move || {
-            if let Ok(idle) = rt().block_on(open_connection(&cfg, &wanted)) {
+        let opened = std::thread::Builder::new().name("celer-mssql-reserve".into()).spawn(move || {
+            let idle = take_idle(&key, &wanted).or_else(|| rt().block_on(open_connection(&cfg, &wanted)).ok());
+            if let Err(Some(idle)) = tx.send(idle) {
+                // La sesión ya no la quiere: queda libre para otra.
                 put_idle(key, idle);
             }
         });
+        if opened.is_ok() {
+            self.reserve = Some(rx);
+        }
+    }
+
+    /// Sin estado de sesión que conservar, se deja el resultado a medias y la sesión sigue en su conexión de reserva
+    /// (esperando solo lo que le falte por abrirse); sin reserva, en una libre o nueva. Misma base y mismo script de
+    /// inicio: la reserva se abrió con ellos.
+    fn switch_to_reserve(&mut self, t0: Instant) -> Result<()> {
+        let mut ready = self.reserve.take().and_then(|rx| rt().block_on(rx).ok().flatten());
+        // Abierta en otra base (la sesión cambió de base después): queda libre para otra sesión.
+        if let Some(idle) = ready.take_if(|i| !i.facts.serves(&self.database)) {
+            put_idle(self.key.clone(), idle);
+        }
+        if let Some(mut idle) = ready {
+            if alive(&mut idle) {
+                self.adopt(idle);
+                self.notes.push(format!("resultado anterior dejado: sigue en la conexión de reserva ({} ms)", t0.elapsed().as_millis()));
+                return Ok(());
+            }
+        }
+        self.notes.push("resultado anterior dejado: sin conexión de reserva lista".into());
+        let db = self.database.clone();
+        self.attach(&db)
     }
 
     /// Azure Synapse dedicated no admite USE ni consulta otras bases con nombres de tres partes: cambiar de base es
@@ -547,11 +596,12 @@ impl MssqlDriver {
         let token = CancellationToken::new();
         *self.cancel.lock() = Some(token.clone());
         let abandon = CancellationToken::new();
-        let leave = abandon.clone();
+        let drained = Arc::new(AtomicU64::new(0));
+        let (leave, count) = (abandon.clone(), drained.clone());
         let (tx, rx) = mpsc::channel(1024);
         let (dtx, drx) = oneshot::channel();
         rt().spawn(async move {
-            let done = run_query(client, sql, dml, tx, token, leave).await;
+            let done = run_query(client, sql, dml, tx, token, leave, count).await;
             let _ = dtx.send(done);
         });
         self.cursor = Some(Cursor {
@@ -559,6 +609,7 @@ impl MssqlDriver {
             done: drx,
             peeked: None,
             abandon,
+            drained,
         });
         Ok(())
     }
@@ -586,7 +637,7 @@ impl MssqlDriver {
         *self.cancel.lock() = None;
     }
 
-    /// Recoge la conexión tras cortar un resultado a medias y anota cómo fue.
+    /// Recoge la conexión tras leer el resto de un resultado (o tras acabar el lector) y anota cómo fue.
     fn after_cut(&mut self, finished: Option<Finished>, t0: Instant) {
         let ms = t0.elapsed().as_millis();
         let (client, cut) = match finished {
@@ -594,8 +645,7 @@ impl MssqlDriver {
             None => (None, None),
         };
         let how = match cut {
-            Some(Cut { rows, attention: true }) => format!("resultado anterior cortado con ATTENTION en {ms} ms ({rows} filas más leídas)"),
-            Some(Cut { rows, attention: false }) => format!("resto del resultado anterior leído en {ms} ms ({rows} filas)"),
+            Some(c) => format!("resto del resultado anterior leído en {ms} ms ({} filas) para conservar la sesión", c.rows),
             None => format!("resultado anterior cerrado en {ms} ms"),
         };
         if client.is_none() {
@@ -604,41 +654,6 @@ impl MssqlDriver {
             self.notes.push(how);
         }
         self.client = client;
-    }
-
-    /// Sin estado de sesión que conservar y con un corte que tarda: la sesión sigue con una conexión libre si la hay
-    /// (si no, espera al corte hasta PATIENCE_MAX, y si tampoco llega abrirá otra) y la vieja termina de cortarse en
-    /// segundo plano y queda libre en el pool. Deja además una de reserva para la próxima vez.
-    fn leave_slow_cut(&mut self, mut done: oneshot::Receiver<Finished>, t0: Instant) {
-        let adopted = take_idle(&self.key, &self.database);
-        if adopted.is_none() {
-            let wait = PATIENCE_MAX.saturating_sub(PATIENCE);
-            if let Ok(r) = rt().block_on(async { tokio::time::timeout(wait, &mut done).await }) {
-                *self.cancel.lock() = None;
-                self.after_cut(r.ok(), t0);
-                self.ensure_reserve();
-                return;
-            }
-        }
-        let (key, facts) = (self.key.clone(), self.facts());
-        rt().spawn(async move {
-            if let Ok(Finished { client: Some(client), .. }) = done.await {
-                put_idle(key, Idle { client, facts, since: Instant::now() });
-            }
-        });
-        *self.cancel.lock() = None;
-        let ms = t0.elapsed().as_millis();
-        match adopted {
-            Some(idle) => {
-                self.adopt(idle);
-                self.notes.push(format!("resultado anterior abandonado a los {ms} ms: sigue en una conexión libre (la otra se corta en segundo plano)"));
-            }
-            None => {
-                self.client = None;
-                self.notes.push(format!("resultado anterior abandonado a los {ms} ms: se abre otra conexión"));
-            }
-        }
-        self.ensure_reserve();
     }
 
     /// Lee resultados hasta que uno supera `fetch` filas (queda abierto) o acaba el lote.
@@ -1309,9 +1324,10 @@ async fn run_query(
     tx: mpsc::Sender<Item>,
     token: CancellationToken,
     abandon: CancellationToken,
+    drained: Arc<AtomicU64>,
 ) -> Finished {
     let outcome = {
-        let work = stream_query(&mut client, sql, dml, &tx, &abandon);
+        let work = stream_query(&mut client, sql, dml, &tx, &abandon, &drained);
         tokio::select! {
             o = work => o,
             _ = token.cancelled() => {
@@ -1332,6 +1348,7 @@ async fn stream_query(
     dml: bool,
     tx: &mpsc::Sender<Item>,
     abandon: &CancellationToken,
+    drained: &AtomicU64,
 ) -> Outcome {
     if dml {
         return match client.execute(sql, &[]).await {
@@ -1387,26 +1404,32 @@ async fn stream_query(
             break;
         }
     }
-    // El resultado se deja a medias. Lo que ya viene de camino se sigue leyendo durante DRAIN_BUDGET (un resto pequeño
-    // acaba ahí); si no ha terminado, se corta con ATTENTION entre dos filas y se descarta hasta el acuse del
-    // servidor. La conexión queda limpia, con su sesión: no hace falta leer el resto ni volver a conectar.
-    let deadline = Instant::now() + DRAIN_BUDGET;
-    let mut cut = Cut { rows: 0, attention: false };
-    while Instant::now() < deadline {
-        match tokio::time::timeout(STUCK_CAP, stream.try_next()).await {
-            Ok(Ok(Some(QueryItem::Row(_)))) => cut.rows += 1,
-            Ok(Ok(Some(_))) => {}
-            Ok(Ok(None)) => return Outcome::Ok(Some(cut)),
-            Ok(Err(e)) if !is_fatal(&e) => {}
-            _ => return Outcome::Broken(Some(cut)),
+    if !abandon.is_cancelled() {
+        // El cursor se cerró y la sesión tiene algo propio (transacción, #temporales, SET): se lee el resto para
+        // conservar la conexión. Solo Detener (el token de la consulta, en `run_query`) lo corta.
+        let mut cut = Cut::default();
+        loop {
+            match stream.try_next().await {
+                Ok(Some(QueryItem::Row(_))) => {
+                    cut.rows += 1;
+                    drained.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => return Outcome::Ok(Some(cut)),
+                Err(e) if !is_fatal(&e) => {}
+                Err(_) => return Outcome::Broken(Some(cut)),
+            }
         }
     }
+    // Se deja la conexión: se corta con ATTENTION (el servidor deja de trabajar) y se anota cómo fue; la sesión ya
+    // sigue en su reserva y esta se cierra.
     drop(stream);
-    cut.attention = true;
-    match tokio::time::timeout(ATTENTION_CAP, client.cancel_query()).await {
-        Ok(Ok(())) => Outcome::Ok(Some(cut)),
-        _ => Outcome::Broken(Some(cut)),
-    }
+    let cut = match tokio::time::timeout(ATTENTION_CAP, client.cancel_query()).await {
+        Ok(Ok(())) => Cut { rows: 0, error: None },
+        Ok(Err(e)) => Cut { rows: 0, error: Some(e.to_string()) },
+        Err(_) => Cut { rows: 0, error: Some(format!("sin acuse en {} s", ATTENTION_CAP.as_secs())) },
+    };
+    Outcome::Broken(Some(cut))
 }
 
 /// Con CELER_MSSQL_TRACE en el entorno, los tiempos de conexión y de cada lote por la salida de error.
@@ -1628,7 +1651,7 @@ pub fn fmt_rows(n: i64) -> String {
 impl Driver for MssqlDriver {
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
-        self.notes.clear();
+        self.notes = std::mem::take(&mut *self.late.lock());
         let kw = first_keyword(sql);
         let effects = session_effects(sql);
         if let (Engine::Synapse, Some(db)) = (self.engine, &effects.use_only) {
@@ -1679,6 +1702,10 @@ impl Driver for MssqlDriver {
         }
         self.refresh_tx_state();
         out.in_transaction = self.in_tx;
+        // Un resultado que queda abierto sin estado de sesión: su reserva se abre ya, por si se deja a medias.
+        if self.cursor.is_some() && !self.keeps_session() {
+            self.ensure_reserve();
+        }
         out.messages.extend(self.timing_line(first_ms));
         out.elapsed_ms = t0.elapsed().as_millis() as u64;
         Ok(out)
@@ -1719,31 +1746,50 @@ impl Driver for MssqlDriver {
         }
     }
 
-    /// Deja el resultado abierto sin leer el resto: el lector lo corta con ATTENTION (`stream_query`). Con
-    /// transacción o estado de sesión se espera a ese corte para seguir en la misma conexión (Cancelar en la
-    /// interfaz cancela también la espera, y entonces la sesión se pierde); sin ellos, solo un momento: si tarda, la
-    /// sesión sigue en otra conexión (`leave_slow_cut`).
+    /// Cierra el resultado abierto. Si el lector ya lo había leído entero, la conexión sigue. Si no:
+    /// - con transacción, modo manual, tablas #temporales o SET del usuario, se lee el resto en la misma conexión
+    ///   (con progreso; Detener lo corta y la sesión se pierde);
+    /// - si no, la sesión sigue al momento en su reserva y la vieja se corta y se cierra en segundo plano.
     fn close_cursor(&mut self) -> Result<()> {
-        let Some(cur) = self.cursor.take() else { return Ok(()) };
+        let Some(mut cur) = self.cursor.take() else { return Ok(()) };
         let t0 = Instant::now();
+        if let Ok(finished) = cur.done.try_recv() {
+            *self.cancel.lock() = None;
+            self.after_cut(Some(finished), t0);
+            return Ok(());
+        }
         drop(cur.rx);
+        if self.keeps_session() {
+            let why = match self.lost_state() {
+                lost if lost.is_empty() => "el modo manual de transacciones".to_string(),
+                lost => lost,
+            };
+            *self.drain.lock() = Some(Drain { why, rows: cur.drained.clone(), since: t0 });
+            let finished = rt().block_on(&mut cur.done).ok();
+            *self.drain.lock() = None;
+            *self.cancel.lock() = None;
+            self.after_cut(finished, t0);
+            return Ok(());
+        }
         cur.abandon.cancel();
-        let mut done = cur.done;
-        let finished = if self.keeps_session() {
-            rt().block_on(&mut done).ok()
-        } else {
-            // The timer is created inside the runtime: built outside it, tokio panics ("no reactor running").
-            match rt().block_on(async { tokio::time::timeout(PATIENCE, &mut done).await }) {
-                Ok(r) => r.ok(),
-                Err(_) => {
-                    self.leave_slow_cut(done, t0);
-                    return Ok(());
-                }
-            }
-        };
         *self.cancel.lock() = None;
-        self.after_cut(finished, t0);
-        Ok(())
+        let late = self.late.clone();
+        let done = cur.done;
+        rt().spawn(async move {
+            let ms = t0.elapsed().as_millis();
+            let note = match done.await {
+                Ok(Finished { cut: Some(Cut { error: None, .. }), .. }) => {
+                    format!("la conexión anterior se cortó con ATTENTION en {ms} ms y se ha cerrado")
+                }
+                Ok(Finished { cut: Some(Cut { error: Some(e), .. }), .. }) => {
+                    format!("la conexión anterior no aceptó el ATTENTION ({e}, {ms} ms) y se ha cerrado")
+                }
+                _ => format!("la conexión anterior se ha cerrado ({ms} ms)"),
+            };
+            trace(&note);
+            late.lock().push(note);
+        });
+        self.switch_to_reserve(t0)
     }
 
     fn set_autocommit(&mut self, on: bool) -> Result<bool> {
@@ -2223,6 +2269,21 @@ impl Driver for MssqlDriver {
         Ok(info)
     }
 
+    /// Mientras se lee el resto de un resultado para conservar la sesión: cuántas filas van.
+    fn progress(&self) -> Progress {
+        let slot = self.drain.clone();
+        Arc::new(move || {
+            slot.lock().as_ref().map(|d| {
+                format!(
+                    "leyendo el resto del resultado anterior para conservar {}: {} en {:.1} s · Detener lo corta y pierde la sesión",
+                    d.why,
+                    fmt_rows(d.rows.load(Ordering::Relaxed) as i64),
+                    d.since.elapsed().as_secs_f64()
+                )
+            })
+        })
+    }
+
     fn canceller(&self) -> Canceller {
         let slot = self.cancel.clone();
         Arc::new(move || {
@@ -2234,24 +2295,26 @@ impl Driver for MssqlDriver {
 }
 
 impl Drop for MssqlDriver {
-    /// La sesión se cierra: su conexión queda libre para otra sesión de la misma configuración si no lleva estado
-    /// propio (con un resultado a medias, después de cortarlo en segundo plano).
+    /// La sesión se cierra: un resultado a medias se corta y su conexión se cierra; si no, la conexión queda libre
+    /// para otra sesión de la misma configuración, si no lleva estado propio. La reserva también queda libre.
     fn drop(&mut self) {
+        if let Some(rx) = self.reserve.take() {
+            let key = self.key.clone();
+            rt().spawn(async move {
+                if let Ok(Some(idle)) = rx.await {
+                    put_idle(key, idle);
+                }
+            });
+        }
+        if let Some(cur) = self.cursor.take() {
+            cur.abandon.cancel();
+            return;
+        }
         if self.keeps_session() {
             return;
         }
-        let (key, facts) = (self.key.clone(), self.facts());
-        if let Some(cur) = self.cursor.take() {
-            drop(cur.rx);
-            cur.abandon.cancel();
-            let done = cur.done;
-            rt().spawn(async move {
-                if let Ok(Finished { client: Some(client), .. }) = done.await {
-                    put_idle(key, Idle { client, facts, since: Instant::now() });
-                }
-            });
-        } else if let Some(client) = self.client.take() {
-            put_idle(key, Idle { client, facts, since: Instant::now() });
+        if let Some(client) = self.client.take() {
+            put_idle(self.key.clone(), Idle { client, facts: self.facts(), since: Instant::now() });
         }
     }
 }
