@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
-#[cfg(windows)]
 use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, LazyLock};
@@ -127,10 +126,19 @@ pub struct Api {
     get_info: FnGetInfo,
     drivers: Option<FnEnum>,
     data_sources: Option<FnEnum>,
+    /// SQLLEN is 32 bits: IBM's CLI driver outside Windows (built without ODBC64) writes 4-byte lengths and
+    /// indicators where the ODBC headers of a 64-bit system say 8. Windows and unixODBC use 8.
+    len32: bool,
 }
 
 unsafe impl Send for Api {}
 unsafe impl Sync for Api {}
+
+/// IBM Data Server Driver (CLI) library: libdb2.so / libdb2.dylib (db2cli64.dll on Windows).
+fn is_ibm_cli(path: &str) -> bool {
+    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    name.starts_with("libdb2") || name.starts_with("db2cli") || name.starts_with("libdb2o")
+}
 
 static APIS: LazyLock<Mutex<HashMap<String, Arc<Api>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -203,7 +211,18 @@ impl Api {
             drivers: opt!("SQLDriversW"),
             data_sources: opt!("SQLDataSourcesW"),
             _lib: lib,
+            len32: !cfg!(windows) && is_ibm_cli(path),
         })
+    }
+
+    /// A length or indicator as the driver wrote it: with a 32-bit SQLLEN only the low 4 bytes are its own (the
+    /// variable was zeroed before the call), and -1 / -4 arrive as 0xFFFFFFFF / 0xFFFFFFFC there.
+    fn len(&self, raw: isize) -> isize {
+        if self.len32 {
+            raw as i32 as isize
+        } else {
+            raw
+        }
     }
 
     /// Mensajes de diagnóstico de un handle.
@@ -528,9 +547,12 @@ impl Stmt {
     }
 
     pub fn row_count(&self) -> i64 {
-        let mut n: isize = -1;
-        unsafe { (self.api.row_count)(self.h, &mut n) };
-        n as i64
+        let mut n: isize = 0;
+        let rc = unsafe { (self.api.row_count)(self.h, &mut n) };
+        if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
+            return -1;
+        }
+        self.api.len(n) as i64
     }
 
     /// Avanza al siguiente resultado del lote. Devuelve false si no hay más.
@@ -688,7 +710,13 @@ impl Stmt {
             for r in 0..n {
                 let mut row = Vec::with_capacity(self.plans.len());
                 for (c, p) in self.plans.iter().enumerate() {
-                    let ind = b.inds[c][r];
+                    // A 32-bit SQLLEN driver fills the indicator array 4 bytes per row.
+                    let ind = if self.api.len32 {
+                        // SAFETY: the array holds `rows` isize values, room for `rows` i32 ones; r < fetched <= rows.
+                        unsafe { *(b.inds[c].as_ptr() as *const i32).add(r) as isize }
+                    } else {
+                        b.inds[c][r]
+                    };
                     let data = &b.bufs[c][r * p.elem..(r + 1) * p.elem];
                     row.push(decode(p, data, ind));
                 }
@@ -731,6 +759,7 @@ impl Stmt {
                         if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
                             bail!(self.api.diag(SQL_HANDLE_STMT, self.h));
                         }
+                        let ind = self.api.len(ind);
                         if ind == SQL_NULL_DATA {
                             return Ok(Cell::Null);
                         }
@@ -766,6 +795,7 @@ impl Stmt {
                     if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO && rc != SQL_NO_DATA {
                         bail!(self.api.diag(SQL_HANDLE_STMT, self.h));
                     }
+                    let ind = self.api.len(ind);
                     if ind == SQL_NULL_DATA {
                         return Ok(Cell::Null);
                     }
@@ -790,7 +820,7 @@ impl Stmt {
                     if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
                         bail!(self.api.diag(SQL_HANDLE_STMT, self.h));
                     }
-                    Ok(decode(p, &buf[..p.elem], ind))
+                    Ok(decode(p, &buf[..p.elem], self.api.len(ind)))
                 }
             }
         }
