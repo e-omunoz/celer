@@ -73,6 +73,24 @@ const viaCore = await js(`
   return out.results[0].rows[0][0];
 `);
 check("every new session runs it (application_name set)", viaCore === "celer-startup-check", viaCore);
+const afterReconnect = await js(`
+  const s = await inv('open_session', { connId: ${JSON.stringify(connId)}, password: null });
+  const killer = await inv('open_session', { connId: ${JSON.stringify(connId)}, password: null });
+  try {
+    const pid = (await inv('execute', { sessionId: s.sessionId, sql: "SELECT pg_backend_pid()", fetch: 1 })).results[0].rows[0][0];
+    await inv('execute', { sessionId: killer.sessionId, sql: "SELECT pg_terminate_backend(" + pid + ")", fetch: 1 });
+    await sleep(300);
+    // The lost connection is reopened (the first try may report the loss).
+    let value = null;
+    for (let i = 0; i < 2 && value === null; i++) {
+      try { value = (await inv('execute', { sessionId: s.sessionId, sql: "SELECT current_setting('application_name'), pg_backend_pid() <> " + pid, fetch: 1 })).results[0].rows[0]; } catch (e) { value = null; }
+    }
+    return value;
+  } finally {
+    await inv('close_session', { sessionId: s.sessionId }); await inv('close_session', { sessionId: killer.sessionId });
+  }
+`);
+check("a reopened connection runs it again", afterReconnect?.[0] === "celer-startup-check" && afterReconnect?.[1] === true, JSON.stringify(afterReconnect));
 await js(`const list = await inv('list_connections'); const c = list.find((x) => x.id === ${JSON.stringify(connId)}); await inv('save_connection', { cfg: { ...c, password: null, startupSql: "" } });`);
 await js(`
   const list = await inv('list_connections'); const c = list.find((x) => x.id === ${JSON.stringify(connId)});

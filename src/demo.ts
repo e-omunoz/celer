@@ -618,6 +618,9 @@ export function createDemoBackend(): Backend {
       if (hit !== undefined) return { text: hit, encoding: "utf-8" };
       throw new Error("En el navegador abre el script con el botón Abrir");
     },
+    async readSpreadsheet() {
+      throw new Error("Las hojas de cálculo se importan en la aplicación de escritorio; en el navegador, guárdala como CSV");
+    },
     async writeTextFile(path, content) {
       textFiles.set(path, content);
       download(path.split(/[\\/]/).pop() || "script.sql", content, "text/plain");

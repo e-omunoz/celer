@@ -48,6 +48,8 @@ export interface Backend {
   saveJson(name: "settings" | "workspace", value: unknown): Promise<void>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
+  /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */
+  readSpreadsheet(path: string, sheet?: string): Promise<{ sheets: string[]; sheet: string; rows: string[][] }>;
   /** Writes in `encoding` (UTF-8 by default); returns the encoding used (UTF-8 when Windows-1252 cannot hold the text). */
   writeTextFile(path: string, content: string, encoding?: string): Promise<string>;
   odbcDrivers(): Promise<string[]>;
@@ -118,6 +120,7 @@ function tauriBackend(): Backend {
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value) => invoke("save_json", { name, value }),
     readTextFile: (path) => invoke("read_text_file", { path }),
+    readSpreadsheet: (path, sheet) => invoke("read_spreadsheet", { path, sheet: sheet ?? null }),
     writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),
     odbcDrivers: () => invoke("odbc_drivers"),
     odbcDsns: () => invoke("odbc_dsns"),
@@ -148,6 +151,13 @@ function tauriBackend(): Backend {
       return picked ?? null;
     },
     pickOpenPath: async (filters) => {
+      // End-to-end checks (dev/*-check.mjs) hand over the file the native dialog would have picked. Nothing a
+      // script in the page could not already do through invoke().
+      const scripted = (window as { __celerNextOpenPath?: string }).__celerNextOpenPath;
+      if (scripted) {
+        delete (window as { __celerNextOpenPath?: string }).__celerNextOpenPath;
+        return scripted;
+      }
       const { open } = await import("@tauri-apps/plugin-dialog");
       const picked = await open({ multiple: false, directory: false, filters });
       return typeof picked === "string" ? picked : null;

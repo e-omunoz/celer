@@ -1,6 +1,6 @@
 import { FileUp, LoaderCircle } from "lucide-solid";
 import { createMemo, For, Show } from "solid-js";
-import { cancelImport, importer, parsed, pickImportFile, remap, runImport, setImporter } from "../importer";
+import { cancelImport, hasFile, importer, parsed, pickImportFile, pickSheet, remap, runImport, setImporter } from "../importer";
 import { ObjIcon } from "../icons";
 import { Dialog } from "./Modals";
 
@@ -20,36 +20,48 @@ export function ImportDialog() {
   return (
     <Dialog title={`Importar datos en ${importer.obj?.name ?? ""}`} wide class="import-dialog" onClose={cancelImport}>
       <Show
-        when={importer.text}
+        when={hasFile()}
         fallback={
           <button type="button" class="drop-zone" onClick={() => void pickImportFile()}>
             <FileUp size={26} />
-            <b>Elegir un fichero CSV o TSV</b>
-            <small>El separador y las cabeceras se detectan solos. Nada se escribe hasta que pulses «Importar».</small>
+            <b>Elegir un fichero CSV, JSON o Excel</b>
+            <small>CSV / TSV, JSON (lista de objetos o JSON Lines), Excel (.xlsx, .xls) y OpenDocument (.ods). Nada se escribe hasta que pulses «Importar».</small>
           </button>
         }
       >
         <div class="import-file">
           <ObjIcon kind="file" size={16} />
           <b>{importer.fileName}</b>
-          <span class="muted">{data().rows.length.toLocaleString()} filas · {data().header.length} columnas</span>
+          <span class="muted">{data().rows.length.toLocaleString()} {data().rows.length === 1 ? "fila" : "filas"} · {data().header.length} {data().header.length === 1 ? "columna" : "columnas"}</span>
           <span class="spacer" />
           <button type="button" class="btn tiny" disabled={importer.running} onClick={() => void pickImportFile()}>Cambiar fichero</button>
         </div>
         <div class="import-opts">
-          <div class="field">
-            <span>Separador</span>
-            <div class="seg">
-              <For each={DELIMITERS}>
-                {([value, label]) => (
-                  <button type="button" classList={{ on: importer.delimiter === value }} onClick={() => { setImporter("delimiter", value); remap(); }}>
-                    {label}
-                  </button>
-                )}
-              </For>
+          <Show when={importer.format === "csv"}>
+            <div class="field">
+              <span>Separador</span>
+              <div class="seg">
+                <For each={DELIMITERS}>
+                  {([value, label]) => (
+                    <button type="button" classList={{ on: importer.delimiter === value }} onClick={() => { setImporter("delimiter", value); remap(); }}>
+                      {label}
+                    </button>
+                  )}
+                </For>
+              </div>
             </div>
-          </div>
-          <label class="check"><input type="checkbox" checked={importer.hasHeader} onChange={(event) => { setImporter("hasHeader", event.currentTarget.checked); remap(); }} /> La primera fila son cabeceras</label>
+          </Show>
+          <Show when={importer.sheets.length > 1}>
+            <label class="field import-sheet">
+              <span>Hoja</span>
+              <select value={importer.sheet} disabled={importer.running} onChange={(event) => void pickSheet(event.currentTarget.value)}>
+                <For each={importer.sheets}>{(name) => <option value={name}>{name}</option>}</For>
+              </select>
+            </label>
+          </Show>
+          <Show when={!importer.keyedHeader}>
+            <label class="check"><input type="checkbox" checked={importer.hasHeader} onChange={(event) => { setImporter("hasHeader", event.currentTarget.checked); remap(); }} /> La primera fila son cabeceras</label>
+          </Show>
           <label class="check"><input type="checkbox" checked={importer.emptyAsNull} onChange={(event) => setImporter("emptyAsNull", event.currentTarget.checked)} /> Campos vacíos como NULL</label>
         </div>
         <div class="import-map">

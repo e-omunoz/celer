@@ -725,7 +725,7 @@ function TablePane(props: { tab: TableTab }) {
               <span class="tag" title={conn()?.readOnly ? "Conexión de solo lectura" : props.tab.obj.kind === "view" ? "Las vistas no se editan" : "Sin clave primaria"}>solo lectura</span>
             </Show>
             <Show when={editable()}>
-              <button type="button" class="tb-icon" title="Importar CSV…" onClick={() => void startImport(props.tab.connId, props.tab.obj)}><Upload size={15} /></button>
+              <button type="button" class="tb-icon" title="Importar datos (CSV, JSON, Excel)…" onClick={() => void startImport(props.tab.connId, props.tab.obj)}><Upload size={15} /></button>
             </Show>
             <button type="button" class="tb-icon" title="Exportar con los filtros actuales…" disabled={!props.tab.baseSelect} onClick={() => startTableExport(props.tab.id)}><Download size={15} /></button>
             <button type="button" class="tb-icon" title="Panel de valor / registro" classList={{ on: state.inspectorOpen && state.inspectorMode !== "history" }} onClick={() => toggleInspector("record")}><PanelRight size={15} /></button>

@@ -278,7 +278,7 @@ export function Sidebar() {
         { label: "DDL en consola", run: () => void generateSql(connId, obj, "ddl") },
         { separator: true },
         { label: "Exportar datos…", icon: "download", run: () => void startObjectExport(connId, obj) },
-        ...(obj.kind === "table" ? [{ label: "Importar CSV…", icon: "upload", run: () => void startImport(connId, obj) }] : []),
+        ...(obj.kind === "table" ? [{ label: "Importar datos (CSV, JSON, Excel)…", icon: "upload", run: () => void startImport(connId, obj) }] : []),
         { label: "Copiar estructura para IA", icon: "ai", run: () => void copySchemaForAi(connId, obj) },
         { separator: true },
       );

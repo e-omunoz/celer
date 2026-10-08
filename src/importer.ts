@@ -3,78 +3,9 @@ import { api, errorText } from "./api";
 import { sqlLiteral } from "./sql";
 import { gib, kindOf, notify, reloadTable, state as appState } from "./state";
 import type { ObjectRef, TableColumn } from "./types";
+import { detectDelimiter, importFormat, parseCsv, parseJsonRows, type ImportFormat } from "./importFormats";
 
-/** RFC 4180 CSV parser (quotes, doubled quotes, CRLF, newlines inside quotes). */
-export function parseCsv(text: string, delimiter: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let quoted = false;
-  let i = 0;
-  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-  while (i < src.length) {
-    const c = src[i];
-    if (quoted) {
-      if (c === '"') {
-        if (src[i + 1] === '"') {
-          field += '"';
-          i += 2;
-          continue;
-        }
-        quoted = false;
-        i++;
-        continue;
-      }
-      field += c;
-      i++;
-      continue;
-    }
-    if (c === '"' && field === "") {
-      quoted = true;
-      i++;
-      continue;
-    }
-    if (c === delimiter) {
-      row.push(field);
-      field = "";
-      i++;
-      continue;
-    }
-    if (c === "\r" || c === "\n") {
-      row.push(field);
-      field = "";
-      if (row.length > 1 || row[0] !== "") rows.push(row);
-      row = [];
-      i += c === "\r" && src[i + 1] === "\n" ? 2 : 1;
-      continue;
-    }
-    field += c;
-    i++;
-  }
-  if (field !== "" || row.length) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
-}
-
-/** Picks the delimiter that splits the first lines most consistently. */
-export function detectDelimiter(text: string): string {
-  const sample = text.split(/\r?\n/).slice(0, 10).filter(Boolean);
-  let best = ",";
-  let bestScore = -1;
-  for (const delimiter of [",", ";", "\t", "|"]) {
-    const counts = sample.map((line) => line.split(delimiter).length - 1);
-    if (!counts.length || counts[0] === 0) continue;
-    const consistent = counts.every((count) => count === counts[0]);
-    const score = counts[0] * (consistent ? 2 : 1);
-    if (score > bestScore) {
-      bestScore = score;
-      best = delimiter;
-    }
-  }
-  return best;
-}
+export { detectDelimiter, importFormat, parseCsv, parseJsonRows, type ImportFormat };
 
 export interface ImportState {
   open: boolean;
@@ -84,6 +15,15 @@ export interface ImportState {
   columns: TableColumn[];
   quoted: string[];
   fileName: string;
+  /** The file's full path (to read another sheet of the same workbook). */
+  filePath: string;
+  format: ImportFormat;
+  /** JSON or a sheet, already as cells (CSV is parsed from `text`). */
+  grid: string[][];
+  /** JSON objects: the header comes from their keys, always. */
+  keyedHeader: boolean;
+  sheets: string[];
+  sheet: string;
   text: string;
   delimiter: string;
   hasHeader: boolean;
@@ -103,6 +43,12 @@ export const [importer, setImporter] = createStore<ImportState>({
   columns: [],
   quoted: [],
   fileName: "",
+  filePath: "",
+  format: "csv",
+  grid: [],
+  keyedHeader: false,
+  sheets: [],
+  sheet: "",
   text: "",
   delimiter: ",",
   hasHeader: true,
@@ -115,10 +61,15 @@ export const [importer, setImporter] = createStore<ImportState>({
 
 let cancelRequested = false;
 
+/** A file is loaded (CSV text, or JSON / sheet cells). */
+export function hasFile() {
+  return Boolean(importer.fileName);
+}
+
 export function parsed() {
-  if (!importer.text) return { header: [] as string[], rows: [] as string[][] };
-  const all = parseCsv(importer.text, importer.delimiter);
-  if (!importer.hasHeader) return { header: (all[0] ?? []).map((_, index) => `columna ${index + 1}`), rows: all };
+  if (!hasFile()) return { header: [] as string[], rows: [] as string[][] };
+  const all = importer.format === "csv" ? parseCsv(importer.text, importer.delimiter) : importer.grid;
+  if (!importer.hasHeader && !importer.keyedHeader) return { header: (all[0] ?? []).map((_, index) => `columna ${index + 1}`), rows: all };
   return { header: all[0] ?? [], rows: all.slice(1) };
 }
 
@@ -134,7 +85,7 @@ export async function startImport(connId: string, obj: ObjectRef) {
       if (obj.database) await api().useDatabase(opened.sessionId, obj.database).catch(() => {});
       const [columns, info] = await Promise.all([api().tableColumns(opened.sessionId, obj), api().objectSql(opened.sessionId, obj)]);
       const quoted = await api().quoteIdents(opened.sessionId, columns.map((col) => col.name));
-      setImporter({ open: true, connId, obj, qualified: info.qualified, columns, quoted, fileName: "", text: "", mapping: columns.map(() => -1), running: false, done: 0, total: 0 });
+      setImporter({ open: true, connId, obj, qualified: info.qualified, columns, quoted, fileName: "", filePath: "", format: "csv", grid: [], keyedHeader: false, sheets: [], sheet: "", text: "", mapping: columns.map(() => -1), running: false, done: 0, total: 0 });
     } finally {
       void api().closeSession(opened.sessionId).catch(() => {});
     }
@@ -144,12 +95,39 @@ export async function startImport(connId: string, obj: ObjectRef) {
 }
 
 export async function pickImportFile() {
-  const path = await api().pickOpenPath([{ name: "CSV / TSV", extensions: ["csv", "tsv", "txt"] }]);
+  const path = await api().pickOpenPath([
+    { name: "Datos (CSV, JSON, Excel, OpenDocument)", extensions: ["csv", "tsv", "txt", "json", "jsonl", "ndjson", "xlsx", "xlsm", "xlsb", "xls", "ods"] },
+    { name: "CSV / TSV", extensions: ["csv", "tsv", "txt"] },
+    { name: "JSON", extensions: ["json", "jsonl", "ndjson"] },
+    { name: "Hojas de cálculo", extensions: ["xlsx", "xlsm", "xlsb", "xls", "ods"] },
+  ]);
   if (!path) return;
   try {
-    const { text } = await api().readTextFile(path);
-    const delimiter = path.toLowerCase().endsWith(".tsv") ? "\t" : detectDelimiter(text);
-    setImporter({ fileName: path.split(/[\\/]/).pop() ?? path, text, delimiter });
+    const fileName = path.split(/[\\/]/).pop() ?? path;
+    const format = importFormat(path);
+    if (format === "sheet") {
+      const book = await api().readSpreadsheet(path);
+      setImporter({ fileName, filePath: path, format, grid: book.rows, sheets: book.sheets, sheet: book.sheet, keyedHeader: false, hasHeader: true, text: "" });
+    } else if (format === "json") {
+      const { text } = await api().readTextFile(path);
+      const json = parseJsonRows(text);
+      setImporter({ fileName, filePath: path, format, grid: json.rows, sheets: [], sheet: "", keyedHeader: json.objects, hasHeader: true, text: "" });
+    } else {
+      const { text } = await api().readTextFile(path);
+      const delimiter = path.toLowerCase().endsWith(".tsv") ? "\t" : detectDelimiter(text);
+      setImporter({ fileName, filePath: path, format, grid: [], sheets: [], sheet: "", keyedHeader: false, text, delimiter });
+    }
+    remap();
+  } catch (err) {
+    notify(errorText(err), "error");
+  }
+}
+
+/** Another sheet of the workbook. */
+export async function pickSheet(sheet: string) {
+  try {
+    const book = await api().readSpreadsheet(importer.filePath, sheet);
+    setImporter({ grid: book.rows, sheet: book.sheet });
     remap();
   } catch (err) {
     notify(errorText(err), "error");

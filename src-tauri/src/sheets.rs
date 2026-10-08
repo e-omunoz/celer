@@ -78,4 +78,19 @@ mod tests {
         assert_eq!(sheet.rows[0], vec!["id", "nombre", "alta", "activo", "saldo"]);
         assert_eq!(sheet.rows[1], vec!["1", "Ana Ruiz", "2024-03-15", "true", "12.5"]);
     }
+
+    #[test]
+    fn reads_the_import_fixture_by_sheet_name() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../dev/fixtures/import/clientes.xlsx");
+        let first = read(path, None).unwrap();
+        assert_eq!(first.sheets, vec!["Notas", "Clientes"]);
+        assert_eq!(first.rows.len(), 1);
+        let sheet = read(path, Some("Clientes")).unwrap();
+        assert_eq!(sheet.rows.len(), 4);
+        assert_eq!(sheet.rows[1], vec!["1", "Ana Ruiz", "2024-03-15", "true", "12.5"]);
+        assert_eq!(sheet.rows[2], vec!["2", "Luis Peña", "2023-03-15", "false", ""]);
+        assert_eq!(sheet.rows[3], vec!["3", "Marta Gil", "", "true", "-3"]);
+        // An unknown sheet name falls back to the first one.
+        assert_eq!(read(path, Some("Nope")).unwrap().sheet, "Notas");
+    }
 }
