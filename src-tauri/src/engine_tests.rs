@@ -776,3 +776,158 @@ fn informix_speed() {
     println!("\n{text}\n");
     let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-informix-speed.txt"), text);
 }
+
+// ───────────────────────────────────────────────────────────────── reconnection and the pool (guard.rs)
+
+use crate::guard::{Connector, Guarded, Opts, RECOVERED};
+
+/// A watched session, as the interface opens them (`key` "" = without the generic pool).
+fn guarded(kind: DbKind, connect: &Connector, key: &str, database: &str) -> Guarded {
+    Guarded::open(connect.clone(), Opts { kind, owner: format!("engine-test-{key}"), key: key.into(), database: database.into(), autocommit: true }).expect("sesión vigilada")
+}
+
+/// Ends a SQL Server session from another one (KILL), as a DBA or a failover would; returns its SPID.
+fn mssql_kill(admin: &mut dyn Driver, g: &mut Guarded) -> String {
+    let spid = scalar(g, "SELECT @@SPID");
+    admin.execute(&format!("KILL {spid}"), 10).unwrap_or_else(|e| panic!("KILL {spid}: {e}"));
+    std::thread::sleep(Duration::from_millis(500));
+    spid
+}
+
+/// A session killed on the server comes back on its own when nothing would be lost (the read runs again, the output
+/// says so), says so when a transaction or #temp tables went with it, never repeats a write, and is checked before
+/// use after a pause.
+#[test]
+fn mssql_reconnects() {
+    let Some(cfg) = mssql_cfg("tempdb") else { return };
+    let Some(mut admin) = mssql("master") else { return };
+    let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mssql::MssqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let mut g = guarded(DbKind::Mssql, &connect, "", "tempdb");
+
+    let spid = mssql_kill(&mut admin, &mut g);
+    let t0 = Instant::now();
+    let out = g.execute("SELECT @@SPID, DB_NAME()", 10).unwrap_or_else(|e| panic!("tras KILL: {e}"));
+    eprintln!("SQL Server, sesión terminada con KILL: {} ms; {:?}", t0.elapsed().as_millis(), out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), spid, "otra conexión");
+    assert_eq!(txt(&out.results[0].rows[0][1]), "tempdb", "en la misma base");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{:?}", out.messages);
+
+    // A transaction and a #temp table are never lost in silence.
+    let out = g.execute("BEGIN TRAN; CREATE TABLE #celer_rc (a int)", 10).unwrap();
+    assert!(out.in_transaction);
+    mssql_kill(&mut admin, &mut g);
+    let e = g.execute("SELECT 1", 10).unwrap_err().to_string();
+    eprintln!("con transacción: {e}");
+    assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción"), "{e}");
+    assert_eq!(scalar(&mut g, "SELECT @@TRANCOUNT"), "0", "the session goes on, without the transaction");
+
+    // A write is not repeated: it is not known whether it ran.
+    g.execute("IF OBJECT_ID('dbo.celer_rc') IS NOT NULL DROP TABLE dbo.celer_rc; CREATE TABLE dbo.celer_rc (a int)", 10).unwrap();
+    mssql_kill(&mut admin, &mut g);
+    let e = g.execute("INSERT INTO dbo.celer_rc VALUES (1)", 10).unwrap_err().to_string();
+    assert!(e.starts_with("CONN_RESET:"), "{e}");
+    assert_eq!(scalar(&mut g, "SELECT COUNT(*) FROM dbo.celer_rc"), "0");
+
+    // After a pause (suspension, VPN), the session is checked before use: the statement runs once, on the new one.
+    let spid = mssql_kill(&mut admin, &mut g);
+    g.pretend_idle(Duration::from_secs(300));
+    let out = g.execute("SELECT @@SPID", 10).unwrap();
+    assert!(out.messages.first().is_some_and(|m| m.starts_with(RECOVERED) && m.contains("sin usarse")), "{:?}", out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), spid);
+
+    // The interface's check (after the computer wakes up) reconnects too.
+    mssql_kill(&mut admin, &mut g);
+    let health = g.health(true);
+    assert!(health.ok && health.reconnected && health.lost.is_empty(), "{health:?}");
+    assert_eq!(scalar(&mut g, "SELECT 1"), "1");
+    g.execute("DROP TABLE dbo.celer_rc", 10).unwrap();
+}
+
+/// Ends an Informix session from outside, as a DBA would with `onmode -z`: through the SQL admin API
+/// (sysadmin:task) or with onmode in the container (CELER_INFORMIX_CONTAINER). false when neither works here.
+fn informix_kill(admin: &mut dyn Driver, sid: &str) -> bool {
+    let done = match admin.execute(&format!("EXECUTE FUNCTION task('onmode', 'z', '{sid}')"), 10) {
+        Ok(out) => {
+            eprintln!("task('onmode', 'z', {sid}): {:?}", out.results.first().map(|r| r.rows.iter().map(|row| row.iter().map(txt).collect::<Vec<_>>()).collect::<Vec<_>>()));
+            true
+        }
+        Err(e) => {
+            eprintln!("sysadmin:task no disponible ({e}); se prueba onmode en el contenedor");
+            match std::env::var("CELER_INFORMIX_CONTAINER") {
+                Ok(container) => {
+                    let onmode = format!("onmode -z {sid}");
+                    Command::new("docker").args(["exec", container.as_str(), "bash", "-lc", onmode.as_str()]).status().is_ok_and(|s| s.success())
+                }
+                Err(_) => false,
+            }
+        }
+    };
+    std::thread::sleep(Duration::from_millis(1500));
+    done
+}
+
+/// The same for Informix (DRDA and JDBC): reconnection after `onmode -z`, the transaction never lost in silence, and
+/// the generic pool (a session closed without state leaves its connection to the next one).
+fn informix_reconnect_suite(via: &str, connect: &Connector, admin: &mut dyn Driver) {
+    const SID: &str = "SELECT DBINFO('sessionid') FROM systables WHERE tabid = 1";
+    let mut g = guarded(DbKind::Informix, connect, "", "celer");
+    let sid = scalar(&mut g, SID);
+    if !informix_kill(admin, &sid) {
+        eprintln!("{via}: no se puede terminar una sesión en este servidor; sin prueba de reconexión");
+        return;
+    }
+    let t0 = Instant::now();
+    let out = g.execute(SID, 10).unwrap_or_else(|e| panic!("{via}: tras onmode -z → {e}"));
+    eprintln!("{via}: sesión terminada con onmode -z: {} ms; {:?}", t0.elapsed().as_millis(), out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), sid, "{via}: otra sesión");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{via}: {:?}", out.messages);
+
+    // Manual mode with work done: the transaction is lost with the session, and that is said.
+    g.set_autocommit(false).unwrap();
+    let sid = scalar(&mut g, SID);
+    assert!(informix_kill(admin, &sid));
+    let e = g.execute("SELECT COUNT(*) FROM systables", 10).unwrap_err().to_string();
+    eprintln!("{via}, con transacción: {e}");
+    assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción"), "{via}: {e}");
+    assert_eq!(scalar(&mut g, "SELECT 1 FROM systables WHERE tabid = 1"), "1", "{via}: the session goes on (still in manual mode)");
+    g.rollback().unwrap();
+    g.set_autocommit(true).unwrap();
+    drop(g);
+
+    // The pool: no new login for the next session of the same settings, unless the closed one had state.
+    let key = format!("engine-test-informix-{via}");
+    let mut a = guarded(DbKind::Informix, connect, &key, "celer");
+    let sid_a = scalar(&mut a, SID);
+    drop(a);
+    let t0 = Instant::now();
+    let mut b = guarded(DbKind::Informix, connect, &key, "celer");
+    eprintln!("{via}: sesión nueva con la conexión libre de otra: {} ms", t0.elapsed().as_millis());
+    assert!(b.reused, "{via}: la conexión libre se reutiliza");
+    assert_eq!(scalar(&mut b, SID), sid_a, "{via}: misma sesión del servidor");
+    b.set_autocommit(false).unwrap();
+    drop(b);
+    let c = guarded(DbKind::Informix, connect, &key, "celer");
+    assert!(!c.reused, "{via}: una sesión en modo manual no deja su conexión");
+    drop(c);
+    crate::guard::pool_forget(&format!("engine-test-{key}"));
+}
+
+#[test]
+fn informix_reconnects() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::odbc_driver::OdbcDriver::connect(admin_cfg, lib.clone()).expect("conexión a sysadmin");
+    let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+    informix_reconnect_suite("DRDA", &connect, &mut admin);
+}
+
+#[test]
+fn informix_jdbc_reconnects() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
+    let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
+    informix_reconnect_suite("JDBC", &connect, &mut admin);
+}

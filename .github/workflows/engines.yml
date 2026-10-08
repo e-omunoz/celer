@@ -94,6 +94,8 @@ jobs:
           CELER_JDBC_JARS: ${{ github.workspace }}/jdbc/jdbc-15.0.1.4.jar:${{ github.workspace }}/jdbc/bson-3.8.0.jar
           CELER_REQUIRE_BRIDGE: "1"
           CELER_NODE: node
+          # Reconnection tests end sessions with onmode -z when the SQL admin API is not there.
+          CELER_INFORMIX_CONTAINER: ifx
         run: cargo test --lib engine_tests -- --nocapture --test-threads=1
 
       - name: Execution plans and server logs
