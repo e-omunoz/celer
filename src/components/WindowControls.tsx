@@ -1,7 +1,6 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { isTauri } from "../api";
-import { beforeClose } from "../state";
-import { installOnClose } from "../update";
+import { windowCloseRequested } from "../windows";
 
 type AppWindow = Awaited<ReturnType<typeof getWindow>>;
 
@@ -23,10 +22,10 @@ export function WindowControls() {
       win = w;
       setMaximized(await w.isMaximized());
       unlisten = await w.onResized(async () => setMaximized(await w.isMaximized()));
-      // Covers our button, Alt+F4 and the taskbar: unsaved work is confirmed and the workspace flushed.
+      // Covers our button, Alt+F4 and the taskbar: unsaved work is confirmed and the workspace flushed; with other
+      // windows open, what happens to this one's tabs (windows.ts).
       unlistenClose = await w.onCloseRequested(async (event) => {
-        if (!(await beforeClose())) event.preventDefault();
-        else await installOnClose();
+        if (!(await windowCloseRequested())) event.preventDefault();
       });
     });
     onCleanup(() => {

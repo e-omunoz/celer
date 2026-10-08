@@ -14,6 +14,7 @@ export const DEFAULT_KEYS: Record<string, string[]> = {
   rollback: ["Ctrl+Alt+Shift+R"],
   "new-console": ["Ctrl+Shift+L"],
   "new-conn": ["Ctrl+Alt+N"],
+  "new-window": ["Ctrl+Shift+N"],
   open: ["Ctrl+O"],
   save: ["Ctrl+S"],
   "save-as": ["Ctrl+Shift+S"],

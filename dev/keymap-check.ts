@@ -1,6 +1,6 @@
 // Checks for src/keymap.ts: node --experimental-strip-types dev/keymap-check.ts
 import assert from "node:assert/strict";
-import { chordLabel, chordOf, chordParts, chordsFor, codeMirrorKey, DEFAULT_KEYS, normalizeChord, setAltGrDown } from "../src/keymap.ts";
+import { chordLabel, chordOf, chordParts, chordsFor, codeMirrorKey, DEFAULT_KEYS, EDITOR_RESERVED, normalizeChord, setAltGrDown } from "../src/keymap.ts";
 
 const ev = (key: string, code: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean; altGraph?: boolean } = {}) => ({
   key,
@@ -65,6 +65,7 @@ assert.deepEqual(chordsFor("run", { run: ["ctrl+r"] }), ["Ctrl+R"]);
 assert.deepEqual(chordsFor("run", { run: [] }), []);
 assert.deepEqual(chordsFor("save", { run: [] }), DEFAULT_KEYS.save);
 assert.deepEqual(chordsFor("guide", {}), []);
+assert.deepEqual(chordsFor("new-window", {}), ["Ctrl+Shift+N"], "a new window, as in browsers and editors");
 
 // Display and CodeMirror notation.
 assert.deepEqual(chordParts("Ctrl+Shift+Enter"), ["Ctrl", "Mayús", "Intro"]);
@@ -83,6 +84,7 @@ for (const [id, keys] of Object.entries(DEFAULT_KEYS)) {
     assert.ok(!seen.has(k), `${k} is the default of both ${seen.get(k)} and ${id}`);
     seen.set(k, id);
     assert.equal(normalizeChord(k), k, `default ${k} is normalized`);
+    assert.ok(!(k in EDITOR_RESERVED), `${k} (${id}) is a key the editor keeps for itself`);
   }
 }
 

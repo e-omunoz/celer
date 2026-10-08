@@ -1,4 +1,4 @@
-import { BookMarked, Braces, Code2, Copy, History, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
+import { BookMarked, Braces, Code2, Copy, ExternalLink, History, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
 import { AiPanel } from "./AiPanel";
 import { LibraryView, relative } from "./LibraryView";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
@@ -6,6 +6,8 @@ import { withShortcut } from "../commands";
 import { prettyXml } from "../prettyXml";
 import { cellText, isNullCell, prettyJson } from "../sql";
 import { clearHistory, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory } from "../state";
+import { isTauri } from "../api";
+import { detachPanel } from "../windows";
 
 export function Inspector() {
   return (
@@ -19,6 +21,9 @@ export function Inspector() {
           <button type="button" classList={{ on: state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => openInspector("ai")}><Sparkles size={13} /><span class="seg-label">IA</span></button>
         </div>
         <span class="spacer" />
+        <Show when={isTauri() && (state.inspectorMode === "library" || state.inspectorMode === "ai")}>
+          <button type="button" class="icon-btn" title="Abrir en su propia ventana" onClick={() => void detachPanel(state.inspectorMode === "ai" ? "ai" : "library")}><ExternalLink size={14} /></button>
+        </Show>
         <button type="button" class="icon-btn" title="Cerrar panel" onClick={() => setState("inspectorOpen", false)}><X size={14} /></button>
       </div>
       <Switch>

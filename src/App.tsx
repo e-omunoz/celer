@@ -13,6 +13,8 @@ import { Companion } from "./gib/Companion";
 import { Splash } from "./gib/Splash";
 import { Onboarding } from "./components/Onboarding";
 import { revealWindow, WindowControls } from "./components/WindowControls";
+import { PanelApp, WindowAskDialog } from "./components/Windows";
+import { gibHere, openNewWindow, panelKind, prepareWindow, startWindows, windowLabel } from "./windows";
 import { EngineIcon } from "./icons";
 import { loadLibrary } from "./library";
 import {
@@ -28,6 +30,7 @@ import {
   openPalette,
   openQuery,
   saveSettings,
+  setSplashDone,
   setState,
   state,
   toggleInspector,
@@ -39,6 +42,8 @@ import { migration, openMigration } from "./migrate";
 import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
 
 export default function App() {
+  // A panel in a window of its own (library, assistant, plan, diagram, comparison).
+  if (panelKind) return <PanelApp />;
   // Table tabs restored from the last session load (and connect) the first time they are shown.
   createEffect(() => {
     const id = state.ready ? state.activeTabId : "";
@@ -46,12 +51,16 @@ export default function App() {
     if (id) untrack(() => loadIfRestored(id));
   });
   onMount(() => {
+    startWindows();
+    // Gib's start-up hop is the main window's; another window starts with him where he is.
+    if (windowLabel !== "main") setSplashDone(true);
     void boot().then(() => {
-      startUpdateChecks();
+      if (windowLabel === "main") startUpdateChecks();
       // The library early: consoles opened from it show whether they have unsaved changes, and the palette lists it.
       void loadLibrary();
     });
-    revealWindow();
+    // Shown once it is where it was last time (and painted).
+    void prepareWindow().then(revealWindow);
     // Window in the background: Gib's idle loops pause (App.css, data-focus).
     const focus = () => (document.documentElement.dataset.focus = document.hasFocus() && !document.hidden ? "in" : "out");
     focus();
@@ -136,7 +145,8 @@ export default function App() {
       <Modals />
       <Show when={update.dialogOpen}><UpdateDialog /></Show>
       <Show when={migration.open}><MigrateDialog /></Show>
-      <Splash />
+      <WindowAskDialog />
+      <Show when={windowLabel === "main"}><Splash /></Show>
       <Show when={state.onboardingOpen}><Onboarding /></Show>
     </div>
   );
@@ -157,6 +167,7 @@ function TopBar() {
           openMenu(event, [
             { label: "Nueva conexión…", hint: "Ctrl+Alt+N", run: () => openConnDialog() },
             { label: "Nueva consola", hint: "Ctrl+Mayús+L", run: () => openQuery(activeTab()?.connId ?? state.connections[0]?.id ?? null) },
+            { label: "Nueva ventana", hint: "Ctrl+Mayús+N", run: () => void openNewWindow() },
             { separator: true },
             { label: "Importar conexiones de DBeaver o DbVisualizer…", run: () => void openMigration() },
           ])
@@ -245,7 +256,7 @@ function StatusBar() {
           </span>
         </button>
       </Show>
-      <Companion />
+      <Show when={gibHere()}><Companion /></Show>
     </footer>
   );
 }

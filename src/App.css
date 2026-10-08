@@ -1816,3 +1816,22 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .dc-head { margin: 0 0 8px; padding: 0; border-bottom: 0; }
 .dc-grid { height: min(52vh, 460px); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; }
 .dc-grid > * { flex: 1; min-width: 0; }
+
+/* ============================================================================
+   Several windows: a tab from another window, panels in a window of their own
+   ========================================================================== */
+
+/* A tab dragged out of another Celer window can be dropped on this tab bar. */
+.tabbar.drop-in { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); box-shadow: inset 0 -2px 0 var(--accent); }
+/* The comparisons' "own window" button after the two sides. */
+.sc-sides { grid-auto-flow: column; grid-auto-columns: auto; }
+
+.panel-window .panel-top { height: 36px; }
+.panel-window .brand { font-size: 12.5px; font-weight: 500; }
+.panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); }
+.panel-body > * { flex: 1; min-height: 0; }
+/* A diagram or a comparison fills its window instead of covering an app that is not there. */
+.panel-body > .er-view { position: static; inset: auto; z-index: auto; animation: none; }
+.panel-body > .scrim { display: none; }
+.panel-body > .dialog { position: static; transform: none; width: auto; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; animation: none; overflow: auto; }
+.panel-body > .dialog .dc-grid { height: auto; flex: 1; min-height: 240px; }
