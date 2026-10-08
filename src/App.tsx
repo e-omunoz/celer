@@ -2,7 +2,8 @@ import { ArrowDownToLine, Database, History, Moon, PanelLeft, PanelRight, Plus, 
 import { createEffect, onCleanup, onMount, Show, untrack } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
-import { handleGlobalKey } from "./commands";
+import { handleGlobalKey, withShortcut } from "./commands";
+import { trackAltGr } from "./keymap";
 import { Inspector } from "./components/Inspector";
 import { Modals } from "./components/Modals";
 import { ContextMenu, Palette, Toasts } from "./components/Overlays";
@@ -72,9 +73,11 @@ export default function App() {
       if (!target?.closest("input, textarea, .cm-editor")) event.preventDefault();
     };
     window.addEventListener("contextmenu", blockMenu);
+    const stopAltGr = trackAltGr(window);
     onCleanup(() => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("contextmenu", blockMenu);
+      stopAltGr();
     });
   });
 
@@ -83,17 +86,17 @@ export default function App() {
       <TopBar />
       <div class="main">
         <nav class="stripe">
-          <button type="button" class="stripe-btn" classList={{ on: state.explorerOpen }} title="Explorador (Alt+1)" onClick={() => setState("explorerOpen", !state.explorerOpen)}>
+          <button type="button" class="stripe-btn" classList={{ on: state.explorerOpen }} title={withShortcut("Explorador", "toggle-explorer")} onClick={() => setState("explorerOpen", !state.explorerOpen)}>
             <Database size={17} />
           </button>
-          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "history" }} title="Historial (Ctrl+Alt+E)" onClick={() => toggleInspector("history")}>
+          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "history" }} title={withShortcut("Historial", "history")} onClick={() => toggleInspector("history")}>
             <History size={17} />
           </button>
-          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "ai" }} title="Asistente IA (Ctrl+Alt+I)" onClick={() => toggleInspector("ai")}>
+          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => toggleInspector("ai")}>
             <Sparkles size={17} />
           </button>
           <span class="spacer" />
-          <button type="button" class="stripe-btn" title="Ajustes (Ctrl+Alt+S)" onClick={() => setState("settingsOpen", true)}>
+          <button type="button" class="stripe-btn" title={withShortcut("Ajustes", "settings")} onClick={() => setState("settingsOpen", true)}>
             <Settings2 size={17} />
           </button>
         </nav>
@@ -152,10 +155,10 @@ function TopBar() {
       <button type="button" class="top-icon" title={isLightTheme() ? "Tema oscuro" : "Tema claro"} onClick={() => void saveSettings({ theme: isLightTheme() ? "dark" : "light" })}>
         <Show when={isLightTheme()} fallback={<Sun size={16} />}><Moon size={16} /></Show>
       </button>
-      <button type="button" class="top-icon" classList={{ on: state.explorerOpen }} title="Explorador (Alt+1)" onClick={() => setState("explorerOpen", !state.explorerOpen)}>
+      <button type="button" class="top-icon" classList={{ on: state.explorerOpen }} title={withShortcut("Explorador", "toggle-explorer")} onClick={() => setState("explorerOpen", !state.explorerOpen)}>
         <PanelLeft size={16} />
       </button>
-      <button type="button" class="top-icon" classList={{ on: state.inspectorOpen }} title="Panel derecho (Alt+7)" onClick={() => (state.inspectorOpen ? setState("inspectorOpen", false) : toggleInspector("value"))}>
+      <button type="button" class="top-icon" classList={{ on: state.inspectorOpen }} title={withShortcut("Panel derecho", "toggle-inspector")} onClick={() => (state.inspectorOpen ? setState("inspectorOpen", false) : toggleInspector("value"))}>
         <PanelRight size={16} />
       </button>
       <WindowControls />

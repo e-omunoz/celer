@@ -938,7 +938,10 @@ impl Driver for OdbcDriver {
     }
 
     fn use_database(&mut self, db: &str) -> Result<()> {
-        if db == self.database {
+        // Informix changes database by reconnecting: not when the session is already there (asked to the server,
+        // since a DATABASE statement run by the user also moves it).
+        if self.dialect == Dialect::Informix && self.current_database().is_ok_and(|current| current == db) {
+            self.database = db.to_string();
             return Ok(());
         }
         if self.dialect == Dialect::Generic {

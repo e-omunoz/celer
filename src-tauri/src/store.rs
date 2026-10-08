@@ -164,10 +164,23 @@ impl Store {
         }
     }
 
+    /// The JSON file `name`, or Null when it does not exist. A file that does not parse is kept aside as
+    /// `name.unreadable-<time>` (the next save would otherwise overwrite what it held) and reads as Null.
     pub fn load_json(&self, name: &str) -> serde_json::Value {
-        self.read(name)
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(serde_json::Value::Null)
+        let Some(text) = self.read(name) else {
+            return serde_json::Value::Null;
+        };
+        match serde_json::from_str(&text) {
+            Ok(value) => value,
+            Err(_) => {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let _ = fs::rename(self.path(name), self.path(&format!("{name}.unreadable-{stamp}")));
+                serde_json::Value::Null
+            }
+        }
     }
 
     pub fn add_history(&self, e: &HistoryEntry) -> Result<()> {
@@ -221,5 +234,25 @@ impl Store {
     pub fn clear_history(&self) -> Result<()> {
         let _ = fs::remove_file(self.path("history.jsonl"));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+
+    #[test]
+    fn an_unreadable_json_file_is_kept_aside() {
+        let dir = std::env::temp_dir().join(format!("celer-store-{}", std::process::id()));
+        let store = Store::new(dir.clone());
+        std::fs::write(dir.join("library.json"), "{ \"scripts\": [ broken").unwrap();
+        assert!(store.load_json("library.json").is_null());
+        assert!(!dir.join("library.json").exists(), "the broken file is not left to be overwritten");
+        let kept = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("library.json.unreadable-"));
+        assert!(kept, "it is kept next to it");
+        std::fs::write(dir.join("ok.json"), "{\"a\":1}").unwrap();
+        assert_eq!(store.load_json("ok.json")["a"], 1);
+        assert!(store.load_json("missing.json").is_null());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

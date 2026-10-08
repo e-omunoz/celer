@@ -40,6 +40,11 @@ fn cell_text(cell: &Data) -> String {
         Data::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("{}", *f as i64),
         Data::Float(f) => f.to_string(),
         Data::Bool(b) => b.to_string(),
+        // A time of day or a duration (a value under one day, or a [h]:mm format) is not a date in 1899.
+        Data::DateTime(d) if d.is_duration() || (0.0..1.0).contains(&d.as_f64()) => {
+            let secs = (d.as_f64() * 86_400.0).round() as i64;
+            format!("{:02}:{:02}:{:02}", secs / 3600, secs % 3600 / 60, secs % 60)
+        }
         Data::DateTime(d) => match d.as_datetime() {
             Some(dt) if dt.time() == chrono::NaiveTime::MIN => dt.date().format("%Y-%m-%d").to_string(),
             Some(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -69,14 +74,17 @@ mod tests {
         ws.write_datetime_with_format(1, 2, &rust_xlsxwriter::ExcelDateTime::from_ymd(2024, 3, 15).unwrap(), &date).unwrap();
         ws.write_boolean(1, 3, true).unwrap();
         ws.write_number(1, 4, 12.5).unwrap();
+        let time = rust_xlsxwriter::Format::new().set_num_format("hh:mm");
+        ws.write_string(0, 5, "hora").unwrap();
+        ws.write_number_with_format(1, 5, 8.5 / 24.0, &time).unwrap();
         book.add_worksheet().set_name("Otra").unwrap();
         book.save(&path).unwrap();
         let sheet = read(path.to_str().unwrap(), None).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(sheet.sheets, vec!["Clientes", "Otra"]);
         assert_eq!(sheet.sheet, "Clientes");
-        assert_eq!(sheet.rows[0], vec!["id", "nombre", "alta", "activo", "saldo"]);
-        assert_eq!(sheet.rows[1], vec!["1", "Ana Ruiz", "2024-03-15", "true", "12.5"]);
+        assert_eq!(sheet.rows[0], vec!["id", "nombre", "alta", "activo", "saldo", "hora"]);
+        assert_eq!(sheet.rows[1], vec!["1", "Ana Ruiz", "2024-03-15", "true", "12.5", "08:30:00"]);
     }
 
     #[test]

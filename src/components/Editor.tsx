@@ -393,7 +393,8 @@ export function SqlEditor(props: {
           unfilteredWarning(() => props.kind),
           linkField,
           theme.of(themeExtension()),
-          // Before the built-in bindings: a user's shortcut wins over the editor's own.
+          // Before the built-in bindings: a user's shortcut wins over the editor's own (not over the completion
+          // list's keys, which CodeMirror puts above everything).
           userKeys.of(commandKeys()),
           keymap.of([
             // Go to the table under the caret (DataGrip: F4 / Ctrl+B).

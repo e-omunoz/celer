@@ -1,10 +1,12 @@
-import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { CalendarDays } from "lucide-solid";
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
 import { raw } from "../raw";
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral } from "../sql";
 import { copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
+import type { LookupItem, LookupSession } from "../fkLookup";
 
 const HEAD_H = 30;
 const MIN_W = 56;
@@ -43,6 +45,8 @@ export interface GridProps {
   /** Engine of the data, for identifier quoting and literals in copy-as-SQL. */
   dialect?: string;
   onEdit?: (row: number, col: number, value: string | null) => void;
+  /** Values to pick from while editing a column (a foreign key's referenced rows); null when it has none. */
+  lookup?: (col: number) => Promise<LookupSession | null> | null;
   onNeedMore?: () => void;
   onDelete?: (rows: number[]) => void;
   onClone?: (row: number) => void;
@@ -151,6 +155,8 @@ export function DataGrid(props: GridProps) {
   const setSort = (next: { col: number; dir: 1 | -1 } | null) => (props.onSortChange ? props.onSortChange(next) : setLocalSort(next));
   const [hoverCol, setHoverCol] = createSignal(-1);
   const [editor, setEditor] = createSignal<{ row: number; col: number; value: string } | null>(null);
+  /** The referenced rows offered while editing a foreign key (null: no list). */
+  const [lookup, setLookup] = createSignal<{ title: string; items: LookupItem[]; index: number; loading: boolean; error: string } | null>(null);
   const [search, setSearch] = createSignal<string | null>(null);
   let drag: { col: number; startX: number; startW: number } | null = null;
   let selecting: "cells" | "rows" | "cols" | null = null;
@@ -707,13 +713,156 @@ export function DataGrid(props: GridProps) {
     const source = ordered()[pos.row];
     if (source === undefined || props.deleted?.includes(source)) return;
     const current = raw(props.rows)[source]?.[pos.col];
+    if (props.columns[pos.col]?.kind === "bool") {
+      // Booleans: t / 1 / f / 0 / space set the value straight away; anything else opens the true / false picker.
+      const now = boolOf(current);
+      const typed = initial === undefined ? undefined : /^[t1sy]$/i.test(initial) ? true : /^[f0n]$/i.test(initial) ? false : initial === " " ? !now : undefined;
+      if (typed !== undefined) {
+        props.onEdit(source, pos.col, String(typed));
+        return;
+      }
+      scrollIntoView(pos);
+      setEditor({ row: pos.row, col: pos.col, value: now === null ? "" : String(now) });
+      queueMicrotask(() => root?.querySelector<HTMLElement>(".cell-editor .cell-bool")?.focus());
+      return;
+    }
     scrollIntoView(pos);
     setEditor({ row: pos.row, col: pos.col, value: initial ?? (isNullCell(current) ? "" : cellText(current)) });
     queueMicrotask(() => {
-      const input = root?.querySelector<HTMLInputElement>(".cell-editor input");
+      const input = root?.querySelector<HTMLInputElement>(".cell-editor input:not([type=date])");
       input?.focus();
       if (initial === undefined) input?.select();
     });
+  }
+
+  /** The column being edited takes dates (not just a time of day): the editor offers a calendar. */
+  const editorDate = () => {
+    const current = editor();
+    const col = current ? props.columns[current.col] : undefined;
+    return Boolean(col && col.kind === "date" && !/^time(?!stamp)/i.test(col.typeName.trim()));
+  };
+
+  // ---- foreign-key lookup: a side session lives while the cell is edited
+  let lookupSession: LookupSession | null = null;
+  let lookupSeq = 0;
+  let lookupTimer = 0;
+
+  function closeLookup() {
+    lookupSeq++;
+    window.clearTimeout(lookupTimer);
+    lookupSession?.close();
+    lookupSession = null;
+    setLookup(null);
+  }
+
+  async function openLookup(col: number, text: string) {
+    const pending = props.lookup?.(col);
+    if (!pending) return;
+    const seq = ++lookupSeq;
+    setLookup({ title: "", items: [], index: -1, loading: true, error: "" });
+    try {
+      const session = await pending;
+      if (seq !== lookupSeq) {
+        session?.close();
+        return;
+      }
+      if (!session) {
+        setLookup(null);
+        return;
+      }
+      lookupSession = session;
+      setLookup((l) => l && { ...l, title: session.title });
+      // The first rows of the referenced table, with the cell's current value highlighted if it is among them.
+      await searchLookup("", seq, text);
+    } catch (err) {
+      if (seq === lookupSeq) setLookup((l) => l && { ...l, loading: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function searchLookup(text: string, seq = lookupSeq, highlight = text) {
+    const session = lookupSession;
+    if (!session) return;
+    setLookup((l) => l && { ...l, loading: true });
+    try {
+      const items = await session.search(text);
+      if (seq !== lookupSeq) return;
+      // Highlight the value typed (or the cell's) when it is in the list.
+      const at = items.findIndex((item) => item.value === highlight);
+      setLookup((l) => l && { ...l, items, index: at, loading: false, error: "" });
+    } catch (err) {
+      if (seq === lookupSeq) setLookup((l) => l && { ...l, loading: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // A new cell in the editor gets its own lookup; leaving the editor closes it.
+  createEffect(
+    on(
+      () => {
+        const current = editor();
+        return current ? `${current.row}:${current.col}` : null;
+      },
+      (key, previous) => {
+        if (key === previous) return;
+        closeLookup();
+        const current = editor();
+        if (current && props.columns[current.col]?.kind !== "bool") void openLookup(current.col, untrack(() => editor()?.value ?? ""));
+      },
+    ),
+  );
+  onCleanup(closeLookup);
+
+  /** Typing in a foreign-key cell searches the referenced table (a moment after the last key). */
+  function lookupInput(text: string) {
+    if (!lookup()) return;
+    window.clearTimeout(lookupTimer);
+    const seq = lookupSeq;
+    lookupTimer = window.setTimeout(() => void searchLookup(text, seq), 220);
+  }
+
+  /** ↑ / ↓ move through the list, Enter takes the highlighted row. True when the key was the list's. */
+  function lookupKey(event: KeyboardEvent): boolean {
+    const l = lookup();
+    if (!l || !l.items.length) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setLookup({ ...l, index: Math.max(-1, Math.min(l.items.length - 1, l.index + step)) });
+      root?.querySelector(".cell-lookup .on")?.scrollIntoView({ block: "nearest" });
+      return true;
+    }
+    if (event.key === "Enter" && l.index >= 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      const current = editor();
+      commitEditor(l.items[l.index].value, current ? { row: current.row + 1, col: current.col } : undefined);
+      return true;
+    }
+    return false;
+  }
+
+  /** Keys inside a cell editor: Enter / Tab save and move, Esc cancels, Ctrl+Shift+N sets NULL. */
+  function editorKey(event: KeyboardEvent, value: string | null, commitNow = false) {
+    event.stopPropagation();
+    const current = editor();
+    if (!current) return;
+    if (lookupKey(event)) return;
+    if (commitNow) {
+      event.preventDefault();
+      commitEditor(value);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      commitEditor(value, { row: current.row + 1, col: current.col });
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      commitEditor(value, { row: current.row, col: current.col + (event.shiftKey ? -1 : 1) });
+    } else if (event.key === "Escape") {
+      setEditor(null);
+      root?.focus({ preventScroll: true });
+    } else if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "n") {
+      event.preventDefault();
+      commitEditor(null);
+    }
   }
 
   function commitEditor(value: string | null, move?: Pos) {
@@ -1200,33 +1349,124 @@ export function DataGrid(props: GridProps) {
       </div>
       <Show when={editorBox()}>
         {(box) => (
-          <div class="cell-editor" style={{ left: `${box().left}px`, top: `${box().top}px`, width: `${Math.max(box().width, 160)}px`, height: `${box().height}px` }}>
-            <input
-              value={editor()!.value}
-              spellcheck={false}
-              onInput={(event) => setEditor({ ...editor()!, value: event.currentTarget.value })}
-              onKeyDown={(event) => {
-                event.stopPropagation();
+          <div class="cell-editor" style={{ left: `${box().left}px`, top: `${box().top}px`, width: `${Math.max(box().width, editorDate() ? 190 : 160)}px`, height: `${box().height}px` }}>
+            <Show
+              when={props.columns[editor()!.col]?.kind === "bool"}
+              fallback={
+                <>
+                  <input
+                    value={editor()!.value}
+                    spellcheck={false}
+                    onInput={(event) => {
+                      setEditor({ ...editor()!, value: event.currentTarget.value });
+                      lookupInput(event.currentTarget.value);
+                    }}
+                    onKeyDown={(event) => editorKey(event, editor()!.value)}
+                    onBlur={(event) => {
+                      // The calendar button keeps the editor open.
+                      if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".cell-editor")) return;
+                      if (editor()) commitEditor(editor()!.value);
+                    }}
+                  />
+                  <Show when={editorDate()}>
+                    <label class="cell-date" title="Elegir en el calendario">
+                      <CalendarDays size={13} />
+                      <input
+                        type="date"
+                        tabIndex={-1}
+                        value={/^\d{4}-\d{2}-\d{2}/.exec(editor()!.value)?.[0] ?? ""}
+                        onClick={(event) => {
+                          try {
+                            event.currentTarget.showPicker();
+                          } catch {
+                            /* the picker opens on click anyway */
+                          }
+                        }}
+                        onChange={(event) => {
+                          const date = event.currentTarget.value;
+                          if (!date || !editor()) return;
+                          setEditor({ ...editor()!, value: withDate(editor()!.value, date) });
+                          root?.querySelector<HTMLInputElement>(".cell-editor input:not([type=date])")?.focus();
+                        }}
+                        onKeyDown={(event) => editorKey(event, editor()!.value)}
+                        onBlur={(event) => {
+                          if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".cell-editor")) return;
+                          if (editor()) commitEditor(editor()!.value);
+                        }}
+                      />
+                    </label>
+                  </Show>
+                </>
+              }
+            >
+              <div class="cell-bool" tabIndex={0} role="radiogroup" aria-label="Valor" onKeyDown={(event) => {
                 const current = editor()!;
-                if (event.key === "Enter") {
+                if (/^[t1sy]$/i.test(event.key)) return editorKey(event, "true", true);
+                if (/^[f0n]$/i.test(event.key) && !event.ctrlKey && !event.metaKey) return editorKey(event, "false", true);
+                if (event.key === " " || event.key === "ArrowLeft" || event.key === "ArrowRight") {
                   event.preventDefault();
-                  commitEditor(current.value, { row: current.row + 1, col: current.col });
-                } else if (event.key === "Tab") {
-                  event.preventDefault();
-                  commitEditor(current.value, { row: current.row, col: current.col + (event.shiftKey ? -1 : 1) });
-                } else if (event.key === "Escape") {
-                  setEditor(null);
-                  root?.focus({ preventScroll: true });
-                } else if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "n") {
-                  event.preventDefault();
-                  commitEditor(null);
+                  event.stopPropagation();
+                  setEditor({ ...current, value: current.value === "true" ? "false" : "true" });
+                  return;
                 }
-              }}
-              onBlur={() => editor() && commitEditor(editor()!.value)}
-            />
+                editorKey(event, current.value === "" ? null : current.value);
+              }} onBlur={(event) => {
+                if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".cell-editor")) return;
+                if (editor()) commitEditor(editor()!.value === "" ? null : editor()!.value);
+              }}>
+                <For each={["true", "false"]}>
+                  {(value) => (
+                    <button type="button" role="radio" tabIndex={-1} aria-checked={editor()!.value === value} classList={{ on: editor()!.value === value }} onMouseDown={(event) => { event.preventDefault(); commitEditor(value); }}>
+                      {value}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
             <button type="button" title="Poner a NULL (Ctrl+Mayús+N)" onMouseDown={(event) => { event.preventDefault(); commitEditor(null); }}>NULL</button>
           </div>
         )}
+      </Show>
+      <Show when={editorBox() && lookup()}>
+        {(l) => {
+          const LIST_H = 236;
+          const place = () => {
+            const box = editorBox()!;
+            const below = box.top + box.height + LIST_H < (root?.clientHeight ?? Infinity);
+            return { left: `${Math.max(0, box.left)}px`, top: `${below ? box.top + box.height + 2 : box.top - LIST_H - 2}px`, width: `${Math.max(box.width, 280)}px` };
+          };
+          return (
+            <div class="cell-lookup" style={place()} role="listbox" aria-label="Valores de la tabla referenciada" onMouseDown={(event) => event.preventDefault()}>
+              <div class="cell-lookup-head">
+                <span>{l().title || "Tabla referenciada"}</span>
+                <Show when={l().loading}><span class="muted">buscando…</span></Show>
+              </div>
+              <Show when={l().error}><div class="cell-lookup-note error">{l().error}</div></Show>
+              <Show when={!l().loading && !l().error && !l().items.length}><div class="cell-lookup-note">Ninguna fila coincide.</div></Show>
+              <div class="cell-lookup-list">
+                <For each={l().items}>
+                  {(item, i) => (
+                    <button
+                      type="button"
+                      role="option"
+                      tabIndex={-1}
+                      aria-selected={l().index === i()}
+                      classList={{ on: l().index === i() }}
+                      onMouseEnter={() => setLookup({ ...l(), index: i() })}
+                      onClick={() => {
+                        const current = editor();
+                        commitEditor(item.value, current ? { row: current.row + 1, col: current.col } : undefined);
+                      }}
+                    >
+                      <code>{item.value}</code>
+                      <span>{item.label}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          );
+        }}
       </Show>
       <Show when={search() !== null}>
         <div class="grid-search">
@@ -1259,4 +1499,19 @@ export function DataGrid(props: GridProps) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+/** A boolean cell as true / false, or null (NULL or something that is not a boolean). */
+function boolOf(cell: Cell | undefined): boolean | null {
+  if (cell === undefined || isNullCell(cell)) return null;
+  const text = cellText(cell).trim().toLowerCase();
+  if (/^(true|t|1|yes|y|sí|si)$/.test(text)) return true;
+  if (/^(false|f|0|no|n)$/.test(text)) return false;
+  return null;
+}
+
+/** "2024-03-15 10:20:30+02" with its date part replaced (time and zone kept), or just the date. */
+export function withDate(value: string, date: string): string {
+  const match = /^\s*\d{4}-\d{2}-\d{2}(.*)$/s.exec(value);
+  return match ? `${date}${match[1]}` : date;
 }

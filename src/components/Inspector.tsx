@@ -2,6 +2,7 @@ import { BookMarked, BookmarkPlus, Braces, Copy, History, Pencil, Rows3, Search,
 import { AiPanel } from "./AiPanel";
 import { createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { cancelNaming, deleteLibraryScript, filteredScripts, finishNaming, library, loadLibrary, openLibraryScript, renameLibraryScript, saveToLibrary, setLibrary, type LibraryScript } from "../library";
+import { shortcutLabel, withShortcut } from "../commands";
 import { cellText, isNullCell, prettyJson } from "../sql";
 import { activeSql, clearHistory, confirmDialog, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory } from "../state";
 
@@ -12,9 +13,9 @@ export function Inspector() {
         <div class="seg small">
           <button type="button" classList={{ on: state.inspectorMode === "value" }} title="Valor de la celda" onClick={() => openInspector("value")}><Braces size={13} /><span class="seg-label">Valor</span></button>
           <button type="button" classList={{ on: state.inspectorMode === "record" }} title="Registro: la fila como formulario" onClick={() => openInspector("record")}><Rows3 size={13} /><span class="seg-label">Registro</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "history" }} title="Historial de consultas (Ctrl+Alt+E)" onClick={() => openInspector("history")}><History size={13} /><span class="seg-label">Historial</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "library" }} title="Biblioteca de scripts guardados (Ctrl+Alt+B guarda la consola)" onClick={() => openInspector("library")}><BookMarked size={13} /><span class="seg-label">Biblioteca</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "ai" }} title="Asistente IA (Ctrl+Alt+I)" onClick={() => openInspector("ai")}><Sparkles size={13} /><span class="seg-label">IA</span></button>
+          <button type="button" classList={{ on: state.inspectorMode === "history" }} title={withShortcut("Historial de consultas", "history")} onClick={() => openInspector("history")}><History size={13} /><span class="seg-label">Historial</span></button>
+          <button type="button" classList={{ on: state.inspectorMode === "library" }} title="Biblioteca de scripts guardados" onClick={() => openInspector("library")}><BookMarked size={13} /><span class="seg-label">Biblioteca</span></button>
+          <button type="button" classList={{ on: state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => openInspector("ai")}><Sparkles size={13} /><span class="seg-label">IA</span></button>
         </div>
         <span class="spacer" />
         <button type="button" class="icon-btn" title="Cerrar panel" onClick={() => setState("inspectorOpen", false)}><X size={14} /></button>
@@ -191,11 +192,14 @@ function LibraryView() {
           <Search size={12} />
           <input placeholder="Buscar en la biblioteca" value={library.query} onInput={(event) => setLibrary("query", event.currentTarget.value)} />
         </div>
-        <button type="button" class="icon-btn" title="Guardar la consola actual en la biblioteca (Ctrl+Alt+B)" disabled={!activeSql()} onClick={() => void saveToLibrary()}><BookmarkPlus size={14} /></button>
+        <button type="button" class="icon-btn" title={withShortcut("Guardar la consola actual en la biblioteca", "save-library")} disabled={!activeSql()} onClick={() => void saveToLibrary()}><BookmarkPlus size={14} /></button>
       </div>
       <div class="history-list">
         <Show when={library.loaded && !library.scripts.length}>
-          <p class="inspector-empty">La biblioteca está vacía. Guarda aquí las consultas que repites con <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd> desde la consola.</p>
+          <p class="inspector-empty">
+            La biblioteca está vacía. Guarda aquí las consultas que repites
+            {shortcutLabel("save-library") ? ` con ${shortcutLabel("save-library")}` : " con el botón de arriba"} desde la consola.
+          </p>
         </Show>
         <Show when={library.scripts.length && !filteredScripts().length}>
           <p class="inspector-empty">Ningún script coincide con la búsqueda.</p>

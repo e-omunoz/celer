@@ -704,6 +704,25 @@ kbd {
 .cell-editor input { flex: 1; min-width: 0; border: 1.5px solid var(--accent); border-radius: 3px 0 0 3px; background: var(--surface); padding: 0 7px; font-family: var(--mono); font-size: 12.5px; }
 .cell-editor button { padding: 0 7px; font-size: 10.5px; font-weight: 600; border: 1.5px solid var(--accent); border-left: 0; border-radius: 0 3px 3px 0; background: var(--popover); color: var(--text-muted); }
 .cell-editor button:hover { color: var(--text); }
+/* Dates: a calendar next to the text (the text stays editable for the time and the zone). */
+.cell-date { position: relative; display: grid; place-items: center; flex: none; width: 26px; border: 1.5px solid var(--accent); border-left: 0; background: var(--popover); color: var(--text-muted); cursor: pointer; }
+.cell-date:hover { color: var(--accent-text); }
+.cell-editor .cell-date input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
+/* Foreign keys: the referenced rows to pick from, under (or over) the cell being edited. */
+.cell-lookup { position: absolute; z-index: 6; display: flex; flex-direction: column; max-height: 236px; border-radius: 7px; border: 1px solid var(--border); background: var(--popover); box-shadow: var(--shadow-lg, var(--shadow-md)); overflow: hidden; animation: pop-in var(--dur-fast, 120ms) ease-out; }
+.cell-lookup-head { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.cell-lookup-head .muted { font-weight: 400; }
+.cell-lookup-note { padding: 10px; font-size: 12px; color: var(--text-faint); }
+.cell-lookup-note.error { color: var(--danger); }
+.cell-lookup-list { overflow-y: auto; padding: 3px; }
+.cell-lookup-list button { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 4px 8px; border-radius: 4px; text-align: left; font-size: 12.5px; }
+.cell-lookup-list button.on { background: var(--accent-soft); }
+.cell-lookup-list code { flex: none; min-width: 3ch; font-size: 12px; color: var(--accent-text); }
+.cell-lookup-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+/* Booleans: true / false to pick (t, f, 1, 0 or the space bar from the keyboard). */
+.cell-bool { flex: 1; min-width: 0; display: flex; gap: 2px; padding: 2px; border: 1.5px solid var(--accent); border-radius: 3px 0 0 3px; background: var(--surface); outline: none; }
+.cell-editor .cell-bool button { flex: 1; min-width: 0; padding: 0 6px; border: 0; border-radius: 2px; background: transparent; font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.cell-editor .cell-bool button.on { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .grid-search {
   position: absolute; top: 36px; right: 18px; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 4px;
   background: var(--popover); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-md);

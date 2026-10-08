@@ -81,11 +81,19 @@ function jsonCell(value: unknown): string {
 }
 
 /**
+ * Integers of 16 digits or more as strings before parsing: a JavaScript number would round them (ids such as
+ * 9007199254740993 must arrive exactly as written). Strings are skipped whole, so their digits stay as they are.
+ */
+function keepBigIntegers(json: string): string {
+  return json.replace(/"(?:[^"\\]|\\.)*"|(?<![\w.+-])-?\d{16,}(?![\d.eE])/g, (match) => (match.startsWith('"') ? match : `"${match}"`));
+}
+
+/**
  * JSON data as rows with a header row: an array of objects (the header is every key, in order of appearance),
  * an array of arrays (as they are), an object holding such an array ({"data": […]}) or JSON Lines.
  */
 export function parseJsonRows(text: string): { rows: string[][]; objects: boolean } {
-  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const src = keepBigIntegers(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
   let data: unknown;
   try {
     data = JSON.parse(src);

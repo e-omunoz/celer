@@ -31,6 +31,7 @@ import {
 } from "../state";
 import type { ConnSummary, MetaNode } from "../types";
 import { startImport } from "../importer";
+import { withShortcut } from "../commands";
 import { engineOf } from "../types";
 
 const ROW = 24;
@@ -302,7 +303,7 @@ export function Sidebar() {
       <div class="toolwin-head">
         <span class="toolwin-title">Explorador</span>
         <span class="spacer" />
-        <button type="button" class="icon-btn" title="Nueva conexión (Ctrl+Alt+N)" onClick={() => openConnDialog()}><Plus size={15} /></button>
+        <button type="button" class="icon-btn" title={withShortcut("Nueva conexión", "new-conn")} onClick={() => openConnDialog()}><Plus size={15} /></button>
         <button type="button" class="icon-btn" title="Buscar en el árbol" classList={{ on: filterOpen() }} onClick={() => { setFilterOpen(!filterOpen()); if (filterOpen()) queueMicrotask(() => filterInput?.focus()); else setState("treeFilter", ""); }}><Search size={14} /></button>
         <button type="button" class="icon-btn" title="Actualizar todo" onClick={() => { for (const id of Object.keys(state.sessions)) void refreshNode(id, []); }}><RefreshCw size={14} /></button>
         <button type="button" class="icon-btn" title="Contraer todo" onClick={collapseAll}><ChevronsDownUp size={14} /></button>

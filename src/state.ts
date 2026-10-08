@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, sqlLiteral, statementAt, wherePosition } from "./sql";
+import { cellText, codeOnly, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, sqlLiteral, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -275,6 +275,8 @@ export const [state, setState] = createStore({
   settingsOpen: false,
   /** The settings section shown when the dialog opens (commands can open a given one). */
   settingsSection: "appearance" as string,
+  /** A shortcut is being recorded: every key goes to the recorder (Esc included). */
+  capturingKeys: false,
   connDialog: null as ConnConfig | null,
   testOutput: "",
   testOk: null as boolean | null,
@@ -1131,8 +1133,26 @@ export function collapseAll() {
   for (const key of Object.keys(state.tree)) setState("tree", key, "open", false);
 }
 
+/**
+ * Reloads a node and everything expanded below it (a table created elsewhere shows up in its open folder);
+ * cached folders that are closed are forgotten, so they load fresh when opened.
+ */
 export async function refreshNode(connId: string, path: string[]) {
+  const own = pathKey(connId, path);
+  const below = (key: string) => key !== own && (path.length ? key.startsWith(`${own}\u0000`) : key.startsWith(own));
+  const reopen: string[][] = [];
+  setState(
+    "tree",
+    produce((tree) => {
+      for (const key of Object.keys(tree)) {
+        if (!below(key)) continue;
+        if (tree[key].open) reopen.push(key.slice(connId.length + 1).split("\u0000"));
+        else delete tree[key];
+      }
+    }),
+  );
   await loadChildren(connId, path, true);
+  await Promise.all(reopen.map((sub) => loadChildren(connId, sub, true)));
   if (!path.length) {
     const session = state.sessions[connId];
     if (!session) return;
@@ -1302,11 +1322,13 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   }
   if (mode === "explain" || mode === "analyze") {
     // One plan: the first statement of a selection (the others would run, not be explained).
-    const parts = splitSql(sql, conn?.kind);
+    // Pieces that are only comments ("SELECT 1; -- fin") are not statements.
+    const parts = splitSql(sql, conn?.kind).filter((part) => codeOnly(part.sql, conn?.kind).trim());
     if (parts.length > 1) notify("La selección tiene varias sentencias: se muestra el plan de la primera", "info");
     return explainStatement(current.id, parts[0]?.sql ?? sql, mode === "analyze");
   }
-  if (conn?.production && state.settings.confirmMutations && needsProductionConfirm(sql, conn.kind)) {
+  // hasUnfilteredWrite also sees the DELETE / UPDATE inside a CTE (WITH d AS (DELETE …) SELECT … WHERE …).
+  if (conn?.production && state.settings.confirmMutations && (needsProductionConfirm(sql, conn.kind) || hasUnfilteredWrite(sql, conn.kind))) {
     const ok = await confirmDialog(
       `Ejecutar en ${conn.name} (producción)`,
       "La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.",
@@ -1689,7 +1711,7 @@ function reopenTableSession(tabId: string): Promise<string> {
 }
 
 /** A new session for a connection (connecting first if needed); null when it cannot connect. */
-async function openSessionFor(connId: string) {
+export async function openSessionFor(connId: string) {
   if (!state.sessions[connId]) await connect(connId);
   if (!state.sessions[connId]) return null;
   const generation = connectGeneration(connId);
@@ -2685,7 +2707,8 @@ export async function openScript() {
     const tab = activeSql();
     const title = path.split(/[\\/]/).pop() || "script.sql";
     if (tab && !tab.sql.trim()) {
-      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title, filePath: path, fileEncoding: encoding, fileCrlf } as Partial<SqlTab>);
+      // The console now holds the file: it is no longer the library script it may have come from.
+      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title, filePath: path, fileEncoding: encoding, fileCrlf, libraryId: undefined } as Partial<SqlTab>);
     } else {
       const id = openQuery(tab?.connId ?? null, sql, title);
       patchTab(id, { filePath: path, fileEncoding: encoding, fileCrlf });

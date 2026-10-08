@@ -23,6 +23,8 @@ export const [library, setLibrary] = createStore({
 });
 
 let loading: Promise<void> | null = null;
+/** The last load failed: saving would replace scripts that may still be in the file. */
+let loadFailed = false;
 
 const valid = (s: unknown): s is LibraryScript => {
   const x = s as LibraryScript;
@@ -35,9 +37,13 @@ export function loadLibrary(): Promise<void> {
     .then((file) => {
       const list = (file as { scripts?: unknown[] } | null)?.scripts;
       const scripts = Array.isArray(list) ? list.filter(valid).map((s) => ({ ...s, connId: s.connId ?? null, createdAt: s.createdAt ?? 0, updatedAt: s.updatedAt ?? 0 })) : [];
+      loadFailed = false;
       setLibrary({ loaded: true, scripts });
     })
     .catch((err) => {
+      // Not read: never write over it (the scripts may still be there). The next load tries again.
+      loadFailed = true;
+      loading = null;
       setLibrary("loaded", true);
       notify("No se pudo leer la biblioteca de scripts", "error", errorText(err));
     });
@@ -45,6 +51,10 @@ export function loadLibrary(): Promise<void> {
 }
 
 async function persist() {
+  if (loadFailed) {
+    notify("La biblioteca no se guardó: no se pudo leer la que ya había", "error");
+    return;
+  }
   try {
     await api().saveJson("library", { version: 1, scripts: library.scripts });
   } catch (err) {
@@ -95,7 +105,11 @@ export async function finishNaming(name: string) {
   setLibrary("naming", null);
   const tab = naming && state.tabs.find((t) => t.id === naming.tabId);
   const clean = name.trim();
-  if (!tab || tab.kind !== "sql" || !clean) return;
+  if (!clean) return;
+  if (!tab || tab.kind !== "sql") {
+    notify("La consola se cerró antes de guardarla: no se ha guardado nada", "warning");
+    return;
+  }
   const now = Date.now();
   const script: LibraryScript = { id: uid(), name: clean, sql: tab.sql, connId: tab.connId, createdAt: now, updatedAt: now };
   setLibrary("scripts", (list) => [...list, script]);

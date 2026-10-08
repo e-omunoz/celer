@@ -1,8 +1,8 @@
 import { Plus, RotateCcw, Search, X } from "lucide-solid";
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { commands, type Command } from "../commands";
-import { chordOf, chordParts, chordsFor, DEFAULT_KEYS, EDITOR_COMMANDS, EDITOR_RESERVED } from "../keymap";
-import { saveSettings, state } from "../state";
+import { chordOf, chordParts, chordsFor, DEFAULT_KEYS, EDITOR_ALWAYS, EDITOR_COMMANDS, EDITOR_RESERVED } from "../keymap";
+import { saveSettings, setState, state } from "../state";
 
 const EDITOR_SET = new Set<string>(EDITOR_COMMANDS);
 
@@ -78,10 +78,31 @@ export function KeymapSettings() {
     }
     const reserved = EDITOR_RESERVED[chord];
     assign(id, chord);
-    if (reserved && !EDITOR_SET.has(id)) setPending({ id, chord, note: `Dentro del editor SQL, ${chordParts(chord).join("+")} es «${reserved}»: allí seguirá haciendo eso.` });
+    const keys = chordParts(chord).join("+");
+    if (reserved && (!EDITOR_SET.has(id) || EDITOR_ALWAYS.has(chord))) setPending({ id, chord, note: `Dentro del editor SQL, ${keys} es «${reserved}»: allí seguirá haciendo eso.` });
+    else if (reserved) setPending({ id, chord, note: `En el editor SQL, ${keys} era «${reserved}»: ahora será «${labelOf(id)}».` });
+  };
+
+  /** Back to the default keys; a default another command has taken since is given back (and said). */
+  const reset = (id: string) => {
+    const patch: Record<string, string[] | undefined> = { [id]: undefined };
+    const from: string[] = [];
+    for (const chord of DEFAULT_KEYS[id] ?? []) {
+      for (const other of list()) {
+        if (other.id === id || !keysOf(other.id).includes(chord)) continue;
+        patch[other.id] = (patch[other.id] ?? keysOf(other.id)).filter((k) => k !== chord);
+        from.push(`${chordParts(chord).join("+")} de «${other.label}»`);
+      }
+    }
+    write(patch);
+    setPending(from.length ? { id, chord: "", note: `Se ha quitado ${from.join(", ")} para devolvérselo a «${labelOf(id)}».` } : null);
   };
   window.addEventListener("keydown", onKey, true);
-  onCleanup(() => window.removeEventListener("keydown", onKey, true));
+  createEffect(() => setState("capturingKeys", recording() !== null));
+  onCleanup(() => {
+    window.removeEventListener("keydown", onKey, true);
+    setState("capturingKeys", false);
+  });
 
   return (
     <div class="keymap">
@@ -150,7 +171,7 @@ export function KeymapSettings() {
                       >
                         <Plus size={14} />
                       </button>
-                      <button type="button" class="icon-btn" title="Volver al atajo de serie" disabled={!changed(command.id)} onClick={() => write({ [command.id]: undefined })}>
+                      <button type="button" class="icon-btn" title="Volver al atajo de serie" disabled={!changed(command.id)} onClick={() => reset(command.id)}>
                         <RotateCcw size={13} />
                       </button>
                     </span>

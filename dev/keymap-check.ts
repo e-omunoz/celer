@@ -1,6 +1,6 @@
 // Checks for src/keymap.ts: node --experimental-strip-types dev/keymap-check.ts
 import assert from "node:assert/strict";
-import { chordLabel, chordOf, chordParts, chordsFor, codeMirrorKey, DEFAULT_KEYS, normalizeChord } from "../src/keymap.ts";
+import { chordLabel, chordOf, chordParts, chordsFor, codeMirrorKey, DEFAULT_KEYS, normalizeChord, setAltGrDown } from "../src/keymap.ts";
 
 const ev = (key: string, code: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean; altGraph?: boolean } = {}) => ({
   key,
@@ -35,6 +35,21 @@ assert.equal(chordOf(ev("Shift", "ShiftLeft", { shift: true })), null);
 assert.equal(chordOf(ev("€", "KeyE", { ctrl: true, alt: true })), null);
 assert.equal(chordOf(ev("@", "Digit2", { ctrl: true, alt: true })), null);
 assert.equal(chordOf(ev("e", "KeyE", { ctrl: true, alt: true, altGraph: true })), null);
+
+// With the right Alt followed (the app does it): left Ctrl+Alt+E is a shortcut even though it types "€"; AltGr is not.
+setAltGrDown(false);
+assert.equal(chordOf(ev("€", "KeyE", { ctrl: true, alt: true })), "Ctrl+Alt+E");
+assert.equal(chordOf(ev("@", "Digit2", { ctrl: true, alt: true })), "Ctrl+Alt+2");
+setAltGrDown(true);
+assert.equal(chordOf(ev("€", "KeyE", { ctrl: true, alt: true })), null);
+setAltGrDown(null);
+// Letters of their own key (ñ, ç): lower case in the chord, upper case on screen; Shift is a modifier.
+assert.equal(chordOf(ev("ñ", "Semicolon", { ctrl: true })), "Ctrl+ñ");
+assert.equal(chordOf(ev("Ñ", "Semicolon", { ctrl: true, shift: true })), "Ctrl+Shift+ñ");
+assert.equal(normalizeChord("ctrl+Ñ"), "Ctrl+ñ");
+assert.equal(normalizeChord("Ctrl+ß"), "Ctrl+ß");
+assert.deepEqual(chordParts("Ctrl+ñ"), ["Ctrl", "Ñ"]);
+assert.deepEqual(chordsFor("open", { open: ["Ctrl+Ñ"] }), ["Ctrl+ñ"], "a stored chord matches what the event gives");
 
 // Normalization of hand-written or stored chords.
 assert.equal(normalizeChord("ctrl+shift+e"), "Ctrl+Shift+E");

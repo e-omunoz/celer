@@ -47,14 +47,63 @@ export const EDITOR_RESERVED: Record<string, string> = {
   "Ctrl+V": "Pegar",
   "Ctrl+X": "Cortar",
   "Ctrl+F": "Buscar",
+  "Ctrl+G": "Siguiente coincidencia",
+  "Ctrl+Shift+G": "Coincidencia anterior",
+  "Ctrl+Alt+G": "Ir a la línea",
+  F3: "Siguiente coincidencia",
+  "Ctrl+H": "Reemplazar",
   "Ctrl+D": "Duplicar la línea",
   "Ctrl+B": "Ir a la tabla bajo el cursor",
   "Ctrl+/": "Comentar",
+  "Ctrl+I": "Seleccionar el bloque",
+  "Ctrl+U": "Deshacer la selección",
+  "Ctrl+[": "Quitar sangría",
+  "Ctrl+]": "Sangrar",
+  "Ctrl+Shift+K": "Borrar la línea",
+  "Alt+ArrowUp": "Subir la línea",
+  "Alt+ArrowDown": "Bajar la línea",
+  "Ctrl+Shift+ArrowUp": "Subir la línea",
+  "Ctrl+Shift+ArrowDown": "Bajar la línea",
   "Ctrl+Space": "Autocompletar",
   F4: "Ir a la tabla bajo el cursor",
 };
 
+/** Keys the editor keeps even over the user's shortcuts (the completion list is above everything). */
+export const EDITOR_ALWAYS = new Set(["Ctrl+Space"]);
+
 const MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta", "AltGraph", "CapsLock", "OS", "Dead", "Unidentified", "Process"]);
+
+/**
+ * Whether the AltGr key (right Alt) is held: on Windows it reports Ctrl+Alt, so Ctrl+Alt+E typed with the left
+ * keys is a shortcut but AltGr+E is "€". null until trackAltGr() runs (then the event alone decides).
+ */
+let altGrDown: boolean | null = null;
+
+export function setAltGrDown(down: boolean | null) {
+  altGrDown = down;
+}
+
+/** Follows the right Alt key on `target`; returns the function that stops it. */
+export function trackAltGr(target: Window): () => void {
+  altGrDown = false;
+  const isRightAlt = (event: KeyboardEvent) => event.key === "AltGraph" || (event.key === "Alt" && event.location === 2);
+  const down = (event: KeyboardEvent) => {
+    if (isRightAlt(event)) altGrDown = true;
+  };
+  const up = (event: KeyboardEvent) => {
+    if (isRightAlt(event)) altGrDown = false;
+  };
+  const reset = () => (altGrDown = false);
+  target.addEventListener("keydown", down, true);
+  target.addEventListener("keyup", up, true);
+  target.addEventListener("blur", reset);
+  return () => {
+    target.removeEventListener("keydown", down, true);
+    target.removeEventListener("keyup", up, true);
+    target.removeEventListener("blur", reset);
+    altGrDown = null;
+  };
+}
 
 /**
  * The chord of a key event, or null for a lone modifier or a character typed with AltGr (Ctrl+Alt on Windows:
@@ -63,7 +112,9 @@ const MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta", "AltGraph", "C
 export function chordOf(event: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> & { getModifierState?: (key: string) => boolean }): string | null {
   const { key, code } = event;
   if (!key || MODIFIER_KEYS.has(key)) return null;
-  if (event.getModifierState?.("AltGraph")) return null;
+  // AltGr held: a character is being typed (€, @, #…), not a shortcut.
+  if (altGrDown === true) return null;
+  if (altGrDown === null && event.getModifierState?.("AltGraph")) return null;
   const ctrl = event.ctrlKey || event.metaKey;
   let name: string;
   let shiftCounts = true;
@@ -71,11 +122,14 @@ export function chordOf(event: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | 
   else if (/^[0-9]$/.test(key)) name = key;
   else if (/^Key[A-Z]$/.test(code) || /^Digit[0-9]$/.test(code)) {
     // A letter or digit key giving something else: Shift+1 is "!" (still "1"), another alphabet uses its
-    // position, and a symbol typed with Ctrl+Alt is AltGr.
-    if (ctrl && event.altKey && key.length === 1 && !/\p{L}/u.test(key)) return null;
+    // position, and Ctrl+Alt+E is "€" on a Spanish keyboard (a shortcut when AltGr is known not to be held).
+    if (altGrDown === null && ctrl && event.altKey && key.length === 1 && !/\p{L}/u.test(key)) return null;
     name = code.slice(-1);
   } else if (key === " ") name = "Space";
-  else if (key.length === 1) {
+  else if (key.length === 1 && /\p{L}/u.test(key)) {
+    // A letter of its own key (ñ, ç): always in lower case, Shift is a modifier like for a–z.
+    name = key.toLowerCase();
+  } else if (key.length === 1) {
     // Symbols: the Shift that produces them is part of the character ("+" on a US keyboard is Shift+=).
     name = key;
     shiftCounts = false;
@@ -100,9 +154,15 @@ export function normalizeChord(chord: string): string {
   if (mods.has("ctrl") || mods.has("cmd") || mods.has("mod") || mods.has("meta")) parts.push("Ctrl");
   if (mods.has("alt") || mods.has("option")) parts.push("Alt");
   if (mods.has("shift") || mods.has("mayús") || mods.has("mayus")) parts.push("Shift");
-  const k = key.length === 1 ? key.toUpperCase() : key.replace(/^(intro|return)$/i, "Enter").replace(/^esc$/i, "Escape").replace(/^(space|espacio)$/i, "Space").replace(/^f(\d+)$/i, "F$1");
+  // a–z in upper case; other letters (ñ, ç) in lower case, as chordOf writes them; symbols as they are.
+  const k = key.length === 1 ? (/^[a-z]$/i.test(key) ? key.toUpperCase() : key.toLowerCase()) : key.replace(/^(intro|return)$/i, "Enter").replace(/^esc$/i, "Escape").replace(/^(space|espacio)$/i, "Space").replace(/^f(\d+)$/i, "F$1");
   parts.push(k.length > 1 ? k[0].toUpperCase() + k.slice(1) : k);
   return parts.join("+");
+}
+
+/** "Ctrl+ñ" as shown: letters in upper case ("Ctrl+Ñ"). */
+function keyLabel(part: string): string {
+  return part.length === 1 && part.toUpperCase().length === 1 ? part.toUpperCase() : part;
 }
 
 /** The shortcuts of a command: the user's choice (an empty list removes them) or the default. */
@@ -137,7 +197,7 @@ export function chordParts(chord: string): string[] {
   const plusKey = chord.endsWith("++") || chord === "+";
   const pieces = (plusKey ? chord.slice(0, -1) : chord).split("+").filter(Boolean);
   if (plusKey) pieces.push("+");
-  return pieces.map((p) => (p === "Ctrl" && MAC ? "⌘" : KEY_LABELS[p] ?? p));
+  return pieces.map((p) => (p === "Ctrl" && MAC ? "⌘" : KEY_LABELS[p] ?? keyLabel(p)));
 }
 
 export function chordLabel(chord: string): string {

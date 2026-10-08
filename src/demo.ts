@@ -290,12 +290,22 @@ function meta(db: Database, path: string[]): MetaNode[] {
   }
   if (sub === "fks") {
     const rows = query(db, `SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(${sqlString(name)})`);
-    return rows.map((row) => ({
-      name: `fk${text(row[0])}`,
+    // Same shape as the core: "cols → table(cols)" and the referenced table in obj (one node per key).
+    const keys = new Map<string, { table: string; from: string[]; to: string[] }>();
+    for (const row of rows) {
+      const id = text(row[0]);
+      const key = keys.get(id) ?? { table: text(row[1]), from: [], to: [] };
+      key.from.push(text(row[2]));
+      key.to.push(text(row[3]));
+      keys.set(id, key);
+    }
+    return [...keys.entries()].map(([id, key]) => ({
+      name: `fk_${name}_${key.table}_${id}`,
       kind: "key",
-      detail: `${text(row[2])} → ${text(row[1])}.${text(row[3])}`,
+      detail: `${key.from.join(", ")} → ${key.table}(${key.to.join(", ")})`,
       path: [],
       leaf: true,
+      obj: { database: "", schema: "main", name: key.table, kind: "table" },
     }));
   }
   return [];

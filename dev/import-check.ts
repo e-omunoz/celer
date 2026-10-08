@@ -24,6 +24,9 @@ assert.deepEqual(parseJsonRows('{"count":1,"data":[{"x":"y"}]}').rows, [["x"], [
 assert.deepEqual(parseJsonRows('{"x":1}').rows, [["x"], ["1"]]);
 // JSON Lines, with a BOM.
 assert.deepEqual(parseJsonRows('\uFEFF{"a":1}\n{"a":2,"b":"z"}\n').rows, [["a", "b"], ["1", ""], ["2", "z"]]);
+// Big integers arrive exactly as written (not rounded by a JavaScript number); strings and decimals as they are.
+assert.deepEqual(parseJsonRows('[{"id": 9007199254740993, "n": "12345678901234567890", "x": 1.12345678901234567, "e": 1e300}]').rows[1], ["9007199254740993", "12345678901234567890", "1.1234567890123457", "1e+300"]);
+assert.deepEqual(parseJsonRows('[[-12345678901234567, 5]]').rows[0], ["-12345678901234567", "5"]);
 // Not JSON, or not rows.
 assert.throws(() => parseJsonRows("{nope"), /no es JSON válido/);
 assert.throws(() => parseJsonRows("[1,2,3]"), /objetos o listas/);

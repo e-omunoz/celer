@@ -132,7 +132,8 @@ function ParamsDialog(props: { ask: NonNullable<typeof state.paramAsk> }) {
 export function Dialog(props: { title: string; onClose: () => void; children: JSX.Element; wide?: boolean; small?: boolean; class?: string }) {
   onMount(() => {
     const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      // A shortcut being recorded takes Esc for itself (it cancels the recording, not the dialog).
+      if (event.key === "Escape" && !state.capturingKeys) {
         event.stopPropagation();
         props.onClose();
       }

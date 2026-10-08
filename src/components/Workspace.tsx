@@ -114,6 +114,7 @@ import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
+import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 
 export function Workspace() {
@@ -215,7 +216,7 @@ function TabBar() {
               <button
                 type="button"
                 class="tab-close"
-                title="Cerrar (Ctrl+W)"
+                title={withShortcut("Cerrar", "close-tab")}
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -228,7 +229,7 @@ function TabBar() {
           );
         }}
       </For>
-      <button type="button" class="tab-new" title="Nueva consola (Ctrl+Mayús+L)" onClick={() => openQuery(activeSql()?.connId ?? null)}>
+      <button type="button" class="tab-new" title={withShortcut("Nueva consola", "new-console")} onClick={() => openQuery(activeSql()?.connId ?? null)}>
         <Plus size={14} />
       </button>
     </div>
@@ -358,7 +359,7 @@ function SqlPane(props: { tab: SqlTab }) {
         <Show
           when={!props.tab.running}
           fallback={
-            <button type="button" class="tb-btn stop" title="Detener (Ctrl+F2)" onClick={() => void cancelActive()}>
+            <button type="button" class="tb-btn stop" title={withShortcut("Detener", "stop")} onClick={() => void cancelActive()}>
               <Square size={13} fill="currentColor" /> <span>Detener</span>
             </button>
           }
@@ -777,6 +778,11 @@ function TablePane(props: { tab: TableTab }) {
             dialect={kindOf(props.tab.connId)}
             api={(value) => (gridApi = value)}
             onEdit={(row, col, value) => editCell(props.tab.id, row, col, value)}
+            lookup={(col) => {
+              const name = props.tab.gridCols[col]?.name ?? "";
+              const fk = foreignKeyOf(props.tab, name);
+              return fk && fk.columns.length === 1 ? openFkLookup(props.tab, name) : null;
+            }}
             onNeedMore={() => void fetchMore(props.tab.id)}
             onDelete={(list) => deleteTableRows(props.tab.id, list)}
             onClone={(row) => insertTableRow(props.tab.id, row)}
