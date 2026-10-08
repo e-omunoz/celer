@@ -1174,7 +1174,8 @@ export function DataGrid(props: GridProps) {
       nextMatch(event.shiftKey ? -1 : 1);
       return;
     }
-    if (ctrl && event.shiftKey && key.toLowerCase() === "n") {
+    // Only an editable grid takes it: elsewhere it is "Ventana nueva".
+    if (ctrl && event.shiftKey && key.toLowerCase() === "n" && props.editable && props.onEdit) {
       event.preventDefault();
       setNull();
       return;
