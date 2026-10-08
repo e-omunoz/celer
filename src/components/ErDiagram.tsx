@@ -1,9 +1,10 @@
-import { Download, Maximize2, Minus, Plus, Search, X } from "lucide-solid";
+import { Download, ExternalLink, Maximize2, Minus, Plus, Search, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { api, isTauri } from "../api";
 import { columnY, edgePath, ER, layoutEr, type ErBox, type ErTable } from "../erLayout";
 import { Gib } from "../gib/Gib";
 import { closeErDiagram, notify, openTable, state } from "../state";
+import { detachPanel, isPanelWindow } from "../windows";
 
 /**
  * Entity-relationship diagram of a schema: one card per table (columns, keys), a line per foreign key from its
@@ -155,6 +156,9 @@ export function ErDiagram() {
         <button type="button" class="icon-btn" title="Acercar" onClick={() => zoom(1.25)}><Plus size={15} /></button>
         <button type="button" class="icon-btn" title="Ajustar a la ventana" onClick={fit}><Maximize2 size={14} /></button>
         <button type="button" class="btn tiny" disabled={!er().tables.length} onClick={() => void exportSvg()}><Download size={13} /> SVG</button>
+        <Show when={isTauri() && !isPanelWindow()}>
+          <button type="button" class="icon-btn" title="Abrir el diagrama en su propia ventana" disabled={er().loading} onClick={() => void detachPanel("er")}><ExternalLink size={15} /></button>
+        </Show>
         <button type="button" class="icon-btn" title="Cerrar (Esc)" onClick={closeErDiagram}><X size={16} /></button>
       </header>
       <Show when={er().loading}>
@@ -206,7 +210,8 @@ export function ErDiagram() {
                 const obj = er().objects[table.id];
                 if (!obj) return;
                 const connId = er().connId;
-                closeErDiagram();
+                // In a window of its own the diagram stays: the table opens in its Celer window.
+                if (!isPanelWindow()) closeErDiagram();
                 void openTable(connId, obj);
               }} />}
             </For>

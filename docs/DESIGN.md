@@ -157,20 +157,29 @@ a calm colleague at the next desk, not a pop-up assistant.
 | Fidgets (every 25–70 s) | Adjusts the tie, raises the other eyebrow, glances at the user over the glasses |
 | Sleep | After 10 min without input; wakes up waving when the user returns |
 
-**Tips:** clicking Gib opens a speech bubble with a tip; "Next" browses more, "Hide" closes it.
-Tips are **contextual and learned from usage**, for example:
+**Tips:** clicking Gib opens a speech bubble with a tip (unseen ones first); "Otro consejo" browses more, "Cerrar"
+closes it. Hovering him while he waits makes him swat the cursor, but never while he is talking; four clicks in a row
+is pestering, and he grumbles. Tips are **contextual and learned from usage**, for example:
 
 - The user ran queries with the mouse five times → "Ctrl+Enter runs the statement under the cursor."
 - The user typed `SELECT *` on a wide table → "Alt+Enter on `*` expands it into the column list."
 - The user exported via the grid repeatedly → "You can export straight from the query without loading the grid: right-click › Export…"
 - A production connection is open → "Production connections ask before UPDATE/DELETE without WHERE."
 
-Proactive tips appear **at most once every 15 minutes**, only while the user is idle (no typing for 5 s),
-as a small bubble that fades out after 8 s. They never take focus, never cover the editor cursor or the
-grid selection, and never appear while a query is running or on production connections.
+- The same statement run three times → "Save it in the library (Ctrl+Alt+B)".
+- After a run, advice about **that statement** (`src/gib/advice.ts`): likely mistakes always (`= NULL`,
+  `NOT IN (SELECT …)`, comma joins without WHERE); performance only when it was slow (`LIKE '%…'`, functions on
+  columns in WHERE, `UNION` vs `UNION ALL`, `ORDER BY` without a limit).
 
-**Settings:** Companion: *Off* / *Quiet* (idle animation only, no proactive tips) / *Normal*.
-Tip frequency, and "reset tips seen". All of it is also in the appearance JSON (see §15).
+Proactive tips appear **at most once every 15 minutes** (the first a few minutes into the session), only while the
+user pauses (no input for 5 s, back within a minute) and only tips not seen yet, as a small bubble that closes after
+8 s or as soon as the user types. They never take focus, never appear while a query is running, on production
+connections or behind a dialog, and offer "No más consejos" (Quiet). Hovering a bubble keeps it open. Warnings come once
+per session, other advice at most twice ever; what was seen is remembered per machine (`src/gib/memory.ts`).
+
+**Settings:** Companion: *Off* / *Quiet* (idle animation and warnings only, no tips of his own) / *Normal*.
+"Reset tips seen" is the palette command *Gib: volver a contar los consejos desde el principio*. Idle loops pause
+while the window is in the background.
 
 ### Rules
 
@@ -383,6 +392,15 @@ action name **and its shortcut**.
 Connection colour strip on top, icon by type (console, table, script), modified dot, pin, close on hover.
 Middle-click closes. Drag to reorder or split the editor (vertical / horizontal). Overflow goes to a dropdown.
 
+### Windows
+Several windows share connections, library, settings and Gib; each has its own tabs, explorer and side panel.
+A tab dragged out of the tab bar opens a new window where it is dropped; dragged onto another window's tab bar it
+moves there (that tab bar takes the accent tint while a tab from another window is in the air). The tab's menu and
+the palette offer the same ("Mover a una ventana nueva", "Mover a la ventana 2"). The library, the assistant, a plan,
+the E-R diagram and the comparisons have an "own window" button (external-link icon) and come back with *Acoplar*.
+A panel window has a slim title bar: the panel's name, *Acoplar* and the window buttons. Gib appears in one window
+only, the one in use. Closing a window that is not the last asks only when tabs would lose work.
+
 ### Data grid (canvas)
 - Header: column name (600 weight) + type in `--text-faint`, sort indicator, resize handle,
   key icon for PK/FK columns. Double-click the border auto-fits the column.
@@ -491,6 +509,7 @@ Motion explains **where things come from and where they go**; it is never decora
 | Move line up/down | Ctrl+Shift+↑ / ↓ |
 | Multiple cursors | Alt+Click, Alt+J |
 | New console | Ctrl+Shift+L |
+| New window | Ctrl+Shift+N |
 | Commit / rollback | Ctrl+Alt+Shift+C / Ctrl+Alt+Shift+R |
 | Toggle explorer / results | Alt+1 / Alt+4 |
 | Recent tabs | Ctrl+E |

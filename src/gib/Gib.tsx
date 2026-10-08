@@ -67,15 +67,18 @@ export function Gib(props: {
   };
 
   onMount(() => {
-    // The app sets data-motion from its settings; elsewhere (the installer) the system setting decides.
-    const motion = document.documentElement.dataset.motion;
-    const reduce = motion ? motion === "reduce" : window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduce) return;
+    // The app sets data-motion from its settings (and may change it later); elsewhere (the installer) the system
+    // setting decides. Read at every blink, so switching "reduce motion" on stops them at once.
+    const reduce = () => {
+      const motion = document.documentElement.dataset.motion;
+      return motion ? motion === "reduce" : window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    };
     let timer = 0;
     const schedule = () => {
       const wait = 2500 + Math.random() * 4500;
       timer = window.setTimeout(() => {
-        if (mood() !== "sleep" && mood() !== "think") {
+        // Nobody is looking (another window has the focus, or it is minimised): no blinks either.
+        if (!reduce() && !document.hidden && document.hasFocus() && mood() !== "sleep" && mood() !== "think") {
           setBlink(true);
           window.setTimeout(() => setBlink(false), 120);
           if (Math.random() < 0.25) {
@@ -89,9 +92,20 @@ export function Gib(props: {
       }, wait);
     };
     schedule();
+    // The eyes follow the pointer: at most once per frame (one layout read, then style writes), and not for a Gib
+    // that is not on screen.
+    let frame = 0;
+    let pointer: PointerEvent | null = null;
     const look = (event: PointerEvent) => {
-      if (!root || mood() === "busy" || mood() === "sleep" || mood() === "think") return;
+      pointer = event;
+      if (!frame) frame = window.requestAnimationFrame(follow);
+    };
+    const follow = () => {
+      frame = 0;
+      const event = pointer;
+      if (!event || !root || reduce() || mood() === "busy" || mood() === "sleep" || mood() === "think") return;
       const box = root.getBoundingClientRect();
+      if (!box.width) return;
       // The side the cursor is on: an annoyed Gib swats with the arm on that side.
       setSide(event.clientX < box.left + box.width / 2 ? "left" : "right");
       const dx = (event.clientX - (box.left + box.width / 2)) / 80;
@@ -102,6 +116,7 @@ export function Gib(props: {
     window.addEventListener("pointermove", look);
     onCleanup(() => {
       window.clearTimeout(timer);
+      window.cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", look);
     });
   });

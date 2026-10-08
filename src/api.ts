@@ -29,6 +29,8 @@ export interface Backend {
   fetch(sessionId: string, n: number): Promise<FetchOutput>;
   closeCursor(sessionId: string): Promise<void>;
   cancel(sessionId: string): Promise<void>;
+  /** What the session is doing besides the statement (reading the rest of a result to keep the session), or null. */
+  sessionProgress(sessionId: string): Promise<string | null>;
   setAutocommit(sessionId: string, on: boolean): Promise<boolean>;
   commit(sessionId: string): Promise<boolean>;
   rollback(sessionId: string): Promise<boolean>;
@@ -45,7 +47,11 @@ export interface Backend {
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
   loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
-  saveJson(name: "settings" | "workspace" | "library", value: unknown): Promise<void>;
+  /**
+   * Writes a shared file through the core, which tells the other windows. `merge`: `value` holds only some top-level
+   * keys, merged into what the file has. In the desktop app the workspace is written by windows.ts instead.
+   */
+  saveJson(name: "settings" | "workspace" | "library", value: unknown, merge?: boolean): Promise<void>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */
@@ -72,8 +78,11 @@ export interface Backend {
   mcpClientInfo(): Promise<McpClientInfo>;
   mcpInstallClaudeDesktop(): Promise<string>;
   mcpTestTool(name: string, args: Record<string, unknown>): Promise<unknown>;
-  pickSavePath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
+  /** `defaultName`: the file name the dialog proposes. */
+  pickSavePath(filters: { name: string; extensions: string[] }[], defaultName?: string): Promise<string | null>;
   pickOpenPath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
+  /** Several files at once (an empty list when cancelled). */
+  pickOpenPaths(filters: { name: string; extensions: string[] }[]): Promise<string[]>;
   onExportProgress(cb: (progress: { exportId: string; rows: number }) => void): Promise<() => void>;
   onDriverDownload(cb: (progress: { done: number; total: number }) => void): Promise<() => void>;
 }
@@ -101,6 +110,7 @@ function tauriBackend(): Backend {
     fetch: (sessionId, n) => invoke("fetch", { sessionId: sessionId, n }),
     closeCursor: (sessionId) => invoke("close_cursor", { sessionId: sessionId }),
     cancel: (sessionId) => invoke("cancel", { sessionId: sessionId }),
+    sessionProgress: (sessionId) => invoke("session_progress", { sessionId: sessionId }),
     setAutocommit: (sessionId, on) => invoke("set_autocommit", { sessionId: sessionId, on }),
     commit: (sessionId) => invoke("commit", { sessionId: sessionId }),
     rollback: (sessionId) => invoke("rollback", { sessionId: sessionId }),
@@ -118,7 +128,7 @@ function tauriBackend(): Backend {
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
     clearHistory: () => invoke("clear_history"),
     loadJson: (name) => invoke("load_json", { name }),
-    saveJson: (name, value) => invoke("save_json", { name, value }),
+    saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),
     readSpreadsheet: (path, sheet) => invoke("read_spreadsheet", { path, sheet: sheet ?? null }),
     writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),
@@ -145,9 +155,9 @@ function tauriBackend(): Backend {
     mcpClientInfo: () => invoke("mcp_client_info"),
     mcpInstallClaudeDesktop: () => invoke("mcp_install_claude_desktop"),
     mcpTestTool: (name, args) => invoke("mcp_test_tool", { name, args }),
-    pickSavePath: async (filters) => {
+    pickSavePath: async (filters, defaultName) => {
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const picked = await save({ filters });
+      const picked = await save({ filters, defaultPath: defaultName });
       return picked ?? null;
     },
     pickOpenPath: async (filters) => {
@@ -161,6 +171,11 @@ function tauriBackend(): Backend {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const picked = await open({ multiple: false, directory: false, filters });
       return typeof picked === "string" ? picked : null;
+    },
+    pickOpenPaths: async (filters) => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({ multiple: true, directory: false, filters });
+      return Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
     },
     onExportProgress: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");

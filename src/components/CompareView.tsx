@@ -1,8 +1,10 @@
-import { GitCompare, X } from "lucide-solid";
+import { ExternalLink, GitCompare, X } from "lucide-solid";
 import { createMemo, For, Show } from "solid-js";
 import { compareResults } from "../compare";
 import { closeCompare, currentResultOf, kindOf, setCompareKey, type SqlTab } from "../state";
 import { DataGrid } from "./Grid";
+import { isTauri } from "../api";
+import { detachPanel, isPanelWindow } from "../windows";
 
 /**
  * A pinned result next to the current one: rows matched by a key (guessed, or chosen), changed cells marked,
@@ -50,6 +52,9 @@ export function CompareView(props: { tab: SqlTab }) {
             <For each={shared()}>{(name) => <option value={name}>{name}</option>}</For>
           </select>
         </label>
+        <Show when={isTauri() && !isPanelWindow()}>
+          <button type="button" class="icon-btn" title="Abrir la comparación en su propia ventana" onClick={() => void detachPanel("compare")}><ExternalLink size={14} /></button>
+        </Show>
         <button type="button" class="icon-btn" title="Cerrar la comparación" onClick={() => closeCompare(props.tab.id)}><X size={15} /></button>
       </div>
       <Show when={comparison()?.onlyOld.length || comparison()?.onlyNew.length}>

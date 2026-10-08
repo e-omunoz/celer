@@ -36,7 +36,7 @@ export function BusyOverlay(props: { tabId: string }) {
               <Show when={info()!.detail}> · {info()!.detail}</Show>
             </span>
             <div class="busy-track" classList={{ indeterminate: pct() === null }}>
-              <div class="busy-fill" style={{ width: pct() === null ? undefined : `${pct()}%` }} />
+              <div class="busy-fill" style={{ transform: pct() === null ? undefined : `translateX(${pct()! - 100}%)` }} />
             </div>
           </div>
           <Show when={info()!.cancel}>

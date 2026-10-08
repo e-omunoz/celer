@@ -648,7 +648,7 @@ kbd {
 .running-timer { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
 .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse-op 0.6s ease-in-out infinite alternate; }
 .progress-bar { position: absolute; left: 0; right: 0; top: 34px; height: 2px; overflow: hidden; z-index: 4; }
-.progress-bar::after { content: ""; position: absolute; top: 0; bottom: 0; width: 35%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: indeterminate 1.1s ease-in-out infinite; }
+.progress-bar::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: indeterminate 1.1s ease-in-out infinite; }
 .data-toolbar + .progress-bar { top: auto; position: relative; margin-bottom: -2px; }
 
 .affected { display: flex; align-items: center; gap: 14px; margin: 28px; padding: 18px 20px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--success) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--success) 25%, var(--border)); color: var(--success); width: fit-content; }
@@ -695,11 +695,12 @@ kbd {
 .busy-body b { font-size: 14px; font-weight: 600; }
 .busy-detail { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .busy-track { position: relative; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--text) 10%, transparent); overflow: hidden; margin-top: 2px; }
-.busy-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 160ms linear; }
-.busy-track.indeterminate .busy-fill { position: absolute; width: 34%; animation: busy-slide 1.25s cubic-bezier(.45, .05, .35, 1) infinite; }
+/* Progress moves the bar (transform), never its width: no layout on every step. */
+.busy-fill { width: 100%; height: 100%; border-radius: 3px; background: var(--accent); transform: translateX(-100%); transition: transform 160ms linear; }
+.busy-track.indeterminate .busy-fill { position: absolute; left: 0; width: 34%; transition: none; animation: busy-slide 1.25s cubic-bezier(.45, .05, .35, 1) infinite; }
 @keyframes busy-in { from { opacity: 0; } }
-@keyframes busy-slide { from { left: -34%; } to { left: 100%; } }
-:root[data-motion="reduce"] .busy-track.indeterminate .busy-fill { animation: none; left: 0; width: 100%; opacity: 0.5; }
+@keyframes busy-slide { from { transform: translateX(-100%); } to { transform: translateX(295%); } }
+:root[data-motion="reduce"] .busy-track.indeterminate .busy-fill { animation: none; transform: none; width: 100%; opacity: 0.5; }
 .cell-editor { position: absolute; display: flex; z-index: 5; box-shadow: var(--shadow-md); border-radius: 3px; }
 .cell-editor input { flex: 1; min-width: 0; border: 1.5px solid var(--accent); border-radius: 3px 0 0 3px; background: var(--surface); padding: 0 7px; font-family: var(--mono); font-size: 12.5px; }
 .cell-editor button { padding: 0 7px; font-size: 10.5px; font-weight: 600; border: 1.5px solid var(--accent); border-left: 0; border-radius: 0 3px 3px 0; background: var(--popover); color: var(--text-muted); }
@@ -815,18 +816,59 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .history-item small i { width: 6px; height: 6px; border-radius: 50%; }
 .history-item small i.ok { background: var(--success); }
 .history-item small i.bad { background: var(--danger); }
-.library-item { position: relative; border-radius: 6px; }
-.library-item.open { box-shadow: inset 2px 0 0 var(--accent); }
-.library-item .history-item { padding-right: 58px; }
-.library-title { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.library-item .history-item code { color: var(--text-muted); -webkit-line-clamp: 2; }
-.library-actions { position: absolute; top: 5px; right: 4px; display: flex; gap: 1px; opacity: 0; transition: opacity 120ms; }
-.library-item:hover .library-actions, .library-item:focus-within .library-actions { opacity: 1; }
-.library-rename { width: calc(100% - 58px); margin: 6px 0 6px 8px; padding: 4px 8px; font: inherit; font-size: 12.5px; }
 .library-name { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin: 8px 6px 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2, var(--bg)); }
 .library-name label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
 .library-name-row { display: flex; gap: 6px; align-items: center; }
+.library-name > input, .lib-details > input, .lib-details > select { min-width: 0; padding: 4px 8px; font: inherit; font-size: 12.5px; }
 .library-name-row input { flex: 1; min-width: 0; padding: 4px 8px; font: inherit; font-size: 12.5px; }
+.library-name-row small { font-size: 11px; line-height: 1.35; }
+
+/* Script library: a tree of folders and scripts */
+.library { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.lib-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 8px 14px; }
+.lib-tag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast); }
+.lib-tag small { font-size: 10px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.lib-tag:hover { color: var(--text); border-color: var(--border-strong); }
+.lib-tag.on { color: var(--accent-text); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.lib-tag.small { height: 16px; padding: 0 5px; font-size: 10.5px; }
+.lib-tree { flex: 1; overflow: auto; padding: 2px 6px 12px; outline: none; border-radius: 6px; }
+.lib-tree.drop-root { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
+.lib-row { position: relative; display: flex; align-items: flex-start; gap: 6px; padding: 5px 8px 5px 6px; border-radius: 6px; cursor: default; user-select: none; }
+.lib-row.folder { align-items: center; height: 28px; padding-top: 0; padding-bottom: 0; }
+.lib-row:hover { background: var(--hover); }
+.lib-row.selected { background: var(--active); }
+.lib-tree:focus-visible .lib-row.selected { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.lib-row.open::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--accent); }
+.lib-row.dragging { opacity: 0.45; }
+.lib-row.drop-into { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent); }
+.lib-chevron { display: inline-grid; place-items: center; width: 12px; color: var(--text-faint); transition: transform var(--dur-fast) var(--ease-out); }
+.lib-chevron.open { transform: rotate(90deg); }
+.lib-icon { display: inline-grid; place-items: center; flex: none; line-height: 0; }
+.lib-icon.folder { color: var(--text-muted); }
+.lib-icon.script { color: var(--text-faint); margin-top: 1px; }
+.lib-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.lib-row.script .lib-name { font-weight: 600; color: var(--text); }
+.lib-count { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.lib-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.lib-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lib-dirty { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+.lib-preview { font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; color: var(--text-faint); }
+.lib-conn { display: inline-flex; align-items: center; gap: 4px; margin-right: 2px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-conn i { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+/* Actions over the row's right end; they appear on hover, selection or focus (opacity only) */
+.lib-actions { position: absolute; top: 3px; right: 4px; display: flex; gap: 1px; padding-left: 10px; border-radius: 6px; background: linear-gradient(90deg, transparent, var(--panel) 10px); opacity: 0; pointer-events: none; transition: opacity var(--dur-fast); }
+.lib-row:hover .lib-actions, .lib-row.selected .lib-actions, .lib-row:focus-within .lib-actions { opacity: 1; pointer-events: auto; }
+.lib-rename { flex: 1; min-width: 0; padding: 2px 6px; font: inherit; font-size: 12.5px; }
+.lib-details { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 8px; padding: 10px 12px; margin: 2px 6px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2, var(--bg)); animation: pop-in var(--dur-med) var(--ease-out); transform-origin: top center; }
+.lib-details label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
+.lib-details .library-name-row { grid-column: 1 / -1; }
+.lib-empty p { margin: 0 0 12px; }
+.lib-empty-actions { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+.lib-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.lib-foot span[title] { cursor: help; }
+.tb-icon.lib-save { position: relative; }
+.tb-icon.lib-save.dirty::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
 .inspector { container-type: inline-size; container-name: inspector; }
 .inspector .toolwin-head .seg.small { min-width: 0; overflow: hidden; }
 /* A narrow panel: the tabs that are not open show just their icon (the title says what they are). */
@@ -1058,7 +1100,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .upd-notes li { margin: 2px 0; }
 .upd-progress { margin-bottom: 12px; }
 .upd-track { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--text) 10%, transparent); overflow: hidden; }
-.upd-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 200ms linear, background var(--dur-med); }
+.upd-fill { width: 100%; height: 100%; border-radius: 3px; background: var(--accent); transform: translateX(-100%); transition: transform 200ms linear, background var(--dur-med); }
 .upd-fill.done { background: var(--success); }
 .upd-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .upd-meta span { display: inline-flex; align-items: center; gap: 5px; }
@@ -1219,7 +1261,10 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .tip.ok .tip-actions { display: none; }
 .tip p { margin: 0 0 10px; font-size: 12.5px; line-height: 1.5; }
 .tip.ok p { margin: 0; }
-.tip-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.tip-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.tip-mute { color: var(--text-muted); font-weight: 400; }
+/* Window in the background: Gib's endless loops (breathing, tufts, zzz) wait instead of repainting for nobody. */
+:root[data-focus="out"] :is(.gib-art svg, .gib .tuft, .fx-zzz i, .gib.mood-think .g-all, .gib.mood-think .fore-r, .fx-cloud i) { animation-play-state: paused; }
 
 /* Startup splash */
 .splash { position: fixed; inset: 0; z-index: 300; pointer-events: none; }
@@ -1287,7 +1332,8 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 @keyframes tab-in { from { opacity: 0; } }
 @keyframes slide-up { from { opacity: 0; transform: translateY(6px); } }
 @keyframes morph-in { from { transform: scale(0.92); } }
-@keyframes indeterminate { from { left: -35%; } to { left: 100%; } }
+/* translateX is relative to the bar itself (35 % of the track): from just off the left edge to just off the right. */
+@keyframes indeterminate { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
 
 /* Reduced motion: data-motion comes from Settings › Apariencia (which can follow the system setting). */
 :root[data-motion="reduce"] *, :root[data-motion="reduce"] *::before, :root[data-motion="reduce"] *::after { animation-duration: 60ms !important; animation-iteration-count: 1 !important; transition-duration: 60ms !important; }
@@ -1770,3 +1816,22 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .dc-head { margin: 0 0 8px; padding: 0; border-bottom: 0; }
 .dc-grid { height: min(52vh, 460px); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; }
 .dc-grid > * { flex: 1; min-width: 0; }
+
+/* ============================================================================
+   Several windows: a tab from another window, panels in a window of their own
+   ========================================================================== */
+
+/* A tab dragged out of another Celer window can be dropped on this tab bar. */
+.tabbar.drop-in { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); box-shadow: inset 0 -2px 0 var(--accent); }
+/* The comparisons' "own window" button after the two sides. */
+.sc-sides { grid-auto-flow: column; grid-auto-columns: auto; }
+
+.panel-window .panel-top { height: 36px; }
+.panel-window .brand { font-size: 12.5px; font-weight: 500; }
+.panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); }
+.panel-body > * { flex: 1; min-height: 0; }
+/* A diagram or a comparison fills its window instead of covering an app that is not there. */
+.panel-body > .er-view { position: static; inset: auto; z-index: auto; animation: none; }
+.panel-body > .scrim { display: none; }
+.panel-body > .dialog { position: static; transform: none; width: auto; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; animation: none; overflow: auto; }
+.panel-body > .dialog .dc-grid { height: auto; flex: 1; min-height: 240px; }

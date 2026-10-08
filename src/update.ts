@@ -2,7 +2,8 @@
 // core) and hands over to it. The installer waits for Celer to close, updates in place and reopens it.
 import { createStore } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
-import { beforeClose, notify, saveSettings, state } from "./state";
+import { notify, saveSettings, state } from "./state";
+import { confirmQuit } from "./windows";
 import type { UpdateInfo } from "./types";
 
 export type UpdateStatus = "idle" | "checking" | "current" | "available" | "downloading" | "ready" | "installing" | "error";
@@ -75,10 +76,10 @@ export async function downloadUpdate() {
   }
 }
 
-/** Closes Celer through the usual guard (open transactions, unsaved edits) and runs the installer. */
+/** Closes Celer through the usual guard (open transactions, unsaved edits, in every window) and runs the installer. */
 export async function installUpdate() {
   if (update.status !== "ready" || !update.path) return;
-  if (!(await beforeClose())) return;
+  if (!(await confirmQuit())) return;
   setUpdate({ status: "installing" });
   try {
     await api().updateInstall(update.path, true);

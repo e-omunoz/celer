@@ -1,6 +1,7 @@
 import { CircleAlert, CircleCheck, Info, Search, TriangleAlert, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { commands } from "../commands";
+import { library, loadLibrary, openLibraryScript } from "../library";
 import { ObjIcon } from "../icons";
 import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state } from "../state";
 
@@ -180,6 +181,8 @@ export function Palette() {
     if (state.paletteOpen) {
       setQuery("");
       setActive(0);
+      // Library scripts are listed too ("all"): read the library if the panel never was.
+      void loadLibrary();
       queueMicrotask(() => input?.focus());
     }
   });
@@ -210,6 +213,20 @@ export function Palette() {
           const score = fuzzy(tab.title, q);
           if (!score) continue;
           out.push({ key: `tab:${tab.id}`, label: tab.title, detail: connectionById(tab.connId)?.name, group: "Pestañas abiertas", icon: tab.kind === "table" ? "table" : "console", run: () => selectTab(tab.id), score: score + 8 });
+        }
+        for (const script of library.scripts) {
+          const tags = script.tags.map((tag) => `#${tag}`).join(" ");
+          const score = fuzzy(script.name, q) || fuzzy(`${script.folder} ${script.name} ${tags}`, q) * 0.8;
+          if (!score) continue;
+          out.push({
+            key: `lib:${script.id}`,
+            label: script.name,
+            detail: [script.folder, connectionById(script.connId)?.name, tags].filter(Boolean).join(" · ") || "Biblioteca",
+            group: "Biblioteca",
+            icon: "file",
+            run: () => void openLibraryScript(script.id),
+            score: score + 6,
+          });
         }
       }
     }

@@ -12,9 +12,9 @@ Puedes volver a verla desde la paleta: *Guía de inicio*.
 La ventana tiene tres zonas:
 
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
-- **Pestañas** (centro): consolas SQL y tablas abiertas.
-- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts y el
-  asistente de IA.
+- **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
+- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
+  (Alt+8) y el asistente de IA.
 
 ## Conexiones
 
@@ -109,9 +109,28 @@ UPSERT/MERGE, DELETE, DROP y su DDL.
 
 ## Biblioteca de scripts
 
-**Ctrl+Alt+B** guarda la consola en la biblioteca con un nombre; volver a pulsarlo en una consola abierta desde la
-biblioteca actualiza el script. La pestaña *Biblioteca* del panel derecho los lista para abrir, buscar, renombrar o
-borrar.
+Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer (`library.json`). Se abre con
+**Alt+8**, con el botón del libro en la barra lateral o en la pestaña *Biblioteca* del panel derecho.
+
+- **Guardar**: **Ctrl+Alt+B** guarda la consola con un nombre y una carpeta. En una consola abierta desde la
+  biblioteca, el mismo atajo (o el botón del marcador en la barra de la consola) guarda sus cambios; un punto naranja
+  avisa de que hay cambios sin guardar. *Guardar la consola en la biblioteca como script nuevo* crea otro.
+- **Buscar**: el cuadro busca en el nombre, la carpeta, las etiquetas y el SQL; `#etiqueta` filtra por etiqueta (o haz
+  clic en ella). Los scripts también salen en la paleta (**Shift Shift**).
+- **Abrir y ejecutar**: clic o **Intro** abre el script en su consola (si ya está abierta, va a ella);
+  **Ctrl+Intro** o el botón ▶ lo abre y lo ejecuta entero. Arrastrado al editor, pega su SQL donde lo sueltes.
+- **Organizar**: carpetas y subcarpetas (botón de carpeta nueva o clic derecho), etiquetas y una conexión asociada
+  (lápiz o **Alt+Intro**). Arrastra scripts y carpetas para moverlos. El menú **⋯** ordena por nombre o por uso y
+  muestra solo los de la conexión activa.
+- **Teclado**: flechas para moverse (← → pliegan y despliegan), **F2** renombra, **Ctrl+D** duplica, **Ctrl+C**
+  copia el SQL, **Supr** borra y **Mayús+F10** abre el menú.
+- **Borrar** no pregunta: el aviso que aparece tiene **Deshacer**. Borrar una carpeta con scripts sí pide
+  confirmación (y también se puede deshacer).
+- **Importar y exportar**: *Importar ficheros .sql* crea un script por fichero en la carpeta seleccionada. Un script
+  se exporta como SQL normal; una carpeta o la biblioteca entera, en un solo `.sql` que sigue ejecutándose como script
+  y que, al importarlo, recupera los scripts con sus carpetas y etiquetas.
+
+La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas.
 
 ## Asistente de IA y servidor MCP
 
@@ -121,6 +140,33 @@ datos, nunca tus filas. Necesita una clave de API de Anthropic (*Ajustes › IA 
 El **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y otros clientes MCP usen tus conexiones
 con un nivel de permiso por conexión (ninguno, solo estructura, lectura o escritura), límites de filas y de tiempo,
 columnas enmascaradas y un registro de auditoría.
+
+## Varias ventanas
+
+Celer puede tener varias ventanas, por ejemplo una en cada monitor. Todas comparten las conexiones guardadas, la
+biblioteca, los ajustes, el tema, los atajos y a Gib; cada una tiene sus pestañas, su explorador y su panel derecho.
+
+- **Ventana nueva**: **Ctrl+Mayús+N** (o *Nuevo › Nueva ventana*). Se abre conectada a lo mismo que la ventana desde
+  la que la abres.
+- **Sacar una pestaña**: arrástrala fuera de la barra de pestañas y suéltala donde quieras: la ventana nueva aparece
+  ahí. También con el botón derecho sobre la pestaña: *Mover a una ventana nueva*.
+- **Llevarla a otra ventana**: arrástrala a la barra de pestañas de otra ventana de Celer (se marca al pasar por
+  encima) o elige *Mover a la ventana…* en el menú de la pestaña o en la paleta.
+- **La sesión no se toca**: una consola movida sigue con la misma conexión, la transacción abierta, las filas que
+  faltaban por cargar y las tablas `#temp`. Mientras ejecuta o carga no se puede mover; espera o detenla.
+- **Paneles en su propia ventana**: la biblioteca, el asistente de IA, el plan de ejecución, el diagrama E-R y las
+  comparaciones tienen un botón *Abrir en su propia ventana* (y *Abrir el panel en su propia ventana* en la paleta).
+  La biblioteca y el asistente trabajan con la consola activa de la última ventana de Celer que usaste. *Acoplar* lo
+  devuelve a su sitio.
+- **Cerrar**: al cerrar una ventana que no es la última, Celer pregunta qué hacer con las pestañas que perderían
+  trabajo (una transacción abierta, cambios en una tabla, una consola sin guardar): moverlas a la ventana principal o
+  descartarlas. Cerrar la ventana principal con otras abiertas pregunta si quieres salir de Celer o cerrar solo esa.
+  Cerrar la última sale de Celer, como siempre.
+- **Al volver**: *Salir de Celer* (paleta) cierra todas las ventanas y la próxima vez se abren como estaban, con sus
+  pestañas, en su sitio y en su monitor. Si un monitor ya no está, la ventana aparece en uno que sí. Cerrar las
+  ventanas una a una hace que solo vuelva la última.
+
+Gib vive en una sola ventana: la que estás usando.
 
 ## Personalizar
 
@@ -135,11 +181,24 @@ columnas enmascaradas y un registro de auditoría.
 
 ## Gib
 
-Gib piensa mientras corren las consultas, tiene una idea cuando termina una larga y comparte trucos. Cuando no haces
+Gib piensa mientras corren las consultas, tiene una idea cuando termina una larga y te da consejos. Cuando no haces
 nada un rato se entretiene: bosteza, se va a por un café, programa con su portátil, hace malabares, lee o baila. Si
-le molestas mientras espera, aparta el cursor como a una mosca.
+le persigues con el ratón mientras espera, aparta el cursor como a una mosca.
 
-En *Ajustes › Apariencia* se puede poner en silencio o apagar, y las animaciones se reducen si el sistema lo pide.
+- **Un consejo**: haz clic en él (o *Gib: un consejo* en la paleta). *Otro consejo* pasa al siguiente; primero salen
+  los que no has visto.
+- **Por su cuenta**: unos minutos después de empezar y como mucho uno cada 15 minutos, solo cuando haces una pausa,
+  nunca con una consulta en marcha ni en una conexión de producción, y solo consejos que no has visto. Se cierra solo,
+  al escribir o con *Cerrar*; *No más consejos* lo pone en silencio.
+- **Sobre la consulta que acabas de lanzar**: avisa de `= NULL` (que nunca es cierto), de `NOT IN (SELECT …)` con
+  nulos y de tablas separadas por comas sin `WHERE`; si la consulta tardó, de `LIKE '%…'`, de funciones sobre columnas
+  en el `WHERE`, de `UNION` frente a `UNION ALL` y de `ORDER BY` sin límite. Si repites una consulta, propone guardarla
+  en la biblioteca. Cada aviso sale una vez por sesión y los consejos, como mucho dos veces.
+- *Gib: volver a contar los consejos desde el principio* (paleta) hace que vuelvan a salir todos.
+
+En *Ajustes › Apariencia* se puede poner en silencio (solo avisos, sin consejos por su cuenta) o apagar. Con
+*Animaciones: reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de
+animarse.
 
 ## Dónde guarda Celer sus datos
 

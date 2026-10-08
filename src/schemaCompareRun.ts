@@ -6,6 +6,7 @@ import { api, errorText } from "./api";
 import { compareSchemas, syncScript, type SchemaTable, type TableDiff } from "./schemaCompare";
 import { connectionById, kindOf, notify, openQuery, openSessionFor, patchTab, persistSoon } from "./state";
 import type { DbKind, MetaNode, ObjectRef } from "./types";
+import { forwardFromPanel } from "./windows";
 
 export interface SchemaRef {
   connId: string;
@@ -123,6 +124,8 @@ async function readColumns(sid: string, tables: ObjectRef[], tick: () => void, l
 }
 
 export function swapCompare() {
+  // In a window of its own: the window it came from compares again (it has the connections) and sends it over.
+  if (forwardFromPanel("schema-swap")) return;
   const { source, target } = schemaCompare;
   if (source && target && !schemaCompare.loading) void runCompare(target, source);
 }
@@ -134,6 +137,7 @@ export function closeSchemaCompare() {
 
 /** The script that makes the target like the source, in a new console on the target. */
 export function openSyncScript() {
+  if (forwardFromPanel("schema-script")) return;
   const { source, target } = schemaCompare;
   if (!source || !target) return;
   const dialect: DbKind = kindOf(target.connId);

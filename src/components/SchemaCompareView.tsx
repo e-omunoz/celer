@@ -1,8 +1,10 @@
-import { ArrowLeftRight, ArrowRight, FileCode2, LoaderCircle } from "lucide-solid";
+import { ArrowLeftRight, ArrowRight, ExternalLink, FileCode2, LoaderCircle } from "lucide-solid";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { compareCounts, type TableDiff } from "../schemaCompare";
 import { closeSchemaCompare, openSyncScript, schemaCompare, schemaTitle, setSchemaCompare, swapCompare } from "../schemaCompareRun";
 import { Dialog } from "./Modals";
+import { isTauri } from "../api";
+import { detachPanel, isPanelWindow } from "../windows";
 
 type Filter = "all" | TableDiff["status"];
 
@@ -43,6 +45,11 @@ export function SchemaCompareView() {
           <small>Destino (lo que cambiaría)</small>
           <b>{schemaCompare.target ? schemaTitle(schemaCompare.target) : ""}</b>
         </div>
+        <Show when={isTauri() && !isPanelWindow()}>
+          <button type="button" class="icon-btn sc-detach" title="Abrir la comparación en su propia ventana" onClick={() => void detachPanel("schema-compare")}>
+            <ExternalLink size={14} />
+          </button>
+        </Show>
       </div>
       <Show when={!schemaCompare.loading} fallback={
         <div class="export-progress sc-progress">

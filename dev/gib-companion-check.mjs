@@ -1,6 +1,6 @@
 // Gib in the status bar of the desktop app: an idle activity from the palette ("Gib: haz algo"), the cursor
-// over him (annoyed, swatting), a click (grumpy) and insisting (a grumble, then a tip). Saves crops of the corner
-// to <outDir> and a contact sheet. Needs the desktop app with CDP (dev/run-desktop.ps1).
+// over him (annoyed, swatting), a click (a tip, "Otro consejo") and clicking on and on (a grumble). Saves crops of
+// the corner to <outDir> and a contact sheet. Needs the desktop app with CDP (dev/run-desktop.ps1).
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect, sleep } from "./cdp-lib.mjs";
@@ -77,33 +77,31 @@ await sleep(300);
 check("cursor on his left: he swats with the left arm", (await js(`return gib().classList.contains('side-left');`)) === true);
 await crop("annoyed-left");
 
-// A click: grumpy (no tip any more); insisting: a grumble, the fourth softens into an offer.
+// A click: a tip (he stops swatting while he talks); a second click closes it; clicking on and on: a grumble.
 const click = async () => {
   await app.send("Input.dispatchMouseEvent", { type: "mousePressed", x: g.x, y: g.y, button: "left", clickCount: 1 });
   await app.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: g.x, y: g.y, button: "left", clickCount: 1 });
 };
+const bubble = () => js(`return { mood: [...gib().classList].find((c) => c.startsWith('mood-')), text: document.querySelector('.companion .tip p')?.textContent ?? '', buttons: [...document.querySelectorAll('.companion .tip button')].map((b) => b.textContent) };`);
 await click();
 await sleep(380); // single clicks wait 230 ms to tell them from a double click
-const grumpy = await js(`return { mood: [...gib().classList].find((c) => c.startsWith('mood-')), tip: document.querySelector('.companion .tip')?.textContent ?? '' };`);
-check("a click makes him grumpy, not a tip", grumpy.mood === "mood-grumpy" && !grumpy.tip, JSON.stringify(grumpy));
+const first = await bubble();
+check("a click gives a tip", first.text.length > 20 && first.buttons.includes("Otro consejo"), JSON.stringify(first));
+check("he does not swat while he talks", first.mood !== "mood-annoyed" && first.mood !== "mood-grumpy", JSON.stringify(first));
+await crop("tip");
+await js(`[...document.querySelectorAll('.companion .tip button')].find((b) => b.textContent === 'Otro consejo')?.click(); await sleep(150);`);
+const second = await bubble();
+check("'Otro consejo' shows another one", second.text.length > 20 && second.text !== first.text, JSON.stringify(second));
+await click();
+await sleep(380);
+check("a click on him closes the tip", (await bubble()).text === "");
+await click();
+await sleep(380);
+await click();
+await sleep(380);
+const grumble = await bubble();
+check("the fourth click in a row is pestering: a grumble", grumble.mood === "mood-grumpy" && /bot[oó]n|mosca|clics/i.test(grumble.text), JSON.stringify(grumble));
 await crop("grumpy");
-await sleep(500);
-await click();
-await sleep(380);
-const grumble = await js(`return document.querySelector('.companion .tip')?.textContent ?? '';`);
-check("insisting gets a grumble", /bot[oó]n|mosca|esperando/i.test(grumble), grumble);
-await click();
-await sleep(380);
-await click();
-await sleep(380);
-await click();
-await sleep(380);
-const offer = await js(`return { text: document.querySelector('.companion .tip')?.textContent ?? '', action: [...document.querySelectorAll('.companion .tip button')].map((b) => b.textContent) };`);
-check("the fifth click offers a tip", /consejo/i.test(offer.text) && offer.action.includes("Sí, uno"), JSON.stringify(offer));
-await crop("offer");
-await js(`[...document.querySelectorAll('.companion .tip button')].find((b) => b.textContent === 'Sí, uno')?.click(); await sleep(200);`);
-const tip = await js(`return document.querySelector('.companion .tip')?.textContent ?? '';`);
-check("accepting shows a real tip", tip.length > 20 && !tip.includes("¿Quieres"), tip);
 await app.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 600, y: 300 });
 await sleep(1600);
 check("moving away calms him down", (await js(`return gib().classList.contains('mood-idle');`)) === true);

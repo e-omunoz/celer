@@ -74,7 +74,7 @@ export function UpdateDialog() {
 
       <Show when={update.status === "downloading" || update.status === "ready" || update.status === "installing"}>
         <div class="upd-progress">
-          <div class="upd-track"><div class="upd-fill" classList={{ done: update.status !== "downloading" }} style={{ width: `${update.status === "downloading" ? pct() : 100}%` }} /></div>
+          <div class="upd-track"><div class="upd-fill" classList={{ done: update.status !== "downloading" }} style={{ transform: `translateX(${(update.status === "downloading" ? pct() : 100) - 100}%)` }} /></div>
           <div class="upd-meta">
             <span>
               <Switch>

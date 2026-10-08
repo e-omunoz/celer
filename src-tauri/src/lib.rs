@@ -16,6 +16,7 @@ mod sqlite;
 mod startup;
 mod store;
 mod update;
+mod windows;
 
 use std::sync::Arc;
 
@@ -39,6 +40,8 @@ struct AppState {
     sessions: Sessions,
     /// Servidor MCP en modo vista previa (para que la interfaz muestre lo que vería la IA).
     mcp: mcp::McpServer,
+    /// Un solo escritor a la vez de los ficheros que comparten las ventanas (ajustes, biblioteca).
+    files: Mutex<()>,
 }
 
 impl AppState {
@@ -116,6 +119,11 @@ struct ConnSummary {
     has_password: bool,
 }
 
+/// Las conexiones guardadas han cambiado: las demás ventanas las vuelven a leer (windows.ts).
+fn connections_changed(window: &tauri::WebviewWindow) {
+    let _ = window.emit("celer://shared", serde_json::json!({ "name": "connections", "from": window.label() }));
+}
+
 #[tauri::command]
 fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
     state
@@ -131,7 +139,7 @@ fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
 }
 
 #[tauri::command]
-fn save_connection(state: State<'_, Arc<AppState>>, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
+fn save_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     if cfg.id.is_empty() {
         cfg.id = uuid::Uuid::new_v4().to_string();
     }
@@ -143,31 +151,42 @@ fn save_connection(state: State<'_, Arc<AppState>>, mut cfg: ConnConfig) -> CmdR
         state.store.delete_password(&cfg.id);
     }
     cfg.password = None;
-    let mut conns = state.conns.lock();
-    match conns.iter_mut().find(|c| c.id == cfg.id) {
-        Some(c) => *c = cfg.clone(),
-        None => conns.push(cfg.clone()),
+    {
+        let mut conns = state.conns.lock();
+        match conns.iter_mut().find(|c| c.id == cfg.id) {
+            Some(c) => *c = cfg.clone(),
+            None => conns.push(cfg.clone()),
+        }
+        state.store.save_connections(&conns).map_err(err)?;
     }
-    state.store.save_connections(&conns).map_err(err)?;
+    connections_changed(&window);
     Ok(cfg)
 }
 
 #[tauri::command]
-fn reorder_connections(state: State<'_, Arc<AppState>>, ids: Vec<String>) -> CmdResult<()> {
-    let mut conns = state.conns.lock();
-    conns.sort_by_key(|c| ids.iter().position(|i| *i == c.id).unwrap_or(usize::MAX));
-    state.store.save_connections(&conns).map_err(err)
+fn reorder_connections(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, ids: Vec<String>) -> CmdResult<()> {
+    {
+        let mut conns = state.conns.lock();
+        conns.sort_by_key(|c| ids.iter().position(|i| *i == c.id).unwrap_or(usize::MAX));
+        state.store.save_connections(&conns).map_err(err)?;
+    }
+    connections_changed(&window);
+    Ok(())
 }
 
 #[tauri::command]
-fn delete_connection(state: State<'_, Arc<AppState>>, id: String) -> CmdResult<()> {
+fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, id: String) -> CmdResult<()> {
     for s in state.sessions.remove_for_conn(&id) {
         s.cancel();
     }
     state.store.delete_password(&id);
-    let mut conns = state.conns.lock();
-    conns.retain(|c| c.id != id);
-    state.store.save_connections(&conns).map_err(err)
+    {
+        let mut conns = state.conns.lock();
+        conns.retain(|c| c.id != id);
+        state.store.save_connections(&conns).map_err(err)?;
+    }
+    connections_changed(&window);
+    Ok(())
 }
 
 #[tauri::command]
@@ -280,6 +299,13 @@ async fn close_cursor(state: State<'_, Arc<AppState>>, session_id: String) -> Cm
 fn cancel(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<()> {
     state.sessions.get(&session_id).map_err(err)?.cancel();
     Ok(())
+}
+
+/// What a session is doing besides the statement itself (reading the rest of a result to keep the session), while
+/// it runs.
+#[tauri::command]
+fn session_progress(state: State<'_, Arc<AppState>>, session_id: String) -> Option<String> {
+    state.sessions.get(&session_id).ok().and_then(|h| h.progress())
 }
 
 #[tauri::command]
@@ -478,22 +504,48 @@ fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_j
     state.store.load_json(&format!("{name}.json")).map_err(err)
 }
 
+/// Ajustes y biblioteca, que comparten todas las ventanas. `merge`: `value` trae solo unas claves, que se
+/// ponen sobre lo que tiene el fichero (dos ventanas que cambian ajustes distintos a la vez no se deshacen nada).
+/// La disposición de las ventanas (`workspace.json`) la escribe windows.rs con la parte de cada una.
 #[tauri::command]
 fn save_json(
+    window: tauri::WebviewWindow,
     state: State<'_, Arc<AppState>>,
     name: String,
     value: serde_json::Value,
+    merge: Option<bool>,
 ) -> CmdResult<()> {
-    if !matches!(name.as_str(), "settings" | "workspace" | "library") {
+    if !matches!(name.as_str(), "settings" | "library") {
         return Err("Nombre no permitido".into());
     }
+    let file = format!("{name}.json");
+    let _writing = state.files.lock();
+    let value = if merge.unwrap_or(false) {
+        merged(state.store.read(&file).as_deref(), value)
+    } else {
+        value
+    };
     state
         .store
-        .write_atomic(
-            &format!("{name}.json"),
-            &serde_json::to_string(&value).map_err(err)?,
-        )
-        .map_err(err)
+        .write_atomic(&file, &serde_json::to_string(&value).map_err(err)?)
+        .map_err(err)?;
+    // Las demás ventanas se ponen al día (windows.ts, "celer://shared").
+    let _ = window.emit("celer://shared", serde_json::json!({ "name": name, "value": value, "from": window.label() }));
+    Ok(())
+}
+
+/// Las claves de primer nivel de `patch` sobre el objeto de `current` (lo que no sea un objeto se descarta).
+fn merged(current: Option<&str>, patch: serde_json::Value) -> serde_json::Value {
+    let mut base = current
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let (Some(target), serde_json::Value::Object(changes)) = (base.as_object_mut(), patch) {
+        for (key, value) in changes {
+            target.insert(key, value);
+        }
+    }
+    base
 }
 
 #[tauri::command]
@@ -879,9 +931,12 @@ pub fn run() {
                 conns: Mutex::new(conns),
                 sessions: Sessions::default(),
                 mcp,
+                files: Mutex::new(()),
             }));
+            app.manage(windows::Windows::default());
             Ok(())
         })
+        .on_window_event(windows::on_event)
         .invoke_handler(tauri::generate_handler![
             list_connections,
             save_connection,
@@ -896,6 +951,7 @@ pub fn run() {
             fetch,
             close_cursor,
             cancel,
+            session_progress,
             set_autocommit,
             commit,
             rollback,
@@ -934,6 +990,20 @@ pub fn run() {
             ai_key_status,
             ai_key_set,
             ai_key_get,
+            windows::window_open,
+            windows::window_inbox,
+            windows::window_post,
+            windows::window_list,
+            windows::window_layout_load,
+            windows::window_report,
+            windows::window_forget,
+            windows::window_screen,
+            windows::window_place,
+            windows::window_raise,
+            windows::window_quit,
+            windows::tab_drag_start,
+            windows::tab_drag_claim,
+            windows::tab_drag_end,
         ])
         .run(tauri::generate_context!())
         .expect("error al iniciar Celer");

@@ -186,6 +186,7 @@ The exit code is 0 on success; errors are written to `%TEMP%\celer-setup.log`.
 | `Ctrl+N` | Go to table |
 | `Ctrl+Shift+A` | Actions |
 | `Ctrl+Shift+L` | New console |
+| `Ctrl+Shift+N` | New window (drag a tab out of the tab bar to move it to one) |
 | `Ctrl+Alt+N` | New connection |
 | `Ctrl+Alt+L` | Format SQL |
 | `Ctrl+Shift+E` | Execution plan |
@@ -193,6 +194,7 @@ The exit code is 0 on success; errors are written to `%TEMP%\celer-setup.log`.
 | `Ctrl+Alt+I` | AI assistant |
 | `Ctrl+Alt+E` | History |
 | `Ctrl+Alt+B` | Save the console in the script library |
+| `Alt+8` | Script library |
 | `Ctrl+Alt+S` | Settings |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
 

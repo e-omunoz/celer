@@ -1,9 +1,11 @@
-import { ArrowLeftRight, FileCode2, LoaderCircle } from "lucide-solid";
+import { ArrowLeftRight, ExternalLink, FileCode2, LoaderCircle } from "lucide-solid";
 import { Show } from "solid-js";
 import { closeDataCompare, DATA_LIMIT, dataCompare, openDataSyncScript, swapDataCompare, tableTitle } from "../dataCompareRun";
 import { kindOf } from "../state";
 import { DataGrid } from "./Grid";
 import { Dialog } from "./Modals";
+import { isTauri } from "../api";
+import { detachPanel, isPanelWindow } from "../windows";
 
 /** The rows of two tables side by side: changed cells marked, rows only in the target struck, new ones at the end. */
 export function DataCompareView() {
@@ -23,6 +25,11 @@ export function DataCompareView() {
           <small>Destino (lo que cambiaría)</small>
           <b>{dataCompare.target ? tableTitle(dataCompare.target) : ""}</b>
         </div>
+        <Show when={isTauri() && !isPanelWindow()}>
+          <button type="button" class="icon-btn sc-detach" title="Abrir la comparación en su propia ventana" onClick={() => void detachPanel("data-compare")}>
+            <ExternalLink size={14} />
+          </button>
+        </Show>
       </div>
       <Show when={!dataCompare.loading} fallback={
         <div class="export-progress sc-progress">

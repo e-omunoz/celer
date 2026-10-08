@@ -44,8 +44,9 @@ const TOUR: Spot[] = [
   { selector: ".pane-host.active .tb-btn.run", title: "Ejecutar", body: "Ctrl+Intro ejecuta la sentencia del cursor o la selección; Ctrl+Mayús+Intro, el script entero. El botón se convierte en «Detener» mientras corre." },
   { selector: ".pane-host.active .results", title: "Resultados", body: "Millones de filas sin bloquear nada: se leen por páginas. Selecciona celdas para ver suma y media abajo, Ctrl+F para buscar, clic derecho para copiar como CSV, JSON, INSERT…" },
   { selector: ".search-trigger", title: "Buscar en todo", body: "Pulsa Mayús dos veces (o Ctrl+K) para saltar a cualquier tabla, pestaña o acción. Ctrl+N va directo a una tabla." },
+  { selector: ".stripe-btn[title^='Biblioteca']", title: "Biblioteca de scripts", body: "Las consultas que repites, guardadas con nombre (Ctrl+Alt+B desde la consola). Ordénalas en carpetas y etiquetas, ábrelas o ejecútalas con un clic y arrástralas al editor." },
   { selector: ".stripe-btn[title^='Asistente']", title: "Asistente de IA", body: "Genera, explica, corrige y optimiza SQL con Claude usando tu esquema real, nunca tus filas. Y desde Ajustes › IA, un servidor MCP con permisos por conexión." },
-  { selector: ".companion .gib", title: "Gib", body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan; si no hay nada que hacer, me entretengo a mi manera. No me persigas con el ratón, que me molesta. ¿Consejos? «Gib: un consejo» en la paleta." },
+  { selector: ".companion .gib", title: "Gib", body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan; si no hay nada que hacer, me entretengo a mi manera. No me persigas con el ratón, que me molesta. ¿Un consejo? Haz clic en mí." },
 ];
 
 const KEYS: [string, string][] = [
@@ -331,7 +332,7 @@ export function Onboarding() {
                     <Match when={step() === "done"}>
                       <div class="onb-screen">
                         <h1>Ya lo tienes.</h1>
-                        <p class="onb-lead">Me quedo en la esquina de abajo a la derecha. Si quieres un consejo, búscame en la paleta: «Gib: un consejo». Puedes repetir esta guía desde la paleta: «Guía de inicio».</p>
+                        <p class="onb-lead">Me quedo en la esquina de abajo a la derecha. Si quieres un consejo, haz clic en mí. Puedes repetir esta guía desde la paleta: «Guía de inicio».</p>
                         <div class="onb-cards">
                           <button type="button" class="onb-card action" onClick={() => { close(true); setState({ paletteOpen: true, paletteMode: "all" }); }}><Sparkles size={16} /><b>Abrir la paleta</b><small>Mayús Mayús</small></button>
                           <button type="button" class="onb-card action" onClick={() => { close(true); openConnDialog(); }}><Database size={16} /><b>Nueva conexión</b><small>Ctrl+Alt+N</small></button>

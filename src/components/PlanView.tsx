@@ -1,7 +1,9 @@
-import { ChevronRight, Copy, Gauge, RefreshCw, TriangleAlert } from "lucide-solid";
+import { ChevronRight, Copy, ExternalLink, Gauge, RefreshCw, TriangleAlert } from "lucide-solid";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { flatten, planText, type Plan, type PlanNode } from "../plan";
 import { canAnalyze, copyText, explainStatement, formatMs, type SqlTab } from "../state";
+import { isTauri } from "../api";
+import { detachPanel, isPanelWindow } from "../windows";
 
 /**
  * An execution plan as a tree: what each step does, on what, rows (estimated, and real with ANALYZE), and a bar
@@ -91,6 +93,9 @@ export function PlanView(props: { tab: SqlTab; plan: Plan; sql: string }) {
         </Show>
         <button type="button" class="tb-icon" title="Volver a planificar" disabled={props.tab.running} onClick={() => void explainStatement(props.tab.id, props.sql, props.plan.analyzed)}><RefreshCw size={14} /></button>
         <button type="button" class="tb-icon" title="Copiar el plan como texto" onClick={() => void copyText(planText(props.plan), "Plan copiado")}><Copy size={14} /></button>
+        <Show when={isTauri() && !isPanelWindow()}>
+          <button type="button" class="tb-icon" title="Abrir el plan en su propia ventana" onClick={() => void detachPanel("plan")}><ExternalLink size={14} /></button>
+        </Show>
       </div>
       <div class="plan-cols">
         <span>Paso</span>

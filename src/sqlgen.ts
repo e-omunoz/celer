@@ -1,6 +1,7 @@
 // SQL that Celer writes for a table: filters, the changes of the table viewer, generated scripts. Pure (plain
 // data in, text out), so dev/engine-sql.ts can produce the exact statements for each engine and the Rust
 // integration tests run them against real servers.
+import { synapseDedicated } from "./activity.ts";
 import { fitInformixDatetime, sqlLiteral } from "./sql.ts";
 import type { Cell, DbKind, TableColumn } from "./types";
 import type { ColumnFilter } from "./state";
@@ -140,10 +141,15 @@ export function upsertSql(dialect: DbKind, q: string, quoted: string[], params: 
   return `MERGE INTO ${q} ${dialect === "mssql" ? "AS t" : "t"}\nUSING ${source}\nON ${on}${update}\nWHEN NOT MATCHED THEN\n  INSERT (${inserted.map((i) => quoted[i]).join(", ")}) VALUES (${inserted.map((i) => `s.${quoted[i]}`).join(", ")});`;
 }
 
-export function limitClause(kind: DbKind, n: number) {
-  if (kind === "mssql") return `ORDER BY 1 OFFSET 0 ROWS FETCH NEXT ${n} ROWS ONLY`;
-  if (kind === "informix") return "";
-  return `LIMIT ${n}`;
+/**
+ * What limits a generated SELECT to `n` rows: `top` goes right after SELECT, `tail` at the end. Azure Synapse dedicated
+ * / PDW has no OFFSET … FETCH: there it is TOP (the server description tells, as for the plan and the activity).
+ */
+export function selectLimit(kind: DbKind, n: number, serverInfo?: string): { top: string; tail: string } {
+  if (kind === "mssql" && synapseDedicated(serverInfo)) return { top: `TOP ${n} `, tail: "" };
+  if (kind === "mssql") return { top: "", tail: `ORDER BY 1 OFFSET 0 ROWS FETCH NEXT ${n} ROWS ONLY` };
+  if (kind === "informix") return { top: "", tail: "" };
+  return { top: "", tail: `LIMIT ${n}` };
 }
 
 export function explainPrefix(kind: DbKind | undefined) {

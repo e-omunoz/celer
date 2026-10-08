@@ -5,6 +5,7 @@ import {
   AlignLeft,
   ArrowDownToLine,
   ArrowRight,
+  BookmarkPlus,
   Check,
   ChevronDown,
   CircleAlert,
@@ -109,11 +110,15 @@ import {
   type TableTab,
 } from "../state";
 import { engineOf, type Cell } from "../types";
+import { api, isTauri } from "../api";
 import { CodeView, SqlEditor } from "./Editor";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
+import { libraryDirty, saveToLibrary, scriptById } from "../library";
+import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
+import { windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 
@@ -144,19 +149,42 @@ export function Workspace() {
 function TabBar() {
   const [dragFrom, setDragFrom] = createSignal(-1);
   const [renaming, setRenaming] = createSignal("");
+  /** The tab was dropped on this tab bar (a reorder): it does not go to another window. */
+  let droppedHere = false;
 
   function menu(event: MouseEvent, tab: Tab) {
+    // Another window, or a new one: the tab goes on there with its session as it is.
+    const windows = isTauri()
+      ? [
+          { separator: true },
+          { label: "Mover a una ventana nueva", run: () => void sendTab(tab.id, null) },
+          ...otherFullWindows().map((w) => ({ label: `Mover a ${windowName(w.label)}${w.title ? ` (${w.title})` : ""}`, run: () => void sendTab(tab.id, w.label) })),
+        ]
+      : [];
     openMenu(event, [
       { label: "Cerrar", hint: "Ctrl+W", run: () => void closeTab(tab.id) },
       { label: "Cerrar las demás", run: () => void closeOtherTabs(tab.id) },
       { separator: true },
       { label: "Renombrar", disabled: tab.kind !== "sql", run: () => setRenaming(tab.id) },
       { label: "Duplicar consola", disabled: tab.kind !== "sql", run: () => tab.kind === "sql" && openQuery(tab.connId, tab.sql, `${tab.title} (2)`) },
+      ...windows,
     ]);
   }
 
   return (
-    <div class="tabbar" role="tablist" onDblClick={(event) => event.target === event.currentTarget && openQuery(activeSql()?.connId ?? null)}>
+    <div
+      class="tabbar"
+      role="tablist"
+      classList={{ "drop-in": Boolean(incomingDrag()) }}
+      onDblClick={(event) => event.target === event.currentTarget && openQuery(activeSql()?.connId ?? null)}
+      onDragOver={(event) => incomingDrag() && event.preventDefault()}
+      onDrop={(event) => {
+        // A tab from another window let go after the last tab.
+        if (event.target !== event.currentTarget || !incomingDrag()) return;
+        event.preventDefault();
+        claimTabDrop(state.tabs.length);
+      }}
+    >
       <For each={state.tabs}>
         {(tab, index) => {
           const conn = () => connectionById(tab.connId);
@@ -171,15 +199,25 @@ function TabBar() {
               draggable={renaming() !== tab.id}
               onDragStart={(event) => {
                 setDragFrom(index());
+                droppedHere = false;
                 event.dataTransfer?.setData("application/x-celer-tab", tab.id);
+                // Out of the window it goes to another one, or to a new one where it is let go.
+                startTabDrag(tab.id, tab.title);
               }}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
-                if (dragFrom() >= 0) moveTab(dragFrom(), index());
+                event.stopPropagation();
+                if (dragFrom() >= 0) {
+                  droppedHere = true;
+                  moveTab(dragFrom(), index());
+                } else claimTabDrop(index());
                 setDragFrom(-1);
               }}
-              onDragEnd={() => setDragFrom(-1)}
+              onDragEnd={() => {
+                setDragFrom(-1);
+                void endTabDrag(tab.id, droppedHere);
+              }}
               onMouseDown={(event) => {
                 if (event.button === 1) {
                   event.preventDefault();
@@ -339,6 +377,21 @@ function SqlPane(props: { tab: SqlTab }) {
   };
   const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
   const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
+  // What the session does besides the statement (SQL Server reading the rest of the previous result to keep a
+  // transaction or #temp tables): asked every half second while it runs.
+  const [progress, setProgress] = createSignal<string | null>(null);
+  createEffect(() => {
+    const sessionId = props.tab.running ? props.tab.sessionId : null;
+    setProgress(null);
+    if (!sessionId) return;
+    const timer = window.setInterval(() => {
+      void api()
+        .sessionProgress(sessionId)
+        .then((text) => setProgress(props.tab.running ? text : null))
+        .catch(() => setProgress(null));
+    }, 500);
+    onCleanup(() => window.clearInterval(timer));
+  });
 
   function resize(event: MouseEvent) {
     event.preventDefault();
@@ -395,6 +448,15 @@ function SqlPane(props: { tab: SqlTab }) {
         </button>
         <button type="button" class="tb-icon secondary" title={withShortcut("Guardar script", "save")} onClick={() => void saveScript()}>
           <Save size={16} />
+        </button>
+        <button
+          type="button"
+          class="tb-icon secondary lib-save"
+          classList={{ dirty: Boolean(props.tab.libraryId && libraryDirty(props.tab.libraryId)) }}
+          title={withShortcut(props.tab.libraryId && scriptById(props.tab.libraryId) ? `Guardar los cambios en la biblioteca («${scriptById(props.tab.libraryId)!.name}»)` : "Guardar en la biblioteca de scripts", "save-library")}
+          onClick={() => void saveToLibrary()}
+        >
+          <BookmarkPlus size={16} />
         </button>
         <span class="spacer" />
         <ConnectionPicker tab={props.tab} />
@@ -479,7 +541,7 @@ function SqlPane(props: { tab: SqlTab }) {
             </span>
           </Show>
           <Show when={props.tab.running}>
-            <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}</span>
+            <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}<Show when={progress()}>{(text) => <> · {text()}</>}</Show></span>
           </Show>
           <Show when={!props.tab.running && !props.tab.activePlan && !props.tab.compare && result()?.columns.length}>
             <span class="muted small">

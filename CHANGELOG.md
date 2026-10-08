@@ -6,6 +6,67 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Several windows** (desktop app):
+  - **Ctrl+Shift+N** opens a new window, with its own explorer and tabs, connected to what the first one is;
+  - drag a tab out of the tab bar and it opens in a new window where you drop it, or drag it onto another window's
+    tab bar; the tab's menu and the palette also move it ("Mover a una ventana nueva", "Mover a la ventana 2");
+  - a moved console keeps its session: same connection, open transaction, rows still to fetch and `#temp` tables;
+  - the library, the AI assistant, the execution plan, the E-R diagram and the comparisons can go to a window of their
+    own and come back ("Acoplar"); the library and the assistant work with the last window you used;
+  - connections, library, settings, theme, shortcuts and Gib are the same in every window, and Gib lives in one of
+    them at a time;
+  - closing a window that is not the last asks what to do with tabs that would lose work (move them to the main
+    window or discard them); "Salir de Celer" closes them all and the next start opens every window again, with its
+    tabs, size, place and monitor (on another monitor if that one is gone).
+- **Script library**, now useful beyond saving (Alt+8, or the book in the side bar):
+  - folders and subfolders, tags and an optional connection per script; drag scripts and folders to move them;
+  - search by name, folder, tag (`#tag`) and SQL; library scripts also appear in the palette;
+  - open, or open and run (Ctrl+Enter), insert into the console, or drag into the editor to paste the SQL;
+  - rename in place (F2), duplicate (Ctrl+D), copy the SQL, delete with undo (Del), context menu (Shift+F10);
+  - a console opened from the library shows unsaved changes (dot in the toolbar and in the list); save them or drop them;
+  - import `.sql` files, export a script as plain SQL, or a folder or the whole library as one `.sql` that imports back with its folders and tags;
+  - sort by name or recent use, and show only the scripts of the active connection;
+  - palette entries for all of the above.
+- **Gib's advice about the statement you just ran**: `= NULL`, `NOT IN (SELECT …)`, comma joins without `WHERE`, and, when it was slow, `LIKE '%…'`, functions on columns in `WHERE`, `UNION` vs `UNION ALL` and `ORDER BY` without a limit. A query run again and again gets a nudge to save it in the library.
+- **Azure Synapse dedicated SQL pool / PDW**, recognised on connect (`SERVERPROPERTY('EngineEdition')`) and named in the server description:
+  - table DDL with its distribution (`HASH`, `ROUND_ROBIN`, `REPLICATE`) and storage (`CLUSTERED COLUMNSTORE INDEX` with its `ORDER`, `HEAP`, `CLUSTERED INDEX`), primary and unique keys `NOT ENFORCED`, no foreign keys;
+  - execution plan through `EXPLAIN`: the distributed steps, with a warning on big data movements;
+  - server activity from `sys.dm_pdw_exec_sessions` and `sys.dm_pdw_exec_requests`; "Terminar sesión" runs `KILL 'SID…'`;
+  - the explorer leaves out what Synapse lacks (foreign keys, triggers, synonyms, sequences), and syntax Synapse rejects says so instead of showing the parser's raw error.
+- **Fabric Warehouse / Synapse serverless**: table DDL with `IDENTITY` without seed and keys `NOT ENFORCED`.
+- **SQL Server, faster connections**:
+  - a console connects as soon as it opens, in the background, so the first run does not pay the login;
+  - the connection of a closed session (a table, a count, a side session) is kept for a few minutes and reused by the next session with the same settings, without a new login; never one with a transaction, `#temp` tables or `SET` options of its own;
+  - the database, the edition and the server description are read in a single round trip on connect, and are not asked again;
+  - TDS packets of 8000 bytes (4096 before), as mssql-jdbc;
+  - the output shows the time spent connecting or cutting the previous result when there was any; with `CELER_MSSQL_TRACE` set, every statement's times also go to the standard error.
+
+### Changed
+- `workspace.json` moves to version 2 (one entry per window); the main window's tabs stay where older versions read
+  them. Settings are saved as the keys that changed, merged by the core, so two windows never undo each other.
+- Drag and drop inside Celer no longer goes through the native file drop handler.
+- The library file moves to version 2 (folders and tags); version 1 files are read as they are, nothing is lost, and older Celer versions can still read the new file.
+- Gib remembers the tips you have seen and shows the others first; warnings come once per session and tips at most twice. "Gib: volver a contar los consejos desde el principio" resets that.
+- A tip Gib volunteers closes when you type, stays while the pointer is over it, and offers "No más consejos".
+- Progress bars and the busy overlay animate with transforms only, and Gib's endless loops pause while the window is in the background.
+
+### Fixed
+- **Gib no longer gave tips**: since he learnt to swat the cursor, a click only made him grumpy, and his first proactive tip waited 15 minutes. A click gives a tip again (four clicks in a row is pestering), and the first tip comes a few minutes into the session.
+- Gib swatted at the cursor while showing a tip, and his "column does not exist" hint pointed at table names.
+- "Animaciones: reducidas" in Celer's settings was ignored by the start-up animation and by Gib's blinking when the system did not ask for reduced motion.
+- **SQL Server**: running a statement after a big result left half read (the first page of 500) no longer waits up to 3 s for the rest of it and then reconnects, losing the session:
+  - a session with nothing of its own goes on at once in its reserve connection, opened in the background while the result was open (same database, startup script applied); the old one is cut with the TDS `ATTENTION` signal and closed in the background;
+  - a session with an open transaction, the manual transaction mode, `#temp` tables or `SET` options of its own keeps its connection: the rest is read, with its progress next to the running time, and "Detener" is the only way to cut it (then the session is lost).
+- **SQL Server**: a query whose server took more than 30 s to answer failed with a time-out from the driver; it now runs until it ends or is cancelled.
+- **Azure Synapse dedicated SQL pool**:
+  - generated `SELECT`s use `TOP` (Synapse has no `OFFSET … FETCH`);
+  - `USE` and changing the database of a console or of the explorer reconnect to that database, since Synapse has no `USE`;
+  - the explorer's row counts come from `sys.dm_pdw_nodes_db_partition_stats` (`sys.partitions` lacks them there), and without permission to read it the tables are listed without counts;
+  - primary and unique keys `NOT ENFORCED` are also read from `sys.key_constraints`, for the DDL, the explorer and the key columns;
+  - if the server refuses the manual transaction mode, the console says so and stays in automatic mode.
+- **SQL Server**: the DDL of a table failed on Azure Synapse dedicated SQL pool ("Parse error … Incorrect syntax near 'FOR'", code 103010). Index and key columns are no longer joined with `FOR XML PATH`, which Synapse, PDW and Fabric lack; the explorer's "Índices" and "Claves foráneas" too. Same result on SQL Server.
+
 ## [2.0.1] - 2026-10-08
 
 ### Fixed

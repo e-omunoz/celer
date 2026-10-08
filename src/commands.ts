@@ -11,6 +11,7 @@ import {
   disconnect,
   formatActive,
   gib,
+  notify,
   openActivity,
   openConnDialog,
   openInspector,
@@ -30,8 +31,12 @@ import type { ThemeName } from "./types";
 import { askAi } from "./ai";
 import { checkForUpdates } from "./update";
 import { openMigration } from "./migrate";
-import { saveToLibrary } from "./library";
+import { createLibraryFolder, exportLibrary, importLibraryFiles, library, loadLibrary, saveToLibrary, setLibrary, setOnlyConn } from "./library";
 import { chordLabel, chordOf, chordsFor, EDITOR_COMMANDS } from "./keymap";
+import { resetGibTips } from "./gib/memory";
+import { isTauri } from "./api";
+import { detachablePanel, detachPanel, openNewWindow, otherFullWindows, quitCeler, raiseWindow, sendTab } from "./windows";
+import { windowName } from "./windowModel";
 
 export interface Command {
   id: string;
@@ -89,8 +94,21 @@ export function commands(): Command[] {
     { id: "ai-schema", label: "Copiar esquema para IA", group: "IA", run: () => { const id = activeTab()?.connId; if (id) void copySchemaForAi(id); }, enabled: () => Boolean(activeTab()?.connId && state.sessions[activeTab()!.connId!]) },
     { id: "history", label: "Historial de consultas", group: "Ventana", run: () => openInspector("history") },
     { id: "library", label: "Biblioteca de scripts", group: "Ventana", run: () => openInspector("library") },
-    { id: "save-library", label: "Guardar la consola en la biblioteca", group: "Archivo", run: () => void saveToLibrary(), enabled: sqlOnly },
+    { id: "save-library", label: "Guardar la consola en la biblioteca (o sus cambios)", group: "Biblioteca", run: () => void saveToLibrary(), enabled: sqlOnly },
+    { id: "library-save-new", label: "Guardar la consola en la biblioteca como script nuevo", group: "Biblioteca", run: () => void saveToLibrary(true), enabled: sqlOnly },
+    { id: "library-search", label: "Buscar en la biblioteca de scripts", group: "Biblioteca", run: () => { openInspector("library"); void loadLibrary(); setLibrary("focusSearch", library.focusSearch + 1); } },
+    { id: "library-new-folder", label: "Nueva carpeta en la biblioteca", group: "Biblioteca", run: () => void createLibraryFolder("") },
+    { id: "library-import", label: "Importar ficheros .sql a la biblioteca…", group: "Biblioteca", run: () => void importLibraryFiles() },
+    { id: "library-export", label: "Exportar toda la biblioteca a .sql…", group: "Biblioteca", run: () => void exportLibrary({ folder: "" }) },
+    { id: "library-only-conn", label: "Biblioteca: solo los scripts de la conexión activa (activar o quitar)", group: "Biblioteca", run: () => { openInspector("library"); setOnlyConn(!library.onlyConn); } },
     { id: "collapse", label: "Contraer el árbol", group: "Ventana", run: collapseAll },
+    // Several windows (desktop only).
+    { id: "new-window", label: "Ventana nueva, con su explorador y sus pestañas", group: "Ventana", run: () => void openNewWindow(), enabled: isTauri },
+    { id: "tab-new-window", label: "Mover la pestaña a una ventana nueva", group: "Ventana", run: () => void sendTab(state.activeTabId, null), enabled: () => isTauri() && Boolean(activeTab()) },
+    { id: "detach-panel", label: "Abrir el panel en su propia ventana (biblioteca, IA, plan, diagrama o comparación)", group: "Ventana", run: () => { const kind = detachablePanel(); if (kind) void detachPanel(kind); }, enabled: () => isTauri() && Boolean(detachablePanel()) },
+    { id: "detach-library", label: "Biblioteca de scripts en su propia ventana", group: "Biblioteca", run: () => void detachPanel("library"), enabled: isTauri },
+    { id: "detach-ai", label: "Asistente IA en su propia ventana", group: "IA", run: () => void detachPanel("ai"), enabled: isTauri },
+    { id: "quit", label: "Salir de Celer (la próxima vez se abren todas las ventanas)", group: "Archivo", run: () => void quitCeler(), enabled: isTauri },
     { id: "go-table", label: "Ir a tabla…", group: "Navegar", run: () => openPalette("tables") },
     { id: "palette", label: "Buscar en todo (tablas y acciones)", group: "Navegar", run: () => openPalette("all") },
     { id: "palette-actions", label: "Buscar una acción", group: "Navegar", run: () => openPalette("actions") },
@@ -104,11 +122,18 @@ export function commands(): Command[] {
     { id: "guide", label: "Guía de inicio", group: "Ayuda", run: () => setState("onboardingOpen", true) },
     { id: "gib-tip", label: "Gib: un consejo", group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
     { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
+    { id: "gib-reset", label: "Gib: volver a contar los consejos desde el principio", group: "Ayuda", run: () => { resetGibTips(); notify("Gib volverá a darte sus consejos", "success", "Los que ya viste cuentan como nuevos."); } },
     { id: "about", label: "Acerca de Celer", group: "Ayuda", run: () => setState("aboutOpen", true) },
     { id: "update", label: "Buscar actualizaciones", group: "Ayuda", run: () => void checkForUpdates(true) },
   ];
   for (const theme of THEMES) {
     list.push({ id: `theme-${theme.id}`, label: `Tema: ${theme.label}`, group: "Tema", run: () => void saveSettings({ theme: theme.id }) });
+  }
+  // The other windows open now ("window:" commands are not offered for shortcuts: the windows come and go).
+  for (const w of otherFullWindows()) {
+    const name = windowName(w.label);
+    list.push({ id: `window:go:${w.label}`, label: `Ir a ${name}${w.title ? ` (${w.title})` : ""}`, group: "Ventana", run: () => void raiseWindow(w.label) });
+    list.push({ id: `window:move:${w.label}`, label: `Mover la pestaña a ${name}`, group: "Ventana", run: () => void sendTab(state.activeTabId, w.label), enabled: () => Boolean(activeTab()) });
   }
   const user = state.settings.keymap;
   for (const command of list) {

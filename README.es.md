@@ -183,6 +183,7 @@ Devuelve 0 si todo va bien; los errores se escriben en `%TEMP%\celer-setup.log`.
 | `Ctrl+N` | Ir a tabla |
 | `Ctrl+Shift+A` | Acciones |
 | `Ctrl+Shift+L` | Nueva consola |
+| `Ctrl+Shift+N` | Ventana nueva (arrastra una pestaña fuera de la barra para llevarla a otra) |
 | `Ctrl+Alt+N` | Nueva conexión |
 | `Ctrl+Alt+L` | Formatear SQL |
 | `Ctrl+Shift+E` | Plan de ejecución |
@@ -190,6 +191,7 @@ Devuelve 0 si todo va bien; los errores se escriben en `%TEMP%\celer-setup.log`.
 | `Ctrl+Alt+I` | Asistente de IA |
 | `Ctrl+Alt+E` | Historial |
 | `Ctrl+Alt+B` | Guardar la consola en la biblioteca de scripts |
+| `Alt+8` | Biblioteca de scripts |
 | `Ctrl+Alt+S` | Ajustes |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
 

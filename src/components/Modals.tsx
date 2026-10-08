@@ -36,6 +36,7 @@ import { dataCompare } from "../dataCompareRun";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
 import { checkForUpdates, openReleasePage } from "../update";
+import { isDetached, isPanelWindow } from "../windows";
 
 export function Modals() {
   return (
@@ -67,10 +68,11 @@ export function Modals() {
         )}
       </Show>
       <Show when={state.paramAsk}>{(ask) => <ParamsDialog ask={ask()} />}</Show>
-      <Show when={state.er}><ErDiagram /></Show>
+      {/* A panel window shows these itself; a comparison in a window of its own is not shown here too. */}
+      <Show when={state.er && !isPanelWindow()}><ErDiagram /></Show>
       <Show when={state.activity}><ActivityView /></Show>
-      <Show when={schemaCompare.open}><SchemaCompareView /></Show>
-      <Show when={dataCompare.open}><DataCompareView /></Show>
+      <Show when={schemaCompare.open && !isPanelWindow() && !isDetached("schema-compare")}><SchemaCompareView /></Show>
+      <Show when={dataCompare.open && !isPanelWindow() && !isDetached("data-compare")}><DataCompareView /></Show>
       <Show when={state.passwordAsk}>
         {(ask) => (
           <Dialog title={`Conectar a ${ask().name}`} onClose={() => answerPassword(null)} small>

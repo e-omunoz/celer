@@ -17,7 +17,8 @@ export function KeymapSettings() {
   /** A combination that needs a decision (taken by another command) or a note. */
   const [pending, setPending] = createSignal<{ id: string; chord: string; owner?: string; note?: string } | null>(null);
 
-  const list = createMemo(() => commands().filter((c) => !c.id.startsWith("theme-")));
+  // Not the themes, nor the commands of the windows open right now ("window:…").
+  const list = createMemo(() => commands().filter((c) => !c.id.startsWith("theme-") && !c.id.startsWith("window:")));
   const keysOf = (id: string) => chordsFor(id, state.settings.keymap);
   const changed = (id: string) => state.settings.keymap[id] !== undefined;
   const labelOf = (id: string) => list().find((c) => c.id === id)?.label ?? id;
