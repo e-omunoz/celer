@@ -23,8 +23,8 @@ import { defaultSettings, emptyConn, engineOf } from "./types";
 import { changesSql, explainPrefix, limitClause, paramNamesFor, upsertSql, whereOf } from "./sqlgen";
 import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
 import type { ErEdge, ErTable } from "./erLayout";
-import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, type Plan } from "./plan";
-import { activitySpec, readSessions, type ServerSession } from "./activity";
+import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, parseSynapsePlan, type Plan } from "./plan";
+import { activitySpec, readSessions, synapseDedicated, type ServerSession } from "./activity";
 import type { AiMessage } from "./ai";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
@@ -747,6 +747,8 @@ export interface ActivityState {
   /** The monitor's own side session (and its id on the server, to mark it). */
   sessionId: string;
   selfId: string;
+  /** Descripción del servidor de la sesión del monitor (distingue Azure Synapse dentro de SQL Server). */
+  serverInfo: string;
   loading: boolean;
   error: string;
   sessions: ServerSession[];
@@ -763,7 +765,7 @@ export async function openActivity(connId: string) {
     notify("La actividad del servidor no está disponible para este motor", "warning");
     return;
   }
-  setState("activity", { connId, title: conn.name, sessionId: "", selfId: "", loading: true, error: "", sessions: [], updatedAt: 0, canCancel: Boolean(spec.cancel), canKill: Boolean(spec.kill) });
+  setState("activity", { connId, title: conn.name, sessionId: "", selfId: "", serverInfo: "", loading: true, error: "", sessions: [], updatedAt: 0, canCancel: Boolean(spec.cancel), canKill: Boolean(spec.kill) });
   const opened = await openSessionFor(connId).catch((err) => {
     setState("activity", { loading: false, error: errorText(err) });
     return null;
@@ -773,17 +775,18 @@ export async function openActivity(connId: string) {
     void api().closeSession(opened.sessionId).catch(() => {});
     return;
   }
+  const live = activitySpec(conn.kind, opened.serverInfo) ?? spec;
   const self = await api()
-    .execute(opened.sessionId, spec.self, 1)
+    .execute(opened.sessionId, live.self, 1)
     .then((out) => String(out.results[0]?.rows[0]?.[0] ?? ""))
     .catch(() => "");
-  setState("activity", { sessionId: opened.sessionId, selfId: self });
+  setState("activity", { sessionId: opened.sessionId, selfId: self, serverInfo: opened.serverInfo, canCancel: Boolean(live.cancel), canKill: Boolean(live.kill) });
   await refreshActivity();
 }
 
 export async function refreshActivity() {
   const current = state.activity;
-  const spec = activitySpec(kindOf(current?.connId));
+  const spec = activitySpec(kindOf(current?.connId), current?.serverInfo);
   if (!current?.sessionId || !spec) return;
   setState("activity", "loading", true);
   try {
@@ -799,7 +802,7 @@ export async function refreshActivity() {
 /** Cancels a session's running statement, or ends the session (asks first; says so on production). */
 export async function activityAction(id: string, action: "cancel" | "kill") {
   const current = state.activity;
-  const spec = activitySpec(kindOf(current?.connId));
+  const spec = activitySpec(kindOf(current?.connId), current?.serverInfo);
   const make = action === "cancel" ? spec?.cancel : spec?.kill;
   if (!current?.sessionId || !make) return;
   const conn = connectionById(current.connId);
@@ -1468,6 +1471,11 @@ export async function explainStatement(tabId: string, sql: string, analyze = fal
       const out = await api().execute(session, `EXPLAIN QUERY PLAN ${sql}`, 10_000);
       inTx = out.inTransaction;
       plan = parseSqlitePlan(out.results[0]?.rows ?? []);
+    } else if (synapseDedicated(ready.serverInfo)) {
+      // Azure Synapse dedicated / PDW: sin SHOWPLAN_XML; EXPLAIN da el plan distribuido sin ejecutar la sentencia.
+      const out = await api().execute(session, `EXPLAIN ${sql}`, 10);
+      inTx = out.inTransaction;
+      plan = parseSynapsePlan(String(out.results.find((r) => r.columns.length)?.rows[0]?.[0] ?? ""));
     } else {
       // SQL Server: the XML plan, without running the statement.
       await api().execute(session, "SET SHOWPLAN_XML ON", 1);

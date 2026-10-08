@@ -1,6 +1,7 @@
 // Execution plans as one tree for every engine: PostgreSQL (EXPLAIN FORMAT JSON), MySQL / MariaDB (EXPLAIN /
-// ANALYZE FORMAT=JSON), SQLite (EXPLAIN QUERY PLAN) and SQL Server (SHOWPLAN_XML). Each node says what the
-// engine does, on what, with how many rows and how much it costs, plus the warnings worth acting on.
+// ANALYZE FORMAT=JSON), SQLite (EXPLAIN QUERY PLAN), SQL Server (SHOWPLAN_XML) and Azure Synapse (EXPLAIN). Each
+// node says what the engine does, on what, with how many rows and how much it costs, plus the warnings worth
+// acting on.
 // Pure functions (SQL Server's needs a DOMParser): dev/plan-check.ts tests them on real plans.
 
 export interface PlanNode {
@@ -311,6 +312,45 @@ function mssqlNode(rel: Element): PlanNode {
   if (/Table Scan|Clustered Index Scan/.test(physical) && (n.rows ?? 0) >= FULL_SCAN_ROWS) n.warnings.push(`Recorre toda la tabla (~${fmt(n.rows ?? 0)} filas).`);
   n.children = childRelOps(rel).map(mssqlNode);
   return n;
+}
+
+// ---------------------------------------------------------------- Azure Synapse dedicated / PDW
+
+/**
+ * EXPLAIN de Azure Synapse dedicated / PDW (no tiene SHOWPLAN_XML): el plan distribuido, un nodo por paso
+ * (movimientos de datos entre distribuciones, SQL en los nodos, devolución del resultado).
+ */
+export function parseSynapsePlan(xml: string, parser: { parseFromString(s: string, type: string): Document } = new DOMParser()): Plan {
+  const doc = parser.parseFromString(xml, "application/xml");
+  const ops = doc.getElementsByTagName("dsql_operations")[0];
+  if (!ops) throw new Error("Azure Synapse no devolvió un plan para esta sentencia");
+  const root = node("Consulta distribuida");
+  root.cost = num(ops.getAttribute("total_cost"));
+  const total = ops.getAttribute("total_number_operations");
+  if (total) root.details.push(["Pasos", total]);
+  for (const op of [...ops.children].filter((c) => c.localName === "dsql_operation")) {
+    const type = op.getAttribute("operation_type") ?? "";
+    const first = (tag: string) => op.getElementsByTagName(tag)[0] as Element | undefined;
+    const content = (tag: string) => first(tag)?.textContent?.trim() ?? "";
+    const n = node(type, [content("destination_table"), first("location")?.getAttribute("distribution") ?? ""].filter(Boolean).join(" · "));
+    const cost = first("operation_cost");
+    if (cost) {
+      n.rows = num(cost.getAttribute("output_rows"));
+      n.cost = num(cost.getAttribute("accumulative_cost"));
+      for (const attr of ["cost", "average_rowsize"]) {
+        const v = cost.getAttribute(attr);
+        if (v !== null) n.details.push([attr, v]);
+      }
+    }
+    if (content("shuffle_columns")) n.details.push(["Columnas de reparto", content("shuffle_columns")]);
+    const statement = content("source_statement") || content("select") || content("sql_operation");
+    if (statement) n.details.push(["SQL", statement]);
+    if (/^(BROADCAST|SHUFFLE)_MOVE$/.test(type) && (n.rows ?? 0) >= FULL_SCAN_ROWS) {
+      n.warnings.push(`Mueve ~${fmt(n.rows ?? 0)} filas entre distribuciones${type === "BROADCAST_MOVE" ? " (una copia a cada nodo)" : ""}.`);
+    }
+    root.children.push(n);
+  }
+  return { engine: "Azure Synapse", root, analyzed: false, planningMs: null, executionMs: null };
 }
 
 // ---------------------------------------------------------------- helpers for the view
