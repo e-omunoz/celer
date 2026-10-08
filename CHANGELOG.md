@@ -87,6 +87,7 @@ All notable changes to Celer are documented here. The format follows
 - Progress bars and the busy overlay animate with transforms only, and Gib's endless loops pause while the window is in the background.
 
 ### Fixed
+- **Read-only connections**: Export ran the statement under the cursor without the read-only check, so `DELETE … RETURNING` or an `INSERT … SELECT` went through. Export now refuses it like the console, and on PostgreSQL the server also enforces it (`default_transaction_read_only`).
 - **Informix over DRDA**: a session ended by the server (`onmode -z`, a restart, the network) was reopened by IBM's CLI driver itself, in silence, so Celer could not say what was lost with it. Celer now turns that off (`enableACR` false in a `db2dsdriver.cfg` of its own, unless you have one) and reconnects and warns as on the other engines.
 - **Gib no longer gave tips**: since he learnt to swat the cursor, a click only made him grumpy, and his first proactive tip waited 15 minutes. A click gives a tip again (four clicks in a row is pestering), and the first tip comes a few minutes into the session.
 - Gib swatted at the cursor while showing a tip, and his "column does not exist" hint pointed at table names.

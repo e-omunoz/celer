@@ -494,14 +494,19 @@ async fn execute(
     fetch: usize,
 ) -> CmdResult<ExecOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    let cfg = state.conn(&h.conn_id)?;
-    // Every statement of the batch is checked (a leading SELECT must not hide a later DELETE).
-    if cfg.read_only && (session::is_mutating(&sql) || mcp::batch_writes(&sql, cfg.kind)) {
+    check_read_only(&state.conn(&h.conn_id)?, &sql)?;
+    h.run(move |d| d.execute(&sql, fetch)).await.map_err(err)
+}
+
+/// A read-only connection refuses user SQL that modifies data. Every command that runs user SQL calls this.
+/// Every statement of the batch is checked (a leading SELECT must not hide a later DELETE).
+fn check_read_only(cfg: &ConnConfig, sql: &str) -> CmdResult<()> {
+    if cfg.read_only && (session::is_mutating(sql) || mcp::batch_writes(sql, cfg.kind)) {
         return Err(
             "La conexión es de solo lectura: no se permiten sentencias que modifiquen datos".into(),
         );
     }
-    h.run(move |d| d.execute(&sql, fetch)).await.map_err(err)
+    Ok(())
 }
 
 #[tauri::command]
@@ -674,6 +679,7 @@ async fn export_query(
     options: export::ExportOptions,
 ) -> CmdResult<u64> {
     let cfg = state.conn(&conn_id)?;
+    check_read_only(&cfg, &sql)?;
     let mssql = cfg.kind == DbKind::Mssql;
     let connector = state.make_connector(cfg)?;
     let h = SessionHandle::open(conn_id, connector).await.map_err(err)?;
@@ -882,6 +888,25 @@ fn windows_1252(b: u8) -> char {
         HIGH[(b - 0x80) as usize]
     } else {
         b as char
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::check_read_only;
+    use crate::model::{ConnConfig, DbKind};
+
+    #[test]
+    fn read_only_refuses_writes() {
+        let mut cfg = ConnConfig {
+            kind: DbKind::Postgres,
+            ..ConnConfig::default()
+        };
+        assert!(check_read_only(&cfg, "DELETE FROM t RETURNING *").is_ok());
+        cfg.read_only = true;
+        assert!(check_read_only(&cfg, "DELETE FROM t RETURNING *").is_err());
+        assert!(check_read_only(&cfg, "SELECT 1; DELETE FROM t").is_err());
+        assert!(check_read_only(&cfg, "SELECT * FROM t").is_ok());
     }
 }
 

@@ -1380,7 +1380,14 @@ fn open_client(
     };
     config.keepalives_idle(Duration::from_secs(60));
     config.keepalives_interval(Duration::from_secs(15));
-    config.connect(tls.clone()).map_err(|e| pg_err(&e, None))
+    let mut client = config.connect(tls.clone()).map_err(|e| pg_err(&e, None))?;
+    // A read-only connection is also enforced by the server, on every connection the driver opens.
+    if cfg.read_only {
+        client
+            .batch_execute("SET default_transaction_read_only = on")
+            .map_err(|e| pg_err(&e, None))?;
+    }
+    Ok(client)
 }
 
 /// El script de inicio, sentencia a sentencia, con el protocolo simple (sin transacción implícita).
@@ -2106,6 +2113,18 @@ mod tests {
             .simple_query("SELECT now() <> statement_timestamp()")
             .unwrap();
         rows.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t")))
+    }
+
+    #[test]
+    fn pg_read_only_enforced_by_server() {
+        let Some(mut cfg) = test_cfg() else { return };
+        cfg.read_only = true;
+        let mut d = PostgresDriver::connect(cfg).expect("conexión de prueba");
+        let out = d.execute("SHOW default_transaction_read_only", 10).unwrap();
+        assert_eq!(txt(&out.results[0].rows[0][0]), "on");
+        // Something the core's keyword check would not catch is still refused by the server.
+        let e = d.execute("WITH x AS (DELETE FROM public.events WHERE false RETURNING 1) SELECT * FROM x", 10);
+        assert!(e.is_err());
     }
 
     #[test]
