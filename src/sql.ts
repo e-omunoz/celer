@@ -138,6 +138,26 @@ export function needsProductionConfirm(sql: string, dialect?: string): boolean {
   });
 }
 
+const READS = ["SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "DESC"];
+
+/** A single statement that only reads: no write, no SELECT … INTO (a new table, or a file on MySQL). */
+export function isReadOnly(sql: string, dialect?: string): boolean {
+  if (!READS.includes(firstKeyword(sql)) || isMutating(sql, dialect)) return false;
+  return !/\binto\b/i.test(codeOnly(sql, dialect));
+}
+
+/**
+ * The statement to export for a result of a run of `sql`: `gridIndex` counts only the results with columns, of
+ * which there were `gridCount`. Exporting runs the statement again on a session of its own, so only a statement that
+ * reads is given, and only when it is clear which one produced the result (one read per grid). Null otherwise.
+ */
+export function exportStatement(sql: string, dialect: string | undefined, gridIndex: number, gridCount: number): string | null {
+  const parts = splitSql(sql, dialect).map((part) => part.sql).filter((part) => codeOnly(part, dialect).trim());
+  const reads = parts.filter((part) => isReadOnly(part, dialect));
+  if (parts.length === 1) return reads[0] ?? null;
+  return reads.length === gridCount ? reads[gridIndex] ?? null : null;
+}
+
 /** "1 fila", "2 filas", "500+ filas" (localised thousands). */
 export function rowsLabel(n: number, more = false, word = "fila") {
   return `${n.toLocaleString()}${more ? "+" : ""} ${n === 1 && !more ? word : `${word}s`}`;

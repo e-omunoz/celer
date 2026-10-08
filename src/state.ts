@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, codeOnly, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
+import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -2551,10 +2551,12 @@ export function pinResult(tabId: string) {
   if (tab?.kind !== "sql" || tab.activeResult < 0) return;
   const result = tab.results[tab.activeResult];
   if (!result?.columns.length) return;
+  const grids = tab.results.filter((item) => item.columns.length);
   const pin: PinnedResult = {
     id: uid(),
     title: `Fijado ${tab.pinned.length + 1}`,
-    sql: tab.resultsSql || tab.lastSql,
+    // The statement behind this result when the run was a script (its title, and what exporting it reads).
+    sql: exportStatement(tab.resultsSql || tab.lastSql, kindOf(tab.connId), grids.indexOf(result), grids.length) ?? (tab.resultsSql || tab.lastSql),
     at: Date.now(),
     result: { ...result, hasMore: false },
   };
@@ -2705,8 +2707,9 @@ function openExport(source: ExportSource) {
 }
 
 /**
- * Export the statement of the active console: `sqlOverride` (a pinned result's SQL), else the last run one,
- * the selection or the one under the cursor.
+ * Export the statement of the active console: `sqlOverride` (a pinned result's SQL), else the one behind the
+ * result on show, else the selection or the one under the cursor. Only a statement that reads is exported: the
+ * export runs it again, and a script's writes must not run a second time.
  */
 export async function startExport(sqlOverride?: string) {
   const tab = activeTab();
@@ -2716,8 +2719,26 @@ export async function startExport(sqlOverride?: string) {
     notify("Elige una conexión", "warning");
     return;
   }
-  const sql = sqlOverride || tab.lastSql || tab.selection.trim() || statementAt(tab.sql, tab.cursor, kindOf(tab.connId)) || tab.sql;
-  if (!sql.trim()) return;
+  const kind = kindOf(tab.connId);
+  const grids = tab.results.filter((result) => result.columns.length);
+  const shown = tab.results[tab.activeResult];
+  let source: string;
+  let sql: string | null;
+  if (sqlOverride) {
+    source = sqlOverride;
+    sql = exportStatement(source, kind, 0, 1);
+  } else if (tab.resultsSql && shown?.columns.length) {
+    source = tab.resultsSql;
+    sql = exportStatement(source, kind, grids.indexOf(shown), grids.length);
+  } else {
+    source = tab.selection.trim() || statementAt(tab.sql, tab.cursor, kind);
+    sql = exportStatement(source, kind, 0, 1);
+  }
+  if (!source.trim()) return;
+  if (!sql) {
+    notify("Solo se exporta una consulta de lectura", "warning", "La exportación vuelve a ejecutar la consulta. Selecciona la SELECT que quieres exportar: las demás sentencias del script no se repiten.");
+    return;
+  }
   const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
   openExport({ connId: tab.connId!, database: tab.database, sql: sql.replace(/;\s*$/, ""), label: "el resultado de la consulta", tableName: from });
 }
