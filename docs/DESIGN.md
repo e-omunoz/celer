@@ -157,20 +157,29 @@ a calm colleague at the next desk, not a pop-up assistant.
 | Fidgets (every 25–70 s) | Adjusts the tie, raises the other eyebrow, glances at the user over the glasses |
 | Sleep | After 10 min without input; wakes up waving when the user returns |
 
-**Tips:** clicking Gib opens a speech bubble with a tip; "Next" browses more, "Hide" closes it.
-Tips are **contextual and learned from usage**, for example:
+**Tips:** clicking Gib opens a speech bubble with a tip (unseen ones first); "Otro consejo" browses more, "Cerrar"
+closes it. Hovering him while he waits makes him swat the cursor, but never while he is talking; four clicks in a row
+is pestering, and he grumbles. Tips are **contextual and learned from usage**, for example:
 
 - The user ran queries with the mouse five times → "Ctrl+Enter runs the statement under the cursor."
 - The user typed `SELECT *` on a wide table → "Alt+Enter on `*` expands it into the column list."
 - The user exported via the grid repeatedly → "You can export straight from the query without loading the grid: right-click › Export…"
 - A production connection is open → "Production connections ask before UPDATE/DELETE without WHERE."
 
-Proactive tips appear **at most once every 15 minutes**, only while the user is idle (no typing for 5 s),
-as a small bubble that fades out after 8 s. They never take focus, never cover the editor cursor or the
-grid selection, and never appear while a query is running or on production connections.
+- The same statement run three times → "Save it in the library (Ctrl+Alt+B)".
+- After a run, advice about **that statement** (`src/gib/advice.ts`): likely mistakes always (`= NULL`,
+  `NOT IN (SELECT …)`, comma joins without WHERE); performance only when it was slow (`LIKE '%…'`, functions on
+  columns in WHERE, `UNION` vs `UNION ALL`, `ORDER BY` without a limit).
 
-**Settings:** Companion: *Off* / *Quiet* (idle animation only, no proactive tips) / *Normal*.
-Tip frequency, and "reset tips seen". All of it is also in the appearance JSON (see §15).
+Proactive tips appear **at most once every 15 minutes** (the first a few minutes into the session), only while the
+user pauses (no input for 5 s, back within a minute) and only tips not seen yet, as a small bubble that closes after
+8 s or as soon as the user types. They never take focus, never appear while a query is running, on production
+connections or behind a dialog, and offer "No más consejos" (Quiet). Hovering a bubble keeps it open. Warnings come once
+per session, other advice at most twice ever; what was seen is remembered per machine (`src/gib/memory.ts`).
+
+**Settings:** Companion: *Off* / *Quiet* (idle animation and warnings only, no tips of his own) / *Normal*.
+"Reset tips seen" is the palette command *Gib: volver a contar los consejos desde el principio*. Idle loops pause
+while the window is in the background.
 
 ### Rules
 

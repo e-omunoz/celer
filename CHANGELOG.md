@@ -6,6 +6,29 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Script library**, now useful beyond saving (Alt+8, or the book in the side bar):
+  - folders and subfolders, tags and an optional connection per script; drag scripts and folders to move them;
+  - search by name, folder, tag (`#tag`) and SQL; library scripts also appear in the palette;
+  - open, or open and run (Ctrl+Enter), insert into the console, or drag into the editor to paste the SQL;
+  - rename in place (F2), duplicate (Ctrl+D), copy the SQL, delete with undo (Del), context menu (Shift+F10);
+  - a console opened from the library shows unsaved changes (dot in the toolbar and in the list); save them or drop them;
+  - import `.sql` files, export a script as plain SQL, or a folder or the whole library as one `.sql` that imports back with its folders and tags;
+  - sort by name or recent use, and show only the scripts of the active connection;
+  - palette entries for all of the above.
+- **Gib's advice about the statement you just ran**: `= NULL`, `NOT IN (SELECT …)`, comma joins without `WHERE`, and, when it was slow, `LIKE '%…'`, functions on columns in `WHERE`, `UNION` vs `UNION ALL` and `ORDER BY` without a limit. A query run again and again gets a nudge to save it in the library.
+
+### Changed
+- The library file moves to version 2 (folders and tags); version 1 files are read as they are, nothing is lost, and older Celer versions can still read the new file.
+- Gib remembers the tips you have seen and shows the others first; warnings come once per session and tips at most twice. "Gib: volver a contar los consejos desde el principio" resets that.
+- A tip Gib volunteers closes when you type, stays while the pointer is over it, and offers "No más consejos".
+- Progress bars and the busy overlay animate with transforms only, and Gib's endless loops pause while the window is in the background.
+
+### Fixed
+- **Gib no longer gave tips**: since he learnt to swat the cursor, a click only made him grumpy, and his first proactive tip waited 15 minutes. A click gives a tip again (four clicks in a row is pestering), and the first tip comes a few minutes into the session.
+- Gib swatted at the cursor while showing a tip, and his "column does not exist" hint pointed at table names.
+- "Animaciones: reducidas" in Celer's settings was ignored by the start-up animation and by Gib's blinking when the system did not ask for reduced motion.
+
 ## [2.0.1] - 2026-10-08
 
 ### Fixed
