@@ -56,6 +56,18 @@ pub(crate) fn mark_deleted(id: &str, deleted: bool) {
 
 pub struct Store {
     pub dir: PathBuf,
+    conns_file: parking_lot::Mutex<ConnsFile>,
+}
+
+/// What the last read of connections.json left behind.
+#[derive(Default)]
+struct ConnsFile {
+    /// It could not be read (locked, or damaged and not set aside): saving would replace connections still in it.
+    unread: bool,
+    /// Entries this version does not understand (another version's engine…), written back as they were on save.
+    unknown: Vec<serde_json::Value>,
+    /// For the UI, once.
+    problem: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +86,7 @@ pub struct HistoryEntry {
 impl Store {
     pub fn new(dir: PathBuf) -> Store {
         let _ = fs::create_dir_all(&dir);
-        Store { dir }
+        Store { dir, conns_file: Default::default() }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -93,22 +105,67 @@ impl Store {
         fs::read_to_string(self.path(name)).ok()
     }
 
+    /// The saved connections. Like `load_json`: a locked file is retried, a damaged one is set aside, and then
+    /// `connections_problem` says so. Entries are read one by one: one that is not understood is kept in the file.
     pub fn load_connections(&self) -> Vec<ConnConfig> {
-        self.read("connections.json")
-            .and_then(|s| serde_json::from_str::<Vec<ConnConfig>>(&s).ok())
-            .unwrap_or_default()
+        const NAME: &str = "connections.json";
+        let mut file = ConnsFile::default();
+        let mut conns = Vec::new();
+        match self.load_json(NAME) {
+            Ok(serde_json::Value::Null) => {}
+            Ok(serde_json::Value::Array(items)) => {
+                for item in items {
+                    match serde_json::from_value::<ConnConfig>(item.clone()) {
+                        Ok(c) => conns.push(c),
+                        Err(_) => file.unknown.push(item),
+                    }
+                }
+                if !file.unknown.is_empty() {
+                    file.problem = Some(format!(
+                        "{} conexión(es) de {NAME} no se entienden en esta versión de Celer: no se muestran, pero se conservan en el fichero",
+                        file.unknown.len()
+                    ));
+                }
+            }
+            Ok(_) => match self.set_aside(NAME, "no es una lista de conexiones") {
+                Ok(msg) => file.problem = Some(msg),
+                Err(e) => {
+                    file.unread = true;
+                    file.problem = Some(e.to_string());
+                }
+            },
+            Err(e) => {
+                // Still there: it could not be read (or set aside), so it must not be written over.
+                file.unread = self.path(NAME).exists();
+                file.problem = Some(if file.unread {
+                    format!("{e}. Las conexiones no se guardarán hasta reiniciar Celer, para no perder las del fichero")
+                } else {
+                    e.to_string()
+                });
+            }
+        }
+        *self.conns_file.lock() = file;
+        conns
+    }
+
+    /// What went wrong reading connections.json at start, once.
+    pub fn connections_problem(&self) -> Option<String> {
+        self.conns_file.lock().problem.take()
     }
 
     pub fn save_connections(&self, conns: &[ConnConfig]) -> Result<()> {
-        let clean: Vec<ConnConfig> = conns
-            .iter()
-            .cloned()
-            .map(|mut c| {
-                c.password = None;
-                c
-            })
-            .collect();
-        self.write_atomic("connections.json", &serde_json::to_string_pretty(&clean)?)
+        let file = self.conns_file.lock();
+        if file.unread {
+            return Err(anyhow!("connections.json no se pudo leer al iniciar Celer: no se guarda encima para no perder las conexiones que tiene. Reinicia Celer"));
+        }
+        let mut out = Vec::with_capacity(conns.len() + file.unknown.len());
+        for c in conns {
+            let mut c = c.clone();
+            c.password = None;
+            out.push(serde_json::to_value(c)?);
+        }
+        out.extend(file.unknown.iter().cloned());
+        self.write_atomic("connections.json", &serde_json::to_string_pretty(&out)?)
     }
 
     fn secrets(&self) -> HashMap<String, String> {
@@ -186,16 +243,20 @@ impl Store {
         let parsed = String::from_utf8(bytes).map_err(|e| e.to_string()).and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
         match parsed {
             Ok(value) => Ok(value),
-            Err(e) => {
-                let stamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let aside = format!("{name}.unreadable-{stamp}");
-                fs::rename(&path, self.path(&aside)).map_err(|err| anyhow!("{name} está dañado ({e}) y no se pudo apartar: {err}"))?;
-                Err(anyhow!("{name} estaba dañado ({e}): se ha guardado aparte como {aside} y se empieza de cero"))
-            }
+            Err(e) => Err(anyhow!(self.set_aside(name, &e)?)),
         }
+    }
+
+    /// Renames the damaged file `name` to `name.unreadable-<time>`; the message for the user, or an error when it
+    /// could not be moved.
+    fn set_aside(&self, name: &str, why: &str) -> Result<String> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let aside = format!("{name}.unreadable-{stamp}");
+        fs::rename(self.path(name), self.path(&aside)).map_err(|err| anyhow!("{name} está dañado ({why}) y no se pudo apartar: {err}"))?;
+        Ok(format!("{name} estaba dañado ({why}): se ha guardado aparte como {aside} y se empieza de cero"))
     }
 
     pub fn add_history(&self, e: &HistoryEntry) -> Result<()> {
@@ -269,6 +330,37 @@ mod tests {
         std::fs::write(dir.join("ok.json"), "{\"a\":1}").unwrap();
         assert_eq!(store.load_json("ok.json").unwrap()["a"], 1);
         assert!(store.load_json("missing.json").unwrap().is_null());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn connections_file_is_never_lost() {
+        let dir = std::env::temp_dir().join(format!("celer-store-conns-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let file = dir.join("connections.json");
+        // One entry this version does not understand: the others load, and it is written back on save.
+        std::fs::write(&file, r#"[{"id":"a","name":"A","kind":"postgres"},{"id":"b","name":"B","kind":"oracle"}]"#).unwrap();
+        let conns = store.load_connections();
+        assert_eq!(conns.len(), 1);
+        assert!(store.connections_problem().unwrap().contains("1 conexión"));
+        assert!(store.connections_problem().is_none(), "told once");
+        store.save_connections(&conns).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(saved.as_array().unwrap().len(), 2);
+        assert_eq!(saved[1]["kind"], "oracle");
+        // Damaged: set aside, and saving starts a new file.
+        std::fs::write(&file, r#"[{"id":"a","name":"A","kind":"postgres"},]"#).unwrap();
+        assert!(store.load_connections().is_empty());
+        assert!(store.connections_problem().unwrap().contains("unreadable-"));
+        assert!(!file.exists());
+        store.save_connections(&[]).unwrap();
+        // Unreadable (a folder in its place stands for a lock): it is not written over.
+        let _ = std::fs::remove_file(&file);
+        std::fs::create_dir(&file).unwrap();
+        assert!(store.load_connections().is_empty());
+        assert!(store.connections_problem().is_some());
+        assert!(store.save_connections(&[]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

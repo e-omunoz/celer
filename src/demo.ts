@@ -379,6 +379,9 @@ export function createDemoBackend(): Backend {
     async listConnections() {
       return summaries();
     },
+    async connectionsProblem() {
+      return null;
+    },
     async saveConnection(cfg) {
       const list = loadConns();
       const next = { ...cfg, id: cfg.id || crypto.randomUUID(), password: null };

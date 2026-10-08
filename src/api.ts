@@ -20,6 +20,8 @@ import { createDemoBackend } from "./demo";
 
 export interface Backend {
   listConnections(): Promise<ConnSummary[]>;
+  /** What went wrong reading the saved connections at start (file set aside, locked, entries kept), once. */
+  connectionsProblem(): Promise<string | null>;
   saveConnection(cfg: ConnConfig): Promise<ConnConfig>;
   reorderConnections(ids: string[]): Promise<void>;
   /** Deletes a connection; its saved password is kept in memory until the app closes, for `restoreConnection`. */
@@ -121,6 +123,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 function tauriBackend(): Backend {
   return {
     listConnections: () => invoke("list_connections"),
+    connectionsProblem: () => invoke("connections_problem"),
     saveConnection: (cfg) => invoke("save_connection", { cfg: { ...cfg, password: cfg.password || null } }),
     reorderConnections: (ids) => invoke("reorder_connections", { ids }),
     deleteConnection: (id) => invoke("delete_connection", { id }),

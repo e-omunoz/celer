@@ -504,6 +504,8 @@ export async function boot() {
   try {
     setState("connections", await api().listConnections());
     connectionsLoaded = true;
+    const problem = await api().connectionsProblem();
+    if (problem) notify("Problema al leer las conexiones guardadas", "error", problem);
     setState("appInfo", await api().appInfo());
     setState("driverPath", await api().ibmDriverStatus());
   } catch (err) {

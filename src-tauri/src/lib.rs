@@ -265,6 +265,12 @@ fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
         .collect()
 }
 
+/// What went wrong reading connections.json at start (set aside, locked, entries kept), told once.
+#[tauri::command]
+fn connections_problem(state: State<'_, Arc<AppState>>) -> Option<String> {
+    state.store.connections_problem()
+}
+
 #[tauri::command]
 fn save_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<ConnConfig> {
     let saved = save_cfg(&state, cfg)?;
@@ -1294,6 +1300,7 @@ pub fn run() {
         .on_window_event(windows::on_event)
         .invoke_handler(tauri::generate_handler![
             list_connections,
+            connections_problem,
             save_connection,
             reorder_connections,
             delete_connection,
