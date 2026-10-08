@@ -2,7 +2,7 @@
 // in the source, UPDATE of the changed columns for rows in both, and the DELETE of rows only in the target written
 // commented out. Pure: dev/datacompare-check.ts tests it.
 import type { Comparison } from "./compare.ts";
-import { cellText, quoteIdentFor, sqlLiteral } from "./sql.ts";
+import { cellText, fitInformixDatetime, quoteIdentFor, sqlLiteral } from "./sql.ts";
 import type { Cell, ColKind, DbKind } from "./types";
 
 export interface DataSyncOptions {
@@ -10,7 +10,7 @@ export interface DataSyncOptions {
   /** The target table, qualified and quoted. */
   table: string;
   /** Columns of the target: only these are written, with their names and kinds. */
-  targetColumns: { name: string; identity?: boolean; kind?: ColKind }[];
+  targetColumns: { name: string; identity?: boolean; kind?: ColKind; typeName?: string }[];
 }
 
 /**
@@ -28,7 +28,10 @@ export function dataSyncScript(comparison: Comparison, options: DataSyncOptions)
   const literal = (cell: Cell, i: number) => {
     if (cell === null || cell === undefined) return "NULL";
     if (typeof cell === "boolean" && kind(i) === "number") return cell ? "1" : "0";
-    return sqlLiteral(cellText(cell), kind(i), dialect);
+    // Informix DATETIME: exactly the fields of its qualifier (the text may carry more).
+    const typeName = columns[i].target?.typeName ?? "";
+    const text = dialect === "informix" && /^datetime\b/i.test(typeName) ? fitInformixDatetime(cellText(cell), typeName) : cellText(cell);
+    return sqlLiteral(text, kind(i), dialect);
   };
   const name = (i: number) => q(columns[i].target?.name ?? comparison.columns[i].name);
   // Written columns: in both tables, not binary (no portable literal).

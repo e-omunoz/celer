@@ -36,6 +36,7 @@ Step "result comparison" { & $node --experimental-strip-types --no-warnings dev\
 Step "foreign-key lookup SQL" { & $node --experimental-strip-types --no-warnings dev\fklookup-check.ts }
 Step "data comparison script" { & $node --experimental-strip-types --no-warnings dev\datacompare-check.ts }
 Step "schema comparison logic" { & $node --experimental-strip-types --no-warnings dev\schemacompare-check.ts }
+Step "table SQL builders" { & $node --experimental-strip-types --no-warnings dev\sqlgen-check.ts }
 Step "XML formatting" { & $node --experimental-strip-types --no-warnings dev\prettyxml-check.ts }
 Step "keyboard shortcuts" { & $node --experimental-strip-types --no-warnings dev\keymap-check.ts }
 Step "import formats" { & $node --experimental-strip-types --no-warnings dev\import-check.ts }

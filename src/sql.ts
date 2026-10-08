@@ -383,6 +383,32 @@ export function isNullCell(value: Cell): boolean {
   return value === null || value === undefined;
 }
 
+const DT_FIELDS = ["year", "month", "day", "hour", "minute", "second", "fraction"] as const;
+
+/**
+ * A date-time text fitted to an Informix DATETIME qualifier ("datetime year to minute" takes "2024-03-15 10:20",
+ * not "2024-03-15 10:20:00": Informix rejects extra fields). Other types and unreadable text come back as they are.
+ */
+export function fitInformixDatetime(value: string, typeName: string): string {
+  const q = /^datetime\s+(year|month|day|hour|minute|second|fraction)(?:\(\d\))?\s+to\s+(year|month|day|hour|minute|second|fraction)(?:\((\d)\))?/i.exec(typeName.trim());
+  const v = /^\s*(?:(\d{4})-(\d{1,2})-(\d{1,2}))?[ T]?(?:(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?)?\s*$/.exec(value);
+  if (!q || !v || !value.trim()) return value;
+  const from = DT_FIELDS.indexOf(q[1].toLowerCase() as (typeof DT_FIELDS)[number]);
+  const to = DT_FIELDS.indexOf(q[2].toLowerCase() as (typeof DT_FIELDS)[number]);
+  const digits = to === 6 ? Number(q[3] ?? 3) : 0;
+  const parts = [v[1], v[2], v[3], v[4], v[5], v[6], v[7]];
+  // Every field the qualifier needs must be in the text.
+  for (let i = from; i <= Math.min(to, 5); i++) if (parts[i] === undefined) return value;
+  const two = (s: string | undefined) => (s ?? "0").padStart(2, "0");
+  const sep = ["", "-", "-", " ", ":", ":", "."];
+  let out = "";
+  for (let i = from; i <= to; i++) {
+    const text = i === 0 ? parts[0]! : i === 6 ? (parts[6] ?? "").padEnd(digits, "0").slice(0, digits) : two(parts[i]);
+    out += (i === from ? "" : sep[i]) + text;
+  }
+  return out;
+}
+
 export function sqlLiteral(value: string | null, kind: ColKind, dialect?: string): string {
   if (value === null) return "NULL";
   if (kind === "number" && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value.trim())) return value.trim();

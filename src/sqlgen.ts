@@ -1,7 +1,7 @@
 // SQL that Celer writes for a table: filters, the changes of the table viewer, generated scripts. Pure (plain
 // data in, text out), so dev/engine-sql.ts can produce the exact statements for each engine and the Rust
 // integration tests run them against real servers.
-import { sqlLiteral } from "./sql.ts";
+import { fitInformixDatetime, sqlLiteral } from "./sql.ts";
 import type { Cell, DbKind, TableColumn } from "./types";
 import type { ColumnFilter } from "./state";
 
@@ -13,12 +13,17 @@ export interface TableShape {
   qualified: string;
 }
 
+/** A value as the column takes it: Informix DATETIME columns want exactly their qualifier's fields. */
+export function fitValue(value: string, col: TableColumn, engine: DbKind): string {
+  return engine === "informix" && /^datetime\b/i.test(col.typeName) ? fitInformixDatetime(value, col.typeName) : value;
+}
+
 export function filterSql(tab: TableShape, filter: ColumnFilter, engine: DbKind): string | null {
   const index = tab.columnsMeta.findIndex((col) => col.name === filter.col);
   if (index < 0) return null;
   const ident = tab.quoted[index] ?? filter.col;
   const kind = tab.columnsMeta[index].kind;
-  const lit = (value: string) => sqlLiteral(value, kind, engine);
+  const lit = (value: string) => sqlLiteral(fitValue(value, tab.columnsMeta[index], engine), kind, engine);
   const text = (value: string) => sqlLiteral(value, "text", engine);
   const like = engine === "postgres" ? "ILIKE" : "LIKE";
   const esc = (value: string) => value.replace(/[!%_]/g, (m) => `!${m}`).replace(/\[/g, engine === "mssql" ? "![" : "[");
@@ -59,10 +64,12 @@ export function whereOf(tab: TableShape & { where: string; filters: ColumnFilter
   return parts.join(" AND ");
 }
 
-export function literalOf(value: Cell, kind: TableColumn["kind"], dialect?: string) {
+export function literalOf(value: Cell, col: TableColumn, dialect: DbKind) {
   if (value === null || value === undefined) return "NULL";
-  return sqlLiteral(String(value), kind, dialect);
+  return sqlLiteral(fitValue(String(value), col, dialect), col.kind, dialect);
 }
+
+const editLiteral = (value: string | null, col: TableColumn, engine: DbKind) => (value === null ? "NULL" : sqlLiteral(fitValue(value, col, engine), col.kind, engine));
 
 /** The pending changes of a table tab: DELETE, UPDATE and INSERT statements keyed on the primary key. */
 export function changesSql(
@@ -71,7 +78,7 @@ export function changesSql(
 ): string {
   const pk = tab.columnsMeta.map((col, index) => ({ col, index })).filter((item) => item.col.primaryKey);
   const lines: string[] = [];
-  const whereFor = (row: number) => pk.map((item) => `${tab.quoted[item.index]} = ${literalOf(tab.rows[row][item.index], item.col.kind, engine)}`).join(" AND ");
+  const whereFor = (row: number) => pk.map((item) => `${tab.quoted[item.index]} = ${literalOf(tab.rows[row][item.index], item.col, engine)}`).join(" AND ");
   for (const rowIndex of tab.deleted) lines.push(`DELETE FROM ${tab.qualified} WHERE ${whereFor(rowIndex)};`);
   const byRow = new Map<number, number[]>();
   for (const key of Object.keys(tab.edits)) {
@@ -81,13 +88,13 @@ export function changesSql(
     byRow.set(row, [...(byRow.get(row) ?? []), Number(colText)]);
   }
   for (const [row, cols] of byRow) {
-    const sets = cols.map((col) => `${tab.quoted[col]} = ${sqlLiteral(tab.edits[`${row}:${col}`], tab.columnsMeta[col].kind, engine)}`).join(", ");
+    const sets = cols.map((col) => `${tab.quoted[col]} = ${editLiteral(tab.edits[`${row}:${col}`], tab.columnsMeta[col], engine)}`).join(", ");
     lines.push(`UPDATE ${tab.qualified} SET ${sets} WHERE ${whereFor(row)};`);
   }
   for (const insert of tab.inserts) {
     const usable = tab.columnsMeta.map((col, index) => ({ col, index })).filter((item) => !(item.col.identity && (insert[item.index] === null || insert[item.index] === "")) && !(insert[item.index] === null && item.col.default));
     const names = usable.map((item) => tab.quoted[item.index]).join(", ");
-    const values = usable.map((item) => sqlLiteral(insert[item.index], item.col.kind, engine)).join(", ");
+    const values = usable.map((item) => editLiteral(insert[item.index], item.col, engine)).join(", ");
     lines.push(usable.length ? `INSERT INTO ${tab.qualified} (${names}) VALUES (${values});` : `INSERT INTO ${tab.qualified} DEFAULT VALUES;`);
   }
   return lines.join("\n");

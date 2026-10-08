@@ -480,6 +480,21 @@ struct ColPlan {
     ctype: i16,
     elem: usize,
     lob: bool,
+    /// Timestamps and times: the column's fractional digits (the text is cut to them; DRDA sends six).
+    frac: Option<u8>,
+}
+
+/// "2024-03-15 10:20:30.123450" with `digits` fractional digits ("…30.12345"; none: "…30").
+fn fit_fraction(s: String, digits: u8) -> String {
+    let Some(dot) = s.rfind('.') else { return s };
+    // Only a time's fraction (hh:mm:ss.ffff), not a date or an offset.
+    if dot < 8 || !s[..dot].ends_with(|c: char| c.is_ascii_digit()) || s[dot - 3..dot].chars().nth(0) != Some(':') {
+        return s;
+    }
+    let end = s[dot + 1..].find(|c: char| !c.is_ascii_digit()).map_or(s.len(), |i| dot + 1 + i);
+    let keep = (digits as usize).min(end - dot - 1);
+    let cut = if keep == 0 { dot } else { dot + 1 + keep };
+    format!("{}{}", &s[..cut], &s[end..])
 }
 
 struct Bound {
@@ -626,7 +641,10 @@ impl Stmt {
             let mut type_name =
                 String::from_utf16_lossy(&tbuf[..(tlen.max(0) as usize / 2).min(tbuf.len())])
                     .to_lowercase();
-            let (plan, kind) = plan_for(dtype, size);
+            let (mut plan, kind) = plan_for(dtype, size);
+            if matches!(dtype, 93 | 11 | 92 | 10) {
+                plan.frac = Some(dec.clamp(0, 9) as u8);
+            }
             if type_name.is_empty() {
                 type_name = sql_type_name(dtype).into();
             }
@@ -779,7 +797,11 @@ impl Stmt {
                             return Ok(Cell::Text(s));
                         }
                     }
-                    Ok(Cell::Text(String::from_utf16_lossy(&out)))
+                    let s = String::from_utf16_lossy(&out);
+                    Ok(Cell::Text(match p.frac {
+                        Some(digits) => fit_fraction(s, digits),
+                        None => s,
+                    }))
                 }
                 SQL_C_BINARY => {
                     let mut buf = vec![0u8; BINARY_PREVIEW + 1];
@@ -886,11 +908,13 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
         ctype: SQL_C_WCHAR,
         elem: (chars + 1) * 2,
         lob: false,
+        frac: None,
     };
     let wlob = ColPlan {
         ctype: SQL_C_WCHAR,
         elem: 0,
         lob: true,
+        frac: None,
     };
     match dtype {
         -7 => (
@@ -898,6 +922,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 ctype: SQL_C_BIT,
                 elem: 1,
                 lob: false,
+                frac: None,
             },
             ColKind::Bool,
         ),
@@ -906,6 +931,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 ctype: SQL_C_SBIGINT,
                 elem: 8,
                 lob: false,
+                frac: None,
             },
             ColKind::Number,
         ),
@@ -914,6 +940,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 ctype: SQL_C_DOUBLE,
                 elem: 8,
                 lob: false,
+                frac: None,
             },
             ColKind::Number,
         ),
@@ -923,6 +950,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 ctype: SQL_C_BINARY,
                 elem: size,
                 lob: false,
+                frac: None,
             },
             ColKind::Binary,
         ),
@@ -931,6 +959,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 ctype: SQL_C_BINARY,
                 elem: 0,
                 lob: true,
+                frac: None,
             },
             ColKind::Binary,
         ),
@@ -1011,6 +1040,9 @@ fn decode(p: &ColPlan, data: &[u8], ind: isize) -> Cell {
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let mut s = String::from_utf16_lossy(&u);
+            if let Some(digits) = p.frac {
+                s = fit_fraction(s, digits);
+            }
             if trunc {
                 s.push('…');
             }
@@ -1083,3 +1115,27 @@ pub fn system_manager() -> &'static str {
 
 #[allow(dead_code)]
 const _: i16 = SQL_ERROR;
+
+#[cfg(test)]
+mod tests {
+    use super::{fit_fraction, is_ibm_cli};
+
+    #[test]
+    fn fractions_fit_the_column() {
+        let f = |s: &str, d| fit_fraction(s.to_string(), d);
+        assert_eq!(f("2024-03-15 10:20:30.123450", 5), "2024-03-15 10:20:30.12345");
+        assert_eq!(f("2024-03-15 10:20:30.000000", 0), "2024-03-15 10:20:30");
+        assert_eq!(f("08:30:00.500000", 1), "08:30:00.5");
+        assert_eq!(f("2024-03-15 10:20:30.1", 3), "2024-03-15 10:20:30.1", "never adds digits");
+        assert_eq!(f("2024-03-15", 0), "2024-03-15");
+        assert_eq!(f("2024-03-15 10:20:30.123 +02:00", 0), "2024-03-15 10:20:30 +02:00");
+    }
+
+    #[test]
+    fn ibm_cli_library_names() {
+        assert!(is_ibm_cli("/opt/clidriver/lib/libdb2.so"));
+        assert!(is_ibm_cli("/x/libdb2.dylib"));
+        assert!(is_ibm_cli(r"C:\IBM\clidriver\bin\db2cli64.dll"));
+        assert!(!is_ibm_cli("/usr/lib/x86_64-linux-gnu/libodbc.so.2"));
+    }
+}

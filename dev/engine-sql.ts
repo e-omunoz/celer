@@ -73,6 +73,11 @@ out.push({ name: "filter in with NULL", sql: filter("parent_id", "in", "", "", [
 out.push({ name: "filter not in with NULL", sql: filter("parent_id", "not-in", "", "", ["1", "\u0000NULL"]), rows: 1 });
 out.push({ name: "filter negative decimal", sql: filter("importe", "lt", "-1.5"), rows: 1 });
 
+// DATETIME as the grid shows it (Informix over DRDA: "…10:30:00" for a YEAR TO MINUTE column).
+const momento = col("momento");
+const shownMomento = momento >= 0 ? String(t.rows.find((r) => Number(r[col("id")]) === 1)![momento]) : "";
+if (momento >= 0) out.push({ name: `filter datetime = shown value (${shownMomento})`, sql: filter("momento", "eq", shownMomento), rows: 1 });
+
 // ---------------------------------------------------------------- generated scripts
 const limit = limitClause(kind, 100);
 out.push({ name: "generated select", sql: `SELECT ${t.quoted.join(", ")}\nFROM ${t.qualified}\n${limit}`, rows: 4 });
@@ -87,6 +92,7 @@ edits[`${row2}:${col("importe")}`] = "10.10";
 edits[`${row2}:${col("activo")}`] = "true";
 edits[`${row2}:${col("alta")}`] = "2024-03-01";
 edits[`${row2}:${col("notas")}`] = null;
+if (momento >= 0) edits[`${row2}:${momento}`] = shownMomento;
 const insert: (string | null)[] = t.columns.map(() => null);
 insert[col("id")] = "5";
 insert[col("nombre")] = "Nuevo «5»";
@@ -99,6 +105,7 @@ const changes = changesSql({ ...tab, rows: t.rows, edits, deleted: [byId(4)], in
 out.push({ name: "table changes", sql: changes });
 out.push({ name: "changes applied: edited row", sql: select(`${q("id")} = 2 AND ${q("nombre")} = ${kind === "mssql" ? "N" : ""}'Luisa Peña' AND ${q("notas")} IS NULL`), rows: 1 });
 out.push({ name: "changes applied: deleted row", sql: select(`${q("id")} = 4`), rows: 0 });
+if (momento >= 0) out.push({ name: "changes applied: datetime written as shown", sql: filter("momento", "eq", shownMomento), rows: 2 });
 out.push({ name: "changes applied: inserted row", sql: select(`${q("id")} = 5 AND ${q("notas")} = 'con ''comillas'''`), rows: 1 });
 
 // ---------------------------------------------------------------- UPSERT / MERGE (literals in place of :params)

@@ -173,12 +173,12 @@ IF OBJECT_ID('dbo.celer_p') IS NOT NULL DROP TABLE dbo.celer_p;
 CREATE TABLE dbo.celer_p (id int PRIMARY KEY, nombre nvarchar(50) NOT NULL);
 INSERT INTO dbo.celer_p VALUES (1, N'Uno'), (2, N'Dos');
 CREATE TABLE dbo.celer_t (id int PRIMARY KEY, nombre nvarchar(100) NOT NULL, activo bit NULL, alta date NULL,
-  importe decimal(12,2) NULL, notas nvarchar(max) NULL, parent_id int NULL REFERENCES dbo.celer_p(id));
+  importe decimal(12,2) NULL, notas nvarchar(max) NULL, parent_id int NULL REFERENCES dbo.celer_p(id), momento datetime NULL);
 INSERT INTO dbo.celer_t VALUES
-  (1, N'Ana Ruiz', 1, '2024-01-15', 120.50, N'nota 50% off', 1),
-  (2, N'Luis Peña', 0, '2024-02-20', 0.00, NULL, 2),
-  (3, N'Zoë Martín', 1, NULL, -5.25, N'[corchetes]', NULL),
-  (4, N'O''Neil', NULL, '2023-12-31', 99999.99, N'', 1);";
+  (1, N'Ana Ruiz', 1, '2024-01-15', 120.50, N'nota 50% off', 1, '2024-01-15 10:30:00.003'),
+  (2, N'Luis Peña', 0, '2024-02-20', 0.00, NULL, 2, NULL),
+  (3, N'Zoë Martín', 1, NULL, -5.25, N'[corchetes]', NULL, NULL),
+  (4, N'O''Neil', NULL, '2023-12-31', 99999.99, N'', 1, NULL);";
 
 #[test]
 fn mssql_engine() {
@@ -195,7 +195,7 @@ fn mssql_engine() {
     let (cols, rows) = all_rows(d, "SELECT * FROM dbo.celer_t ORDER BY id");
     assert_eq!(rows.len(), 4);
     let kinds: Vec<ColKind> = cols.iter().map(|c| c.kind).collect();
-    assert_eq!(kinds, vec![ColKind::Number, ColKind::Text, ColKind::Bool, ColKind::Date, ColKind::Number, ColKind::Text, ColKind::Number]);
+    assert_eq!(kinds, vec![ColKind::Number, ColKind::Text, ColKind::Bool, ColKind::Date, ColKind::Number, ColKind::Text, ColKind::Number, ColKind::Date]);
     assert!(matches!(rows[0][2], Cell::Bool(true)));
     assert_eq!(txt(&rows[0][3]), "2024-01-15");
     assert_eq!(txt(&rows[0][4]), "120.50");
@@ -405,11 +405,11 @@ CREATE TABLE celer_p (id INT PRIMARY KEY, nombre VARCHAR(50) NOT NULL);
 INSERT INTO celer_p VALUES (1, 'Uno');
 INSERT INTO celer_p VALUES (2, 'Dos');
 CREATE TABLE celer_t (id INT PRIMARY KEY, nombre VARCHAR(100) NOT NULL, activo BOOLEAN, alta DATE,
-  importe DECIMAL(12,2), notas LVARCHAR(2000), parent_id INT REFERENCES celer_p(id));
-INSERT INTO celer_t VALUES (1, 'Ana Ruiz', 't', MDY(1, 15, 2024), 120.50, 'nota 50% off', 1);
-INSERT INTO celer_t VALUES (2, 'Luis Peña', 'f', MDY(2, 20, 2024), 0.00, NULL, 2);
-INSERT INTO celer_t VALUES (3, 'Zoë Martín', 't', NULL, -5.25, '[corchetes]', NULL);
-INSERT INTO celer_t VALUES (4, 'O''Neil', NULL, MDY(12, 31, 2023), 99999.99, '', 1)";
+  importe DECIMAL(12,2), notas LVARCHAR(2000), parent_id INT REFERENCES celer_p(id), momento DATETIME YEAR TO MINUTE);
+INSERT INTO celer_t VALUES (1, 'Ana Ruiz', 't', MDY(1, 15, 2024), 120.50, 'nota 50% off', 1, DATETIME(2024-01-15 10:30) YEAR TO MINUTE);
+INSERT INTO celer_t VALUES (2, 'Luis Peña', 'f', MDY(2, 20, 2024), 0.00, NULL, 2, NULL);
+INSERT INTO celer_t VALUES (3, 'Zoë Martín', 't', NULL, -5.25, '[corchetes]', NULL, NULL);
+INSERT INTO celer_t VALUES (4, 'O''Neil', NULL, MDY(12, 31, 2023), 99999.99, '', 1, NULL)";
 
 #[test]
 fn informix_engine() {
@@ -509,14 +509,14 @@ fn informix_engine() {
     // The SQL the interface writes, run for real.
     let mut shape = json!({ "kind": "informix", "t": table_shape(d, &obj) });
     d.execute("DROP TABLE IF EXISTS dc_a; DROP TABLE IF EXISTS dc_b;
-               CREATE TABLE dc_a (id INT PRIMARY KEY, nombre VARCHAR(50), activo BOOLEAN, alta DATE, importe DECIMAL(10,2));
-               CREATE TABLE dc_b (id SERIAL PRIMARY KEY, nombre VARCHAR(50), activo BOOLEAN, alta DATE, importe DECIMAL(10,2));
-               INSERT INTO dc_a VALUES (1, 'Ana', 't', MDY(1, 1, 2024), 1.50);
-               INSERT INTO dc_a VALUES (2, 'Luis', 'f', NULL, NULL);
-               INSERT INTO dc_a VALUES (4, 'Zoë', NULL, MDY(12, 31, 2024), -2.25);
-               INSERT INTO dc_b VALUES (1, 'Ana', 't', MDY(1, 1, 2024), 1.50);
-               INSERT INTO dc_b VALUES (2, 'Luís', 't', NULL, 3.00);
-               INSERT INTO dc_b VALUES (3, 'Viejo', 't', NULL, NULL)", 10).unwrap();
+               CREATE TABLE dc_a (id INT PRIMARY KEY, nombre VARCHAR(50), activo BOOLEAN, alta DATE, importe DECIMAL(10,2), momento DATETIME YEAR TO MINUTE);
+               CREATE TABLE dc_b (id SERIAL PRIMARY KEY, nombre VARCHAR(50), activo BOOLEAN, alta DATE, importe DECIMAL(10,2), momento DATETIME YEAR TO MINUTE);
+               INSERT INTO dc_a VALUES (1, 'Ana', 't', MDY(1, 1, 2024), 1.50, DATETIME(2024-01-01 10:00) YEAR TO MINUTE);
+               INSERT INTO dc_a VALUES (2, 'Luis', 'f', NULL, NULL, NULL);
+               INSERT INTO dc_a VALUES (4, 'Zoë', NULL, MDY(12, 31, 2024), -2.25, DATETIME(2024-12-31 23:59) YEAR TO MINUTE);
+               INSERT INTO dc_b VALUES (1, 'Ana', 't', MDY(1, 1, 2024), 1.50, NULL);
+               INSERT INTO dc_b VALUES (2, 'Luís', 't', NULL, 3.00, NULL);
+               INSERT INTO dc_b VALUES (3, 'Viejo', 't', NULL, NULL, NULL)", 10).unwrap();
     let dc_b = ObjectRef { database: "celer".into(), schema: String::new(), name: "dc_b".into(), kind: "table".into() };
     shape["data"] = json!({
         "source": result_set(d, "SELECT * FROM dc_a ORDER BY id"),
@@ -532,6 +532,9 @@ fn informix_engine() {
     let got: Vec<String> = rows.iter().map(|r| r.iter().map(txt).collect::<Vec<_>>().join("|")).collect();
     let norm = |s: &str| s.replace("|true|", "|1|").replace("|false|", "|0|");
     assert_eq!(got.iter().map(|g| norm(g)).collect::<Vec<_>>(), vec!["1|Ana|1|1.50", "2|Luis|0|NULL", "3|Viejo|1|NULL", "4|Zoë|NULL|-2.25"]);
+    // DATETIME YEAR TO MINUTE values written by the script (fitted to the qualifier).
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dc_b WHERE id = 1 AND momento = DATETIME(2024-01-01 10:00) YEAR TO MINUTE"), "1");
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dc_b WHERE id = 4 AND momento = DATETIME(2024-12-31 23:59) YEAR TO MINUTE"), "1");
 
     // Startup script: run on connect; a broken one says so.
     let (mut cfg, lib) = informix_cfg().unwrap();

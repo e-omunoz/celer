@@ -1,8 +1,9 @@
 import { createStore } from "solid-js/store";
 import { api, errorText } from "./api";
 import { sqlLiteral } from "./sql";
+import { fitValue } from "./sqlgen";
 import { gib, kindOf, notify, reloadTable, state as appState } from "./state";
-import type { ObjectRef, TableColumn } from "./types";
+import type { DbKind, ObjectRef, TableColumn } from "./types";
 import { detectDelimiter, importFormat, parseCsv, parseJsonRows, type ImportFormat } from "./importFormats";
 
 export { detectDelimiter, importFormat, parseCsv, parseJsonRows, type ImportFormat };
@@ -138,7 +139,7 @@ export function remap() {
   setImporter("mapping", autoMap(parsed().header, importer.columns));
 }
 
-export function importSql(rows: string[][], dialect: string): string[] {
+export function importSql(rows: string[][], dialect: DbKind): string[] {
   const used = importer.columns.map((col, index) => ({ col, index, source: importer.mapping[index] })).filter((item) => item.source >= 0);
   const names = used.map((item) => importer.quoted[item.index]).join(", ");
   const batch = dialect === "mssql" ? 900 : 500;
@@ -149,7 +150,7 @@ export function importSql(rows: string[][], dialect: string): string[] {
         const raw = row[item.source] ?? "";
         if (raw === "" && importer.emptyAsNull) return "NULL";
         if (/^null$/i.test(raw) && item.col.nullable) return "NULL";
-        return sqlLiteral(raw, item.col.kind, dialect);
+        return sqlLiteral(fitValue(raw, item.col, dialect), item.col.kind, dialect);
       });
       return `(${cells.join(", ")})`;
     });
