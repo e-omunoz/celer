@@ -390,6 +390,13 @@ export function Sidebar() {
       toggleFavorite(conn.id);
       return;
     }
+    // Ctrl+F5 "Actualizar": a connected connection's tree, or the selected object folder.
+    if (ctrl && event.key === "F5") {
+      event.preventDefault();
+      if (conn && state.sessions[conn.id]) void refreshNode(conn.id, []);
+      else if (row.type === "node" && !row.node.leaf) void refreshNode(row.connId, row.node.path);
+      return;
+    }
     if (event.key === "ArrowRight") {
       event.preventDefault();
       if (row.type === "conn") {
@@ -588,7 +595,7 @@ export function Sidebar() {
       { label: "Copiar nombre", hint: "Ctrl+C", icon: "copy", run: () => void copyText(node.name) },
     );
     if (obj) items.push({ label: "Copiar nombre completo", run: () => void copyText([obj.schema, obj.name].filter(Boolean).join(".")) });
-    if (!node.leaf) items.push({ separator: true }, { label: "Actualizar", icon: "refresh", run: () => void refreshNode(connId, node.path) });
+    if (!node.leaf) items.push({ separator: true }, { label: "Actualizar", hint: "Ctrl+F5", icon: "refresh", run: () => void refreshNode(connId, node.path) });
     openMenu(event, items);
   }
 
