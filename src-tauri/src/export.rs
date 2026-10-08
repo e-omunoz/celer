@@ -362,10 +362,10 @@ fn md_cell(s: &str) -> String {
     s.replace('|', "\\|").replace(['\r', '\n'], " ")
 }
 
-/// Escapes text for XML and drops the control characters XML 1.0 does not allow.
+/// Escapes text for XML and drops what XML 1.0 does not allow (control characters, U+FFFE, U+FFFF).
 fn xml_escape(s: &str) -> String {
     s.chars()
-        .filter(|c| !matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}'))
+        .filter(|c| !matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}'))
         .collect::<String>()
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -376,9 +376,19 @@ fn xml_escape(s: &str) -> String {
 /// A column name as an XML element name: kept when valid, otherwise "column" (the real name goes in an
 /// attribute).
 fn xml_name(name: &str) -> String {
+    // XML 1.0 name characters (without ":"): º, ª, ² are not allowed although Unicode calls them letters.
+    fn start(c: char) -> bool {
+        matches!(c, 'A'..='Z' | '_' | 'a'..='z' | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}'
+            | '\u{370}'..='\u{37D}' | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}'
+            | '\u{2C00}'..='\u{2FEF}' | '\u{3001}'..='\u{D7FF}' | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{EFFFF}')
+    }
+    fn rest(c: char) -> bool {
+        start(c) || matches!(c, '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
+    }
     let mut chars = name.chars();
-    let valid_start = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_');
-    let valid_rest = name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    let valid_start = chars.next().is_some_and(start);
+    let valid_rest = name.chars().all(rest);
     if valid_start && valid_rest && !name.to_ascii_lowercase().starts_with("xml") {
         name.to_string()
     } else {
@@ -418,6 +428,9 @@ mod tests {
         assert_eq!(xml_name("first name"), "column");
         assert_eq!(xml_name("1st"), "column");
         assert_eq!(xml_name("xmlns"), "column");
+        assert_eq!(xml_name("nº"), "column");
+        assert_eq!(xml_name("m²"), "column");
+        assert_eq!(xml_name("año"), "año");
         assert_eq!(xml_root("public.events"), "events");
         assert_eq!(xml_root("\"Mixed Case\""), "rows");
         assert_eq!(xml_escape("a<b & \"c\"\u{1}"), "a&lt;b &amp; &quot;c&quot;");

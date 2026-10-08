@@ -147,7 +147,7 @@ export async function pickImportFile() {
   const path = await api().pickOpenPath([{ name: "CSV / TSV", extensions: ["csv", "tsv", "txt"] }]);
   if (!path) return;
   try {
-    const text = await api().readTextFile(path);
+    const { text } = await api().readTextFile(path);
     const delimiter = path.toLowerCase().endsWith(".tsv") ? "\t" : detectDelimiter(text);
     setImporter({ fileName: path.split(/[\\/]/).pop() ?? path, text, delimiter });
     remap();

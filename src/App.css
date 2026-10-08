@@ -1215,9 +1215,8 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 @keyframes morph-in { from { transform: scale(0.92); } }
 @keyframes indeterminate { from { left: -35%; } to { left: 100%; } }
 
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 60ms !important; animation-iteration-count: 1 !important; transition-duration: 60ms !important; }
-}
+/* Reduced motion: data-motion comes from Settings › Apariencia (which can follow the system setting). */
+:root[data-motion="reduce"] *, :root[data-motion="reduce"] *::before, :root[data-motion="reduce"] *::after { animation-duration: 60ms !important; animation-iteration-count: 1 !important; transition-duration: 60ms !important; }
 
 @media (max-width: 900px) {
   .theme-grid { grid-template-columns: repeat(2, 1fr); }

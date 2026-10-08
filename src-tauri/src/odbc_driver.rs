@@ -28,6 +28,8 @@ pub struct OdbcDriver {
     in_tx: bool,
     database: String,
     quote: String,
+    /// Se abrió una conexión nueva (ver `Driver::take_reconnected`).
+    reconnected: bool,
 }
 
 impl OdbcDriver {
@@ -54,6 +56,7 @@ impl OdbcDriver {
             autocommit: true,
             in_tx: false,
             quote,
+            reconnected: false,
         };
         if d.database.is_empty() {
             d.database = d.current_database().unwrap_or_default();
@@ -285,6 +288,7 @@ impl OdbcDriver {
         }
         self.conn = conn;
         self.in_tx = false;
+        self.reconnected = true;
         Ok(())
     }
 }
@@ -453,6 +457,10 @@ const IFX_SYSTEM_DBS: [&str; 6] = [
 ];
 
 impl Driver for OdbcDriver {
+    fn take_reconnected(&mut self) -> bool {
+        std::mem::take(&mut self.reconnected)
+    }
+
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
         self.stmt = None;

@@ -57,6 +57,10 @@ assert.equal(hasUnfilteredWrite("UPDATE t SET a = (SELECT b FROM u LIMIT 1)", "m
 assert.equal(hasUnfilteredWrite("WITH x AS (SELECT 1) DELETE FROM t", "postgres"), true, "WITH … DELETE is checked");
 assert.equal(hasUnfilteredWrite("WITH x AS (SELECT id FROM u WHERE a = 1) DELETE FROM t WHERE id IN (SELECT id FROM x)", "postgres"), false);
 assert.equal(hasUnfilteredWrite("WITH x AS (SELECT 1) SELECT * FROM x", "postgres"), false);
+assert.equal(hasUnfilteredWrite("WITH x AS (SELECT id FROM t) SELECT * FROM x WHERE id > 1 FOR UPDATE", "postgres"), false, "SELECT … FOR UPDATE is not an UPDATE");
+assert.equal(hasUnfilteredWrite("WITH src AS (SELECT 1 AS id) INSERT INTO t SELECT * FROM src ON CONFLICT (id) DO UPDATE SET n = 1", "postgres"), false, "INSERT … DO UPDATE is not an UPDATE");
+assert.equal(hasUnfilteredWrite("WITH s AS (SELECT 1 AS id) MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET n = 1", "mssql"), false);
+assert.equal(hasUnfilteredWrite("{ c } DELETE FROM t", "informix"), true, "a brace comment does not hide a DELETE");
 assert.equal(hasUnfilteredWrite("DELETE t FROM t JOIN u ON u.id = t.uid", "mysql"), false, "a JOIN … ON bounds it in MySQL");
 assert.equal(hasUnfilteredWrite("UPDATE t SET a = u.a FROM t JOIN u ON u.id = t.id", "mssql"), false, "and in SQL Server");
 assert.equal(hasUnfilteredWrite("UPDATE STATISTICS MEDIUM FOR TABLE clientes", "informix"), false, "UPDATE STATISTICS is not a write");

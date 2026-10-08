@@ -46,8 +46,10 @@ export interface Backend {
   clearHistory(): Promise<void>;
   loadJson(name: "settings" | "workspace"): Promise<unknown>;
   saveJson(name: "settings" | "workspace", value: unknown): Promise<void>;
-  readTextFile(path: string): Promise<string>;
-  writeTextFile(path: string, content: string): Promise<void>;
+  /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
+  readTextFile(path: string): Promise<{ text: string; encoding: string }>;
+  /** Writes in `encoding` (UTF-8 by default); returns the encoding used (UTF-8 when Windows-1252 cannot hold the text). */
+  writeTextFile(path: string, content: string, encoding?: string): Promise<string>;
   odbcDrivers(): Promise<string[]>;
   odbcDsns(): Promise<string[]>;
   ibmDriverStatus(): Promise<string | null>;
@@ -116,7 +118,7 @@ function tauriBackend(): Backend {
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value) => invoke("save_json", { name, value }),
     readTextFile: (path) => invoke("read_text_file", { path }),
-    writeTextFile: (path, content) => invoke("write_text_file", { path, content }),
+    writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),
     odbcDrivers: () => invoke("odbc_drivers"),
     odbcDsns: () => invoke("odbc_dsns"),
     ibmDriverStatus: () => invoke("ibm_driver_status"),

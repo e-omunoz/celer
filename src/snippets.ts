@@ -146,9 +146,10 @@ export function unfilteredWrites(sql: string, dialect?: string): UnfilteredWrite
     let top = topLevel(code);
     let kw = firstKeyword(part.sql);
     if (kw === "WITH") {
-      // The statement after the CTEs: the first DELETE/UPDATE outside every parenthesis.
-      const main = /\b(delete|update)\b/i.exec(top);
-      if (!main) continue;
+      // The main statement after the CTEs (their bodies are blanked out): its first keyword decides. A SELECT …
+      // FOR UPDATE or an INSERT … ON CONFLICT DO UPDATE is not a DELETE/UPDATE.
+      const main = /\b(select|insert|update|delete|merge|values|table)\b/i.exec(top);
+      if (!main || !/^(delete|update)$/i.test(main[1])) continue;
       kw = main[1].toUpperCase();
       top = top.slice(main.index);
     } else if (kw !== "DELETE" && kw !== "UPDATE") continue;

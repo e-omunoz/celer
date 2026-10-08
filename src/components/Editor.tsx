@@ -140,9 +140,12 @@ function snippetSource(get: () => { snippets: Snippet[]; dialect: string }) {
     if (/String|Comment|QuotedIdentifier/.test(node.name)) return null;
     // Not after a dot (that is a column or table name), nor where a table name goes (FROM cte⏎ is a table).
     if (ctx.state.sliceDoc(word.from - 1, word.from) === ".") return null;
+    // Right after FROM / JOIN / INTO / UPDATE (or "FROM a,") a table name goes: no templates there. After the
+    // table and its alias ("FROM orders o⏎lj") they are welcome.
     const text = ctx.state.doc.toString();
     const stmt = statementAround(text, ctx.pos, get().dialect);
-    if (expectAt(text.slice(stmt.start, word.from)) === "table") return null;
+    const before = text.slice(stmt.start, word.from);
+    if (/\b(from|join|into|update)\s+$/i.test(before) || /\bfrom\b[^;()]*,\s*$/i.test(before)) return null;
     const typed = word.text.toLowerCase();
     const options = get()
       .snippets.filter((s) => s.name.toLowerCase().startsWith(typed))

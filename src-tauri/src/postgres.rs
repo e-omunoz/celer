@@ -91,6 +91,8 @@ pub struct PostgresDriver {
     cursor_seq: u64,
     /// Conexión secundaria para metadatos de otra base (o de la actual con transacción abierta).
     aux: Option<(String, Client)>,
+    /// Se abrió una conexión principal nueva (ver `Driver::take_reconnected`).
+    reconnected: bool,
 }
 
 impl PostgresDriver {
@@ -113,6 +115,7 @@ impl PostgresDriver {
             cursor: None,
             cursor_seq: 0,
             aux: None,
+            reconnected: false,
         })
     }
 
@@ -125,6 +128,7 @@ impl PostgresDriver {
         self.database = database;
         self.cursor = None;
         self.in_tx = false;
+        self.reconnected = true;
         if self.aux.as_ref().is_some_and(|(d, _)| *d == self.database) {
             self.aux = None;
         }
@@ -713,6 +717,10 @@ impl PostgresDriver {
 // ───────────────────────────── Driver ─────────────────────────────
 
 impl Driver for PostgresDriver {
+    fn take_reconnected(&mut self) -> bool {
+        std::mem::take(&mut self.reconnected)
+    }
+
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = std::time::Instant::now();
         let mut messages = Vec::new();

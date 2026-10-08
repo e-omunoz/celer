@@ -272,7 +272,7 @@ export function Sidebar() {
         );
       }
       items.push(
-        { label: `Generar DROP ${obj.kind === "view" ? "VIEW" : "TABLE"}`, run: () => void generateSql(connId, obj, "drop") },
+        { label: `Generar DROP ${node.path.includes("matviews") ? "MATERIALIZED VIEW" : obj.kind === "view" ? "VIEW" : "TABLE"}`, run: () => void generateSql(connId, obj, "drop", node.path) },
         { label: "DDL en consola", run: () => void generateSql(connId, obj, "ddl") },
         { separator: true },
         { label: "Exportar datos…", icon: "download", run: () => void startObjectExport(connId, obj) },

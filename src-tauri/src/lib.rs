@@ -10,6 +10,7 @@ mod odbc_driver;
 mod postgres;
 mod session;
 mod sqlite;
+mod startup;
 mod store;
 mod update;
 
@@ -88,9 +89,10 @@ pub(crate) fn make_connector(
         }
         DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
     };
-    let startup = cfg.startup_sql.trim().to_string();
+    // What the startup script needs (it runs on every new session and again after internal reconnects).
+    let startup_cfg = ConnConfig { password: None, ..cfg.clone() };
     Ok(move || -> anyhow::Result<Box<dyn Driver>> {
-        let mut driver: Box<dyn Driver> = match kind {
+        let driver: Box<dyn Driver> = match kind {
             DbKind::Sqlite => Box::new(sqlite::SqliteDriver::connect(cfg)?),
             DbKind::Mssql => Box::new(mssql::MssqlDriver::connect(cfg)?),
             DbKind::Postgres => Box::new(postgres::PostgresDriver::connect(cfg)?),
@@ -100,14 +102,7 @@ pub(crate) fn make_connector(
                 Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
             }
         };
-        // The connection's startup script runs on every new session, before anything else.
-        if !startup.is_empty() {
-            driver
-                .execute(&startup, 1)
-                .map_err(|e| anyhow::anyhow!("El script de inicio de la conexión falló: {e}"))?;
-            let _ = driver.close_cursor();
-        }
-        Ok(driver)
+        startup::wrap(driver, &startup_cfg)
     })
 }
 
@@ -499,9 +494,67 @@ fn save_json(
 }
 
 #[tauri::command]
-fn read_text_file(path: String) -> CmdResult<String> {
+fn read_text_file(path: String) -> CmdResult<TextFile> {
     let bytes = std::fs::read(&path).map_err(err)?;
-    Ok(decode_text(&bytes))
+    let encoding = detect_encoding(&bytes).to_string();
+    Ok(TextFile { text: decode_text(&bytes), encoding })
+}
+
+#[derive(Serialize)]
+struct TextFile {
+    text: String,
+    /// utf-8 | utf-8-bom | utf-16le | utf-16be | windows-1252: saving writes it back the same way.
+    encoding: String,
+}
+
+/// La codificación que `decode_text` usa para estos bytes.
+fn detect_encoding(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return "utf-8-bom";
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return "utf-16le";
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return "utf-16be";
+    }
+    if bytes.len() >= 4 {
+        let sample = &bytes[..bytes.len().min(4096) & !1];
+        let zeros = |offset: usize| sample.iter().skip(offset).step_by(2).filter(|&&b| b == 0).count();
+        let half = sample.len() / 2;
+        if zeros(1) * 10 > half * 6 && zeros(0) * 10 < half {
+            return "utf-16le";
+        }
+        if zeros(0) * 10 > half * 6 && zeros(1) * 10 < half {
+            return "utf-16be";
+        }
+    }
+    if std::str::from_utf8(bytes).is_ok() {
+        "utf-8"
+    } else {
+        "windows-1252"
+    }
+}
+
+/// Texto en la codificación pedida. Windows-1252 solo si todos los caracteres caben; si no, UTF-8 (devuelve la
+/// codificación usada).
+fn encode_text(text: &str, encoding: &str) -> (Vec<u8>, &'static str) {
+    match encoding {
+        "utf-8-bom" => ([&[0xEF, 0xBB, 0xBF][..], text.as_bytes()].concat(), "utf-8-bom"),
+        "utf-16le" => ([0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(|u| u.to_le_bytes())).collect(), "utf-16le"),
+        "utf-16be" => ([0xFE, 0xFF].into_iter().chain(text.encode_utf16().flat_map(|u| u.to_be_bytes())).collect(), "utf-16be"),
+        "windows-1252" => {
+            let bytes: Option<Vec<u8>> = text
+                .chars()
+                .map(|c| (0u8..=255).find(|&b| windows_1252(b) == c))
+                .collect();
+            match bytes {
+                Some(b) => (b, "windows-1252"),
+                None => (text.as_bytes().to_vec(), "utf-8"),
+            }
+        }
+        _ => (text.as_bytes().to_vec(), "utf-8"),
+    }
 }
 
 /// Texto de un fichero .sql con la codificación detectada: BOM de UTF-8 o UTF-16 (LE/BE), UTF-16 sin BOM
@@ -568,11 +621,27 @@ mod text_tests {
         assert_eq!(decode_text(&no_bom), "SELECT 'año' FROM t");
         assert_eq!(decode_text(b"SELECT 'a\xF1o \x80'"), "SELECT 'año €'");
     }
+
+    #[test]
+    fn round_trips_every_encoding() {
+        use super::{detect_encoding, encode_text};
+        let text = "SELECT 'año €' -- ñ";
+        for encoding in ["utf-8", "utf-8-bom", "utf-16le", "utf-16be", "windows-1252"] {
+            let (bytes, used) = encode_text(text, encoding);
+            assert_eq!(used, encoding);
+            assert_eq!(detect_encoding(&bytes), encoding, "{encoding}");
+            assert_eq!(decode_text(&bytes), text, "{encoding}");
+        }
+        // Not representable in Windows-1252: saved as UTF-8 instead.
+        assert_eq!(encode_text("中文", "windows-1252").1, "utf-8");
+    }
 }
 
 #[tauri::command]
-fn write_text_file(path: String, content: String) -> CmdResult<()> {
-    std::fs::write(&path, content).map_err(err)
+fn write_text_file(path: String, content: String, encoding: Option<String>) -> CmdResult<String> {
+    let (bytes, used) = encode_text(&content, encoding.as_deref().unwrap_or("utf-8"));
+    std::fs::write(&path, bytes).map_err(err)?;
+    Ok(used.to_string())
 }
 
 #[tauri::command]

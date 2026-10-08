@@ -44,6 +44,8 @@ pub struct MssqlDriver {
     database: String,
     autocommit: bool,
     in_tx: bool,
+    /// Se abrió una conexión nueva (ver `Driver::take_reconnected`).
+    reconnected: bool,
 }
 
 impl MssqlDriver {
@@ -61,6 +63,7 @@ impl MssqlDriver {
             cancel: Arc::new(Mutex::new(None)),
             autocommit: true,
             in_tx: false,
+            reconnected: false,
         };
         if d.database.is_empty() {
             d.database = d.current_database().unwrap_or_default();
@@ -88,6 +91,7 @@ impl MssqlDriver {
             })?;
         }
         self.in_tx = false;
+        self.reconnected = true;
         Ok(c)
     }
 
@@ -705,6 +709,10 @@ pub fn fmt_rows(n: i64) -> String {
 }
 
 impl Driver for MssqlDriver {
+    fn take_reconnected(&mut self) -> bool {
+        std::mem::take(&mut self.reconnected)
+    }
+
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
         let kw = first_keyword(sql);

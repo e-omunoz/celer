@@ -615,12 +615,13 @@ export function createDemoBackend(): Backend {
     },
     async readTextFile(path) {
       const hit = textFiles.get(path);
-      if (hit !== undefined) return hit;
+      if (hit !== undefined) return { text: hit, encoding: "utf-8" };
       throw new Error("En el navegador abre el script con el botón Abrir");
     },
     async writeTextFile(path, content) {
       textFiles.set(path, content);
       download(path.split(/[\\/]/).pop() || "script.sql", content, "text/plain");
+      return "utf-8";
     },
     async odbcDrivers() {
       return [];

@@ -111,7 +111,7 @@ export function statementAt(sql: string, pos: number, dialect?: string): string 
 }
 
 export function firstKeyword(sql: string): string {
-  const m = sql.replace(/^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s|\()*/, "").match(/^([A-Za-z_]+)/);
+  const m = sql.replace(/^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\{[^}]*\}|\s|\()*/, "").match(/^([A-Za-z_]+)/);
   return (m?.[1] ?? "").toUpperCase();
 }
 
@@ -405,14 +405,24 @@ function csvEscape(value: string, delimiter: string): string {
   return value;
 }
 
+// XML 1.0 name characters (without ":"): letters such as º, ª or ² are not allowed although Unicode calls them letters.
+const XML_START = "A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD";
+const XML_NAME = new RegExp(`^[${XML_START}][${XML_START}\\-.0-9\\u00B7\\u0300-\\u036F\\u203F\\u2040]*$`);
+
 /** An XML element name: the column name when it is valid, else "column" (the name then goes in an attribute). Same rule as the core. */
 function xmlName(name: string): string {
-  return /^[\p{L}_][\p{L}\p{N}_.-]*$/u.test(name) && !/^xml/i.test(name) ? name : "column";
+  return XML_NAME.test(name) && !/^xml/i.test(name) ? name : "column";
 }
 
+/** Escapes text for XML and drops what XML 1.0 cannot hold (control characters, U+FFFE/U+FFFF, lone surrogates). */
 function xmlEscape(value: string): string {
-  // eslint-disable-next-line no-control-regex
-  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return value
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 export function resultToText(result: ResultSet, format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xml", table = "resultado", delimiterOverride?: string): string {

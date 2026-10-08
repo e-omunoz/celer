@@ -63,6 +63,9 @@ export interface SqlTab {
   runId: number;
   /** The SQL that produced the current results (lastSql may be a later run that failed). */
   resultsSql: string;
+  /** The .sql file the console was opened from or saved to (Ctrl+S writes there), and its encoding. */
+  filePath?: string;
+  fileEncoding?: string;
   /** Results kept aside with the pin button: they survive the next runs until closed. */
   pinned: PinnedResult[];
   /** The pinned result on show instead of the current ones (null: the current ones). */
@@ -174,6 +177,8 @@ interface SavedSqlTab {
   database: string;
   cursor?: number;
   autocommit?: boolean;
+  filePath?: string;
+  fileEncoding?: string;
 }
 
 interface SavedTableTab {
@@ -437,6 +442,9 @@ export async function boot() {
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (state.settings.theme === "system") applyTheme();
   });
+  window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", () => {
+    if (state.settings.motion === "system") applyTheme();
+  });
   let connectionsLoaded = false;
   try {
     setState("connections", await api().listConnections());
@@ -464,6 +472,8 @@ export async function boot() {
                   database: tab.database ?? "",
                   cursor: Math.min(tab.cursor ?? tab.sql.length, tab.sql.length),
                   autocommit: tab.autocommit ?? true,
+                  filePath: tab.filePath,
+                  fileEncoding: tab.fileEncoding,
                 },
           ),
       );
@@ -573,7 +583,7 @@ export function persistNow() {
     tabs: state.tabs.map(
       (tab): SavedSqlTab | SavedTableTab =>
         tab.kind === "sql"
-          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit }
+          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding }
           : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
     ),
   };
@@ -1550,7 +1560,7 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
   if (existing) {
     // A restored tab not loaded yet loads once here (with the filters, if any), not again when it is shown.
     const restored = existing.kind === "table" && existing.restored;
-    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "" } : {}) });
+    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}) });
     selectTab(existing.id);
     if (section !== "data") patchTab(existing.id, { section });
     if (restored) {
@@ -1988,7 +1998,7 @@ function paramNamesFor(columns: string[]): string[] {
  * Writes a statement for a table or view in the console (the active one of the same connection, else a new
  * one). Values are :name parameters, so running it asks for them. DROP is written, never run.
  */
-export async function generateSql(connId: string, obj: ObjectRef, kind: GenerateKind) {
+export async function generateSql(connId: string, obj: ObjectRef, kind: GenerateKind, nodePath: string[] = []) {
   const opened = await openSessionFor(connId).catch((err) => {
     notify(errorText(err), "error");
     return null;
@@ -2020,8 +2030,25 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: Generate
       sql = `UPDATE ${q}\nSET ${sets}\nWHERE ${where};`;
     }
     if (kind === "delete") sql = `DELETE FROM ${q}\nWHERE ${where};`;
-    if (kind === "drop") sql = `-- Revisa antes de ejecutar: borra ${obj.kind === "view" ? "la vista" : "la tabla y todos sus datos"}.\nDROP ${obj.kind === "view" ? "VIEW" : "TABLE"} ${q};`;
-    if (kind === "upsert") sql = upsertSql(dialect, q, quoted, params, writable.map((item) => item.index), keyCols.map((item) => item.index));
+    if (kind === "drop") {
+      // Materialized views are listed with the views (PostgreSQL), but they are dropped differently.
+      const what = nodePath.includes("matviews") ? "MATERIALIZED VIEW" : obj.kind === "view" ? "VIEW" : "TABLE";
+      sql = `-- Revisa antes de ejecutar: borra ${what === "TABLE" ? "la tabla y todos sus datos" : "la vista"}.\nDROP ${what} ${q};`;
+    }
+    if (kind === "upsert") {
+      // The key decides between insert and update: without a primary key there is no safe one to use.
+      if (!pk.length) {
+        notify(`«${obj.name}» no tiene clave primaria: no se puede generar un UPSERT seguro`, "warning", "Sin clave, el MERGE actualizaría todas las filas que compartan la primera columna.");
+        return;
+      }
+      // Key columns always go in (even identity ones, or the conflict could never happen); other identity
+      // columns are left to the database.
+      const keys = pk.map((item) => item.index);
+      const cols = indexed.filter((item) => keys.includes(item.index) || !item.col.identity).map((item) => item.index);
+      const identityKey = pk.some((item) => item.col.identity);
+      const insertable = indexed.filter((item) => !item.col.identity).map((item) => item.index);
+      sql = upsertSql(dialect, q, quoted, params, cols, keys, identityKey, insertable);
+    }
     if (kind === "select-join") {
       const base = [obj.database || opened.database || "main", obj.schema || "main", obj.kind === "view" ? "views" : "tables", obj.name, "fks"];
       const fks = parseForeignKeys(await api().metaChildren(opened.sessionId, base).catch(() => [] as MetaNode[]), obj).filter((fk) => fk.columns.length && fk.columns.length === fk.targetColumns.length);
@@ -2038,6 +2065,9 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: Generate
     const tab = activeSql();
     if (tab && tab.connId === connId) insertIntoActive((tab.sql.trim() ? "\n\n" : "") + sql);
     else openQuery(connId, sql);
+    if (!state.settings.askParams && /\s:[a-z_]/i.test(sql)) {
+      notify("La sentencia lleva :parámetros", "info", "Sustitúyelos por valores, o activa «Pedir el valor de los parámetros» en Ajustes › Editor para que Celer los pida al ejecutar.");
+    }
   } catch (err) {
     notify(errorText(err), "error");
   } finally {
@@ -2045,15 +2075,20 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: Generate
   }
 }
 
-/** Insert-or-update in each engine's own syntax (the key is the primary key, or the first column). */
-function upsertSql(dialect: DbKind, q: string, quoted: string[], params: string[], cols: number[], keys: number[]) {
+/**
+ * Insert-or-update in each engine's own syntax, keyed on the primary key. `cols` are the columns written (keys
+ * included); `insertable` the ones MERGE may insert (identity columns are generated by the database).
+ */
+function upsertSql(dialect: DbKind, q: string, quoted: string[], params: string[], cols: number[], keys: number[], identityKey: boolean, insertable: number[]) {
   const names = cols.map((i) => quoted[i]);
   const values = cols.map((i) => params[i]);
   const updatable = cols.filter((i) => !keys.includes(i));
   const keyNames = keys.map((i) => quoted[i]).join(", ");
   if (dialect === "postgres" || dialect === "sqlite") {
     const action = updatable.length ? `DO UPDATE SET ${updatable.map((i) => `${quoted[i]} = EXCLUDED.${quoted[i]}`).join(",\n    ")}` : "DO NOTHING";
-    return `INSERT INTO ${q} (${names.join(", ")})\nVALUES (${values.join(", ")})\nON CONFLICT (${keyNames}) ${action};`;
+    // A GENERATED ALWAYS identity key only accepts a value with OVERRIDING SYSTEM VALUE (harmless otherwise).
+    const overriding = dialect === "postgres" && identityKey ? "\nOVERRIDING SYSTEM VALUE" : "";
+    return `INSERT INTO ${q} (${names.join(", ")})${overriding}\nVALUES (${values.join(", ")})\nON CONFLICT (${keyNames}) ${action};`;
   }
   if (dialect === "mysql") {
     const set = (updatable.length ? updatable : keys).map((i) => `${quoted[i]} = VALUES(${quoted[i]})`).join(",\n    ");
@@ -2063,7 +2098,8 @@ function upsertSql(dialect: DbKind, q: string, quoted: string[], params: string[
   const source = dialect === "mssql" ? `(VALUES (${values.join(", ")})) AS s (${names.join(", ")})` : `(SELECT ${cols.map((i) => `${params[i]} AS ${quoted[i]}`).join(", ")} FROM ${dialect === "informix" ? "sysmaster:sysdual" : "(VALUES (1)) AS one"}) s`;
   const on = keys.map((i) => `t.${quoted[i]} = s.${quoted[i]}`).join(" AND ");
   const update = updatable.length ? `\nWHEN MATCHED THEN\n  UPDATE SET ${updatable.map((i) => `${quoted[i]} = s.${quoted[i]}`).join(", ")}` : "";
-  return `MERGE INTO ${q} ${dialect === "mssql" ? "AS t" : "t"}\nUSING ${source}\nON ${on}${update}\nWHEN NOT MATCHED THEN\n  INSERT (${names.join(", ")}) VALUES (${cols.map((i) => `s.${quoted[i]}`).join(", ")});`;
+  const inserted = cols.filter((i) => insertable.includes(i));
+  return `MERGE INTO ${q} ${dialect === "mssql" ? "AS t" : "t"}\nUSING ${source}\nON ${on}${update}\nWHEN NOT MATCHED THEN\n  INSERT (${inserted.map((i) => quoted[i]).join(", ")}) VALUES (${inserted.map((i) => `s.${quoted[i]}`).join(", ")});`;
 }
 
 function limitClause(kind: DbKind, n: number) {
@@ -2410,29 +2446,44 @@ export async function openScript() {
   const path = await api().pickOpenPath([{ name: "SQL", extensions: ["sql", "txt"] }]);
   if (!path) return;
   try {
-    const sql = await api().readTextFile(path);
+    const { text: sql, encoding } = await api().readTextFile(path);
     const tab = activeSql();
     const title = path.split(/[\\/]/).pop() || "script.sql";
     if (tab && !tab.sql.trim()) {
-      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title } as Partial<SqlTab>);
-      persistSoon();
-    } else openQuery(tab?.connId ?? null, sql, title);
+      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title, filePath: path, fileEncoding: encoding } as Partial<SqlTab>);
+    } else {
+      const id = openQuery(tab?.connId ?? null, sql, title);
+      patchTab(id, { filePath: path, fileEncoding: encoding });
+    }
+    persistSoon();
   } catch (err) {
     notify(errorText(err), "error");
   }
 }
 
-export async function saveScript() {
+/**
+ * Ctrl+S: writes the console to its file (in the encoding it was opened with). A console without a file, or
+ * "Guardar como…", asks where.
+ */
+export async function saveScript(saveAs = false) {
   const tab = activeSql();
   if (!tab) return;
-  let path = tab.title.endsWith(".sql") ? tab.title : `${tab.title || "consulta"}.sql`;
-  if (isTauri()) {
+  let path = tab.filePath ?? (tab.title.endsWith(".sql") ? tab.title : `${tab.title || "consulta"}.sql`);
+  if (isTauri() && (saveAs || !tab.filePath)) {
     const picked = await api().pickSavePath([{ name: "SQL", extensions: ["sql"] }]);
     if (!picked) return;
     path = picked;
   }
-  await api().writeTextFile(path, tab.sql);
-  notify(isTauri() ? "Script guardado" : "Script descargado", "success", path);
+  try {
+    const used = await api().writeTextFile(path, tab.sql, tab.fileEncoding);
+    const title = path.split(/[\\/]/).pop() || tab.title;
+    patchTab(tab.id, { filePath: isTauri() ? path : undefined, fileEncoding: used, title });
+    persistSoon();
+    if (tab.fileEncoding && used !== tab.fileEncoding) notify("Script guardado en UTF-8", "warning", `El texto tiene caracteres que ${tab.fileEncoding} no admite.`);
+    else notify(isTauri() ? "Script guardado" : "Script descargado", "success", path);
+  } catch (err) {
+    notify("No se pudo guardar el script", "error", errorText(err));
+  }
 }
 
 export async function downloadDriver() {

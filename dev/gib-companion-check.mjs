@@ -49,9 +49,16 @@ if (await js(`return !!document.querySelector('.onboarding');`)) await press("Es
 await app.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 600, y: 300 });
 await sleep(400);
 
-// An idle activity on demand.
-await palette("Gib: haz algo");
-const act = await js(`await until(() => [...gib().classList].some((c) => c.startsWith('act-')), 3000); return [...gib().classList].find((c) => c.startsWith('act-')) ?? '';`);
+// An idle activity on demand (not the coffee break: while he is away the cursor does not bother him, by design,
+// and the hover checks below need him in place).
+let act = "";
+for (let attempt = 0; attempt < 8; attempt++) {
+  await palette("Gib: haz algo");
+  act = await js(`await until(() => [...gib().classList].some((c) => c.startsWith('act-')), 3000); return [...gib().classList].find((c) => c.startsWith('act-')) ?? '';`);
+  if (act && !act.startsWith("act-coffee")) break;
+  await press("x"); // interrupts it; try again
+  await sleep(300);
+}
 check("'Gib: haz algo' starts an idle activity", Boolean(act), act);
 for (let i = 0; i < 6; i++) {
   await sleep(900);

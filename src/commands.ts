@@ -70,7 +70,8 @@ export function commands(): Command[] {
     { id: "disconnect-all", label: "Desconectar todas", group: "Conexión", run: () => void disconnectAll(), enabled: () => Object.keys(state.sessions).length > 0 },
     { id: "import-conns", label: "Importar conexiones de DBeaver o DbVisualizer…", group: "Archivo", run: () => void openMigration() },
     { id: "open", label: "Abrir script…", group: "Archivo", keys: "Ctrl+O", run: () => void openScript() },
-    { id: "save", label: "Guardar script…", group: "Archivo", keys: "Ctrl+S", run: () => void saveScript(), enabled: sqlOnly },
+    { id: "save", label: "Guardar script", group: "Archivo", keys: "Ctrl+S", run: () => void saveScript(), enabled: sqlOnly },
+    { id: "save-as", label: "Guardar script como…", group: "Archivo", keys: "Ctrl+Mayús+S", run: () => void saveScript(true), enabled: sqlOnly },
     { id: "close-tab", label: "Cerrar pestaña", group: "Ventana", keys: "Ctrl+W", run: () => state.activeTabId && void closeTab(state.activeTabId) },
     { id: "next-tab", label: "Pestaña siguiente", group: "Ventana", keys: "Ctrl+Tab", run: () => cycleTab(1) },
     { id: "prev-tab", label: "Pestaña anterior", group: "Ventana", keys: "Ctrl+Mayús+Tab", run: () => cycleTab(-1) },
@@ -135,7 +136,8 @@ export function handleGlobalKey(event: KeyboardEvent): boolean {
   if (ctrl && !event.shiftKey && key === "w") return run("close-tab");
   if (ctrl && key === "tab") return run(event.shiftKey ? "prev-tab" : "next-tab");
   if (ctrl && !event.shiftKey && key === "o") return run("open");
-  if (ctrl && !event.shiftKey && key === "s") return run("save");
+  if (ctrl && !event.shiftKey && !event.altKey && key === "s") return run("save");
+  if (ctrl && event.shiftKey && !event.altKey && key === "s") return run("save-as");
   if (ctrl && key === "f2") return run("stop");
   if (event.altKey && !ctrl && key === "1") return run("toggle-explorer");
   if (event.altKey && !ctrl && key === "7") return run("toggle-inspector");
