@@ -1531,3 +1531,15 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .snippet-builtin td { padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: top; }
 .snippet-builtin td:nth-child(2) { color: var(--text-muted); white-space: nowrap; }
 .snippet-builtin pre { margin: 0; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; color: var(--text); }
+/* Pinned results (they survive later runs) and the quick filter over the loaded rows */
+.rtab.pinned { padding: 0 2px 0 0; gap: 0; }
+.rtab.pinned .rtab-main { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 6px 0 10px; color: inherit; }
+.rtab.pinned .rtab-main svg { color: var(--accent); }
+.rtab-close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--text-faint); }
+.rtab-close:hover { background: var(--hover); color: var(--text); }
+.result-filter { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 4px 0 8px; margin-right: 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text-muted); }
+.result-filter:focus-within { border-color: var(--accent); }
+.result-filter input { width: 180px; border: 0; background: transparent; padding: 0; height: 22px; font-size: 12px; color: var(--text); outline: none; box-shadow: none; }.results-head > .muted.small { white-space: nowrap; flex: none; padding: 0 4px; }
+.results-head > .tb-icon, .results-head > .btn { flex: none; }
+.results-head .result-filter { flex: 0 1 auto; min-width: 120px; }
+.results-head .result-filter input { width: 100%; min-width: 60px; max-width: 200px; }

@@ -10,11 +10,18 @@ const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
 const ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
 let id = 0;
 const pending = new Map();
+// Uncaught exceptions and console errors in the page while the checks run: any of them fails the run
+// (an exception inside a Solid update aborts the whole update, so the UI silently stops reacting).
+const pageErrors = [];
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
   if (msg.id && pending.has(msg.id)) {
     pending.get(msg.id)(msg);
     pending.delete(msg.id);
+  } else if (msg.method === "Runtime.exceptionThrown") {
+    pageErrors.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
+  } else if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") {
+    pageErrors.push(msg.params.args.map((a) => a.value ?? a.description ?? "").join(" "));
   }
 };
 await new Promise((resolve) => (ws.onopen = resolve));
@@ -24,6 +31,7 @@ const send = (method, params = {}) =>
     pending.set(mid, (msg) => (msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result)));
     ws.send(JSON.stringify({ id: mid, method, params }));
   });
+await send("Runtime.enable");
 const js = async (expression) => {
   const res = await send("Runtime.evaluate", { expression: `(async () => { ${expression} })()`, awaitPromise: true, returnByValue: true });
   if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description ?? JSON.stringify(res.exceptionDetails));
@@ -207,6 +215,9 @@ await check("Ctrl+Enter right after ';' runs that statement", `
   const out = [...pane().querySelectorAll('.out-entry code')].map((c) => c.textContent);
   return out[out.length - 1] ?? "";
 `, (v) => typeof v === "string" && v.includes("41 + 1"));
+const relevant = pageErrors.filter((text) => !/Failed to load resource/.test(text));
+console.log(`${relevant.length ? "FAIL" : "PASS"}  no uncaught errors in the page  ${JSON.stringify(relevant.slice(0, 5)).slice(0, 600)}`);
+if (relevant.length) failures++;
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");
 ws.close();
 process.exit(failures ? 1 : 0);

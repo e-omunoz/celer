@@ -12,9 +12,11 @@ import {
   Filter,
   FolderOpen,
   Gauge,
+  ListFilter,
   Lightbulb,
   Minus,
   PanelRight,
+  Pin,
   Play,
   PlayCircle,
   Plus,
@@ -26,7 +28,7 @@ import {
   Upload,
   X,
 } from "lucide-solid";
-import { createEffect, createMemo, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
 import { cellText, isNullCell, rowsLabel, whereHints } from "../sql";
@@ -59,6 +61,9 @@ import {
   openMenu,
   openQuery,
   openScript,
+  pinResult,
+  showPinned,
+  unpinResult,
   reloadTable,
   renameTab,
   revertTable,
@@ -283,7 +288,34 @@ function ConnectionPicker(props: { tab: SqlTab }) {
 
 function SqlPane(props: { tab: SqlTab }) {
   let paneRef: HTMLDivElement | undefined;
-  const result = () => (props.tab.activeResult >= 0 ? props.tab.results[props.tab.activeResult] : undefined);
+  const pinned = () => (props.tab.activePinned ? props.tab.pinned.find((pin) => pin.id === props.tab.activePinned) : undefined);
+  const current = () => (props.tab.activeResult >= 0 ? props.tab.results[props.tab.activeResult] : undefined);
+  /** What the grid shows: a pinned result, or the current one. */
+  const result = () => pinned()?.result ?? current();
+  // Quick filter over the rows already loaded (any column contains the text, case-insensitive).
+  const [filterOpen, setFilterOpen] = createSignal(false);
+  const [filterText, setFilterText] = createSignal("");
+  const [filterApplied, setFilterApplied] = createSignal("");
+  let filterTimer = 0;
+  const typeFilter = (text: string) => {
+    setFilterText(text);
+    window.clearTimeout(filterTimer);
+    filterTimer = window.setTimeout(() => setFilterApplied(text.trim().toLowerCase()), 160);
+  };
+  const closeFilter = () => {
+    window.clearTimeout(filterTimer);
+    setFilterOpen(false);
+    setFilterText("");
+    setFilterApplied("");
+  };
+  onCleanup(() => window.clearTimeout(filterTimer));
+  const shownRows = createMemo(() => {
+    const rows = result()?.rows ?? [];
+    const needle = filterApplied();
+    if (!needle) return rows;
+    return rows.filter((row) => row.some((cell) => !isNullCell(cell) && cellText(cell).toLowerCase().includes(needle)));
+  });
+  const filtering = () => Boolean(filterApplied());
   const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
   const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
 
@@ -384,22 +416,56 @@ function SqlPane(props: { tab: SqlTab }) {
           </button>
           <For each={gridResults()}>
             {({ item, index }) => (
-              <button type="button" class="rtab" classList={{ on: index === props.tab.activeResult }} onClick={() => setActiveResult(props.tab.id, index)}>
+              <button type="button" class="rtab" classList={{ on: index === props.tab.activeResult && !props.tab.activePinned }} onClick={() => setActiveResult(props.tab.id, index)}>
                 <Show when={item.columns.length} fallback={<Rows3 size={13} />}><ObjIcon kind="table" size={13} /></Show>
                 {item.columns.length ? `Resultado ${gridResults().filter((r) => r.item.columns.length && r.index <= index).length}` : "Actualización"}
                 <small>{item.columns.length ? `${item.rows.length.toLocaleString()}${item.hasMore ? "+" : ""}` : (item.rowsAffected ?? 0).toLocaleString()}</small>
               </button>
             )}
           </For>
+          <For each={props.tab.pinned}>
+            {(pin) => (
+              <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned }} title={pin.sql}>
+                <button type="button" class="rtab-main" onClick={() => showPinned(props.tab.id, pin.id)}>
+                  <Pin size={12} />
+                  {pin.title}
+                  <small>{pin.result.rows.length.toLocaleString()}</small>
+                </button>
+                <button type="button" class="rtab-close" title="Quitar este resultado fijado" onClick={() => unpinResult(props.tab.id, pin.id)}><X size={11} /></button>
+              </span>
+            )}
+          </For>
           <span class="spacer" />
+          <Show when={filterOpen()}>
+            <span class="result-filter">
+              <ListFilter size={13} />
+              <input
+                value={filterText()}
+                placeholder="Filtrar filas cargadas…"
+                spellcheck={false}
+                ref={(el) => queueMicrotask(() => el.focus())}
+                onInput={(event) => typeFilter(event.currentTarget.value)}
+                onKeyDown={(event) => event.key === "Escape" && (event.stopPropagation(), closeFilter())}
+              />
+              <button type="button" class="icon-btn tiny" title="Quitar el filtro (Esc)" onClick={closeFilter}><X size={12} /></button>
+            </span>
+          </Show>
           <Show when={props.tab.running}>
             <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}</span>
           </Show>
           <Show when={!props.tab.running && result()?.columns.length}>
             <span class="muted small">
-              {rowsLabel(result()!.rows.length, result()!.hasMore)} · {formatMs(props.tab.elapsedMs)}
+              <Show when={filtering()} fallback={<>{rowsLabel(result()?.rows.length ?? 0, result()?.hasMore)}{pinned() ? "" : ` · ${formatMs(props.tab.elapsedMs)}`}</>}>
+                {shownRows().length.toLocaleString()} de {rowsLabel(result()?.rows.length ?? 0, result()?.hasMore)}
+              </Show>
             </span>
-            <Show when={result()!.hasMore}>
+            <Show when={!filterOpen()}>
+              <button type="button" class="tb-icon" title="Filtrar las filas cargadas" onClick={() => setFilterOpen(true)}><ListFilter size={15} /></button>
+            </Show>
+            <Show when={!pinned()}>
+              <button type="button" class="tb-icon" title="Fijar este resultado (se conserva al volver a ejecutar)" onClick={() => pinResult(props.tab.id)}><Pin size={14} /></button>
+            </Show>
+            <Show when={result()?.hasMore && !pinned() && !filtering()}>
               <button type="button" class="tb-icon" title="Cargar la siguiente página" onClick={() => void fetchMore(props.tab.id)}><ArrowDownToLine size={15} /></button>
               <button type="button" class="btn tiny" title="Cargar todas las filas" onClick={() => void fetchAll(props.tab.id)}>Cargar todo</button>
             </Show>
@@ -419,26 +485,29 @@ function SqlPane(props: { tab: SqlTab }) {
             <div class="affected">
               <CircleCheck size={28} />
               <div>
-                <strong>{rowsLabel(result()!.rowsAffected ?? 0)} {(result()!.rowsAffected ?? 0) === 1 ? "afectada" : "afectadas"}</strong>
+                <strong>{rowsLabel(result()?.rowsAffected ?? 0)} {(result()?.rowsAffected ?? 0) === 1 ? "afectada" : "afectadas"}</strong>
                 <span>{formatMs(props.tab.elapsedMs)}{props.tab.inTransaction ? " · pendiente de commit" : ""}</span>
               </div>
             </div>
           </Match>
           <Match when={result()}>
             <DataGrid
-              columns={result()!.columns}
-              rows={result()!.rows}
-              resetKey={`${props.tab.runId}:${props.tab.activeResult}`}
+              columns={result()?.columns ?? []}
+              rows={shownRows()}
+              resetKey={`${props.tab.runId}:${props.tab.activeResult}:${props.tab.activePinned ?? ""}:${filterApplied()}`}
               busyKey={props.tab.id}
-              hasMore={result()!.hasMore}
+              // Pinned or filtered rows never page in more by themselves (a filter would keep asking for pages).
+              hasMore={Boolean(result()?.hasMore) && !pinned() && !filtering()}
               loading={props.tab.running}
               dialect={kindOf(props.tab.connId)}
-              onNeedMore={() => void fetchMore(props.tab.id)}
+              onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
               onExport={() => void startExport()}
               onActivate={(row, col) => {
-                const r = result()!;
-                setState("inspect", { column: r.columns[col].name, typeName: r.columns[col].typeName, value: r.rows[row]?.[col] ?? null });
-                setState("record", { columns: r.columns, row: r.rows[row] ?? [], index: row });
+                const r = result();
+                if (!r) return;
+                const values = shownRows()[row] ?? [];
+                setState("inspect", { column: r.columns[col].name, typeName: r.columns[col].typeName, value: values[col] ?? null });
+                setState("record", { columns: r.columns, row: values, index: row });
                 openInspector("value");
               }}
             />

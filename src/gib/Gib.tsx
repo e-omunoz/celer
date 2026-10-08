@@ -16,6 +16,7 @@ export type GibActivity =
   | "coffee-away"
   | "coffee-in"
   | "coffee-sip"
+  | "coffee-done"
   | "laptop"
   | "doze"
   | "juggle"

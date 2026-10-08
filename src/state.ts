@@ -60,6 +60,18 @@ export interface SqlTab {
   lastSql: string;
   /** Increments on every successful run; the grid resets only when this changes (not when pages arrive). */
   runId: number;
+  /** Results kept aside with the pin button: they survive the next runs until closed. */
+  pinned: PinnedResult[];
+  /** The pinned result on show instead of the current ones (null: the current ones). */
+  activePinned: string | null;
+}
+
+export interface PinnedResult {
+  id: string;
+  title: string;
+  sql: string;
+  at: number;
+  result: ResultSet;
 }
 
 export interface TableTab {
@@ -95,6 +107,8 @@ export interface TableTab {
   edits: Record<string, string | null>;
   deleted: number[];
   inserts: (string | null)[][];
+  /** Restored from the last session and not loaded yet: it loads (and connects) when it is first shown. */
+  restored?: boolean;
 }
 
 export type Tab = SqlTab | TableTab;
@@ -148,8 +162,33 @@ interface ConnSession {
   connecting?: boolean;
 }
 
+interface SavedSqlTab {
+  id: string;
+  kind: "sql";
+  title: string;
+  connId: string | null;
+  sql: string;
+  database: string;
+  cursor?: number;
+  autocommit?: boolean;
+}
+
+interface SavedTableTab {
+  id: string;
+  kind: "table";
+  title: string;
+  connId: string;
+  database: string;
+  obj: ObjectRef;
+  section: TableTab["section"];
+  where: string;
+  orderBy: string;
+  filters: ColumnFilter[];
+  sort: TableTab["sort"];
+}
+
 interface WorkspaceFile {
-  tabs: { id: string; kind: "sql"; title: string; connId: string | null; sql: string; database: string }[];
+  tabs: (SavedSqlTab | SavedTableTab)[];
   activeTabId: string;
   sidebarWidth: number;
 }
@@ -395,11 +434,23 @@ export async function boot() {
   try {
     const workspace = (await api().loadJson("workspace")) as WorkspaceFile | null;
     if (workspace?.tabs?.length) {
+      // Tables of connections that no longer exist are dropped; the rest load when first shown.
+      const known = (id: string | null) => !id || state.connections.some((conn) => conn.id === id);
       setState(
         "tabs",
-        workspace.tabs.map((tab) => ({ ...blankSql(tab.id, tab.connId, tab.sql, tab.title), database: tab.database ?? "" })),
+        workspace.tabs
+          .filter((tab) => tab.kind !== "table" || known(tab.connId))
+          .map((tab): Tab =>
+            tab.kind === "table"
+              ? { ...blankTable(tab.id, tab.connId, tab.obj, "", tab.database, tab.section, tab.filters ?? []), where: tab.where ?? "", orderBy: tab.orderBy ?? "", sort: tab.sort ?? null, loading: false, restored: true }
+              : {
+                  ...blankSql(tab.id, tab.connId, tab.sql, tab.title),
+                  database: tab.database ?? "",
+                  cursor: Math.min(tab.cursor ?? tab.sql.length, tab.sql.length),
+                  autocommit: tab.autocommit ?? true,
+                },
+          ),
       );
-      // The saved active tab may have been a table tab (not persisted): fall back to the first console.
       const active = state.tabs.some((tab) => tab.id === workspace.activeTabId) ? workspace.activeTabId : state.tabs[0]?.id ?? "";
       setState("activeTabId", active);
     }
@@ -442,7 +493,53 @@ function blankSql(id: string, connId: string | null = null, sql = "", title = "c
     completion: null,
     lastSql: "",
     runId: 0,
+    pinned: [],
+    activePinned: null,
   };
+}
+
+function blankTable(id: string, connId: string, obj: ObjectRef, sessionId: string, database: string, section: TableTab["section"] = "data", filters: ColumnFilter[] = []): TableTab {
+  return {
+    id,
+    kind: "table",
+    title: obj.name,
+    connId,
+    sessionId,
+    database,
+    obj,
+    qualified: obj.name,
+    baseSelect: "",
+    quoted: [],
+    section,
+    columnsMeta: [],
+    gridCols: [],
+    rows: [],
+    hasMore: false,
+    ddl: "",
+    indexes: [],
+    keys: [],
+    loading: true,
+    error: "",
+    errorAt: null,
+    where: "",
+    orderBy: "",
+    filters,
+    sort: null,
+    totalCount: null,
+    counting: false,
+    elapsedMs: null,
+    edits: {},
+    deleted: [],
+    inserts: [],
+  };
+}
+
+/** A table tab restored from the last session loads (connecting if needed) the first time it is shown. */
+export function loadIfRestored(tabId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "table" || !tab.restored) return;
+  patchTab(tabId, { restored: false });
+  void reloadTable(tabId, true);
 }
 
 function persistSoon() {
@@ -456,9 +553,12 @@ export function persistNow() {
   const file: WorkspaceFile = {
     activeTabId: state.activeTabId,
     sidebarWidth: state.settings.sidebarWidth,
-    tabs: state.tabs
-      .filter((tab): tab is SqlTab => tab.kind === "sql")
-      .map((tab) => ({ id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database })),
+    tabs: state.tabs.map(
+      (tab): SavedSqlTab | SavedTableTab =>
+        tab.kind === "sql"
+          ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit }
+          : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
+    ),
   };
   return api().saveJson("workspace", file);
 }
@@ -664,6 +764,7 @@ export async function connect(connId: string, password?: string) {
       .then((schema) => setState("catalog", connId, { database: opened.database, tables: schema.tables }))
       .catch(() => {});
     await loadChildren(connId, [], true);
+    if (connectGeneration(connId) !== generation) return;
     autoExpand(connId);
     gib("connected", { production: conn.production, detail: conn.name });
     const current = activeTab();
@@ -685,7 +786,8 @@ export async function connect(connId: string, password?: string) {
     }
     if (message.includes("IBM_DRIVER_MISSING")) setState("settingsOpen", true);
   } finally {
-    setState("connecting", connId, false);
+    // A disconnect in between owns the flag now (a newer connect may be running).
+    if (connectGeneration(connId) === generation) setState("connecting", connId, false);
   }
 }
 
@@ -718,15 +820,19 @@ export async function disconnect(connId: string, confirm = true) {
   const affected = state.tabs.filter((tab) => tab.connId === connId);
   const inTransaction = affected.filter((tab) => tab.kind === "sql" && tab.inTransaction).length;
   const dirty = affected.filter((tab) => tab.kind === "table" && tableDirty(tab)).length;
-  if (confirm && (inTransaction || dirty)) {
+  const exporting = state.exportRunning && state.exportSource?.connId === connId;
+  if (confirm && (inTransaction || dirty || exporting)) {
     const lost = [
       inTransaction ? `${inTransaction} ${inTransaction === 1 ? "consola con una transacción abierta (se deshará)" : "consolas con transacciones abiertas (se desharán)"}` : "",
       dirty ? `${dirty} ${dirty === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}` : "",
+      exporting ? "una exportación en curso (se cancelará)" : "",
     ].filter(Boolean);
     const ok = await confirmDialog(`Desconectar «${connectionById(connId)?.name ?? ""}»`, `Hay ${lost.join(" y ")}. Si desconectas se perderán.`, "Desconectar", true);
     if (!ok) return;
   }
   generations[connId] = connectGeneration(connId) + 1;
+  for (const tab of affected) bumpToken(tab.id);
+  if (exporting) void cancelExport();
   // The UI forgets the connection at once; the sessions close behind it.
   setState(
     produce((draft) => {
@@ -808,7 +914,10 @@ export async function refreshNode(connId: string, path: string[]) {
   await loadChildren(connId, path, true);
   if (!path.length) {
     const session = state.sessions[connId];
-    if (session) setState("sessions", connId, "databases", await api().listDatabases(session.metaId).catch(() => session.databases));
+    if (!session) return;
+    const databases = await api().listDatabases(session.metaId).catch(() => session.databases);
+    // Disconnected (or reconnected) meanwhile: the entry is gone or belongs to another session.
+    if (state.sessions[connId]?.metaId === session.metaId) setState("sessions", connId, "databases", databases);
   }
 }
 
@@ -882,9 +991,10 @@ async function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
   if (!fresh || fresh.kind !== "sql") throw new Error("La pestaña ya no existe");
   if (fresh.sessionId) return fresh;
   const pwd = state.passwords[fresh.connId!];
+  const generation = connectGeneration(fresh.connId!);
   const opened = await api().openSession(fresh.connId!, pwd);
-  // Disconnected meanwhile: do not attach a session to a connection the explorer shows as closed.
-  if (!state.sessions[fresh.connId!]) {
+  // Disconnected meanwhile (even if reconnected since): do not attach a session the core may have closed.
+  if (!state.sessions[fresh.connId!] || connectGeneration(fresh.connId!) !== generation) {
     void api().closeSession(opened.sessionId).catch(() => {});
     throw new Error("La conexión se ha cerrado");
   }
@@ -997,9 +1107,12 @@ export async function runActive(mode: "statement" | "script" | "explain") {
   const fresh = state.tabs[tabIndex(current.id)];
   if (!fresh || fresh.kind !== "sql") return;
   patchTab(current.id, { running: true, error: "", messages: [], startedAt: Date.now(), lastSql: sql });
+  const token = tokenOf(current.id);
   try {
     const tab = await ensureSqlSession(fresh);
     const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize);
+    // Disconnected while it ran: this answer belongs to a closed session.
+    if (tokenOf(current.id) !== token) return;
     const firstGrid = output.results.findIndex((result) => result.columns.length);
     patchTab(tab.id, {
       runId: (tab.runId ?? 0) + 1,
@@ -1007,6 +1120,7 @@ export async function runActive(mode: "statement" | "script" | "explain") {
       startedAt: null,
       results: output.results,
       activeResult: firstGrid >= 0 ? firstGrid : -1,
+      activePinned: null,
       messages: output.messages,
       elapsedMs: output.elapsedMs,
       inTransaction: output.inTransaction,
@@ -1022,9 +1136,10 @@ export async function runActive(mode: "statement" | "script" | "explain") {
     }
     await remember(tab, sql, true, output.elapsedMs, rows);
   } catch (err) {
+    if (tokenOf(current.id) !== token) return;
     const message = errorText(err);
     const at = tabIndex(current.id);
-    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1 });
+    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1, activePinned: null });
     pushOutput(current.id, { at: Date.now(), sql, ok: false, text: message, elapsedMs: null });
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
@@ -1075,6 +1190,14 @@ export async function cancelActive() {
   await api().cancel(tab.sessionId).catch((err) => notify(errorText(err), "error"));
 }
 
+/**
+ * Work in flight per tab (a run, a page, a reload): disconnect bumps the token, so an answer that arrives
+ * afterwards from the closed session is ignored instead of overwriting the tab (a new run may own it by then).
+ */
+const tabTokens = new Map<string, number>();
+const tokenOf = (tabId: string) => tabTokens.get(tabId) ?? 0;
+const bumpToken = (tabId: string) => tabTokens.set(tabId, tokenOf(tabId) + 1);
+
 /** Loads the next page. Returns false when nothing could be loaded (error, closed tab, nothing pending). */
 export async function fetchMore(tabId: string, n = state.settings.pageSize): Promise<boolean> {
   const tab = state.tabs[tabIndex(tabId)];
@@ -1083,10 +1206,11 @@ export async function fetchMore(tabId: string, n = state.settings.pageSize): Pro
     const resultIndex = tab.results.findIndex((result) => result.hasMore);
     if (resultIndex < 0 || tab.running) return false;
     patchTab(tab.id, { running: true });
+    const token = tokenOf(tabId);
     try {
       const more = await api().fetch(tab.sessionId, n);
       const fresh = state.tabs[tabIndex(tabId)];
-      if (!fresh || fresh.kind !== "sql") return false;
+      if (!fresh || fresh.kind !== "sql" || tokenOf(tabId) !== token) return false;
       const result = fresh.results[resultIndex];
       const results = fresh.results.slice();
       results[resultIndex] = { ...result, rows: concatRows(result.rows, more.rows), hasMore: more.hasMore };
@@ -1094,6 +1218,7 @@ export async function fetchMore(tabId: string, n = state.settings.pageSize): Pro
       patchTab(tab.id, { results, running: false });
       return true;
     } catch (err) {
+      if (tokenOf(tabId) !== token) return false;
       patchTab(tab.id, { running: false });
       notify("No se pudieron cargar más filas", "error", errorText(err));
       return false;
@@ -1101,13 +1226,15 @@ export async function fetchMore(tabId: string, n = state.settings.pageSize): Pro
   }
   if (!tab.hasMore || tab.loading) return false;
   patchTab(tab.id, { loading: true });
+  const token = tokenOf(tabId);
   try {
     const more = await api().fetch(tab.sessionId, n);
     const fresh = state.tabs[tabIndex(tabId)];
-    if (!fresh || fresh.kind !== "table") return false;
+    if (!fresh || fresh.kind !== "table" || tokenOf(tabId) !== token) return false;
     patchTab(tab.id, { rows: concatRows(fresh.rows, more.rows), hasMore: more.hasMore, loading: false });
     return true;
   } catch (err) {
+    if (tokenOf(tabId) !== token) return false;
     patchTab(tab.id, { loading: false });
     notify("No se pudieron cargar más filas", "error", errorText(err));
     return false;
@@ -1195,6 +1322,7 @@ export async function changeAutocommit(on: boolean) {
     const ready = await ensureSqlSession(tab);
     const inTransaction = await api().setAutocommit(ready.sessionId!, on);
     patchTab(ready.id, { autocommit: on, inTransaction });
+    persistSoon();
   } catch (err) {
     notify(errorText(err), "error");
   }
@@ -1319,40 +1447,9 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
   });
   if (!opened) return;
   const id = uid();
-  const tab: TableTab = {
-    id,
-    kind: "table",
-    title: obj.name,
-    connId,
-    sessionId: opened.sessionId,
-    database: obj.database || opened.database,
-    obj,
-    qualified: obj.name,
-    baseSelect: "",
-    quoted: [],
-    section,
-    columnsMeta: [],
-    gridCols: [],
-    rows: [],
-    hasMore: false,
-    ddl: "",
-    indexes: [],
-    keys: [],
-    loading: true,
-    error: "",
-    errorAt: null,
-    where: "",
-    orderBy: "",
-    filters,
-    sort: null,
-    totalCount: null,
-    counting: false,
-    elapsedMs: null,
-    edits: {},
-    deleted: [],
-    inserts: [],
-  };
+  const tab = blankTable(id, connId, obj, opened.sessionId, obj.database || opened.database, section, filters);
   setState("tabs", [...state.tabs, tab]);
+  persistSoon();
   setState("activeTabId", id);
   await reloadTable(id, true);
 }
@@ -1363,6 +1460,7 @@ export async function reloadTable(tabId: string, full = false) {
   if (!tab || tab.kind !== "table") return;
   patchTab(tabId, { loading: true, error: "", errorAt: null, edits: {}, deleted: [], inserts: [] });
   let select = "";
+  const token = tokenOf(tabId);
   try {
     // After a disconnect the tab has no session: open a new one (connecting first if needed).
     if (!tab.sessionId) await reopenTableSession(tabId);
@@ -1401,6 +1499,7 @@ export async function reloadTable(tabId: string, full = false) {
     const output = await api().execute(sid, select, state.settings.pageSize).catch((err) => {
       throw cancelled ? new Error("Consulta cancelada. La tabla muestra los datos anteriores.") : err;
     }).finally(() => endBusy(tabId));
+    if (tokenOf(tabId) !== token) return;
     const result = output.results.find((item) => item.columns.length) ?? { columns: [], rows: [], hasMore: false, rowsAffected: null };
     if (tabIndex(tabId) < 0) return;
     patchTab(tabId, {
@@ -1411,6 +1510,7 @@ export async function reloadTable(tabId: string, full = false) {
       hasMore: result.hasMore,
     });
   } catch (err) {
+    if (tokenOf(tabId) !== token) return;
     let message = errorText(err);
     // The engine's position counts over the generated SELECT: translate it to the WHERE the user typed.
     const typed = (state.tabs[tabIndex(tabId)] as TableTab | undefined)?.where.trim() ?? "";
@@ -1839,7 +1939,37 @@ export function renameTab(id: string, title: string) {
 }
 
 export function setActiveResult(tabId: string, index: number) {
-  patchTab(tabId, { activeResult: index });
+  patchTab(tabId, { activeResult: index, activePinned: null });
+}
+
+/**
+ * Keeps the result on show aside: it stays in its own result tab, with the SQL that produced it, until it is
+ * closed (later runs replace only the current results). Pages not loaded yet are not part of it.
+ */
+export function pinResult(tabId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql" || tab.activeResult < 0) return;
+  const result = tab.results[tab.activeResult];
+  if (!result?.columns.length) return;
+  const pin: PinnedResult = {
+    id: uid(),
+    title: `Fijado ${tab.pinned.length + 1}`,
+    sql: tab.lastSql,
+    at: Date.now(),
+    result: { ...result, hasMore: false },
+  };
+  patchTab(tabId, { pinned: [...tab.pinned, pin], activePinned: pin.id });
+  if (result.hasMore) notify("Resultado fijado con las filas cargadas", "info", "Las páginas pendientes no se incluyen: usa «Cargar todo» antes de fijar si las necesitas.");
+}
+
+export function showPinned(tabId: string, pinId: string) {
+  patchTab(tabId, { activePinned: pinId });
+}
+
+export function unpinResult(tabId: string, pinId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql") return;
+  patchTab(tabId, { pinned: tab.pinned.filter((pin) => pin.id !== pinId), activePinned: tab.activePinned === pinId ? null : tab.activePinned });
 }
 
 // ---------------------------------------------------------------- history / inspector

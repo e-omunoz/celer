@@ -331,7 +331,7 @@ export function Onboarding() {
                     <Match when={step() === "done"}>
                       <div class="onb-screen">
                         <h1>Ya lo tienes.</h1>
-                        <p class="onb-lead">Me quedo en la esquina de abajo a la derecha. Si me necesitas, haz clic y te doy un consejo. Puedes repetir esta guía desde la paleta: «Guía de inicio».</p>
+                        <p class="onb-lead">Me quedo en la esquina de abajo a la derecha. Si quieres un consejo, búscame en la paleta: «Gib: un consejo». Puedes repetir esta guía desde la paleta: «Guía de inicio».</p>
                         <div class="onb-cards">
                           <button type="button" class="onb-card action" onClick={() => { close(true); setState({ paletteOpen: true, paletteMode: "all" }); }}><Sparkles size={16} /><b>Abrir la paleta</b><small>Mayús Mayús</small></button>
                           <button type="button" class="onb-card action" onClick={() => { close(true); openConnDialog(); }}><Database size={16} /><b>Nueva conexión</b><small>Ctrl+Alt+N</small></button>

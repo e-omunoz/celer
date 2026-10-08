@@ -43,10 +43,11 @@ const ROUTINES: Record<string, { step: GibActivity; ms: number }[]> = {
     { step: "coffee-away", ms: 5000 },
     { step: "coffee-in", ms: 1600 },
     { step: "coffee-sip", ms: 6400 },
+    { step: "coffee-done", ms: 1200 },
   ],
   laptop: [{ step: "laptop", ms: 8000 }],
   doze: [{ step: "doze", ms: 5500 }],
-  juggle: [{ step: "juggle", ms: 5250 }],
+  juggle: [{ step: "juggle", ms: 5600 }],
   read: [{ step: "read", ms: 8000 }],
   dance: [{ step: "dance", ms: 4800 }],
   scratch: [{ step: "scratch", ms: 3600 }],
@@ -213,14 +214,28 @@ export function Companion() {
           setAsleep(false);
           nextTip(true);
           break;
-        case "show-off":
+        case "show-off": {
           setAsleep(false);
           setBubble(null);
-          play(event.detail && ROUTINES[event.detail] ? event.detail : pickRoutine());
+          if (reducedMotion.matches) {
+            say({ text: "Con «reducir movimiento» activado en el sistema me quedo quieto. ¡Pero sigo aquí!", kind: "ok" }, 3500);
+            break;
+          }
+          const name = event.detail && ROUTINES[event.detail] ? event.detail : pickRoutine();
+          // Next tick: the Enter that picked the command in the palette still has to reach the window listener,
+          // which would otherwise stop the routine straight away.
+          window.setTimeout(() => play(name), 0);
           break;
+        }
       }
     }),
   );
+
+  // The cursor arriving while an activity runs (also when he comes back from the coffee break under it).
+  createEffect(() => {
+    const current = activity();
+    if (current && current !== "coffee-away" && hover() && waiting()) stopRoutine();
+  });
 
   // Contextual hint for SELECT * on a production console, once.
   createEffect(() => {
@@ -259,6 +274,7 @@ export function Companion() {
       window.clearTimeout(reactionTimer);
       window.clearTimeout(bubbleTimer);
       window.clearTimeout(routineTimer);
+      window.clearTimeout(clickTimer);
     });
   });
 
@@ -276,7 +292,14 @@ export function Companion() {
   /** Waiting for a query and nothing else going on: the cursor is a fly, and a click is worse. */
   const waiting = () => !running() && !thinking() && !asleep() && (!reaction() || reaction() === "grumpy");
 
+  /** A double click is love, not two grumbles: single clicks wait a moment to see whether a second one comes. */
+  let clickTimer = 0;
   function onClick() {
+    window.clearTimeout(clickTimer);
+    clickTimer = window.setTimeout(handleClick, 230);
+  }
+
+  function handleClick() {
     if (bubble() && !bubble()!.grumble) {
       setBubble(null);
       return;
@@ -345,6 +368,9 @@ export function Companion() {
           }}
           onClick={onClick}
           onDblClick={() => {
+            window.clearTimeout(clickTimer);
+            clicks = [];
+            stopRoutine();
             setBubble(null);
             react("love", 1800);
           }}

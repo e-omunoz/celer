@@ -63,10 +63,13 @@ pub const TOOL_NAMES: &[&str] = &[
 
 /// Directorio de datos de la aplicación: el mismo que usa la interfaz
 /// (`app_data_dir` de Tauri para el identificador `es.celer.app`).
+/// En depuración, `CELER_DATA_DIR` lo sustituye (como en la interfaz).
 pub fn default_data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("es.celer.app")
+    crate::dev_data_dir().unwrap_or_else(|| {
+        dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("es.celer.app")
+    })
 }
 
 // ───────────────────────────── Configuración ─────────────────────────────

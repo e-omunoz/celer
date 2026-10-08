@@ -1,5 +1,5 @@
 import { ArrowDownToLine, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
-import { onCleanup, onMount, Show } from "solid-js";
+import { createEffect, onCleanup, onMount, Show } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
 import { handleGlobalKey } from "./commands";
@@ -20,6 +20,7 @@ import {
   connectionById,
   formatMs,
   isLightTheme,
+  loadIfRestored,
   openConnDialog,
   openMenu,
   openPalette,
@@ -36,6 +37,10 @@ import { migration, openMigration } from "./migrate";
 import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
 
 export default function App() {
+  // Table tabs restored from the last session load (and connect) the first time they are shown.
+  createEffect(() => {
+    if (state.ready && state.activeTabId) loadIfRestored(state.activeTabId);
+  });
   onMount(() => {
     void boot().then(startUpdateChecks);
     revealWindow();

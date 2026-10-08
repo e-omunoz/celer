@@ -112,7 +112,8 @@ export function handleGlobalKey(event: KeyboardEvent): boolean {
   if (event.defaultPrevented) return false;
   const ctrl = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
-  const target = event.target as HTMLElement | null;
+  // The target can be the window or the document (keys sent to the window): only elements have closest().
+  const target = event.target instanceof Element ? event.target : null;
   const typing = Boolean(target?.closest("input, textarea, select, [contenteditable=true]")) && !target?.closest(".cm-editor");
   const run = (id: string) => {
     const command = commands().find((item) => item.id === id);

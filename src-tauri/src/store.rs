@@ -11,8 +11,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::ConnConfig;
 
-const KEYRING_SERVICE: &str = "Celer";
 const HISTORY_MAX: usize = 5000;
+
+/// Servicio del almacén de credenciales. Una compilación de depuración con `CELER_DATA_DIR` escribe en
+/// "Celer-dev" y solo lee "Celer" como alternativa: las pruebas nunca cambian las contraseñas de una copia
+/// instalada.
+pub(crate) fn keyring_service() -> &'static str {
+    if crate::dev_data_dir().is_some() {
+        "Celer-dev"
+    } else {
+        "Celer"
+    }
+}
+
+/// Lee una credencial del servicio propio y, en desarrollo, de la copia instalada si no hay una propia.
+pub(crate) fn keyring_get(id: &str) -> Option<String> {
+    let read = |service: &str| keyring::Entry::new(service, id).and_then(|e| e.get_password()).ok();
+    read(keyring_service()).or_else(|| if keyring_service() == "Celer" { None } else { read("Celer") })
+}
 
 pub struct Store {
     pub dir: PathBuf,
@@ -91,14 +107,14 @@ impl Store {
     /// El almacén del sistema es la vía principal. Si no hay servicio de secretos
     /// (sesión sin llavero), se guarda en `secrets.json` con permisos restringidos.
     pub fn get_password(&self, id: &str) -> Option<String> {
-        if let Ok(p) = keyring::Entry::new(KEYRING_SERVICE, id).and_then(|e| e.get_password()) {
+        if let Some(p) = keyring_get(id) {
             return Some(p);
         }
         self.secrets().get(id).cloned()
     }
 
     pub fn set_password(&self, id: &str, pwd: &str) -> Result<()> {
-        if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, id) {
+        if let Ok(e) = keyring::Entry::new(keyring_service(), id) {
             if e.set_password(pwd).is_ok() {
                 let mut map = self.secrets();
                 if map.remove(id).is_some() {
@@ -113,7 +129,7 @@ impl Store {
     }
 
     pub fn delete_password(&self, id: &str) {
-        if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, id) {
+        if let Ok(e) = keyring::Entry::new(keyring_service(), id) {
             let _ = e.delete_credential();
         }
         let mut map = self.secrets();

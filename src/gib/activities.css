@@ -1,13 +1,16 @@
 /* ============================================================================
    Gib — idle activities and the "annoyed by the cursor" reaction.
-   Every animation starts and ends on the rest pose (arm-r −14°, fore-r 8°, arm-l 14°, head and body at 0) and
-   runs a finite number of times, so nothing snaps when the activity class goes away. Rig pivots are in SVG
+   Every activity starts and ends on the rest pose (arm-r −14°, fore-r 8°, arm-l 14°, head and body at 0) and
+   runs a finite number of times, so nothing snaps when the activity class goes away. The coffee break ends with
+   a "put the mug down" step for that reason. Only the swatting while the cursor hovers loops (it stops when
+   the cursor leaves). Rig pivots are in SVG
    user units (see App.css, "Rig (poker pose)"). Durations match ACTIVITY_MS in Companion.tsx.
    ========================================================================== */
 
 /* ---------------------------------------------------------------- props */
 .gib.act-coffee-in .prop-mug,
-.gib.act-coffee-sip .prop-mug { display: inline; }
+.gib.act-coffee-sip .prop-mug,
+.gib.act-coffee-done .prop-mug { display: inline; }
 .gib.act-read .prop-book { display: inline; }
 /* The mug hangs from the hand and stays upright: it counter-rotates by the arm's total angle. */
 .gib .prop-mug { transform-origin: 140px 219px; }
@@ -37,9 +40,9 @@
 /* walking: the body bobs at every step, the arms swing, he looks where he goes */
 .gib.act-coffee-out .g-all { animation: act-walk-out 1.6s linear both; }
 .gib.act-coffee-in .g-all { animation: act-walk-in 1.6s linear both; }
-.gib.act-coffee-out .arm-r { animation: act-swing-r 0.4s ease-in-out 4 alternate both; }
+.gib.act-coffee-out .arm-r { animation: act-swing-r 0.8s ease-in-out 2 both; }
 .gib.act-coffee-out .arm-l,
-.gib.act-coffee-in .arm-l { animation: act-swing-l 0.4s ease-in-out 4 alternate both; }
+.gib.act-coffee-in .arm-l { animation: act-swing-l 0.8s ease-in-out 2 both; }
 .gib.act-coffee-out .pupils { transform: translate(-3.5px, 0); }
 .gib.act-coffee-in .pupils { transform: translate(3px, 0); }
 .gib.act-coffee-away .g-all { opacity: 0; transform: translateX(-130px); transition: none; }
@@ -64,8 +67,9 @@
   87.5% { transform: translate(-16px, 0); }
   100% { transform: none; opacity: 1; }
 }
-@keyframes act-swing-r { from { transform: rotate(-30deg); } to { transform: rotate(4deg); } }
-@keyframes act-swing-l { from { transform: rotate(30deg); } to { transform: rotate(-4deg); } }
+/* one step each way per cycle, starting and ending on the rest angle */
+@keyframes act-swing-r { 0%, 100% { transform: rotate(-14deg); } 25% { transform: rotate(-32deg); } 75% { transform: rotate(4deg); } }
+@keyframes act-swing-l { 0%, 100% { transform: rotate(14deg); } 25% { transform: rotate(32deg); } 75% { transform: rotate(-4deg); } }
 /* holding the mug in front of the chest while walking back */
 .gib.act-coffee-in .arm-r { transform: rotate(25deg); transition: none; }
 .gib.act-coffee-in .fore-r { transform: rotate(75deg); transition: none; }
@@ -84,6 +88,15 @@
 @keyframes act-sip-head { 0%, 22%, 76%, 100% { transform: none; } 40%, 58% { transform: rotate(-5deg) translateY(-1px); } }
 @keyframes act-sip-lid { 0%, 30%, 70%, 100% { transform: scaleY(1); } 40%, 62% { transform: scaleY(1.85); } }
 @keyframes act-sip-mouth { 0%, 64%, 100% { d: path("M96 127h16"); } 74%, 92% { d: path("M92 123q11 11 24 0"); } }
+/* putting the mug down: the arm goes back to rest and the mug is left below, out of sight */
+.gib.act-coffee-done .arm-r { animation: act-done-arm 1.2s cubic-bezier(.45, .05, .35, 1) both; }
+.gib.act-coffee-done .fore-r { animation: act-done-fore 1.2s cubic-bezier(.45, .05, .35, 1) both; }
+.gib.act-coffee-done .prop-mug { animation: act-done-mug 1.2s cubic-bezier(.45, .05, .35, 1) both; }
+.gib.act-coffee-done .g-all { animation: act-done-body 1.2s ease-in-out both; }
+@keyframes act-done-arm { from { transform: rotate(25deg); } to { transform: rotate(-14deg); } }
+@keyframes act-done-fore { from { transform: rotate(75deg); } to { transform: rotate(8deg); } }
+@keyframes act-done-mug { 0% { transform: rotate(-100deg); opacity: 1; } 70% { opacity: 1; } 100% { transform: rotate(6deg) translateY(16px); opacity: 0; } }
+@keyframes act-done-body { 0%, 100% { transform: none; } 50% { transform: translateY(2px) rotate(-2deg); } }
 
 /* ---------------------------------------------------------------- laptop: types for a while (pose-laptop does the rest) */
 .gib.act-laptop .fx-sparkle { --late: 7.1s; }
@@ -117,7 +130,8 @@
 @keyframes act-wake { 0%, 65% { opacity: 0; transform: scale(0.3); } 68% { opacity: 1; transform: scale(1.2); } 72%, 84% { opacity: 1; transform: scale(1); } 90%, 100% { opacity: 0; transform: scale(1); } }
 
 /* ---------------------------------------------------------------- juggling three little balls (5.25 s) */
-.gib.act-juggle .arm-r { animation: act-juggle-r 0.35s ease-in-out 15 alternate both; }
+/* an even number of alternate iterations ends on the rest angle (16 × 0.35 s = 5.6 s, the routine's length) */
+.gib.act-juggle .arm-r { animation: act-juggle-r 0.35s ease-in-out 16 alternate both; }
 .gib.act-juggle .arm-l { animation: act-juggle-l 0.35s ease-in-out 0.175s 14 alternate both; }
 .gib.act-juggle .pupils { animation: act-juggle-eyes 1.05s ease-in-out 5 both; }
 .gib.act-juggle .brow-l, .gib.act-juggle .brow-r { transform: translateY(-3px); }
@@ -266,13 +280,17 @@
 .gib.mood-annoyed.side-left .g-all { transform: rotate(4deg); }
 .gib.mood-annoyed.side-left .g-head { transform: rotate(7deg); }
 /* a click: both arms flail, a hop and a shake, an anger mark */
-.gib.mood-grumpy .arm-r { animation: act-swat-r 0.16s ease-in-out 8 alternate both; }
-.gib.mood-grumpy .fore-r { animation: act-swat-fore 0.16s ease-in-out 8 alternate both; }
-.gib.mood-grumpy .arm-l { animation: act-swat-l 0.16s ease-in-out 0.08s 8 alternate both; }
+/* (one pass that starts and ends on the rest pose, so nothing snaps when the reaction ends) */
+.gib.mood-grumpy .arm-r { animation: act-flail-r 1.3s ease-in-out both; }
+.gib.mood-grumpy .fore-r { animation: act-flail-fore 1.3s ease-in-out both; }
+.gib.mood-grumpy .arm-l { animation: act-flail-l 1.3s ease-in-out both; }
 .gib.mood-grumpy .g-all { animation: act-huff 0.7s ease-out both; }
 @keyframes act-swat-r { from { transform: rotate(-128deg); } to { transform: rotate(-80deg); } }
 @keyframes act-swat-fore { from { transform: rotate(-60deg); } to { transform: rotate(16deg); } }
 @keyframes act-swat-l { from { transform: rotate(128deg); } to { transform: rotate(80deg); } }
+@keyframes act-flail-r { 0%, 100% { transform: rotate(-14deg); } 12%, 36%, 60% { transform: rotate(-128deg); } 24%, 48%, 72% { transform: rotate(-80deg); } 86% { transform: rotate(-60deg); } }
+@keyframes act-flail-fore { 0%, 100% { transform: rotate(8deg); } 12%, 36%, 60% { transform: rotate(-60deg); } 24%, 48%, 72% { transform: rotate(16deg); } }
+@keyframes act-flail-l { 0%, 100% { transform: rotate(14deg); } 18%, 42%, 66% { transform: rotate(128deg); } 30%, 54%, 78% { transform: rotate(80deg); } 88% { transform: rotate(60deg); } }
 @keyframes act-huff { 0% { transform: none; } 20% { transform: translateY(-5px); } 40% { transform: translate(-1.5px, 0); } 55% { transform: translate(1.5px, 0); } 70% { transform: translate(-1px, 0); } 100% { transform: none; } }
 .fx-swish { position: absolute; top: 18%; width: 2.2em; height: 2.6em; }
 .gib.side-right .fx-swish { right: -1.4em; }

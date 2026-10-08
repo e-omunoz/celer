@@ -654,16 +654,12 @@ const AI_KEY_ID: &str = "celer-ai-anthropic-key";
 /// Solo en el almacén de credenciales del sistema: nunca se escribe en un fichero JSON
 /// (a diferencia de `Store::set_password`, que tiene `secrets.json` como alternativa).
 fn ai_key_entry() -> CmdResult<keyring::Entry> {
-    keyring::Entry::new("Celer", AI_KEY_ID).map_err(err)
+    keyring::Entry::new(store::keyring_service(), AI_KEY_ID).map_err(err)
 }
 
 #[tauri::command]
 fn ai_key_get() -> Option<String> {
-    ai_key_entry()
-        .ok()?
-        .get_password()
-        .ok()
-        .filter(|k| !k.is_empty())
+    store::keyring_get(AI_KEY_ID).filter(|k| !k.is_empty())
 }
 
 #[tauri::command]
@@ -692,7 +688,7 @@ pub fn run_mcp() -> i32 {
 
 /// Debug builds only: `CELER_DATA_DIR` points the app at a separate data folder, so automated tests never touch
 /// the configuration of an installed copy.
-fn dev_data_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn dev_data_dir() -> Option<std::path::PathBuf> {
     if !cfg!(debug_assertions) {
         return None;
     }

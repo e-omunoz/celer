@@ -76,21 +76,21 @@ const click = async () => {
   await app.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: g.x, y: g.y, button: "left", clickCount: 1 });
 };
 await click();
-await sleep(120);
+await sleep(380); // single clicks wait 230 ms to tell them from a double click
 const grumpy = await js(`return { mood: [...gib().classList].find((c) => c.startsWith('mood-')), tip: document.querySelector('.companion .tip')?.textContent ?? '' };`);
 check("a click makes him grumpy, not a tip", grumpy.mood === "mood-grumpy" && !grumpy.tip, JSON.stringify(grumpy));
 await crop("grumpy");
 await sleep(500);
 await click();
-await sleep(200);
+await sleep(380);
 const grumble = await js(`return document.querySelector('.companion .tip')?.textContent ?? '';`);
 check("insisting gets a grumble", /bot[oó]n|mosca|esperando/i.test(grumble), grumble);
 await click();
-await sleep(200);
+await sleep(380);
 await click();
-await sleep(200);
+await sleep(380);
 await click();
-await sleep(250);
+await sleep(380);
 const offer = await js(`return { text: document.querySelector('.companion .tip')?.textContent ?? '', action: [...document.querySelectorAll('.companion .tip button')].map((b) => b.textContent) };`);
 check("the fifth click offers a tip", /consejo/i.test(offer.text) && offer.action.includes("Sí, uno"), JSON.stringify(offer));
 await crop("offer");
