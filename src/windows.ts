@@ -32,6 +32,7 @@ import {
   detachTab,
   disconnect,
   explainStatement,
+  fileDirty,
   insertIntoActive,
   notify,
   openInspector,
@@ -611,7 +612,7 @@ async function answer(message: Message) {
 function tabRisks(): TabRisk[] {
   return state.tabs.map((tab): TabRisk => {
     if (tab.kind === "table") return { id: tab.id, kind: "table", transaction: false, edits: tableDirty(tab), text: false };
-    const text = Boolean(tab.sql.trim()) && (tab.libraryId ? !scriptById(tab.libraryId) || libraryDirty(tab.libraryId) : !tab.filePath);
+    const text = Boolean(tab.sql.trim()) && (tab.libraryId ? !scriptById(tab.libraryId) || libraryDirty(tab.libraryId) : !tab.filePath || fileDirty(tab));
     return { id: tab.id, kind: "sql", transaction: tab.inTransaction, edits: false, text };
   });
 }

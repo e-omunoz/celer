@@ -30,6 +30,7 @@ import { activitySpec, readSessions, synapseDedicated, type ServerSession } from
 import type { AiMessage } from "./ai";
 import { insertAt } from "./windowModel";
 import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
+import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 
@@ -77,6 +78,8 @@ export interface SqlTab {
   fileEncoding?: string;
   /** The file's line endings, written back on save (the editor works with \n). */
   fileCrlf?: boolean;
+  /** The file's text as last read or written (\n line endings): the console has unsaved changes when it differs. */
+  fileSaved?: string;
   /** The script library entry the console was opened from (saving to the library updates it). */
   libraryId?: string;
   /** The last execution plan (Ctrl+Shift+E), shown in its own result tab. */
@@ -198,6 +201,8 @@ export interface SavedSqlTab {
   filePath?: string;
   fileEncoding?: string;
   fileCrlf?: boolean;
+  /** The file's text as last read or written, kept only when the console differs from it. */
+  fileSaved?: string;
   libraryId?: string;
 }
 
@@ -544,6 +549,7 @@ export function restoreTabs(saved: SavedTab[], activeTabId: string, known: (conn
             filePath: tab.filePath,
             fileEncoding: tab.fileEncoding,
             fileCrlf: tab.fileCrlf,
+            fileSaved: tab.filePath ? (tab.fileSaved ?? tab.sql) : undefined,
             libraryId: tab.libraryId,
           },
     );
@@ -641,7 +647,7 @@ export function savedTabs(): SavedTab[] {
   return state.tabs.map(
     (tab): SavedTab =>
       tab.kind === "sql"
-        ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, libraryId: tab.libraryId }
+        ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, fileSaved: tab.filePath && tab.fileSaved !== tab.sql ? tab.fileSaved : undefined, libraryId: tab.libraryId }
         : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
   );
 }
@@ -2436,10 +2442,20 @@ export async function copyText(text: string, label = "Copiado") {
 
 // ---------------------------------------------------------------- tabs
 
+/** A console opened from or saved to a file whose text differs from what the file holds. */
+export function fileDirty(tab: SqlTab): boolean {
+  return Boolean(tab.filePath) && tab.fileSaved !== undefined && tab.sql !== tab.fileSaved;
+}
+
 export async function closeTab(id: string) {
   const tab = state.tabs.find((item) => item.id === id);
   if (tab?.kind === "table" && tableDirty(tab)) {
     const ok = await confirmDialog(`Descartar cambios en ${tab.title}`, "Hay ediciones sin guardar en esta tabla.", "Descartar", true);
+    if (!ok) return;
+  }
+  if (tab?.kind === "sql" && (tab.libraryId ? libraryDirty(tab.libraryId) : fileDirty(tab))) {
+    const where = tab.libraryId ? "la biblioteca" : "el fichero";
+    const ok = await confirmDialog(`Descartar cambios en ${tab.title}`, `La consola tiene cambios que no se han guardado en ${where}.`, "Descartar", true);
     if (!ok) return;
   }
   if (tab?.kind === "sql" && tab.inTransaction) {
@@ -2880,10 +2896,10 @@ export async function openScript() {
     const title = path.split(/[\\/]/).pop() || "script.sql";
     if (tab && !tab.sql.trim()) {
       // The console now holds the file: it is no longer the library script it may have come from.
-      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title, filePath: path, fileEncoding: encoding, fileCrlf, libraryId: undefined } as Partial<SqlTab>);
+      setState("tabs", tabIndex(tab.id), { sql, revision: tab.revision + 1, title, filePath: path, fileEncoding: encoding, fileCrlf, fileSaved: sql, libraryId: undefined } as Partial<SqlTab>);
     } else {
       const id = openQuery(tab?.connId ?? null, sql, title);
-      patchTab(id, { filePath: path, fileEncoding: encoding, fileCrlf });
+      patchTab(id, { filePath: path, fileEncoding: encoding, fileCrlf, fileSaved: sql });
     }
     persistSoon();
   } catch (err) {
@@ -2908,7 +2924,7 @@ export async function saveScript(saveAs = false) {
     const lf = tab.sql.replace(/\r\n?/g, "\n");
     const used = await api().writeTextFile(path, tab.fileCrlf ? lf.replace(/\n/g, "\r\n") : lf, tab.fileEncoding);
     const title = path.split(/[\\/]/).pop() || tab.title;
-    patchTab(tab.id, { filePath: isTauri() ? path : undefined, fileEncoding: used, title });
+    patchTab(tab.id, { filePath: isTauri() ? path : undefined, fileEncoding: used, fileSaved: isTauri() ? lf : undefined, title });
     persistSoon();
     if (tab.fileEncoding && used !== tab.fileEncoding) notify("Script guardado en UTF-8", "warning", `El texto tiene caracteres que ${tab.fileEncoding} no admite.`);
     else notify(isTauri() ? "Script guardado" : "Script descargado", "success", path);
