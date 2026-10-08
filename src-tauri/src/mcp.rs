@@ -733,7 +733,11 @@ pub fn batch_writes(sql: &str, kind: DbKind) -> bool {
         "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "TRUNCATE", "CREATE", "ALTER",
         "DROP", "RENAME", "GRANT", "REVOKE", "DENY", "EXEC", "EXECUTE", "CALL", "COPY", "LOAD",
         "UNLOAD", "BULK", "ATTACH", "DETACH", "VACUUM", "REINDEX", "COMMENT", "LOCK", "IMPORT",
+        // A PostgreSQL DO block runs any PL/pgSQL; MySQL's DO evaluates functions that may write.
+        "DO",
     ];
+    // Session settings that would turn the server's read-only mode off (PostgreSQL, MySQL).
+    const READ_ONLY_VARS: &[&str] = &["DEFAULT_TRANSACTION_READ_ONLY", "TRANSACTION_READ_ONLY", "TX_READ_ONLY"];
     for d in dialects(kind) {
         let Ok(statements) = lex(sql, *d) else {
             // Unbalanced quotes: be conservative.
@@ -742,6 +746,28 @@ pub fn batch_writes(sql: &str, kind: DbKind) -> bool {
         for t in &statements {
             let first = first_word(t).unwrap_or("");
             if WRITE_START.contains(&first) {
+                return true;
+            }
+            let words: Vec<&str> = t
+                .iter()
+                .filter_map(|tok| match tok {
+                    Tok::Word(w) => Some(w.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let has = |list: &[&str]| words.iter().any(|w| list.contains(w));
+            // EXPLAIN ANALYZE (PostgreSQL) and ANALYZE <statement> (MariaDB) run the statement they explain.
+            if matches!(first, "EXPLAIN" | "ANALYZE" | "ANALYSE")
+                && has(&["ANALYZE", "ANALYSE"])
+                && has(&["INSERT", "UPDATE", "DELETE", "MERGE", "REPLACE", "INTO", "CREATE", "EXECUTE"])
+            {
+                return true;
+            }
+            if (matches!(first, "SET" | "RESET") && has(READ_ONLY_VARS))
+                || (matches!(first, "RESET" | "DISCARD") && has(&["ALL"]))
+                || words.windows(2).any(|w| w == ["READ", "WRITE"])
+                || t.windows(2).any(|w| matches!(w, [Tok::Word(f), Tok::P('(')] if f == "SET_CONFIG"))
+            {
                 return true;
             }
             if first == "SELECT" || first == "WITH" {

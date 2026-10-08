@@ -913,6 +913,20 @@ mod read_only_tests {
         assert!(check_read_only(&cfg, "DELETE FROM t RETURNING *").is_err());
         assert!(check_read_only(&cfg, "SELECT 1; DELETE FROM t").is_err());
         assert!(check_read_only(&cfg, "SELECT * FROM t").is_ok());
+        // Writes the first keyword does not show, and ways to turn the server's read-only mode off.
+        assert!(check_read_only(&cfg, "DO $$ BEGIN DELETE FROM t; END $$").is_err());
+        assert!(check_read_only(&cfg, "EXPLAIN ANALYZE DELETE FROM t").is_err());
+        assert!(check_read_only(&cfg, "explain (analyze, buffers) update t set a = 1").is_err());
+        assert!(check_read_only(&cfg, "SET default_transaction_read_only = off").is_err());
+        assert!(check_read_only(&cfg, "SELECT set_config('default_transaction_read_only', 'off', false)").is_err());
+        assert!(check_read_only(&cfg, "BEGIN READ WRITE").is_err());
+        assert!(check_read_only(&cfg, "EXPLAIN DELETE FROM t").is_ok());
+        assert!(check_read_only(&cfg, "EXPLAIN ANALYZE SELECT * FROM t").is_ok());
+        assert!(check_read_only(&cfg, "SHOW default_transaction_read_only").is_ok());
+        cfg.kind = DbKind::Mysql;
+        assert!(check_read_only(&cfg, "ANALYZE DELETE FROM t").is_err());
+        assert!(check_read_only(&cfg, "SET SESSION TRANSACTION READ WRITE").is_err());
+        assert!(check_read_only(&cfg, "ANALYZE TABLE t").is_ok());
     }
 }
 
