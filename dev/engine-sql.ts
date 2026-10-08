@@ -22,6 +22,8 @@ interface Shape {
   kind: DbKind;
   /** Seed table (see engine_tests.rs): id, nombre, activo, alta, importe, notas, parent_id. */
   t: Table;
+  /** A table of date and time columns (first row: the values to find and write back). */
+  dt?: Table;
   /** Schema comparison: source tables, target tables, the source's DDL, the target schema. */
   schemas?: { source: SchemaTable[]; target: SchemaTable[]; sourceDdl: Record<string, string>; schema: string; sourceSchema: string };
   /** Data comparison: the source's rows, the target's rows and the target table. */
@@ -107,6 +109,28 @@ out.push({ name: "changes applied: edited row", sql: select(`${q("id")} = 2 AND 
 out.push({ name: "changes applied: deleted row", sql: select(`${q("id")} = 4`), rows: 0 });
 if (momento >= 0) out.push({ name: "changes applied: datetime written as shown", sql: filter("momento", "eq", shownMomento), rows: 2 });
 out.push({ name: "changes applied: inserted row", sql: select(`${q("id")} = 5 AND ${q("notas")} = 'con ''comillas'''`), rows: 1 });
+
+// ---------------------------------------------------------------- dates and times as the grid shows them
+// Each date/time column of the "dt" table: found by its shown value, and written back as shown (the app fits it).
+if (shape.dt) {
+  const dt = shape.dt;
+  const dtTab = { columnsMeta: dt.columns, quoted: dt.quoted, qualified: dt.qualified };
+  const dated = dt.columns.map((c, i) => ({ c, i })).filter(({ c }) => !c.primaryKey && /date|time/i.test(c.typeName));
+  const first = dt.rows[0];
+  const sameAs = (i: number) => dt.rows.filter((r) => String(r[i]) === String(first[i])).length;
+  for (const { c, i } of dated) {
+    const shown = String(first[i]);
+    const where = filterSql(dtTab, { id: "f", col: c.name, op: "eq", value: shown, value2: "", values: [], enabled: true }, kind)!;
+    out.push({ name: `${c.typeName} = shown "${shown}"`, sql: `SELECT * FROM ${dt.qualified} WHERE ${where}`, rows: sameAs(i) });
+  }
+  const dtEdits: Record<string, string | null> = {};
+  for (const { i } of dated) dtEdits[`0:${i}`] = String(first[i]);
+  out.push({ name: "table changes", sql: changesSql({ ...dtTab, rows: dt.rows, edits: dtEdits, deleted: [], inserts: [] }, kind) });
+  for (const { c, i } of dated) {
+    const where = filterSql(dtTab, { id: "f", col: c.name, op: "eq", value: String(first[i]), value2: "", values: [], enabled: true }, kind)!;
+    out.push({ name: `${c.typeName} written back as shown`, sql: `SELECT * FROM ${dt.qualified} WHERE ${where}`, rows: sameAs(i) });
+  }
+}
 
 // ---------------------------------------------------------------- UPSERT / MERGE (literals in place of :params)
 const lit = (v: string, name: string) => {

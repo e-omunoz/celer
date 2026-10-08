@@ -286,7 +286,8 @@ fn mssql_engine() {
     assert_cancel(d, "WAITFOR DELAY '00:00:30'");
 
     // The SQL the interface writes, run for real.
-    let mut shape = json!({ "kind": "mssql", "t": table_shape(d, &obj) });
+    let dt_obj = ObjectRef { database: "celer_test".into(), schema: "dbo".into(), name: "dt".into(), kind: "table".into() };
+    let mut shape = json!({ "kind": "mssql", "t": table_shape(d, &obj), "dt": table_shape(d, &dt_obj) });
     // Schema comparison: two schemas with known differences.
     d.execute("IF SCHEMA_ID('sc_a') IS NULL EXEC('CREATE SCHEMA sc_a'); IF SCHEMA_ID('sc_b') IS NULL EXEC('CREATE SCHEMA sc_b');
                IF OBJECT_ID('sc_a.cli') IS NOT NULL DROP TABLE sc_a.cli; IF OBJECT_ID('sc_b.cli') IS NOT NULL DROP TABLE sc_b.cli;
@@ -492,22 +493,19 @@ fn informix_engine() {
     println!("error de ejemplo: {err}");
 
     // DATETIME and DATE: what the grid shows is accepted back as it is.
-    d.execute("DROP TABLE IF EXISTS dt; CREATE TABLE dt (id INT, a DATETIME YEAR TO FRACTION(5), b DATETIME YEAR TO SECOND, c DATE, h DATETIME HOUR TO SECOND)", 10).unwrap();
-    d.execute("INSERT INTO dt VALUES (1, DATETIME(2024-03-15 10:20:30.12345) YEAR TO FRACTION(5), DATETIME(2024-03-15 10:20:30) YEAR TO SECOND, MDY(3, 15, 2024), DATETIME(08:30:00) HOUR TO SECOND)", 10).unwrap();
-    let (_, dt) = all_rows(d, "SELECT a, b, c, h FROM dt");
+    // DATETIME qualifiers: DRDA sends every one as a TIMESTAMP (six fraction digits); the interface fits the value
+    // to the column (from the catalog) when it writes it: checked below with the generated SQL ("dt").
+    d.execute("DROP TABLE IF EXISTS dt; CREATE TABLE dt (id INT PRIMARY KEY, a DATETIME YEAR TO FRACTION(5), b DATETIME YEAR TO SECOND, c DATE, h DATETIME HOUR TO SECOND, m DATETIME YEAR TO MINUTE, f DATETIME YEAR TO FRACTION(3))", 10).unwrap();
+    d.execute("INSERT INTO dt VALUES (1, DATETIME(2024-03-15 10:20:30.12345) YEAR TO FRACTION(5), DATETIME(2024-03-15 10:20:30) YEAR TO SECOND, MDY(3, 15, 2024), DATETIME(08:30:00) HOUR TO SECOND, DATETIME(2024-03-15 10:20) YEAR TO MINUTE, DATETIME(2024-03-15 10:20:30.5) YEAR TO FRACTION(3))", 10).unwrap();
+    let (_, dt) = all_rows(d, "SELECT a, b, c, h, m, f FROM dt");
     println!("fechas: {:?}", dt[0].iter().map(txt).collect::<Vec<_>>());
-    for (i, col) in ["a", "b", "c", "h"].iter().enumerate() {
-        let shown = txt(&dt[0][i]);
-        let n = scalar(d, &format!("SELECT COUNT(*) FROM dt WHERE {col} = '{shown}'"));
-        assert_eq!(n, "1", "{col} = '{shown}' no encuentra su fila");
-        d.execute(&format!("UPDATE dt SET {col} = '{shown}' WHERE id = 1"), 10).unwrap_or_else(|e| panic!("{col} = '{shown}': {e}"));
-    }
+    let dt_obj = ObjectRef { database: "celer".into(), schema: obj.schema.clone(), name: "dt".into(), kind: "table".into() };
 
     // Cancel a long statement.
     assert_cancel(d, "SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e");
 
     // The SQL the interface writes, run for real.
-    let mut shape = json!({ "kind": "informix", "t": table_shape(d, &obj) });
+    let mut shape = json!({ "kind": "informix", "t": table_shape(d, &obj), "dt": table_shape(d, &dt_obj) });
     d.execute("DROP TABLE IF EXISTS dc_a; DROP TABLE IF EXISTS dc_b;
                CREATE TABLE dc_a (id INT PRIMARY KEY, nombre VARCHAR(50), activo BOOLEAN, alta DATE, importe DECIMAL(10,2), momento DATETIME YEAR TO MINUTE);
                CREATE TABLE dc_b (id SERIAL PRIMARY KEY, nombre VARCHAR(50), activo BOOLEAN, alta DATE, importe DECIMAL(10,2), momento DATETIME YEAR TO MINUTE);
