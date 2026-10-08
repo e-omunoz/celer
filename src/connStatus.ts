@@ -25,6 +25,9 @@ const EMPTY: LinkInfo = { link: "off", connectMs: null, reused: false, at: 0, no
 
 const [links, setLinks] = createStore({ conns: {} as Record<string, LinkInfo>, tabs: {} as Record<string, LinkInfo> });
 
+/** Principio de la nota del núcleo cuando una sesión se recupera sola (`RECOVERED` en src-tauri/src/guard.rs). */
+export const RECOVERED_PREFIX = "Conexión recuperada";
+
 /** Los avisos (reconectada, perdida) se quedan un rato y luego vuelven a «on». */
 const NOTICE_MS = 10 * 60_000;
 

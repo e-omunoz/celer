@@ -28,6 +28,8 @@ import type { ErEdge, ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, parseSynapsePlan, type Plan } from "./plan";
 import { activitySpec, readSessions, synapseDedicated, type ServerSession } from "./activity";
 import type { AiMessage } from "./ai";
+import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
+import { startConnWatch } from "./connWatch";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
 
@@ -397,7 +399,7 @@ export function connectionById(id: string | null | undefined) {
 /** Connection of the explorer selection, falling back to the active tab, then the first connection. */
 export function contextConnId(): string | null {
   const key = state.treeSelected;
-  if (key.startsWith("c:")) return key.slice(2);
+  if (key.startsWith("c:") || key.startsWith("f:")) return key.slice(2);
   if (key.startsWith("n:")) return key.slice(2).split("\u0000")[0] || null;
   return activeTab()?.connId ?? state.connections[0]?.id ?? null;
 }
@@ -527,6 +529,7 @@ export async function boot() {
     notify("No se pudieron restaurar las pestañas de la última sesión", "error", message);
   }
   setState("ready", true);
+  startConnWatch();
   void api().onExportProgress((progress) => {
     if (state.exportRunning) setState("exportRows", progress.rows);
   });
@@ -1003,9 +1006,13 @@ export async function testConnection(cfg: ConnConfig) {
   }
 }
 
-/** A code the core puts in front of some errors: "JDBC_SETUP:java,jdbc: …", "INFORMIX_GUIDE:sdk: …", "IBM_DRIVER_MISSING: …". */
+/**
+ * A code the core puts in front of some errors: "JDBC_SETUP:java,jdbc: …", "INFORMIX_GUIDE:sdk: …", "IBM_DRIVER_MISSING: …",
+ * and the connection's own (src-tauri/src/guard.rs): SESSION_LOST (it dropped and the transaction, #temp tables or SET
+ * went with it), CONN_RESET (it dropped and a write was not repeated), CONN_DOWN (it dropped and could not reconnect).
+ */
 export function errorCode(message: string): { code: string; arg: string; text: string } | null {
-  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
+  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING|SESSION_LOST|CONN_RESET|CONN_DOWN)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
   return match ? { code: match[1], arg: match[2] ?? "", text: match[3] } : null;
 }
 
@@ -1054,25 +1061,32 @@ export async function connect(connId: string, password?: string) {
   setState("connecting", connId, true);
   try {
     const opened = await api().openSession(connId, pwd);
-    const databases = await api().listDatabases(opened.sessionId).catch(() => [] as string[]);
     // Disconnected while this was connecting: drop the new session instead of bringing the connection back.
     if (connectGeneration(connId) !== generation) {
       void api().closeSession(opened.sessionId).catch(() => {});
       return;
     }
-    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases });
+    markConn(connId, "on", { connectMs: opened.connectMs, reused: opened.reused, note: "" });
+    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases: [] });
     try {
       localStorage.setItem(`celer.server.${connId}`, opened.serverInfo.slice(0, 120));
     } catch {
       /* only cosmetic */
     }
-    void api()
-      .completion(opened.sessionId, opened.database)
-      .then((schema) => setState("catalog", connId, { database: opened.database, tables: schema.tables }))
-      .catch(() => {});
+    // The explorer's first level first; the database list comes from it when it lists databases (one round trip
+    // less), and autocompletion after the tree has opened (on the same session, it would hold the tree back).
     await loadChildren(connId, [], true);
     if (connectGeneration(connId) !== generation) return;
-    autoExpand(connId);
+    const roots = state.tree[pathKey(connId, [])]?.nodes ?? [];
+    const listed = roots.filter((node) => node.kind === "database").map((node) => node.name);
+    const databases = listed.length ? [...listed].sort((a, b) => a.localeCompare(b)) : await api().listDatabases(opened.sessionId).catch(() => [] as string[]);
+    if (state.sessions[connId]?.metaId === opened.sessionId) setState("sessions", connId, "databases", databases);
+    const loadCatalog = () =>
+      void api()
+        .completion(opened.sessionId, opened.database)
+        .then((schema) => setState("catalog", connId, { database: opened.database, tables: schema.tables }))
+        .catch(() => {});
+    void autoExpand(connId).then(loadCatalog, loadCatalog);
     gib("connected", { production: conn.production, detail: conn.name });
     const current = activeTab();
     if (!current) {
@@ -1141,6 +1155,7 @@ export async function disconnect(connId: string, confirm = true) {
     if (!ok) return;
   }
   generations[connId] = connectGeneration(connId) + 1;
+  markConn(connId, "off", { note: "" });
   for (const tab of affected) bumpToken(tab.id);
   if (exporting) void cancelExport();
   // The UI forgets the connection at once; the sessions close behind it.
@@ -1325,12 +1340,18 @@ function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
 }
 
 /**
- * Opens the session of a console of a connected connection in the background, as soon as the console opens: the
- * first run does not pay the login (TLS included), as when a tool keeps its connection open.
+ * Opens the session of a console in the background as soon as the console opens or is shown: the first run does not
+ * pay the login (TLS included), as when a tool keeps its connection open. A connection that is not connected yet
+ * connects on its own when it needs no password (connect() then warms the active console).
  */
-function warmSqlSession(tabId: string) {
+export function warmSqlSession(tabId: string) {
   const tab = state.tabs[tabIndex(tabId)];
-  if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId || !state.sessions[tab.connId]) return;
+  if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId) return;
+  const conn = connectionById(tab.connId);
+  if (!state.sessions[tab.connId]) {
+    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
+    return;
+  }
   void ensureSqlSession(tab).catch(() => {});
 }
 
@@ -1343,24 +1364,30 @@ async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   if (fresh.sessionId) return fresh;
   const pwd = state.passwords[fresh.connId!];
   const generation = connectGeneration(fresh.connId!);
-  const opened = await api().openSession(fresh.connId!, pwd);
+  // Straight into the console's database and transaction mode (a console in Manual mode stays manual on a new
+  // session): no USE or extra round trips afterwards. If that database is gone, the connection's own.
+  markTab(fresh.id, "connecting");
+  const mode = { autocommit: fresh.autocommit };
+  const opened = await api()
+    .openSession(fresh.connId!, pwd, { ...mode, database: fresh.database || undefined })
+    .catch((err: unknown) => (fresh.database ? api().openSession(fresh.connId!, pwd, mode) : Promise.reject(err)))
+    .catch((err: unknown) => {
+      markTab(fresh.id, "down", { note: plainError(errorText(err)) });
+      throw err;
+    });
   // Disconnected meanwhile (even if reconnected since): do not attach a session the core may have closed.
   if (!state.sessions[fresh.connId!] || connectGeneration(fresh.connId!) !== generation) {
     void api().closeSession(opened.sessionId).catch(() => {});
+    markTab(fresh.id, "off");
     throw new Error("La conexión se ha cerrado");
   }
-  const wanted = fresh.database && fresh.database !== opened.database ? fresh.database : "";
-  let database = opened.database;
-  if (wanted) database = await api().useDatabase(opened.sessionId, wanted).catch(() => opened.database);
-  // A console in Manual mode must stay manual on a new session (after a reconnect or a connection change).
-  let inTransaction = false;
-  if (!fresh.autocommit) inTransaction = await api().setAutocommit(opened.sessionId, false).catch(() => false);
   const now = state.tabs[tabIndex(fresh.id)];
   if (!now || now.kind !== "sql") {
     void api().closeSession(opened.sessionId).catch(() => {});
     throw new Error("La pestaña ya no existe");
   }
-  patchTab(fresh.id, { sessionId: opened.sessionId, database, serverInfo: opened.serverInfo, inTransaction });
+  markTab(fresh.id, "on", { connectMs: opened.connectMs, reused: opened.reused, note: "" });
+  patchTab(fresh.id, { sessionId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, inTransaction: false });
   void loadCompletion(fresh.id);
   return state.tabs[tabIndex(fresh.id)] as SqlTab;
 }
@@ -1460,10 +1487,17 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   patchTab(current.id, { running: true, error: "", messages: [], startedAt: Date.now(), lastSql: sql });
   const token = tokenOf(current.id);
   try {
+    const hadSession = Boolean(fresh.sessionId);
     const tab = await ensureSqlSession(fresh);
     const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize);
     // Disconnected while it ran: this answer belongs to a closed session.
     if (tokenOf(current.id) !== token) return;
+    // The session opened for this run: how long that took goes with the output. One that dropped and came back on
+    // its own says so (the core's note) and the tab shows it.
+    const opened = hadSession ? null : tabLink(tab);
+    if (opened && opened.connectMs !== null) output.messages = [`Sesión abierta en ${connectTimeText(opened)}`, ...output.messages];
+    const recovered = output.messages.find((message) => message.startsWith(RECOVERED_PREFIX));
+    if (recovered) markTab(tab.id, "reconnected", { note: recovered });
     const firstGrid = output.results.findIndex((result) => result.columns.length);
     patchTab(tab.id, {
       runId: (tab.runId ?? 0) + 1,
@@ -1490,14 +1524,34 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     await remember(tab, sql, true, output.elapsedMs, rows);
   } catch (err) {
     if (tokenOf(current.id) !== token) return;
-    const message = errorText(err);
+    const full = errorText(err);
+    // The connection dropped: the core reconnected (or could not) and says what was lost; the tab shows it.
+    const dropped = noteDropped(current.id, current.title, full);
+    const message = dropped ? plainError(full) : full;
     const at = tabIndex(current.id);
-    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1, activePinned: null, activePlan: false, compare: null });
+    if (at >= 0) patchTab(current.id, { running: false, startedAt: null, error: message, elapsedMs: null, activeResult: -1, activePinned: null, activePlan: false, compare: null, ...(dropped ? { inTransaction: false } : {}) });
     pushOutput(current.id, { at: Date.now(), sql, ok: false, text: message, elapsedMs: null });
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
-    offerDriverHelp(message, null);
+    offerDriverHelp(full, null);
   }
+}
+
+/**
+ * An error that says the connection dropped (SESSION_LOST, CONN_RESET, CONN_DOWN from src-tauri/src/guard.rs): the
+ * tab's indicator shows it, and a lost transaction or session state is also told in a balloon, since it is not an
+ * error of the statement. Returns whether it was one of those.
+ */
+export function noteDropped(tabId: string, title: string, message: string): boolean {
+  const code = errorCode(message)?.code ?? "";
+  const text = plainError(message);
+  if (code === "SESSION_LOST") {
+    markTab(tabId, "lost", { note: text });
+    notify(`«${title}» perdió su sesión al cortarse la conexión`, "warning", text);
+  } else if (code === "CONN_RESET") markTab(tabId, "reconnected", { note: text });
+  else if (code === "CONN_DOWN") markTab(tabId, "down", { note: text });
+  else return false;
+  return true;
 }
 
 /** ANALYZE runs the statement: only for reads, on engines whose analyzed plan Celer reads (PostgreSQL, MariaDB). */
