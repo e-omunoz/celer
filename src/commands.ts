@@ -11,6 +11,7 @@ import {
   disconnect,
   formatActive,
   gib,
+  notify,
   openActivity,
   openConnDialog,
   openInspector,
@@ -32,6 +33,7 @@ import { checkForUpdates } from "./update";
 import { openMigration } from "./migrate";
 import { saveToLibrary } from "./library";
 import { chordLabel, chordOf, chordsFor, EDITOR_COMMANDS } from "./keymap";
+import { resetGibTips } from "./gib/memory";
 
 export interface Command {
   id: string;
@@ -104,6 +106,7 @@ export function commands(): Command[] {
     { id: "guide", label: "Guía de inicio", group: "Ayuda", run: () => setState("onboardingOpen", true) },
     { id: "gib-tip", label: "Gib: un consejo", group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
     { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
+    { id: "gib-reset", label: "Gib: volver a contar los consejos desde el principio", group: "Ayuda", run: () => { resetGibTips(); notify("Gib volverá a darte sus consejos", "success", "Los que ya viste cuentan como nuevos."); } },
     { id: "about", label: "Acerca de Celer", group: "Ayuda", run: () => setState("aboutOpen", true) },
     { id: "update", label: "Buscar actualizaciones", group: "Ayuda", run: () => void checkForUpdates(true) },
   ];

@@ -326,6 +326,9 @@ export interface GibEvent {
   detail?: string;
   production?: boolean;
   hasMore?: boolean;
+  /** query-ok: columns of the first result with a grid, and the engine (for Gib's advice about the statement). */
+  columns?: number;
+  kind?: string;
 }
 export const [gibEvent, setGibEvent] = createSignal<GibEvent | null>(null);
 export function gib(type: GibEvent["type"], extra: Omit<GibEvent, "type" | "at"> = {}) {
@@ -1389,7 +1392,13 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       error: "",
     });
     const summary = describeResults(output.results, output.elapsedMs);
-    gib("query-ok", { ms: output.elapsedMs, hasMore: output.results.some((result) => result.hasMore), detail: sql });
+    gib("query-ok", {
+      ms: output.elapsedMs,
+      hasMore: output.results.some((result) => result.hasMore),
+      detail: sql,
+      columns: output.results.find((result) => result.columns.length)?.columns.length ?? 0,
+      kind: conn?.kind,
+    });
     pushOutput(tab.id, { at: Date.now(), sql, ok: true, text: [summary, ...output.messages].join("\n"), elapsedMs: output.elapsedMs });
     const rows = output.results.find((result) => result.columns.length)?.rows.length ?? output.results.find((result) => result.rowsAffected !== null)?.rowsAffected ?? null;
     if (isMutating(sql, conn?.kind) && /\b(create|drop|alter|rename)\b/i.test(sql)) {

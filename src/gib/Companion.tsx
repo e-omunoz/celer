@@ -1,27 +1,16 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
-import { activeTab, formatMs, gibEvent, openPalette, reducedMotion, runActive, splashDone, state } from "../state";
+import { shortcutLabel } from "../commands";
+import { saveToLibrary } from "../library";
+import { activeSql, activeTab, formatMs, gibEvent, notify, openPalette, reducedMotion, runActive, saveSettings, splashDone, state, type GibEvent } from "../state";
+import { nextTip, queryAdvice, statementKey, type Advice } from "./advice";
+import { memory, saveMemory, sessionAdvice } from "./memory";
 import { Gib, type GibActivity, type GibMood } from "./Gib";
 
-const TIPS = [
-  "Ctrl+Intro ejecuta la sentencia bajo el cursor, o la selección si la hay.",
-  "Pulsa Mayús dos veces para buscar tablas, pestañas y acciones.",
-  "Ctrl+N salta a cualquier tabla de las conexiones abiertas.",
-  "Selecciona varias celdas: la barra de estado muestra suma, media, mínimo y máximo.",
-  "En una tabla, «+ Filtro» crea filtros por columna sin escribir SQL.",
-  "Clic derecho en una celda: «Filtrar por este valor» añade el filtro por ti.",
-  "Ctrl+F busca dentro de los resultados; F3 salta a la siguiente coincidencia.",
-  "Ctrl+Mayús+E muestra el plan de ejecución de la sentencia.",
-  "Arrastra una tabla del explorador al editor para escribir su nombre.",
-  "Las conexiones de producción piden confirmación antes de un UPDATE o DELETE sin WHERE.",
-  "Al guardar cambios en una tabla verás el SQL; se aplica en una sola transacción.",
-  "Alt+7 abre el panel de valor: JSON formateado y la fila como formulario.",
-  "Doble clic en el borde de una cabecera ajusta el ancho de la columna.",
-  "Copia una selección como JSON, Markdown, INSERT o lista IN desde el clic derecho.",
-  "Ctrl+clic en el nombre de una tabla dentro del SQL la abre; en una clave foránea, va a la fila.",
-];
-
-/** What Gib grumbles when you insist on clicking him. */
-const GRUMBLES = ["¡Eh! Que no soy un botón.", "Fuera, mosca…", "Estoy esperando tu consulta, ¿eh?", "Vale, vale. ¿Quieres un consejo?"];
+/** What Gib grumbles when you keep clicking him (one click is a tip; four in a row is pestering). */
+const GRUMBLES = ["¡Eh! Que no soy un botón.", "Fuera, mosca…", "Ya van unos cuantos clics, ¿eh?"];
+/** Clicks within this window count as pestering from the fourth on. */
+const PESTER_MS = 5000;
+const PESTER_CLICKS = 4;
 
 interface Bubble {
   text: string;
@@ -30,6 +19,10 @@ interface Bubble {
   sticky?: boolean;
   /** A grumble after a click: further clicks keep grumbling instead of closing it. */
   grumble?: boolean;
+  /** One of the general tips (offers "Otro consejo"). */
+  tipId?: string;
+  /** Gib spoke on his own: typing elsewhere closes it, and it offers "No más consejos". */
+  proactive?: boolean;
 }
 
 /**
@@ -58,6 +51,19 @@ const ROUTINE_NAMES = Object.keys(ROUTINES);
 const IDLE_BEFORE_MS = 40_000;
 const GAP_MIN_MS = 25_000;
 const GAP_MAX_MS = 70_000;
+/**
+ * Tips he volunteers: the first a few minutes into the session, then at most one every 15 minutes, only while you
+ * pause (no input for 5 s, but back within a minute: nobody reads a bubble in an empty room) and only tips you have
+ * not seen yet. When every tip has been seen he stops volunteering them; a click on him still gives one.
+ */
+const TIP_FIRST_MS = 3 * 60_000;
+const TIP_EVERY_MS = 15 * 60_000;
+const TIP_PAUSE_MIN_MS = 5000;
+const TIP_PAUSE_MAX_MS = 60_000;
+/** Performance and habit advice is repeated at most this many times, ever; warnings once per session. */
+const ADVICE_REPEAT = 2;
+/** The same statement run this many times in a session (and not from the library): suggest saving it. */
+const REPEAT_RUNS = 3;
 
 export function Companion() {
   const [asleep, setAsleep] = createSignal(false);
@@ -66,9 +72,10 @@ export function Companion() {
   const [hover, setHover] = createSignal(false);
   const [bubble, setBubble] = createSignal<Bubble | null>(null);
   const [activity, setActivity] = createSignal<GibActivity | null>(null);
-  const [tipIndex, setTipIndex] = createSignal(Math.floor(Math.random() * TIPS.length));
+  let tipCursor = 0;
   let lastInput = Date.now();
-  let lastTip = Date.now();
+  let lastTip = Date.now() - TIP_EVERY_MS + TIP_FIRST_MS;
+  let lastBubbleAt = 0;
   let nextActivityAt = Date.now() + IDLE_BEFORE_MS;
   let recent: string[] = [];
   let routineToken = 0;
@@ -77,7 +84,7 @@ export function Companion() {
   let bubbleTimer = 0;
   let mouseRuns = 0;
   let clicks: number[] = [];
-  const shown = new Set<string>();
+  const runs = new Map<string, number>();
 
   const mode = () => state.settings.companion;
   const running = () => state.tabs.some((tab) => (tab.kind === "sql" && tab.running) || (tab.kind === "table" && tab.loading));
@@ -88,18 +95,50 @@ export function Companion() {
     reactionTimer = window.setTimeout(() => setReaction(null), ms);
   }
 
-  function say(next: Bubble, ms = 6500) {
-    if (mode() !== "normal" && next.kind === "tip") return;
-    if (mode() === "off") return;
+  /** Shows a bubble (closing itself after `ms` unless sticky). Hovering it keeps it open (see the markup). */
+  function show(next: Bubble, ms = 6500) {
     window.clearTimeout(bubbleTimer);
     setBubble(next);
+    lastBubbleAt = Date.now();
     if (!next.sticky) bubbleTimer = window.setTimeout(() => setBubble(null), ms);
   }
 
-  function once(key: string, bubbleValue: Bubble) {
-    if (shown.has(key)) return;
-    shown.add(key);
-    say(bubbleValue);
+  /** Gib speaking on his own: nothing when he is off, and only warnings and news (no tips) when he is quiet. */
+  function say(next: Bubble, ms = 6500): boolean {
+    if (mode() === "off") return false;
+    if (mode() !== "normal" && next.kind === "tip") return false;
+    show(next, ms);
+    return true;
+  }
+
+  /** Advice with a memory: warnings once per session, the rest at most ADVICE_REPEAT times ever. */
+  function advise(id: string, kind: Advice["kind"], next: Bubble, ms = 9000): boolean {
+    if (sessionAdvice.has(id)) return false;
+    if (kind === "tip" && (memory.advice[id] ?? 0) >= ADVICE_REPEAT) return false;
+    if (!say(next, ms)) return false;
+    sessionAdvice.add(id);
+    memory.advice[id] = (memory.advice[id] ?? 0) + 1;
+    saveMemory();
+    return true;
+  }
+
+  /**
+   * One of the general tips: on demand any (unseen first, then they come round again); volunteered, only unseen
+   * ones. False when there was nothing to say.
+   */
+  function showTip(proactive: boolean): boolean {
+    if (mode() === "off") return false;
+    const picked = nextTip(tipCursor, new Set(memory.seen), proactive);
+    if (!picked) return false;
+    const next: Bubble = { text: picked.tip.text(shortcutLabel), kind: "tip", tipId: picked.tip.id, proactive };
+    if (!proactive) show(next, 9000);
+    else if (!say(next, 8000)) return false;
+    tipCursor = picked.index + 1;
+    if (!memory.seen.includes(picked.tip.id)) {
+      memory.seen.push(picked.tip.id);
+      saveMemory();
+    }
+    return true;
   }
 
   // ------------------------------------------------------------ idle activities
@@ -138,18 +177,22 @@ export function Companion() {
     return options[Math.floor(Math.random() * options.length)] ?? "yawn";
   }
 
-  /** Activities only while Gib would otherwise just stand there. */
+  /** Nothing in front of him: no dialog, guide or palette open. */
+  const unobstructed = () => !document.querySelector(".onboarding, .tour-spot, .modal-backdrop, .scrim");
+
+  /** Activities only while Gib would otherwise just stand there (and someone may be looking). */
   const free = () =>
     mode() === "normal" &&
     splashDone() &&
     !reducedMotion() &&
     !document.hidden &&
+    document.hasFocus() &&
     !running() &&
     !reaction() &&
     !bubble() &&
     !asleep() &&
     !hover() &&
-    !document.querySelector(".onboarding, .tour-spot, .modal-backdrop, .scrim");
+    unobstructed();
 
   // Thinking while something runs for more than a moment; anything running interrupts an activity.
   createEffect(() => {
@@ -162,6 +205,34 @@ export function Companion() {
     onCleanup(() => window.clearTimeout(timer));
   });
 
+  /** What to say after a statement ran fine: a likely mistake, a faster way, or a habit worth having. */
+  function afterQuery(event: GibEvent) {
+    const ms = event.ms ?? 0;
+    const sql = event.detail ?? "";
+    const plan = { label: "Ver plan", run: () => void runActive("explain") };
+    const advice = queryAdvice({ sql, kind: event.kind, ms, columns: event.columns ?? 0, hasMore: Boolean(event.hasMore) });
+    if (advice && advise(advice.id, advice.kind, { text: advice.text, kind: advice.kind === "warn" ? "warn" : "tip", action: advice.plan ? plan : undefined })) return;
+    if (ms > 5000) {
+      const keys = shortcutLabel("explain");
+      if (advise("slow", "tip", { text: `Esta consulta tarda. El plan de ejecución${keys ? ` (${keys})` : ""} te enseña dónde se va el tiempo.`, kind: "tip", action: plan })) return;
+    } else if (event.hasMore) {
+      if (advise("paging", "tip", { text: "Hay más filas en el servidor: desplázate hacia abajo o pulsa «Cargar todo». Solo se traen las que ves.", kind: "tip" })) return;
+    }
+    // The same statement again and again, typed each time: the library keeps it.
+    const key = statementKey(sql);
+    if (key.length < 12) return;
+    const count = (runs.get(key) ?? 0) + 1;
+    runs.set(key, count);
+    if (count >= REPEAT_RUNS && !activeSql()?.libraryId) {
+      const keys = shortcutLabel("save-library");
+      advise("repeat-library", "tip", {
+        text: `Ya has lanzado esta consulta ${count} veces. Guárdala en la biblioteca${keys ? ` (${keys})` : ""} y la tendrás a mano.`,
+        kind: "tip",
+        action: { label: "Guardar", run: () => void saveToLibrary() },
+      });
+    }
+  }
+
   createEffect(
     on(gibEvent, (event) => {
       if (!event || !splashDone()) return;
@@ -173,27 +244,27 @@ export function Companion() {
             react("idea", 2200);
             say({ text: `Listo en ${formatMs(ms)}.`, kind: "ok" }, 3500);
           } else react("happy", 1300);
-          if (ms > 5000) once("slow", { text: "Esta consulta tarda. Ctrl+Mayús+E muestra su plan de ejecución.", kind: "tip", action: { label: "Ver plan", run: () => void runActive("explain") } });
-          else if (event.hasMore) once("paging", { text: "Hay más filas en el servidor: desplázate hacia abajo o pulsa «Cargar todo». Solo se traen las que ves.", kind: "tip" });
+          afterQuery(event);
           break;
         }
         case "query-error": {
           react("error", 2600);
           const msg = (event.detail ?? "").toLowerCase();
-          if (/does not exist|doesn't exist|no such table|invalid object name|unknown table/.test(msg)) {
-            say({ text: "¿Un nombre mal escrito? Ctrl+N busca tablas y vistas por nombre.", kind: "info", action: { label: "Buscar tabla", run: () => openPalette("tables") } });
+          const tables = shortcutLabel("go-table");
+          if (/does not exist|doesn't exist|no such table|invalid object name|unknown table/.test(msg) && !/column/.test(msg)) {
+            advise("err-name", "warn", { text: `¿Un nombre mal escrito? ${tables ? `${tables} busca` : "La paleta busca"} tablas y vistas por nombre.`, kind: "info", action: { label: "Buscar tabla", run: () => openPalette("tables") } });
           } else if (/unknown column|column .* does not exist|no such column|invalid column/.test(msg)) {
-            say({ text: "Esa columna no existe. Escribe el alias y un punto para ver las columnas disponibles.", kind: "info" });
+            advise("err-column", "warn", { text: "Esa columna no existe. Escribe el alias y un punto para ver las columnas disponibles.", kind: "info" });
           } else if (/syntax|sintaxis/.test(msg)) {
-            say({ text: "Error de sintaxis: en «Salida» tienes la línea y la columna exactas.", kind: "info" });
+            advise("err-syntax", "warn", { text: "Error de sintaxis: en «Salida» tienes la línea y la columna exactas.", kind: "info" });
           } else if (/permission denied|access denied|read only|solo lectura/.test(msg)) {
-            say({ text: "Sin permiso para esa operación con este usuario o conexión.", kind: "warn" });
+            advise("err-permission", "warn", { text: "Sin permiso para esa operación con este usuario o conexión.", kind: "warn" });
           }
           break;
         }
         case "connected":
           react("wave", 1800);
-          if (event.production) say({ text: `«${event.detail}» es de producción: te pediré confirmación antes de cambios peligrosos.`, kind: "warn" }, 7000);
+          if (event.production) advise(`production:${event.detail}`, "warn", { text: `«${event.detail}» es de producción: te pediré confirmación antes de cambios peligrosos.`, kind: "warn" }, 7000);
           break;
         case "connect-failed":
           react("error", 2400);
@@ -205,19 +276,21 @@ export function Companion() {
         case "rollback":
           react("wave", 1200);
           break;
-        case "mouse-run":
+        case "mouse-run": {
           mouseRuns++;
-          if (mouseRuns === 3) once("mouse", { text: "Truco: Ctrl+Intro ejecuta sin soltar el teclado.", kind: "tip" });
+          const keys = shortcutLabel("run");
+          if (mouseRuns >= 3 && keys) advise("mouse", "tip", { text: `Truco: ${keys} ejecuta sin soltar el teclado.`, kind: "tip" });
           break;
+        }
         case "tip":
           setAsleep(false);
-          nextTip(true);
+          showTip(false);
           break;
         case "show-off": {
           setAsleep(false);
           setBubble(null);
           if (reducedMotion()) {
-            say({ text: "Con «reducir movimiento» activado en el sistema me quedo quieto. ¡Pero sigo aquí!", kind: "ok" }, 3500);
+            say({ text: "Con las animaciones reducidas me quedo quieto. ¡Pero sigo aquí!", kind: "ok" }, 3500);
             break;
           }
           const name = event.detail && ROUTINES[event.detail] ? event.detail : pickRoutine();
@@ -236,13 +309,9 @@ export function Companion() {
     if (current && current !== "coffee-away" && hover() && waiting()) stopRoutine();
   });
 
-  // Contextual hint for SELECT * on a production console, once.
+  // Reduced motion switched on while he was in the middle of something: back to the rest pose.
   createEffect(() => {
-    const tab = activeTab();
-    if (tab?.kind !== "sql" || !splashDone()) return;
-    if (/select\s+\*\s+from/i.test(tab.sql) && tab.sql.length < 400 && tab.results.some((result) => result.columns.length > 12)) {
-      once("star", { text: "Muchas columnas: nombra solo las que necesitas y la consulta irá más rápida.", kind: "tip" });
-    }
+    if (reducedMotion()) stopRoutine();
   });
 
   onMount(() => {
@@ -252,19 +321,36 @@ export function Companion() {
         setAsleep(false);
         react("wave", 1600);
       }
+      const onGib = event.target instanceof Element && event.target.closest(".companion");
       // Typing or clicking elsewhere ends an activity: Gib pays attention again. Clicks on Gib are his own business.
-      if (activity() && !(event.target instanceof Element && event.target.closest(".companion"))) stopRoutine();
+      if (activity() && !onGib) stopRoutine();
+      // A tip he volunteered gets out of the way as soon as you type.
+      if (event.type === "keydown" && !onGib && bubble()?.proactive) setBubble(null);
     };
     window.addEventListener("pointerdown", mark);
     window.addEventListener("keydown", mark);
     const timer = window.setInterval(() => {
-      const idleFor = Date.now() - lastInput;
+      const now = Date.now();
+      const idleFor = now - lastInput;
       if (idleFor > 10 * 60 * 1000 && !running() && !activity()) setAsleep(true);
-      if (mode() === "normal" && !bubble() && !running() && !activity() && !productionActive() && idleFor > 5000 && Date.now() - lastTip > 15 * 60 * 1000) {
-        lastTip = Date.now();
-        nextTip();
+      const pause = idleFor > TIP_PAUSE_MIN_MS && idleFor < TIP_PAUSE_MAX_MS;
+      if (
+        mode() === "normal" &&
+        pause &&
+        now - lastTip > TIP_EVERY_MS &&
+        now - lastBubbleAt > 60_000 &&
+        !bubble() &&
+        !running() &&
+        !activity() &&
+        !productionActive() &&
+        !document.hidden &&
+        document.hasFocus() &&
+        unobstructed()
+      ) {
+        lastTip = now;
+        showTip(true);
       }
-      if (!activity() && idleFor > IDLE_BEFORE_MS && Date.now() > nextActivityAt && free()) play(pickRoutine());
+      if (!activity() && idleFor > IDLE_BEFORE_MS && now > nextActivityAt && free()) play(pickRoutine());
     }, 2000);
     onCleanup(() => {
       window.removeEventListener("pointerdown", mark);
@@ -277,53 +363,35 @@ export function Companion() {
     });
   });
 
-  function nextTip(force = false) {
-    const index = tipIndex();
-    setTipIndex(index + 1);
-    const tip = { text: TIPS[index % TIPS.length], kind: "tip" as const };
-    if (force && mode() !== "off") {
-      window.clearTimeout(bubbleTimer);
-      setBubble(tip);
-      bubbleTimer = window.setTimeout(() => setBubble(null), 9000);
-    } else say(tip, 9000);
-  }
-
-  /** Waiting for a query and nothing else going on: the cursor is a fly, and a click is worse. */
+  /** Waiting for a query and nothing else going on: the cursor is a fly. */
   const waiting = () => !running() && !thinking() && !asleep() && (!reaction() || reaction() === "grumpy");
 
-  /** A double click is love, not two grumbles: single clicks wait a moment to see whether a second one comes. */
+  /** A double click is love, not two clicks: single clicks wait a moment to see whether a second one comes. */
   let clickTimer = 0;
   function onClick() {
     window.clearTimeout(clickTimer);
     clickTimer = window.setTimeout(handleClick, 230);
   }
 
+  /** A click is a tip (or closes the bubble); clicking on and on is pestering, and he grumbles. */
   function handleClick() {
+    const at = Date.now();
+    clicks = [...clicks.filter((t) => at - t < PESTER_MS), at];
+    if (clicks.length >= PESTER_CLICKS && !running() && !thinking()) {
+      stopRoutine();
+      react("grumpy", 1400);
+      const step = clicks.length - PESTER_CLICKS;
+      if (step >= GRUMBLES.length - 1) clicks = [];
+      if (mode() !== "off") show({ text: GRUMBLES[Math.min(step, GRUMBLES.length - 1)], kind: "ok", grumble: true }, 2200);
+      return;
+    }
     if (bubble() && !bubble()!.grumble) {
       setBubble(null);
       return;
     }
-    if (!waiting()) return;
     stopRoutine();
-    react("grumpy", 1400);
-    // Insisting gets grumbles; the fifth click in a row softens into the offer of a tip.
-    const at = Date.now();
-    clicks = [...clicks.filter((t) => at - t < 6000), at];
-    if (clicks.length >= 2) {
-      const line = GRUMBLES[Math.min(clicks.length - 2, GRUMBLES.length - 1)];
-      if (line === GRUMBLES[GRUMBLES.length - 1]) {
-        clicks = [];
-        if (mode() !== "off") {
-          window.clearTimeout(bubbleTimer);
-          setBubble({ text: line, kind: "info", action: { label: "Sí, uno", run: () => window.setTimeout(() => nextTip(true), 0) } });
-          bubbleTimer = window.setTimeout(() => setBubble(null), 6000);
-        }
-      } else if (mode() !== "off") {
-        window.clearTimeout(bubbleTimer);
-        setBubble({ text: line, kind: "ok", grumble: true });
-        bubbleTimer = window.setTimeout(() => setBubble(null), 2200);
-      }
-    }
+    setAsleep(false);
+    if (showTip(false)) react("wave", 1200);
   }
 
   const mood = (): GibMood => {
@@ -331,8 +399,14 @@ export function Companion() {
     if (r) return r;
     if (thinking()) return "think";
     if (asleep()) return "sleep";
-    if (hover() && waiting() && activity() !== "coffee-away") return "annoyed";
+    // Talking to you, he does not swat at you.
+    if (hover() && waiting() && !bubble() && activity() !== "coffee-away") return "annoyed";
     return "idle";
+  };
+
+  const closeBubble = () => {
+    window.clearTimeout(bubbleTimer);
+    setBubble(null);
   };
 
   return (
@@ -340,16 +414,41 @@ export function Companion() {
       <div class="companion" classList={{ landed: splashDone() }}>
         <Show when={bubble()}>
           {(b) => (
-            <div class={`tip ${b().kind}`} role="status">
+            <div
+              class={`tip ${b().kind}`}
+              role="status"
+              // Reading it: it stays while the pointer is on it, and gives a moment after.
+              onPointerEnter={() => window.clearTimeout(bubbleTimer)}
+              onPointerLeave={() => {
+                if (b().sticky) return;
+                window.clearTimeout(bubbleTimer);
+                bubbleTimer = window.setTimeout(() => setBubble(null), 2500);
+              }}
+            >
               <p>{b().text}</p>
               <div class="tip-actions">
+                <Show when={b().proactive}>
+                  <button
+                    type="button"
+                    class="link small tip-mute"
+                    title="Gib deja de ofrecer consejos por su cuenta (Ajustes › Apariencia)"
+                    onClick={() => {
+                      closeBubble();
+                      void saveSettings({ companion: "quiet" });
+                      notify("Gib ya no dará consejos por su cuenta", "info", "Haz clic en él para pedir uno, o vuelve a «Normal» en Ajustes › Apariencia.");
+                    }}
+                  >
+                    No más consejos
+                  </button>
+                  <span class="spacer" />
+                </Show>
                 <Show when={b().action}>
-                  <button type="button" class="btn tiny primary" onClick={() => { const action = b().action!; setBubble(null); action.run(); }}>{b().action!.label}</button>
+                  <button type="button" class="btn tiny primary" onClick={() => { const action = b().action!; closeBubble(); action.run(); }}>{b().action!.label}</button>
                 </Show>
-                <Show when={b().kind === "tip"}>
-                  <button type="button" class="btn tiny" onClick={() => nextTip(true)}>Otro consejo</button>
+                <Show when={b().tipId}>
+                  <button type="button" class="btn tiny" onClick={() => showTip(false)}>Otro consejo</button>
                 </Show>
-                <button type="button" class="btn tiny" onClick={() => setBubble(null)}>Cerrar</button>
+                <button type="button" class="btn tiny" onClick={closeBubble}>Cerrar</button>
               </div>
             </div>
           )}
@@ -359,7 +458,7 @@ export function Companion() {
           pose={mood() === "sleep" ? "monday" : "poker"}
           mood={mood()}
           activity={activity()}
-          label="Gib"
+          label="Gib: haz clic para un consejo"
           onHover={(inside) => {
             setHover(inside);
             // The cursor interrupts whatever he was doing (except while he is away for coffee).
@@ -370,7 +469,7 @@ export function Companion() {
             window.clearTimeout(clickTimer);
             clicks = [];
             stopRoutine();
-            setBubble(null);
+            closeBubble();
             react("love", 1800);
           }}
         />
