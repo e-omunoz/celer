@@ -10,6 +10,7 @@ import type {
   CompletionSchema,
   ConnConfig,
   ConnSummary,
+  ConnTestReport,
   DbKind,
   HistoryEntry,
   InformixDrivers,
@@ -309,6 +310,8 @@ export const [state, setState] = createStore({
   informixGuide: null as { topic: string; message: string } | null,
   /** "Probar conexión" failed with something the guide explains: its topic. */
   testGuide: "",
+  /** "Probar conexión": every step with its time, the way it connected and, if it failed, what to do. */
+  testReport: null as ConnTestReport | null,
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
   passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
   /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
@@ -925,7 +928,7 @@ export async function moveConnection(id: string, folder: string, beforeId?: stri
 }
 
 export function openConnDialog(cfg?: ConnConfig) {
-  setState({ testOutput: "", testOk: null, testing: false, testGuide: "" });
+  setState({ testOutput: "", testOk: null, testing: false, testGuide: "", testReport: null });
   setState("connDialog", cfg ? { ...cfg, password: "" } : emptyConn(isTauri() ? "postgres" : "sqlite"));
 }
 
@@ -980,9 +983,15 @@ export async function duplicateConnection(id: string) {
 }
 
 export async function testConnection(cfg: ConnConfig) {
-  setState({ testOutput: "", testOk: null, testing: true, testGuide: "" });
+  setState({ testOutput: "", testOk: null, testing: true, testGuide: "", testReport: null });
   try {
-    setState({ testOutput: await api().testConnection(cfg), testOk: true });
+    const report = await api().testConnection(cfg);
+    const code = errorCode(report.error);
+    const summary = report.ok
+      ? [report.serverInfo, report.route ? `Vía: ${report.route}` : "", `Total: ${formatMs(report.totalMs)}`]
+      : [report.hint, plainError(report.error)];
+    setState({ testReport: report, testOutput: summary.filter(Boolean).join("\n"), testOk: report.ok, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
+    if (code?.code === "JDBC_SETUP") offerDriverHelp(report.error, () => void testConnection(cfg));
   } catch (err) {
     const message = errorText(err);
     const code = errorCode(message);

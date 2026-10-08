@@ -125,6 +125,51 @@ export interface SessionInfo {
   sessionId: string;
   database: string;
   serverInfo: string;
+  /** Time to get the session ready (login, or taking a free connection of the same settings). */
+  connectMs: number;
+  /** A free connection of the same settings was taken instead of logging in again. */
+  reused: boolean;
+}
+
+/** How a session should start: right in a database and transaction mode (no extra round trips afterwards). */
+export interface OpenSessionOptions {
+  database?: string;
+  autocommit?: boolean;
+}
+
+/** One step of "Probar conexión", timed. */
+export interface ConnTestStep {
+  /** resolve | tcp | tls | login | database */
+  id: string;
+  label: string;
+  status: "ok" | "failed" | "skipped";
+  ms: number;
+  detail: string;
+}
+
+/** "Probar conexión": the steps, the way Celer reached the server and, when it failed, what to do. */
+export interface ConnTestReport {
+  ok: boolean;
+  steps: ConnTestStep[];
+  /** Driver and protocol used ("TDS nativo · TLS obligatorio", "Automático → SQLI por JDBC · Java 21…"). */
+  route: string;
+  serverInfo: string;
+  totalMs: number;
+  /** The driver's error as it came (it may carry a code: INFORMIX_GUIDE:…, JDBC_SETUP:…). */
+  error: string;
+  /** What the error means and what to do, in plain words ("" when Celer does not know). */
+  hint: string;
+}
+
+/** A session checked (and reconnected if it had dropped). */
+export interface SessionHealth {
+  ok: boolean;
+  /** The connection had dropped and a new one took its place. */
+  reconnected: boolean;
+  /** What the session had and lost with the old connection ("" if nothing): transaction, #temp tables, SET… */
+  lost: string;
+  ms: number;
+  error: string;
 }
 
 export interface ExportOptions {

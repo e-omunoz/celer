@@ -6,8 +6,11 @@ import type {
   ExportOptions,
   FetchOutput,
   HistoryEntry,
+  ConnTestReport,
   MetaNode,
   ObjectRef,
+  OpenSessionOptions,
+  SessionHealth,
   SessionInfo,
   TableColumn,
 } from "./types";
@@ -19,9 +22,15 @@ export interface Backend {
   listConnections(): Promise<ConnSummary[]>;
   saveConnection(cfg: ConnConfig): Promise<ConnConfig>;
   reorderConnections(ids: string[]): Promise<void>;
+  /** Deletes a connection; its saved password is kept in memory until the app closes, for `restoreConnection`. */
   deleteConnection(id: string): Promise<void>;
-  testConnection(cfg: ConnConfig): Promise<string>;
-  openSession(connId: string, password?: string): Promise<SessionInfo>;
+  /** Undo of a delete: saves the connection again with the password it had. */
+  restoreConnection(cfg: ConnConfig): Promise<ConnConfig>;
+  /** "Probar conexión": every step timed. Rejects only when the connection cannot even be attempted (driver missing…). */
+  testConnection(cfg: ConnConfig): Promise<ConnTestReport>;
+  openSession(connId: string, password?: string, options?: OpenSessionOptions): Promise<SessionInfo>;
+  /** Checks a session (a cheap round trip if it has been idle, or always with `force`) and reconnects it if it dropped. */
+  checkSession(sessionId: string, force: boolean): Promise<SessionHealth>;
   closeSession(sessionId: string): Promise<void>;
   /** Closes every session of a connection (disconnect); returns how many were open. */
   closeConnectionSessions(connId: string): Promise<number>;
@@ -104,8 +113,11 @@ function tauriBackend(): Backend {
     saveConnection: (cfg) => invoke("save_connection", { cfg: { ...cfg, password: cfg.password || null } }),
     reorderConnections: (ids) => invoke("reorder_connections", { ids }),
     deleteConnection: (id) => invoke("delete_connection", { id }),
+    restoreConnection: (cfg) => invoke("restore_connection", { cfg: { ...cfg, password: cfg.password || null } }),
     testConnection: (cfg) => invoke("test_connection", { cfg }),
-    openSession: (connId, password) => invoke("open_session", { connId: connId, password: password ?? null }),
+    openSession: (connId, password, options) =>
+      invoke("open_session", { connId: connId, password: password ?? null, database: options?.database || null, autocommit: options?.autocommit ?? null }),
+    checkSession: (sessionId, force) => invoke("check_session", { sessionId: sessionId, force }),
     closeSession: (sessionId) => invoke("close_session", { sessionId: sessionId }),
     closeConnectionSessions: (connId) => invoke("close_connection_sessions", { connId }),
     execute: (sessionId, sql, fetch) => invoke("execute", { sessionId: sessionId, sql, fetch }),

@@ -375,7 +375,7 @@ function pickFile(accept: string): Promise<{ name: string; text?: string; bytes?
 }
 
 export function createDemoBackend(): Backend {
-  return {
+  const self: Backend = {
     async listConnections() {
       return summaries();
     },
@@ -414,16 +414,48 @@ export function createDemoBackend(): Backend {
         if (session.connId === id) sessions.delete(sid);
       }
     },
+    async restoreConnection(cfg) {
+      return self.saveConnection(cfg);
+    },
     async testConnection(cfg) {
+      const t0 = performance.now();
+      if (cfg.kind !== "sqlite") {
+        return {
+          ok: false,
+          steps: [],
+          route: "",
+          serverInfo: "",
+          totalMs: 0,
+          error: "En el navegador solo está disponible SQLite.",
+          hint: "Abre la aplicación de escritorio para probar conexiones a servidores.",
+        };
+      }
       const db = await databaseFor({ ...cfg, id: cfg.id || "test-tmp" });
+      const opened = performance.now();
       const version = text(query(db, "SELECT sqlite_version()")[0]?.[0]);
       if (!cfg.id) {
         db.close();
         databases.delete("test-tmp");
       }
-      return `SQLite ${version} — ${cfg.filePath || ":memory:"}\nTiempo de respuesta: 1 ms`;
+      const end = performance.now();
+      return {
+        ok: true,
+        steps: [
+          { id: "login", label: "Abrir la base", status: "ok", ms: Math.round(opened - t0), detail: cfg.filePath || ":memory:" },
+          { id: "database", label: "Consulta de prueba", status: "ok", ms: Math.round(end - opened), detail: "SELECT sqlite_version()" },
+        ],
+        route: "sql.js (demo en el navegador)",
+        serverInfo: `SQLite ${version} — ${cfg.filePath || ":memory:"}`,
+        totalMs: Math.round(end - t0),
+        error: "",
+        hint: "",
+      };
     },
-    async openSession(connId, password) {
+    async checkSession(sessionId) {
+      requireSession(sessionId);
+      return { ok: true, reconnected: false, lost: "", ms: 0, error: "" };
+    },
+    async openSession(connId, password, options) {
       const cfg = loadConns().find((item) => item.id === connId);
       if (!cfg) throw new Error("Conexión no encontrada");
       if (cfg.kind !== "sqlite" && cfg.kind !== "odbc") {
@@ -449,7 +481,10 @@ export function createDemoBackend(): Backend {
         sessionId,
         database: "main",
         serverInfo: `SQLite ${version} — ${cfg.filePath || "memoria"} (demo navegador)`,
+        connectMs: 0,
+        reused: false,
       };
+      if (options?.autocommit === false) await self.setAutocommit(sessionId, false);
       return info;
     },
     async closeSession(sessionId) {
@@ -738,4 +773,5 @@ export function createDemoBackend(): Backend {
       return () => {};
     },
   };
+  return self;
 }
