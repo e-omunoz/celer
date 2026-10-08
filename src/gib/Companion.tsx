@@ -1,5 +1,5 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
-import { activeTab, formatMs, gibEvent, openPalette, runActive, splashDone, state } from "../state";
+import { activeTab, formatMs, gibEvent, openPalette, reducedMotion, runActive, splashDone, state } from "../state";
 import { Gib, type GibActivity, type GibMood } from "./Gib";
 
 const TIPS = [
@@ -78,7 +78,6 @@ export function Companion() {
   let mouseRuns = 0;
   let clicks: number[] = [];
   const shown = new Set<string>();
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   const mode = () => state.settings.companion;
   const running = () => state.tabs.some((tab) => (tab.kind === "sql" && tab.running) || (tab.kind === "table" && tab.loading));
@@ -143,7 +142,7 @@ export function Companion() {
   const free = () =>
     mode() === "normal" &&
     splashDone() &&
-    !reducedMotion.matches &&
+    !reducedMotion() &&
     !document.hidden &&
     !running() &&
     !reaction() &&
@@ -217,7 +216,7 @@ export function Companion() {
         case "show-off": {
           setAsleep(false);
           setBubble(null);
-          if (reducedMotion.matches) {
+          if (reducedMotion()) {
             say({ text: "Con «reducir movimiento» activado en el sistema me quedo quieto. ¡Pero sigo aquí!", kind: "ok" }, 3500);
             break;
           }

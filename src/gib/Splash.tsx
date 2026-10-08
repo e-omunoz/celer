@@ -1,6 +1,6 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Mark } from "../brand/Mark";
-import { setSplashDone, setState, state } from "../state";
+import { reducedMotion, setSplashDone, setState, state } from "../state";
 import { Gib, type GibMood } from "./Gib";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -39,7 +39,7 @@ export function Splash() {
   });
 
   async function run() {
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduce = reducedMotion();
     const started = performance.now();
     while (!state.ready) await sleep(30);
     if (reduce || state.settings.companion === "off") {

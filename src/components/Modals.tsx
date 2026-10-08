@@ -337,38 +337,49 @@ function ConnectionDialog(props: { cfg: ConnConfig }) {
             </div>
           </div>
 
-          <Show when={network() || kind() === "sqlite"}>
-            <button type="button" class="disclosure" onClick={() => setAdvanced(!advanced())}>{advanced() ? "▾" : "▸"} Opciones avanzadas</button>
-            <Show when={advanced()}>
-              <div class="advanced">
-                <Show when={network() && kind() !== "informix"}>
-                  <div class="form-row">
-                    <label class="field grow">
-                      <span>Cifrado SSL/TLS</span>
-                      <select value={cfg().encryption} onChange={(event) => set("encryption", event.currentTarget.value)}>
-                        <option value="required">Obligatorio</option>
-                        <option value="login">Preferido</option>
-                        <option value="off">Desactivado</option>
-                      </select>
-                    </label>
-                    <label class="check" style={{ "align-self": "end", "padding-bottom": "6px" }}><input type="checkbox" checked={cfg().trustCert} onChange={(event) => set("trustCert", event.currentTarget.checked)} /> Confiar en el certificado</label>
-                  </div>
-                </Show>
-                <Show when={kind() === "informix"}>
-                  <label class="field">
-                    <span>Protocolo</span>
-                    <select value={cfg().informixMode} onChange={(event) => set("informixMode", event.currentTarget.value)}>
-                      <option value="drda">DRDA (IBM CLI)</option>
-                      <option value="sqli">SQLI (Client SDK / ODBC)</option>
+          <button type="button" class="disclosure" onClick={() => setAdvanced(!advanced())}>{advanced() ? "▾" : "▸"} Opciones avanzadas</button>
+          <Show when={advanced()}>
+            <div class="advanced">
+              <Show when={network() && kind() !== "informix"}>
+                <div class="form-row">
+                  <label class="field grow">
+                    <span>Cifrado SSL/TLS</span>
+                    <select value={cfg().encryption} onChange={(event) => set("encryption", event.currentTarget.value)}>
+                      <option value="required">Obligatorio</option>
+                      <option value="login">Preferido</option>
+                      <option value="off">Desactivado</option>
                     </select>
                   </label>
-                </Show>
+                  <label class="check" style={{ "align-self": "end", "padding-bottom": "6px" }}><input type="checkbox" checked={cfg().trustCert} onChange={(event) => set("trustCert", event.currentTarget.checked)} /> Confiar en el certificado</label>
+                </div>
+              </Show>
+              <Show when={kind() === "informix"}>
+                <label class="field">
+                  <span>Protocolo</span>
+                  <select value={cfg().informixMode} onChange={(event) => set("informixMode", event.currentTarget.value)}>
+                    <option value="drda">DRDA (IBM CLI)</option>
+                    <option value="sqli">SQLI (Client SDK / ODBC)</option>
+                  </select>
+                </label>
+              </Show>
+              <Show when={network() || kind() === "sqlite"}>
                 <label class="field">
                   <span>Parámetros extra</span>
                   <input value={cfg().extra} spellcheck={false} placeholder="clave=valor;clave2=valor2" onInput={(event) => set("extra", event.currentTarget.value)} />
                 </label>
-              </div>
-            </Show>
+              </Show>
+              <label class="field">
+                <span>Script al conectar <small class="muted">(se ejecuta en cada sesión nueva)</small></span>
+                <textarea
+                  class="startup-sql"
+                  rows={3}
+                  spellcheck={false}
+                  value={cfg().startupSql ?? ""}
+                  placeholder={kind() === "postgres" ? "SET search_path TO ventas, public;" : kind() === "mssql" ? "SET LOCK_TIMEOUT 5000;" : kind() === "mysql" ? "SET SESSION sql_mode = 'ANSI_QUOTES';" : "PRAGMA foreign_keys = ON;"}
+                  onInput={(event) => set("startupSql", event.currentTarget.value)}
+                />
+              </label>
+            </div>
           </Show>
 
           <Show when={state.testing || state.testOutput}>
@@ -464,6 +475,14 @@ function SettingsDialog() {
                   <option value="normal">Normal</option>
                   <option value="quiet">Silencioso</option>
                   <option value="off">Apagado</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Animaciones</span>
+                <select value={s().motion} onChange={(event) => void saveSettings({ motion: event.currentTarget.value as "system" | "reduce" | "full" })}>
+                  <option value="system">Como el sistema</option>
+                  <option value="reduce">Reducidas</option>
+                  <option value="full">Todas</option>
                 </select>
               </label>
             </div>

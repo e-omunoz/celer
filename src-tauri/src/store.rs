@@ -24,10 +24,34 @@ pub(crate) fn keyring_service() -> &'static str {
     }
 }
 
-/// Lee una credencial del servicio propio y, en desarrollo, de la copia instalada si no hay una propia.
+/// Lee una credencial del servicio propio y, en desarrollo, de la copia instalada si no hay una propia (salvo
+/// que se haya borrado en esta ejecución: borrar no debe devolver la de la copia instalada).
 pub(crate) fn keyring_get(id: &str) -> Option<String> {
     let read = |service: &str| keyring::Entry::new(service, id).and_then(|e| e.get_password()).ok();
-    read(keyring_service()).or_else(|| if keyring_service() == "Celer" { None } else { read("Celer") })
+    read(keyring_service()).or_else(|| {
+        if keyring_service() == "Celer" || dev_deleted().lock().map(|d| d.contains(id)).unwrap_or(false) {
+            None
+        } else {
+            read("Celer")
+        }
+    })
+}
+
+/// Credenciales borradas en esta ejecución (solo cuenta en desarrollo, ver `keyring_get`).
+fn dev_deleted() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static DELETED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    DELETED.get_or_init(Default::default)
+}
+
+/// Anota (o quita) una credencial borrada en esta ejecución.
+pub(crate) fn mark_deleted(id: &str, deleted: bool) {
+    if let Ok(mut set) = dev_deleted().lock() {
+        if deleted {
+            set.insert(id.to_string());
+        } else {
+            set.remove(id);
+        }
+    }
 }
 
 pub struct Store {
@@ -114,6 +138,7 @@ impl Store {
     }
 
     pub fn set_password(&self, id: &str, pwd: &str) -> Result<()> {
+        mark_deleted(id, false);
         if let Ok(e) = keyring::Entry::new(keyring_service(), id) {
             if e.set_password(pwd).is_ok() {
                 let mut map = self.secrets();
@@ -129,6 +154,7 @@ impl Store {
     }
 
     pub fn delete_password(&self, id: &str) {
+        mark_deleted(id, true);
         if let Ok(e) = keyring::Entry::new(keyring_service(), id) {
             let _ = e.delete_credential();
         }

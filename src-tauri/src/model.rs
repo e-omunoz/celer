@@ -154,6 +154,9 @@ pub struct ConnConfig {
     /// SQLite: ruta del fichero, o `:memory:` para una base en memoria.
     #[serde(default)]
     pub file_path: String,
+    /// Sentencias que se ejecutan en cada sesión nueva nada más conectar (SET search_path…, SET LOCK_TIMEOUT…).
+    #[serde(default)]
+    pub startup_sql: String,
 }
 
 impl Default for ConnConfig {
@@ -180,6 +183,7 @@ impl Default for ConnConfig {
             read_only: false,
             folder: String::new(),
             file_path: String::new(),
+            startup_sql: String::new(),
         }
     }
 }

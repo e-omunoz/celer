@@ -88,17 +88,26 @@ pub(crate) fn make_connector(
         }
         DbKind::Informix | DbKind::Odbc => Some(odbc::system_manager().to_string()),
     };
+    let startup = cfg.startup_sql.trim().to_string();
     Ok(move || -> anyhow::Result<Box<dyn Driver>> {
-        match kind {
-            DbKind::Sqlite => Ok(Box::new(sqlite::SqliteDriver::connect(cfg)?)),
-            DbKind::Mssql => Ok(Box::new(mssql::MssqlDriver::connect(cfg)?)),
-            DbKind::Postgres => Ok(Box::new(postgres::PostgresDriver::connect(cfg)?)),
-            DbKind::Mysql => Ok(Box::new(mysql::MysqlDriver::connect(cfg)?)),
+        let mut driver: Box<dyn Driver> = match kind {
+            DbKind::Sqlite => Box::new(sqlite::SqliteDriver::connect(cfg)?),
+            DbKind::Mssql => Box::new(mssql::MssqlDriver::connect(cfg)?),
+            DbKind::Postgres => Box::new(postgres::PostgresDriver::connect(cfg)?),
+            DbKind::Mysql => Box::new(mysql::MysqlDriver::connect(cfg)?),
             DbKind::Informix | DbKind::Odbc => {
                 let path = odbc_lib.unwrap_or_else(|| odbc::system_manager().to_string());
-                Ok(Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?))
+                Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
             }
+        };
+        // The connection's startup script runs on every new session, before anything else.
+        if !startup.is_empty() {
+            driver
+                .execute(&startup, 1)
+                .map_err(|e| anyhow::anyhow!("El script de inicio de la conexión falló: {e}"))?;
+            let _ = driver.close_cursor();
         }
+        Ok(driver)
     })
 }
 
@@ -492,9 +501,73 @@ fn save_json(
 #[tauri::command]
 fn read_text_file(path: String) -> CmdResult<String> {
     let bytes = std::fs::read(&path).map_err(err)?;
-    let s = String::from_utf8(bytes.clone())
-        .unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
-    Ok(s.trim_start_matches('\u{feff}').to_string())
+    Ok(decode_text(&bytes))
+}
+
+/// Texto de un fichero .sql con la codificación detectada: BOM de UTF-8 o UTF-16 (LE/BE), UTF-16 sin BOM
+/// (muchos ceros alternos, como los que guarda SSMS), UTF-8 válido y, si no, Windows-1252 (ANSI de Windows).
+fn decode_text(bytes: &[u8]) -> String {
+    let utf16 = |data: &[u8], le: bool| {
+        let units = data
+            .chunks_exact(2)
+            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&units)
+    };
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return utf16(rest, true);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return utf16(rest, false);
+    }
+    if bytes.len() >= 4 {
+        let sample = &bytes[..bytes.len().min(4096) & !1];
+        let zeros = |offset: usize| sample.iter().skip(offset).step_by(2).filter(|&&b| b == 0).count();
+        let half = sample.len() / 2;
+        if zeros(1) * 10 > half * 6 && zeros(0) * 10 < half {
+            return utf16(bytes, true);
+        }
+        if zeros(0) * 10 > half * 6 && zeros(1) * 10 < half {
+            return utf16(bytes, false);
+        }
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().map(|&b| windows_1252(b)).collect(),
+    }
+}
+
+/// Un byte de Windows-1252: igual que Latin-1 salvo 0x80–0x9F (€, comillas tipográficas, guiones…).
+fn windows_1252(b: u8) -> char {
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+    ];
+    if (0x80..0xA0).contains(&b) {
+        HIGH[(b - 0x80) as usize]
+    } else {
+        b as char
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::decode_text;
+
+    #[test]
+    fn decodes_common_encodings() {
+        assert_eq!(decode_text(b"\xEF\xBB\xBFSELECT 'a\xC3\xB1o'"), "SELECT 'año'");
+        assert_eq!(decode_text("SELECT 'año'".as_bytes()), "SELECT 'año'");
+        let le: Vec<u8> = [0xFF, 0xFE].into_iter().chain("SELECT 'ñ'".encode_utf16().flat_map(|u| u.to_le_bytes())).collect();
+        assert_eq!(decode_text(&le), "SELECT 'ñ'");
+        let be: Vec<u8> = [0xFE, 0xFF].into_iter().chain("SELECT 1".encode_utf16().flat_map(|u| u.to_be_bytes())).collect();
+        assert_eq!(decode_text(&be), "SELECT 1");
+        let no_bom: Vec<u8> = "SELECT 'año' FROM t".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        assert_eq!(decode_text(&no_bom), "SELECT 'año' FROM t");
+        assert_eq!(decode_text(b"SELECT 'a\xF1o \x80'"), "SELECT 'año €'");
+    }
 }
 
 #[tauri::command]
@@ -671,6 +744,7 @@ fn ai_key_status() -> bool {
 fn ai_key_set(key: String) -> CmdResult<()> {
     let entry = ai_key_entry()?;
     let key = key.trim();
+    store::mark_deleted(AI_KEY_ID, key.is_empty());
     if key.is_empty() {
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),

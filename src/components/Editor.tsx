@@ -109,10 +109,13 @@ const unfilteredWarning = (dialect: () => string) => ViewPlugin.fromClass(
     constructor(view: EditorView) {
       this.decorations = this.build(view);
     }
+    dialect = "";
     update(update: ViewUpdate) {
-      if (update.docChanged) this.decorations = this.build(update.view);
+      // Also when the console switches engine (quoting and comments differ).
+      if (update.docChanged || dialect() !== this.dialect) this.decorations = this.build(update.view);
     }
     build(view: EditorView): DecorationSet {
+      this.dialect = dialect();
       const text = view.state.doc.toString();
       if (text.length > 200_000) return Decoration.none;
       const builder = new RangeSetBuilder<Decoration>();
@@ -129,17 +132,20 @@ const unfilteredWarning = (dialect: () => string) => ViewPlugin.fromClass(
  * Live templates: typing a template's name (sel, ins, upd…) offers it at the top of the completion list;
  * Tab or Enter expands it, then Tab moves between its fields.
  */
-function snippetSource(get: () => Snippet[]) {
+function snippetSource(get: () => { snippets: Snippet[]; dialect: string }) {
   return (ctx: CompletionContext): CompletionResult | null => {
     const word = ctx.matchBefore(/[A-Za-z_][\w]*/);
     if (!word || (word.from === word.to && !ctx.explicit)) return null;
     const node = syntaxTree(ctx.state).resolveInner(ctx.pos, -1);
     if (/String|Comment|QuotedIdentifier/.test(node.name)) return null;
-    // Not after a dot (that is a column or table name).
+    // Not after a dot (that is a column or table name), nor where a table name goes (FROM cte⏎ is a table).
     if (ctx.state.sliceDoc(word.from - 1, word.from) === ".") return null;
+    const text = ctx.state.doc.toString();
+    const stmt = statementAround(text, ctx.pos, get().dialect);
+    if (expectAt(text.slice(stmt.start, word.from)) === "table") return null;
     const typed = word.text.toLowerCase();
     const options = get()
-      .filter((s) => s.name.toLowerCase().startsWith(typed))
+      .snippets.filter((s) => s.name.toLowerCase().startsWith(typed))
       .map((s) => snippetCompletion(s.body, { label: s.name, detail: `plantilla · ${s.description}`, type: "text", boost: s.name.toLowerCase() === typed ? 20 : 4 }));
     return options.length ? { from: word.from, options, validFor: /^[\w]*$/ } : null;
   };
@@ -335,7 +341,7 @@ export function SqlEditor(props: {
   }
 
   const completionSource = catalogCompletion(() => ({ tables: props.tables, defaultSchema: props.defaultSchema, dialect: props.kind }));
-  const templates = snippetSource(() => props.snippets ?? []);
+  const templates = snippetSource(() => ({ snippets: props.snippets ?? [], dialect: props.kind }));
 
   let linked: { from: number; to: number } | null = null;
   function setLinked(v: EditorView, next: { from: number; to: number } | null) {

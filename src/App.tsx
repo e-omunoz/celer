@@ -1,5 +1,5 @@
 import { ArrowDownToLine, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
-import { createEffect, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, onCleanup, onMount, Show, untrack } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
 import { handleGlobalKey } from "./commands";
@@ -39,7 +39,9 @@ import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./updat
 export default function App() {
   // Table tabs restored from the last session load (and connect) the first time they are shown.
   createEffect(() => {
-    if (state.ready && state.activeTabId) loadIfRestored(state.activeTabId);
+    const id = state.ready ? state.activeTabId : "";
+    // Only the active tab is tracked; the load itself must not subscribe this effect to anything else.
+    if (id) untrack(() => loadIfRestored(id));
   });
   onMount(() => {
     void boot().then(startUpdateChecks);

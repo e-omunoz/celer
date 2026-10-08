@@ -1,4 +1,4 @@
-//! Exportación de resultados a CSV, TSV, JSON, SQL (INSERT), Markdown, HTML y Excel, en streaming.
+//! Exportación de resultados a CSV, TSV, JSON, SQL (INSERT), Markdown, HTML, XML y Excel, en streaming.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -15,7 +15,7 @@ const XLSX_MAX_ROWS: u32 = 1_048_575;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExportOptions {
-    /// csv | tsv | json | sql | markdown | html | xlsx
+    /// csv | tsv | json | sql | markdown | html | xml | xlsx
     pub format: String,
     pub path: String,
     pub delimiter: String,
@@ -87,12 +87,14 @@ pub fn export(
         .map(|c| d.quote_ident(&c.name))
         .collect::<Vec<_>>()
         .join(", ");
+    // XML: one element per column, named after it when the name is a valid XML name.
+    let xml_tags = cols.iter().map(|c| xml_name(&c.name)).collect::<Vec<_>>();
     write_header(&mut sink, &cols, o)?;
     let mut total = 0u64;
     let mut rows = first.rows;
     loop {
         for r in &rows {
-            write_row(&mut sink, &cols, r, o, &sql_cols, mssql)?;
+            write_row(&mut sink, &cols, r, o, &sql_cols, &xml_tags, mssql)?;
         }
         total += rows.len() as u64;
         progress(total);
@@ -109,6 +111,7 @@ pub fn export(
             match o.format.as_str() {
                 "json" => w.write_all(b"\n]\n")?,
                 "html" => w.write_all(b"</tbody>\n</table>\n</body>\n</html>\n")?,
+                "xml" => writeln!(w, "</{}>", xml_root(&o.table_name))?,
                 "sql" if batch > 0 => w.write_all(b";\n")?,
                 _ => {}
             }
@@ -203,6 +206,9 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
                     .join(" | ");
                 writeln!(w, "| {head} |\n| {rule} |")?;
             }
+            "xml" => {
+                writeln!(w, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<{}>", xml_root(&o.table_name))?;
+            }
             "html" => {
                 w.write_all(HTML_HEAD.as_bytes())?;
                 w.write_all(b"<thead><tr>")?;
@@ -232,6 +238,7 @@ fn write_row(
     r: &[Cell],
     o: &ExportOptions,
     sql_cols: &str,
+    xml_tags: &[String],
     mssql: bool,
 ) -> Result<()> {
     match sink {
@@ -285,6 +292,18 @@ fn write_row(
             "markdown" => {
                 let line = r.iter().map(|c| md_cell(&text_of(c, if o.null_text.is_empty() { "NULL" } else { &o.null_text }))).collect::<Vec<_>>().join(" | ");
                 writeln!(w, "| {line} |")?;
+            }
+            "xml" => {
+                w.write_all(b"  <row>")?;
+                for (c, (tag, col)) in r.iter().zip(xml_tags.iter().zip(cols)) {
+                    // A column whose name is not a valid XML name keeps it in an attribute.
+                    let open = if *tag == col.name { tag.clone() } else { format!("{tag} name=\"{}\"", xml_escape(&col.name)) };
+                    match c {
+                        Cell::Null => write!(w, "<{open} null=\"true\"/>")?,
+                        _ => write!(w, "<{open}>{}</{tag}>", xml_escape(&text_of(c, "")))?,
+                    }
+                }
+                w.write_all(b"</row>\n")?;
             }
             "html" => {
                 w.write_all(b"<tr>")?;
@@ -343,6 +362,36 @@ fn md_cell(s: &str) -> String {
     s.replace('|', "\\|").replace(['\r', '\n'], " ")
 }
 
+/// Escapes text for XML and drops the control characters XML 1.0 does not allow.
+fn xml_escape(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}'))
+        .collect::<String>()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// A column name as an XML element name: kept when valid, otherwise "column" (the real name goes in an
+/// attribute).
+fn xml_name(name: &str) -> String {
+    let mut chars = name.chars();
+    let valid_start = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_');
+    let valid_rest = name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    if valid_start && valid_rest && !name.to_ascii_lowercase().starts_with("xml") {
+        name.to_string()
+    } else {
+        "column".to_string()
+    }
+}
+
+/// The root element: the table name when it is a valid XML name, else "rows".
+fn xml_root(table: &str) -> String {
+    let name = xml_name(table.rsplit('.').next().unwrap_or(table).trim_matches(['"', '`', '[', ']']));
+    if name == "column" { "rows".into() } else { name }
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -360,5 +409,17 @@ mod tests {
         assert_eq!(sql_literal(&Cell::Text("O'Hara".into()), ColKind::Text, false), "'O''Hara'");
         assert_eq!(md_cell("a|b\nc"), "a\\|b c");
         assert_eq!(html_escape("<b>&\"</b>"), "&lt;b&gt;&amp;&quot;&lt;/b&gt;");
+    }
+
+    #[test]
+    fn xml_names_and_escaping() {
+        assert_eq!(xml_name("customer_id"), "customer_id");
+        assert_eq!(xml_name("Año"), "Año");
+        assert_eq!(xml_name("first name"), "column");
+        assert_eq!(xml_name("1st"), "column");
+        assert_eq!(xml_name("xmlns"), "column");
+        assert_eq!(xml_root("public.events"), "events");
+        assert_eq!(xml_root("\"Mixed Case\""), "rows");
+        assert_eq!(xml_escape("a<b & \"c\"\u{1}"), "a&lt;b &amp; &quot;c&quot;");
     }
 }

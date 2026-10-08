@@ -145,7 +145,7 @@ await check("server-side sort from the header menu", `
 `, (v) => v === "200000");
 
 const exportsDir = outDir.replace(/\\/g, "\\\\");
-const formats = ["csv", "tsv", "json", "sql", "markdown", "html", "xlsx"];
+const formats = ["csv", "tsv", "json", "sql", "markdown", "html", "xml", "xlsx"];
 const exported = await check("export every format (streaming, 200k rows)", `
   const conns = await inv('list_connections');
   const pg = conns.find((c) => c.name === 'Postgres local');
@@ -160,7 +160,7 @@ const exported = await check("export every format (streaming, 200k rows)", `
 `, (v) => v && formats.every((f) => v[f]?.rows === 200000));
 if (exported) {
   const head = (f) => readFileSync(`${outDir}\\events.${f}`, "utf8").slice(0, 160).replace(/\r?\n/g, "⏎");
-  for (const f of ["csv", "tsv", "json", "sql", "md", "html"]) console.log(`      ${f.padEnd(4)} ${(statSync(`${outDir}\\events.${f}`).size / 1e6).toFixed(1)} MB  ${head(f)}`);
+  for (const f of ["csv", "tsv", "json", "sql", "md", "html", "xml"]) console.log(`      ${f.padEnd(4)} ${(statSync(`${outDir}\\events.${f}`).size / 1e6).toFixed(1)} MB  ${head(f)}`);
   console.log(`      xlsx ${(statSync(`${outDir}\\events.xlsx`).size / 1e6).toFixed(1)} MB  exists=${existsSync(`${outDir}\\events.xlsx`)}`);
 }
 

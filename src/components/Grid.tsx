@@ -2,7 +2,7 @@ import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-
 import { raw } from "../raw";
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
-import { cellText, isNullCell, quoteIdentFor, sqlLiteral } from "../sql";
+import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral } from "../sql";
 import { copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 
@@ -15,13 +15,17 @@ interface Pos {
   col: number;
 }
 
-export type CopyFormat = "tsv" | "tsv-head" | "csv" | "json" | "markdown" | "insert" | "in" | "where";
+export type CopyFormat = "tsv" | "tsv-head" | "csv" | "json" | "markdown" | "xml" | "insert" | "in" | "where";
 
 export interface GridProps {
   columns: ColumnInfo[];
   rows: Cell[][];
   /** Stable identity for the data set; changing it resets sort, widths and selection. */
   resetKey?: unknown;
+  /** The rows changed but not the result (a quick filter): selection and vertical scroll reset, sort and widths stay. */
+  rowsKey?: unknown;
+  /** Undo the pending changes of a row (col null) or of one cell. */
+  onRevert?: (row: number, col: number | null) => void;
   /** Tab id: long operations show the busy overlay (Gib + Cancel) over this grid. */
   busyKey?: string;
   /** Foreign-key columns: Ctrl+click or the context menu jump to the referenced row. */
@@ -773,6 +777,8 @@ export function DataGrid(props: GridProps) {
           ...rows.map((row) => `| ${cols.map((c) => (isNullCell(val(row, c)) ? "NULL" : esc(text(val(row, c))))).join(" | ")} |`),
         ].join("\n");
       }
+      case "xml":
+        return resultToText({ columns: cols.map((c) => props.columns[c]), rows: rows.map((row) => cols.map((c) => val(row, c))), hasMore: false, rowsAffected: null }, "xml", props.tableName || "rows");
       case "insert": {
         const table = props.tableName || "tabla";
         const head = names.map(ident).join(", ");
@@ -835,6 +841,7 @@ export function DataGrid(props: GridProps) {
       { label: "Copiar como CSV", run: () => copy("csv") },
       { label: "Copiar como JSON", run: () => copy("json") },
       { label: "Copiar como Markdown", run: () => copy("markdown") },
+      { label: "Copiar como XML", run: () => copy("xml") },
       { label: "Copiar como SQL INSERT", run: () => copy("insert") },
       { label: "Copiar como lista IN (…)", run: () => copy("in") },
       { label: "Copiar como WHERE", run: () => copy("where") },
@@ -868,6 +875,17 @@ export function DataGrid(props: GridProps) {
         { label: "Clonar fila", hint: "Ctrl+D", run: () => focus() && props.onClone?.(ordered()[focus()!.row]) },
         { label: many > 1 ? `Eliminar ${many} filas` : "Eliminar fila", hint: "Supr", icon: "trash", danger: true, run: () => props.onDelete?.(selectedRows()) },
       );
+      // Undo pending changes: the cell under the cursor, or its whole row (edits, deletion or a new row).
+      const at = focus();
+      const source = at ? ordered()[at.row] : undefined;
+      if (at && source !== undefined && props.onRevert) {
+        const cellEdited = props.edits?.[`${source}:${at.col}`] !== undefined;
+        const rowEdited = Object.keys(props.edits ?? {}).some((key) => key.startsWith(`${source}:`));
+        const rowDeleted = props.deleted?.includes(source) ?? false;
+        const rowNew = props.insertStart !== undefined && source >= props.insertStart;
+        if (cellEdited) items.push({ label: "Deshacer el cambio de la celda", icon: "undo", run: () => props.onRevert?.(source, at.col) });
+        if (rowEdited || rowDeleted || rowNew) items.push({ label: rowNew ? "Quitar la fila nueva" : rowDeleted ? "Restaurar la fila" : "Deshacer los cambios de la fila", icon: "undo", run: () => props.onRevert?.(source, null) });
+      }
     }
     items.push({ separator: true }, { label: "Ajustar todas las columnas", run: () => autofit() });
     if (props.onExport) items.push({ label: "Exportar…", icon: "download", run: () => props.onExport?.() });
@@ -1060,6 +1078,21 @@ export function DataGrid(props: GridProps) {
         refreshPalette();
         setWidths(measureWidths());
       },
+    ),
+  );
+
+  // A filtered view of the same result: the old selection points at other rows, so it goes; the rest stays.
+  createEffect(
+    on(
+      () => props.rowsKey,
+      () => {
+        setAnchor(null);
+        setFocus(null);
+        setEditor(null);
+        if (scroller) scroller.scrollTop = 0;
+        setScroll((current) => ({ ...current, y: 0 }));
+      },
+      { defer: true },
     ),
   );
 

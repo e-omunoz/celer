@@ -689,7 +689,7 @@ kbd {
 .busy-track.indeterminate .busy-fill { position: absolute; width: 34%; animation: busy-slide 1.25s cubic-bezier(.45, .05, .35, 1) infinite; }
 @keyframes busy-in { from { opacity: 0; } }
 @keyframes busy-slide { from { left: -34%; } to { left: 100%; } }
-@media (prefers-reduced-motion: reduce) { .busy-track.indeterminate .busy-fill { animation: none; left: 0; width: 100%; opacity: 0.5; } }
+:root[data-motion="reduce"] .busy-track.indeterminate .busy-fill { animation: none; left: 0; width: 100%; opacity: 0.5; }
 .cell-editor { position: absolute; display: flex; z-index: 5; box-shadow: var(--shadow-md); border-radius: 3px; }
 .cell-editor input { flex: 1; min-width: 0; border: 1.5px solid var(--accent); border-radius: 3px 0 0 3px; background: var(--surface); padding: 0 7px; font-family: var(--mono); font-size: 12.5px; }
 .cell-editor button { padding: 0 7px; font-size: 10.5px; font-weight: 600; border: 1.5px solid var(--accent); border-left: 0; border-radius: 0 3px 3px 0; background: var(--popover); color: var(--text-muted); }
@@ -1543,3 +1543,4 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .results-head > .tb-icon, .results-head > .btn { flex: none; }
 .results-head .result-filter { flex: 0 1 auto; min-width: 120px; }
 .results-head .result-filter input { width: 100%; min-width: 60px; max-width: 200px; }
+.startup-sql { width: 100%; resize: vertical; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }

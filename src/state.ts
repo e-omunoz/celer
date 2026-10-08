@@ -60,6 +60,8 @@ export interface SqlTab {
   lastSql: string;
   /** Increments on every successful run; the grid resets only when this changes (not when pages arrive). */
   runId: number;
+  /** The SQL that produced the current results (lastSql may be a later run that failed). */
+  resultsSql: string;
   /** Results kept aside with the pin button: they survive the next runs until closed. */
   pinned: PinnedResult[];
   /** The pinned result on show instead of the current ones (null: the current ones). */
@@ -396,6 +398,7 @@ export function applyTheme(settings: Settings = state.settings, preview?: ThemeN
   const root = document.documentElement;
   root.dataset.theme = theme;
   root.dataset.density = settings.density;
+  root.dataset.motion = reducedMotion(settings) ? "reduce" : "full";
   root.style.setProperty("--accent", settings.accent);
   root.style.fontSize = `${settings.fontSize}px`;
   if (isTauri()) {
@@ -403,6 +406,13 @@ export function applyTheme(settings: Settings = state.settings, preview?: ThemeN
       .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(LIGHT_THEMES.has(theme) ? "light" : "dark"))
       .catch(() => {});
   }
+}
+
+/** Animations kept to a minimum: the in-app setting, or the system's when it says "follow the system". */
+export function reducedMotion(settings: Settings = state.settings) {
+  if (settings.motion === "reduce") return true;
+  if (settings.motion === "full") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 export function isLightTheme() {
@@ -424,8 +434,10 @@ export async function boot() {
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (state.settings.theme === "system") applyTheme();
   });
+  let connectionsLoaded = false;
   try {
     setState("connections", await api().listConnections());
+    connectionsLoaded = true;
     setState("appInfo", await api().appInfo());
     setState("driverPath", await api().ibmDriverStatus());
   } catch (err) {
@@ -434,8 +446,9 @@ export async function boot() {
   try {
     const workspace = (await api().loadJson("workspace")) as WorkspaceFile | null;
     if (workspace?.tabs?.length) {
-      // Tables of connections that no longer exist are dropped; the rest load when first shown.
-      const known = (id: string | null) => !id || state.connections.some((conn) => conn.id === id);
+      // Tables of connections that no longer exist are dropped (only when the list did load: a failure must not
+      // lose them for good); the rest load when first shown.
+      const known = (id: string | null) => !id || !connectionsLoaded || state.connections.some((conn) => conn.id === id);
       setState(
         "tabs",
         workspace.tabs
@@ -493,6 +506,7 @@ function blankSql(id: string, connId: string | null = null, sql = "", title = "c
     completion: null,
     lastSql: "",
     runId: 0,
+    resultsSql: "",
     pinned: [],
     activePinned: null,
   };
@@ -601,6 +615,8 @@ export interface ParamAsk {
 const rememberedParams: Record<string, { values: Record<string, string>; raw: Record<string, boolean> }> = {};
 
 function askParamValues(tabId: string, names: string[], sql: string) {
+  // Only one dialog: a second ask cancels the first (its run does not happen).
+  if (state.paramAsk) answerParams(null);
   const previous = rememberedParams[tabId] ?? { values: {}, raw: {} };
   return new Promise<{ values: Record<string, string>; raw: Record<string, boolean> } | null>((resolve) =>
     setState("paramAsk", {
@@ -1121,6 +1137,7 @@ export async function runActive(mode: "statement" | "script" | "explain") {
       results: output.results,
       activeResult: firstGrid >= 0 ? firstGrid : -1,
       activePinned: null,
+      resultsSql: sql,
       messages: output.messages,
       elapsedMs: output.elapsedMs,
       inTransaction: output.inTransaction,
@@ -1363,25 +1380,41 @@ export async function switchDatabase(database: string) {
 
 // ---------------------------------------------------------------- table viewer
 
-/** Opens a new session for a table tab (connecting first if needed) and selects its database. */
-async function reopenTableSession(tabId: string) {
-  const tab = state.tabs[tabIndex(tabId)];
-  if (!tab || tab.kind !== "table") throw new Error("La pestaña ya no existe");
-  const opened = await openSessionFor(tab.connId);
-  if (!opened) throw new Error("Sin conexión");
-  if (tabIndex(tabId) < 0) {
-    void api().closeSession(opened.sessionId).catch(() => {});
-    throw new Error("La pestaña ya no existe");
-  }
-  patchTab(tabId, { sessionId: opened.sessionId });
-  if (tab.obj.database) await api().useDatabase(opened.sessionId, tab.obj.database).catch(() => {});
-  return opened.sessionId;
+/** Opens a new session for a table tab (connecting first if needed) and selects its database; one at a time. */
+const reopening = new Map<string, Promise<string>>();
+function reopenTableSession(tabId: string): Promise<string> {
+  const pending = reopening.get(tabId);
+  if (pending) return pending;
+  const job = (async () => {
+    const tab = state.tabs[tabIndex(tabId)];
+    if (!tab || tab.kind !== "table") throw new Error("La pestaña ya no existe");
+    const opened = await openSessionFor(tab.connId);
+    if (!opened) throw new Error("Sin conexión");
+    if (tabIndex(tabId) < 0) {
+      void api().closeSession(opened.sessionId).catch(() => {});
+      throw new Error("La pestaña ya no existe");
+    }
+    patchTab(tabId, { sessionId: opened.sessionId });
+    if (tab.obj.database) await api().useDatabase(opened.sessionId, tab.obj.database).catch(() => {});
+    return opened.sessionId;
+  })();
+  reopening.set(tabId, job);
+  void job.finally(() => reopening.delete(tabId)).catch(() => {});
+  return job;
 }
 
+/** A new session for a connection (connecting first if needed); null when it cannot connect. */
 async function openSessionFor(connId: string) {
   if (!state.sessions[connId]) await connect(connId);
   if (!state.sessions[connId]) return null;
-  return api().openSession(connId, state.passwords[connId]);
+  const generation = connectGeneration(connId);
+  const opened = await api().openSession(connId, state.passwords[connId]);
+  // Disconnected while it opened: the core may have closed it already.
+  if (connectGeneration(connId) !== generation || !state.sessions[connId]) {
+    void api().closeSession(opened.sessionId).catch(() => {});
+    throw new Error("La conexión se ha cerrado");
+  }
+  return opened;
 }
 
 // ---------------------------------------------------------------- foreign keys
@@ -1398,13 +1431,18 @@ const unquote = (name: string) => name.trim().replace(/^["`[]|["`\]]$/g, "");
 
 /** FK nodes of the "Claves" section: the core sends "cols → table(cols)" and the referenced table in `obj`. */
 export function foreignKeys(tab: TableTab): ForeignKey[] {
+  return parseForeignKeys(tab.keys, tab.obj);
+}
+
+/** FK nodes of the explorer ("cols → table(cols)") as foreign keys of `base`. */
+function parseForeignKeys(nodes: MetaNode[], base: ObjectRef): ForeignKey[] {
   const out: ForeignKey[] = [];
-  for (const node of tab.keys) {
+  for (const node of nodes) {
     if (node.kind !== "key" || !node.obj) continue;
     const match = /^(.*?)\s*→\s*.*?\(([^()]*)\)\s*$/.exec(node.detail ?? "");
     const columns = match ? match[1].split(",").map(unquote).filter(Boolean) : [];
     const targetColumns = match ? match[2].split(",").map(unquote).filter(Boolean) : [];
-    out.push({ name: node.name, columns, target: { ...node.obj, database: node.obj.database || tab.obj.database }, targetColumns });
+    out.push({ name: node.name, columns, target: { ...node.obj, database: node.obj.database || base.database }, targetColumns });
   }
   return out;
 }
@@ -1433,9 +1471,14 @@ export async function followForeignKey(tab: TableTab, fk: ForeignKey, row?: Reco
 export async function openTable(connId: string, obj: ObjectRef, section: TableTab["section"] = "data", filters: ColumnFilter[] = []) {
   const existing = state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
   if (existing) {
+    // A restored tab not loaded yet loads once here (with the filters, if any), not again when it is shown.
+    const restored = existing.kind === "table" && existing.restored;
+    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "" } : {}) });
     selectTab(existing.id);
     if (section !== "data") patchTab(existing.id, { section });
-    if (filters.length && (await guardDirty(existing.id))) {
+    if (restored) {
+      void reloadTable(existing.id, true);
+    } else if (filters.length && (await guardDirty(existing.id))) {
       patchTab(existing.id, { filters, where: "", section: "data" });
       void reloadTable(existing.id);
     }
@@ -1459,6 +1502,8 @@ export async function reloadTable(tabId: string, full = false) {
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "table") return;
   patchTab(tabId, { loading: true, error: "", errorAt: null, edits: {}, deleted: [], inserts: [] });
+  // Filters, WHERE, ORDER BY and sort all go through a reload: keep the workspace file in step.
+  persistSoon();
   let select = "";
   const token = tokenOf(tabId);
   try {
@@ -1504,6 +1549,8 @@ export async function reloadTable(tabId: string, full = false) {
     if (tabIndex(tabId) < 0) return;
     patchTab(tabId, {
       loading: false,
+      error: "",
+      errorAt: null,
       elapsedMs: output.elapsedMs,
       gridCols: result.columns.length ? withColumnTypes(result.columns, current.columnsMeta) : current.columnsMeta.map((col) => ({ name: col.name, typeName: col.typeName, kind: col.kind })),
       rows: result.rows,
@@ -1679,6 +1726,7 @@ export async function countTable(tabId: string) {
 
 export function setTableSection(tabId: string, section: TableTab["section"]) {
   patchTab(tabId, { section });
+  persistSoon();
 }
 
 export function tableDirty(tab: TableTab) {
@@ -1729,6 +1777,18 @@ export function insertTableRow(tabId: string, from?: number) {
     return value === null || value === undefined ? null : String(value);
   });
   patchTab(tab.id, { inserts: [...tab.inserts, row] });
+}
+
+/** Undoes pending changes: one cell's edit, or everything on a row (edits, its deletion, or the new row itself). */
+export function revertTableChange(tabId: string, row: number, col: number | null) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "table") return;
+  if (row >= tab.rows.length) {
+    if (col === null) patchTab(tabId, { inserts: tab.inserts.filter((_, offset) => tab.rows.length + offset !== row) });
+    return;
+  }
+  const edits = Object.fromEntries(Object.entries(tab.edits).filter(([key]) => (col === null ? !key.startsWith(`${row}:`) : key !== `${row}:${col}`)));
+  patchTab(tabId, { edits, ...(col === null ? { deleted: tab.deleted.filter((index) => index !== row) } : {}) });
 }
 
 export function deleteTableRows(tabId: string, rows: number[]) {
@@ -1832,12 +1892,32 @@ export function canEdit(tab: TableTab) {
 
 // ---------------------------------------------------------------- object actions
 
-export async function generateSql(connId: string, obj: ObjectRef, kind: "select" | "insert" | "update" | "delete" | "ddl" | "count") {
+export type GenerateKind = "select" | "select-join" | "insert" | "update" | "delete" | "upsert" | "drop" | "ddl" | "count";
+
+/** A :name parameter for a column (letters, digits and _; numbered when two columns clash). */
+function paramNamesFor(columns: string[]): string[] {
+  const used = new Set<string>();
+  return columns.map((name, i) => {
+    let base = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
+    if (!/^[a-z_]/.test(base)) base = `p${i + 1}${base ? `_${base}` : ""}`;
+    let candidate = base;
+    for (let n = 2; used.has(candidate); n++) candidate = `${base}${n}`;
+    used.add(candidate);
+    return `:${candidate}`;
+  });
+}
+
+/**
+ * Writes a statement for a table or view in the console (the active one of the same connection, else a new
+ * one). Values are :name parameters, so running it asks for them. DROP is written, never run.
+ */
+export async function generateSql(connId: string, obj: ObjectRef, kind: GenerateKind) {
   const opened = await openSessionFor(connId).catch((err) => {
     notify(errorText(err), "error");
     return null;
   });
   if (!opened) return;
+  const dialect = kindOf(connId);
   try {
     if (obj.database) await api().useDatabase(opened.sessionId, obj.database).catch(() => {});
     if (kind === "ddl") {
@@ -1847,21 +1927,37 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: "select"
     }
     const [columns, info] = await Promise.all([api().tableColumns(opened.sessionId, obj).catch(() => [] as TableColumn[]), api().objectSql(opened.sessionId, obj)]);
     const quoted = await api().quoteIdents(opened.sessionId, columns.map((col) => col.name));
+    const params = paramNamesFor(columns.map((col) => col.name));
     const q = info.qualified;
-    const pk = columns.map((col, index) => ({ col, index })).filter((item) => item.col.primaryKey);
-    const where = (pk.length ? pk : columns.slice(0, 1).map((col, index) => ({ col, index }))).map((item) => `${quoted[item.index]} = ?`).join("\n  AND ");
+    const indexed = columns.map((col, index) => ({ col, index }));
+    const pk = indexed.filter((item) => item.col.primaryKey);
+    const keyCols = pk.length ? pk : indexed.slice(0, 1);
+    const where = keyCols.map((item) => `${quoted[item.index]} = ${params[item.index]}`).join("\n  AND ");
+    const writable = indexed.filter((item) => !item.col.identity);
     let sql = "";
-    if (kind === "select") sql = `SELECT ${quoted.length ? quoted.join(",\n       ") : "*"}\nFROM ${q}\n${limitClause(kindOf(connId), 100)};`;
+    if (kind === "select") sql = `SELECT ${quoted.length ? quoted.join(",\n       ") : "*"}\nFROM ${q}\n${limitClause(dialect, 100)};`;
     if (kind === "count") sql = `SELECT COUNT(*) FROM ${q};`;
-    if (kind === "insert") {
-      const usable = columns.map((col, index) => ({ col, index })).filter((item) => !item.col.identity);
-      sql = `INSERT INTO ${q} (${usable.map((item) => quoted[item.index]).join(", ")})\nVALUES (${usable.map(() => "?").join(", ")});`;
-    }
+    if (kind === "insert") sql = `INSERT INTO ${q} (${writable.map((item) => quoted[item.index]).join(", ")})\nVALUES (${writable.map((item) => params[item.index]).join(", ")});`;
     if (kind === "update") {
-      const sets = columns.map((col, index) => ({ col, index })).filter((item) => !item.col.primaryKey).map((item) => `${quoted[item.index]} = ?`).join(",\n    ");
+      const sets = indexed.filter((item) => !item.col.primaryKey).map((item) => `${quoted[item.index]} = ${params[item.index]}`).join(",\n    ");
       sql = `UPDATE ${q}\nSET ${sets}\nWHERE ${where};`;
     }
     if (kind === "delete") sql = `DELETE FROM ${q}\nWHERE ${where};`;
+    if (kind === "drop") sql = `-- Revisa antes de ejecutar: borra ${obj.kind === "view" ? "la vista" : "la tabla y todos sus datos"}.\nDROP ${obj.kind === "view" ? "VIEW" : "TABLE"} ${q};`;
+    if (kind === "upsert") sql = upsertSql(dialect, q, quoted, params, writable.map((item) => item.index), keyCols.map((item) => item.index));
+    if (kind === "select-join") {
+      const base = [obj.database || opened.database || "main", obj.schema || "main", obj.kind === "view" ? "views" : "tables", obj.name, "fks"];
+      const fks = parseForeignKeys(await api().metaChildren(opened.sessionId, base).catch(() => [] as MetaNode[]), obj).filter((fk) => fk.columns.length && fk.columns.length === fk.targetColumns.length);
+      const lines = [`SELECT t0.*${fks.map((_, i) => `,\n       t${i + 1}.*`).join("")}`, `FROM ${q} t0`];
+      for (const [i, fk] of fks.entries()) {
+        const target = await api().objectSql(opened.sessionId, fk.target).then((r) => r.qualified).catch(() => fk.target.name);
+        const left = await api().quoteIdents(opened.sessionId, fk.columns);
+        const right = await api().quoteIdents(opened.sessionId, fk.targetColumns);
+        lines.push(`LEFT JOIN ${target} t${i + 1} ON ${left.map((col, j) => `t${i + 1}.${right[j]} = t0.${col}`).join(" AND ")}`);
+      }
+      sql = `${lines.join("\n")}\n${limitClause(dialect, 100)};`;
+      if (!fks.length) notify(`«${obj.name}» no tiene claves foráneas: es un SELECT normal`, "info");
+    }
     const tab = activeSql();
     if (tab && tab.connId === connId) insertIntoActive((tab.sql.trim() ? "\n\n" : "") + sql);
     else openQuery(connId, sql);
@@ -1870,6 +1966,27 @@ export async function generateSql(connId: string, obj: ObjectRef, kind: "select"
   } finally {
     void api().closeSession(opened.sessionId).catch(() => {});
   }
+}
+
+/** Insert-or-update in each engine's own syntax (the key is the primary key, or the first column). */
+function upsertSql(dialect: DbKind, q: string, quoted: string[], params: string[], cols: number[], keys: number[]) {
+  const names = cols.map((i) => quoted[i]);
+  const values = cols.map((i) => params[i]);
+  const updatable = cols.filter((i) => !keys.includes(i));
+  const keyNames = keys.map((i) => quoted[i]).join(", ");
+  if (dialect === "postgres" || dialect === "sqlite") {
+    const action = updatable.length ? `DO UPDATE SET ${updatable.map((i) => `${quoted[i]} = EXCLUDED.${quoted[i]}`).join(",\n    ")}` : "DO NOTHING";
+    return `INSERT INTO ${q} (${names.join(", ")})\nVALUES (${values.join(", ")})\nON CONFLICT (${keyNames}) ${action};`;
+  }
+  if (dialect === "mysql") {
+    const set = (updatable.length ? updatable : keys).map((i) => `${quoted[i]} = VALUES(${quoted[i]})`).join(",\n    ");
+    return `INSERT INTO ${q} (${names.join(", ")})\nVALUES (${values.join(", ")})\nON DUPLICATE KEY UPDATE ${set};`;
+  }
+  // SQL Server, Informix and others: standard MERGE from a one-row source.
+  const source = dialect === "mssql" ? `(VALUES (${values.join(", ")})) AS s (${names.join(", ")})` : `(SELECT ${cols.map((i) => `${params[i]} AS ${quoted[i]}`).join(", ")} FROM ${dialect === "informix" ? "sysmaster:sysdual" : "(VALUES (1)) AS one"}) s`;
+  const on = keys.map((i) => `t.${quoted[i]} = s.${quoted[i]}`).join(" AND ");
+  const update = updatable.length ? `\nWHEN MATCHED THEN\n  UPDATE SET ${updatable.map((i) => `${quoted[i]} = s.${quoted[i]}`).join(", ")}` : "";
+  return `MERGE INTO ${q} ${dialect === "mssql" ? "AS t" : "t"}\nUSING ${source}\nON ${on}${update}\nWHEN NOT MATCHED THEN\n  INSERT (${names.join(", ")}) VALUES (${cols.map((i) => `s.${quoted[i]}`).join(", ")});`;
 }
 
 function limitClause(kind: DbKind, n: number) {
@@ -1954,7 +2071,7 @@ export function pinResult(tabId: string) {
   const pin: PinnedResult = {
     id: uid(),
     title: `Fijado ${tab.pinned.length + 1}`,
-    sql: tab.lastSql,
+    sql: tab.resultsSql || tab.lastSql,
     at: Date.now(),
     result: { ...result, hasMore: false },
   };
@@ -2049,7 +2166,7 @@ export function openPalette(mode: "all" | "actions" | "tables" = "all") {
 
 // ---------------------------------------------------------------- export / files
 
-export type ExportFormat = "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xlsx";
+export type ExportFormat = "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xml" | "xlsx";
 
 export interface ExportSource {
   connId: string;
@@ -2061,15 +2178,18 @@ export interface ExportSource {
   tableName: string;
 }
 
-const EXT: Record<ExportFormat, string> = { csv: "csv", tsv: "tsv", json: "json", sql: "sql", markdown: "md", html: "html", xlsx: "xlsx" };
+const EXT: Record<ExportFormat, string> = { csv: "csv", tsv: "tsv", json: "json", sql: "sql", markdown: "md", html: "html", xml: "xml", xlsx: "xlsx" };
 
 function openExport(source: ExportSource) {
   setState({ exportOpen: true, exportSource: source, exportRows: 0, exportRunning: false, exportPath: "" });
   setState("exportOpts", "tableName", source.tableName);
 }
 
-/** Export the statement of the active console (the last run one, the selection or the one under the cursor). */
-export async function startExport() {
+/**
+ * Export the statement of the active console: `sqlOverride` (a pinned result's SQL), else the last run one,
+ * the selection or the one under the cursor.
+ */
+export async function startExport(sqlOverride?: string) {
   const tab = activeTab();
   if (tab?.kind === "table") return startTableExport(tab.id);
   if (!tab || tab.kind !== "sql") return;
@@ -2077,7 +2197,7 @@ export async function startExport() {
     notify("Elige una conexión", "warning");
     return;
   }
-  const sql = tab.lastSql || tab.selection.trim() || statementAt(tab.sql, tab.cursor, kindOf(tab.connId)) || tab.sql;
+  const sql = sqlOverride || tab.lastSql || tab.selection.trim() || statementAt(tab.sql, tab.cursor, kindOf(tab.connId)) || tab.sql;
   if (!sql.trim()) return;
   const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
   openExport({ connId: tab.connId!, database: tab.database, sql: sql.replace(/;\s*$/, ""), label: "el resultado de la consulta", tableName: from });

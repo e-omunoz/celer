@@ -311,8 +311,4 @@
 .companion .fx-wake { right: auto; left: -0.6em; }
 .companion .fx-sign { right: -0.2em; }
 
-@media (prefers-reduced-motion: reduce) {
-  .gib.mood-annoyed .arm-r, .gib.mood-annoyed .fore-r, .gib.mood-annoyed .arm-l,
-  .gib.mood-grumpy .arm-r, .gib.mood-grumpy .fore-r, .gib.mood-grumpy .arm-l, .gib.mood-grumpy .g-all,
-  .fx-swish i, .fx-vein { animation: none; }
-}
+:root[data-motion="reduce"] :is(.gib.mood-annoyed .arm-r, .gib.mood-annoyed .fore-r, .gib.mood-annoyed .arm-l, .gib.mood-grumpy .arm-r, .gib.mood-grumpy .fore-r, .gib.mood-grumpy .arm-l, .gib.mood-grumpy .g-all, .fx-swish i, .fx-vein) { animation: none !important; }

@@ -55,6 +55,7 @@ import {
   insertTableRow,
   kindOf,
   moveTab,
+  notify,
   now,
   openConnDialog,
   openInspector,
@@ -62,6 +63,7 @@ import {
   openQuery,
   openScript,
   pinResult,
+  revertTableChange,
   showPinned,
   unpinResult,
   reloadTable,
@@ -309,13 +311,24 @@ function SqlPane(props: { tab: SqlTab }) {
     setFilterApplied("");
   };
   onCleanup(() => window.clearTimeout(filterTimer));
+  // Lower-cased text of each row, built once per set of rows (not on every keystroke of the filter).
+  const rowTexts = createMemo(() => {
+    if (!filterOpen()) return null;
+    return (result()?.rows ?? []).map((row) => row.map((cell) => (isNullCell(cell) ? "" : cellText(cell).toLowerCase())).join("\u0000"));
+  });
   const shownRows = createMemo(() => {
     const rows = result()?.rows ?? [];
     const needle = filterApplied();
-    if (!needle) return rows;
-    return rows.filter((row) => row.some((cell) => !isNullCell(cell) && cellText(cell).toLowerCase().includes(needle)));
+    const texts = rowTexts();
+    if (!needle || !texts) return rows;
+    return rows.filter((_, i) => texts[i]?.includes(needle));
   });
   const filtering = () => Boolean(filterApplied());
+  /** Export what is on show: a pinned result re-runs its own SQL; the quick filter is a view and is not applied. */
+  const exportShown = () => {
+    if (filtering()) notify("Se exportan todas las filas", "info", "El filtro rápido solo cambia lo que ves; la exportación vuelve a leer la consulta completa.");
+    void startExport(pinned()?.sql);
+  };
   const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
   const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
 
@@ -409,7 +422,7 @@ function SqlPane(props: { tab: SqlTab }) {
       <div class="hsplit" onMouseDown={resize} />
       <div class="results">
         <div class="results-head">
-          <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
+          <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1 && !props.tab.activePinned, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
             <Show when={props.tab.error} fallback={<FileCode2 size={13} />}><CircleAlert size={13} /></Show>
             Salida
             <Show when={props.tab.output.length}><small>{props.tab.output.length}</small></Show>
@@ -471,14 +484,14 @@ function SqlPane(props: { tab: SqlTab }) {
             </Show>
           </Show>
           <button type="button" class="tb-icon" title="Volver a ejecutar" disabled={!props.tab.lastSql || props.tab.running} onClick={() => void rerunActive()}><RefreshCw size={14} /></button>
-          <button type="button" class="tb-icon" title="Exportar…" disabled={!props.tab.connId} onClick={() => void startExport()}><Download size={15} /></button>
+          <button type="button" class="tb-icon" title="Exportar…" disabled={!props.tab.connId} onClick={exportShown}><Download size={15} /></button>
           <button type="button" class="tb-icon" title="Panel de valor / registro" classList={{ on: state.inspectorOpen && state.inspectorMode !== "history" }} onClick={() => toggleInspector("value")}><PanelRight size={15} /></button>
         </div>
         <Show when={props.tab.running && !props.tab.results.length}>
           <div class="progress-bar" />
         </Show>
         <Switch>
-          <Match when={props.tab.activeResult === -1}>
+          <Match when={props.tab.activeResult === -1 && !pinned()}>
             <OutputLog tab={props.tab} />
           </Match>
           <Match when={result() && !result()!.columns.length}>
@@ -494,14 +507,15 @@ function SqlPane(props: { tab: SqlTab }) {
             <DataGrid
               columns={result()?.columns ?? []}
               rows={shownRows()}
-              resetKey={`${props.tab.runId}:${props.tab.activeResult}:${props.tab.activePinned ?? ""}:${filterApplied()}`}
+              resetKey={`${props.tab.runId}:${props.tab.activeResult}:${props.tab.activePinned ?? ""}`}
+              rowsKey={filterApplied()}
               busyKey={props.tab.id}
               // Pinned or filtered rows never page in more by themselves (a filter would keep asking for pages).
               hasMore={Boolean(result()?.hasMore) && !pinned() && !filtering()}
               loading={props.tab.running}
               dialect={kindOf(props.tab.connId)}
               onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
-              onExport={() => void startExport()}
+              onExport={exportShown}
               onActivate={(row, col) => {
                 const r = result();
                 if (!r) return;
@@ -747,6 +761,7 @@ function TablePane(props: { tab: TableTab }) {
             onDelete={(list) => deleteTableRows(props.tab.id, list)}
             onClone={(row) => insertTableRow(props.tab.id, row)}
             onInsert={() => insertTableRow(props.tab.id)}
+            onRevert={(row, col) => revertTableChange(props.tab.id, row, col)}
             sortState={props.tab.sort}
             onSortChange={(sort) => setTableSort(props.tab.id, sort)}
             onFilter={(quick) => upsertTableFilter(props.tab.id, { ...newFilter(props.tab, props.tab.gridCols[quick.col]?.name, quick.op, quick.value), enabled: true })}

@@ -67,7 +67,9 @@ export function Gib(props: {
   };
 
   onMount(() => {
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // The app sets data-motion from its settings; elsewhere (the installer) the system setting decides.
+    const motion = document.documentElement.dataset.motion;
+    const reduce = motion ? motion === "reduce" : window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduce) return;
     let timer = 0;
     const schedule = () => {

@@ -65,6 +65,8 @@ export interface ConnConfig {
   readOnly: boolean;
   folder: string;
   filePath: string;
+  /** Statements run on every new session right after connecting (SET search_path…, SET LOCK_TIMEOUT…). */
+  startupSql?: string;
 }
 
 export interface ConnSummary extends ConnConfig {
@@ -125,7 +127,7 @@ export interface SessionInfo {
 }
 
 export interface ExportOptions {
-  format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xlsx";
+  format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xml" | "xlsx";
   sqlBatch?: number;
   path: string;
   delimiter: string;
@@ -175,6 +177,8 @@ export interface Settings {
   askParams: boolean;
   /** On every connection, confirm a DELETE or UPDATE without WHERE. */
   confirmNoWhere: boolean;
+  /** Animations: follow the system setting, keep them to a minimum, or always on. */
+  motion: "system" | "reduce" | "full";
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -222,6 +226,7 @@ export const defaultSettings: Settings = {
   snippets: [],
   askParams: true,
   confirmNoWhere: true,
+  motion: "system",
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

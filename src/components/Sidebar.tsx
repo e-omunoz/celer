@@ -11,6 +11,7 @@ import {
   disconnect,
   duplicateConnection,
   generateSql,
+  kindOf,
   moveConnection,
   openConnDialog,
   openMenu,
@@ -258,6 +259,7 @@ export function Sidebar() {
         { label: "Ver DDL", icon: "code", run: () => void openTable(connId, obj, "ddl") },
         { separator: true },
         { label: "Generar SELECT", run: () => void generateSql(connId, obj, "select") },
+        { label: "Generar SELECT con JOIN de sus claves foráneas", run: () => void generateSql(connId, obj, "select-join") },
         { label: "Generar SELECT COUNT(*)", run: () => void generateSql(connId, obj, "count") },
       );
       if (obj.kind === "table") {
@@ -265,9 +267,11 @@ export function Sidebar() {
           { label: "Generar INSERT", run: () => void generateSql(connId, obj, "insert") },
           { label: "Generar UPDATE", run: () => void generateSql(connId, obj, "update") },
           { label: "Generar DELETE", run: () => void generateSql(connId, obj, "delete") },
+          { label: kindOf(connId) === "mysql" || kindOf(connId) === "postgres" || kindOf(connId) === "sqlite" ? "Generar UPSERT (insertar o actualizar)" : "Generar MERGE (insertar o actualizar)", run: () => void generateSql(connId, obj, "upsert") },
         );
       }
       items.push(
+        { label: `Generar DROP ${obj.kind === "view" ? "VIEW" : "TABLE"}`, run: () => void generateSql(connId, obj, "drop") },
         { label: "DDL en consola", run: () => void generateSql(connId, obj, "ddl") },
         { separator: true },
         { label: "Exportar datos…", icon: "download", run: () => void startObjectExport(connId, obj) },
@@ -330,6 +334,7 @@ export function Sidebar() {
         onKeyDown={onKey}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
         role="tree"
+        aria-label="Conexiones y objetos"
       >
         <div style={{ height: `${visible().total * ROW}px`, position: "relative" }}>
           <For each={visible().items}>
@@ -394,6 +399,8 @@ function TreeRow(props: {
         classList={{ selected: props.selected, connected: connected(), "drop-before": dropOver() === row.key, dragging: dragging() === conn.id }}
         style={{ "padding-left": `${indent()}px` }}
         role="treeitem"
+        aria-level={row.depth + 1}
+        aria-selected={props.selected}
         aria-expanded={Boolean(open())}
         draggable={true}
         onDragStart={(event) => {
@@ -455,6 +462,8 @@ function TreeRow(props: {
       classList={{ selected: props.selected, leaf: node.leaf }}
       style={{ "padding-left": `${indent()}px` }}
       role="treeitem"
+      aria-level={row.depth + 1}
+      aria-selected={props.selected}
       aria-expanded={node.leaf ? undefined : open()}
       draggable={draggable}
       onDragStart={(event) => {

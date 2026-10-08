@@ -25,6 +25,12 @@ function scan(sql: string, dialect: string | undefined, onCode: (index: number, 
       while (i < n && sql[i] !== "\n") i++;
       continue;
     }
+    // Informix also writes comments between braces.
+    if (c === "{" && dialect === "informix") {
+      const close = sql.indexOf("}", i + 1);
+      i = close < 0 ? n : close + 1;
+      continue;
+    }
     if (c === "/" && next === "*") {
       i += 2;
       while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
@@ -399,8 +405,34 @@ function csvEscape(value: string, delimiter: string): string {
   return value;
 }
 
-export function resultToText(result: ResultSet, format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html", table = "resultado", delimiterOverride?: string): string {
+/** An XML element name: the column name when it is valid, else "column" (the name then goes in an attribute). Same rule as the core. */
+function xmlName(name: string): string {
+  return /^[\p{L}_][\p{L}\p{N}_.-]*$/u.test(name) && !/^xml/i.test(name) ? name : "column";
+}
+
+function xmlEscape(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export function resultToText(result: ResultSet, format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xml", table = "resultado", delimiterOverride?: string): string {
   const delimiter = format === "tsv" ? "\t" : delimiterOverride ?? ",";
+  if (format === "xml") {
+    const rootName = xmlName(table.split(".").pop()!.replace(/["`[\]]/g, ""));
+    const root = rootName === "column" ? "rows" : rootName;
+    const tags = result.columns.map((col) => xmlName(col.name));
+    const rows = result.rows.map(
+      (row) =>
+        `  <row>${row
+          .map((cell, i) => {
+            const tag = tags[i];
+            const open = tag === result.columns[i].name ? tag : `${tag} name="${xmlEscape(result.columns[i].name)}"`;
+            return isNullCell(cell) ? `<${open} null="true"/>` : `<${open}>${xmlEscape(cellText(cell))}</${tag}>`;
+          })
+          .join("")}</row>`,
+    );
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<${root}>\n${rows.join("\n")}${rows.length ? "\n" : ""}</${root}>\n`;
+  }
   if (format === "markdown") {
     const esc = (value: string) => value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
     return [

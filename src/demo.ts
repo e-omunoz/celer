@@ -425,6 +425,13 @@ export function createDemoBackend(): Backend {
         throw new Error("Hace falta la contraseña");
       }
       const db = await databaseFor(cfg);
+      if (cfg.startupSql?.trim()) {
+        try {
+          db.exec(cfg.startupSql);
+        } catch (err) {
+          throw new Error(`El script de inicio de la conexión falló: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       const sessionId = crypto.randomUUID();
       sessions.set(sessionId, { connId, db, database: "main", inTx: false, cursor: null });
       const version = text(query(db, "SELECT sqlite_version()")[0]?.[0]);

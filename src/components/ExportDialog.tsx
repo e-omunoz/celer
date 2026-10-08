@@ -12,6 +12,7 @@ const FORMATS: [ExportFormat, string, string][] = [
   ["sql", "SQL", "Sentencias INSERT"],
   ["markdown", "Markdown", "Tabla para docs"],
   ["html", "HTML", "Página con tabla"],
+  ["xml", "XML", "Un elemento por fila"],
 ];
 
 type Opts = typeof state.exportOpts;
