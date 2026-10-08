@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-08
+
 ### Added
 - Drag connections between folders in the explorer (drop on a folder, on another connection to place it
   before it, or on "Sin carpeta" to take it out of its folder).
@@ -114,7 +116,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/e-omunoz/celer/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/e-omunoz/celer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/e-omunoz/celer/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/e-omunoz/celer/compare/v1.0.0...v1.1.0
