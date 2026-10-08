@@ -29,6 +29,8 @@ export interface Backend {
   fetch(sessionId: string, n: number): Promise<FetchOutput>;
   closeCursor(sessionId: string): Promise<void>;
   cancel(sessionId: string): Promise<void>;
+  /** What the session is doing besides the statement (reading the rest of a result to keep the session), or null. */
+  sessionProgress(sessionId: string): Promise<string | null>;
   setAutocommit(sessionId: string, on: boolean): Promise<boolean>;
   commit(sessionId: string): Promise<boolean>;
   rollback(sessionId: string): Promise<boolean>;
@@ -104,6 +106,7 @@ function tauriBackend(): Backend {
     fetch: (sessionId, n) => invoke("fetch", { sessionId: sessionId, n }),
     closeCursor: (sessionId) => invoke("close_cursor", { sessionId: sessionId }),
     cancel: (sessionId) => invoke("cancel", { sessionId: sessionId }),
+    sessionProgress: (sessionId) => invoke("session_progress", { sessionId: sessionId }),
     setAutocommit: (sessionId, on) => invoke("set_autocommit", { sessionId: sessionId, on }),
     commit: (sessionId) => invoke("commit", { sessionId: sessionId }),
     rollback: (sessionId) => invoke("rollback", { sessionId: sessionId }),

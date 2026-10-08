@@ -37,15 +37,22 @@ pub trait Driver: Send {
     fn server_info(&mut self) -> Result<String>;
     /// Función para cancelar desde otro hilo la operación en curso.
     fn canceller(&self) -> Canceller;
+    /// Función que dice desde otro hilo qué hace la sesión cuando no es la consulta en sí (p. ej. leer el resto de un
+    /// resultado para conservar la sesión), para mostrarlo mientras se ejecuta.
+    fn progress(&self) -> Progress {
+        Arc::new(|| None)
+    }
 }
 
 pub type Canceller = Arc<dyn Fn() + Send + Sync>;
+pub type Progress = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
 type Job = Box<dyn FnOnce(&mut dyn Driver) + Send>;
 
 pub struct SessionHandle {
     tx: mpsc::Sender<Job>,
     canceller: Canceller,
+    progress: Progress,
     pub conn_id: String,
 }
 
@@ -56,7 +63,7 @@ impl SessionHandle {
         F: FnOnce() -> Result<Box<dyn Driver>> + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<Job>();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<Canceller>>();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<(Canceller, Progress)>>();
         std::thread::Builder::new()
             .name(format!("celer-session-{conn_id}"))
             .stack_size(8 * 1024 * 1024)
@@ -73,7 +80,7 @@ impl SessionHandle {
                             return;
                         }
                     };
-                let _ = ready_tx.send(Ok(driver.canceller()));
+                let _ = ready_tx.send(Ok((driver.canceller(), driver.progress())));
                 while let Ok(job) = rx.recv() {
                     let d: &mut dyn Driver = driver.as_mut();
                     // Un pánico en un driver no debe tumbar la aplicación.
@@ -81,12 +88,13 @@ impl SessionHandle {
                 }
                 // Al cerrarse el canal se libera el driver (y la conexión) en este hilo.
             })?;
-        let canceller = ready_rx
+        let (canceller, progress) = ready_rx
             .await
             .map_err(|_| anyhow!("La sesión terminó inesperadamente"))??;
         Ok(SessionHandle {
             tx,
             canceller,
+            progress,
             conn_id,
         })
     }
@@ -114,6 +122,10 @@ impl SessionHandle {
 
     pub fn cancel(&self) {
         (self.canceller)();
+    }
+
+    pub fn progress(&self) -> Option<String> {
+        (self.progress)()
     }
 }
 

@@ -222,6 +222,20 @@ fn mssql_engine() {
     assert!(columns[0].primary_key && !columns[0].nullable);
     assert!(d.ddl(&obj).unwrap().to_uppercase().contains("CREATE TABLE"));
     assert!(d.completion("celer_test").unwrap().tables.iter().any(|t| t.name == "celer_t"));
+    // Key and index columns joined in the driver (no FOR XML PATH): order, brackets and DESC as SQL Server has them.
+    assert!(!d.server_info().unwrap().contains("Synapse"));
+    d.execute("CREATE INDEX ix_celer_t_alta ON dbo.celer_t (alta DESC, nombre); CREATE UNIQUE INDEX [ux_celer_t_mom]]] ON dbo.celer_t (momento, id)", 10).unwrap();
+    let ddl = d.ddl(&obj).unwrap();
+    assert!(ddl.contains("    [id] int NOT NULL,"), "{ddl}");
+    assert!(ddl.contains("] PRIMARY KEY CLUSTERED ([id])"), "{ddl}");
+    assert!(ddl.contains(" FOREIGN KEY ([parent_id]) REFERENCES [dbo].[celer_p] ([id])"), "{ddl}");
+    assert!(ddl.contains("\nCREATE NONCLUSTERED INDEX [ix_celer_t_alta] ON [celer_test].[dbo].[celer_t] ([alta] DESC, [nombre]);"), "{ddl}");
+    assert!(ddl.contains("\nCREATE UNIQUE NONCLUSTERED INDEX [ux_celer_t_mom]]] ON [celer_test].[dbo].[celer_t] ([momento], [id]);"), "{ddl}");
+    let indexes = d.children(&[t_node.path.clone(), vec!["indexes".into()]].concat()).unwrap();
+    let ix = indexes.iter().find(|n| n.name == "ix_celer_t_alta").expect("ix_celer_t_alta");
+    assert_eq!(ix.detail.as_deref(), Some("(alta, nombre) · nonclustered"));
+    assert!(indexes.iter().any(|n| n.detail.as_deref() == Some("(id) · PK · clustered")), "{:?}", indexes.iter().map(|n| &n.detail).collect::<Vec<_>>());
+    assert_eq!(fk.detail.as_deref(), Some("parent_id → dbo.celer_p(id)"));
 
     // Paging through a cursor, closing it half way.
     d.execute("IF OBJECT_ID('dbo.many') IS NOT NULL DROP TABLE dbo.many; SELECT TOP 3000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n INTO dbo.many FROM sys.all_objects a CROSS JOIN sys.all_objects b", 10).unwrap();
@@ -348,6 +362,78 @@ fn mssql_engine() {
     assert_eq!(d.current_database().unwrap(), "master");
     d.use_database("celer_test").unwrap();
     assert_eq!(scalar(d, "SELECT DB_NAME()"), "celer_test");
+}
+
+/// A big result left half read (a page of 500, as the interface asks for). Without session state, the next statement
+/// goes on at once in the session's reserve connection; with a transaction or #temp tables, the session keeps its
+/// connection (same SPID) and they survive.
+#[test]
+fn mssql_abandoned_cursor() {
+    let Some(mut d) = mssql("tempdb") else { return };
+    let d: &mut dyn Driver = &mut d;
+    // 200.000 rows of ~200 bytes: far more than the network buffers hold, so the server is still sending.
+    d.execute("IF OBJECT_ID('dbo.celer_big') IS NOT NULL DROP TABLE dbo.celer_big;
+               SELECT TOP 200000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n, REPLICATE(N'x', 100) AS relleno
+               INTO dbo.celer_big FROM sys.all_objects a CROSS JOIN sys.all_objects b", 10).unwrap();
+    let page = |d: &mut dyn Driver| {
+        let t0 = Instant::now();
+        let out = d.execute("SELECT n, relleno FROM dbo.celer_big", 500).unwrap();
+        assert!(out.results[0].has_more && out.results[0].rows.len() == 500);
+        t0.elapsed().as_millis()
+    };
+    for round in 1..=3 {
+        let first = page(d);
+        let t0 = Instant::now();
+        let out = d.execute("SELECT DB_NAME(), @@LANGUAGE", 10).unwrap();
+        let next = t0.elapsed().as_millis();
+        eprintln!("cursor abandonado sin estado, ronda {round}: primera página {first} ms, siguiente consulta {next} ms; {:?}", out.messages);
+        assert!(next < 500, "la consulta tras el cursor abandonado tardó {next} ms");
+        assert!(out.messages.iter().any(|m| m.contains("sigue en la conexión de reserva")), "{:?}", out.messages);
+        // Same database (and startup script) on the reserve.
+        assert_eq!(txt(&out.results[0].rows[0][0]), "tempdb");
+        // How the old connection was cut and closed, in the background, comes with the next statement.
+        let later = d.execute("SELECT 1", 10).unwrap();
+        eprintln!("  después: {:?}", later.messages);
+    }
+    // "Pedir más" still works after a cut: a new cursor pages on.
+    page(d);
+    assert_eq!(d.fetch(500).unwrap().rows.len(), 500);
+
+    // A #temp table and an open transaction (autocommit mode, BEGIN TRAN) across an abandoned cursor.
+    let spid = scalar(d, "SELECT @@SPID");
+    d.execute("CREATE TABLE #celer_tmp (id int); INSERT INTO #celer_tmp VALUES (1)", 10).unwrap();
+    let out = d.execute("BEGIN TRAN; INSERT INTO #celer_tmp VALUES (2)", 10).unwrap();
+    assert!(out.in_transaction);
+    page(d);
+    let t0 = Instant::now();
+    let out = d.execute("SELECT COUNT(*), @@TRANCOUNT, @@SPID FROM #celer_tmp", 10).unwrap();
+    eprintln!("#temp y transacción tras el cursor abandonado: {} ms; {:?}", t0.elapsed().as_millis(), out.messages);
+    let row: Vec<String> = out.results[0].rows[0].iter().map(txt).collect();
+    assert_eq!(row, vec!["2".to_string(), "1".to_string(), spid.clone()]);
+    assert!(out.in_transaction);
+    d.rollback().unwrap();
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "1");
+
+    // Manual mode keeps its transaction across a cut too.
+    d.set_autocommit(false).unwrap();
+    d.execute("INSERT INTO #celer_tmp VALUES (3)", 10).unwrap();
+    page(d);
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "2");
+    assert_eq!(scalar(d, "SELECT @@SPID"), spid);
+    assert!(!d.rollback().unwrap());
+    d.set_autocommit(true).unwrap();
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "1");
+
+    // A closed session without state of its own leaves its connection to the next one: no new login.
+    let mut a = mssql("tempdb").unwrap();
+    let spid_a = scalar(&mut a, "SELECT @@SPID");
+    drop(a);
+    let t0 = Instant::now();
+    let mut b = mssql("tempdb").unwrap();
+    let reused = t0.elapsed().as_millis();
+    assert_eq!(scalar(&mut b, "SELECT @@SPID"), spid_a, "la sesión nueva debía reutilizar la conexión libre");
+    eprintln!("sesión nueva con la conexión libre de otra: {reused} ms");
+    assert_eq!(b.current_database().unwrap(), "tempdb");
 }
 
 /// "cols → table(cols)": the format the interface reads FK nodes with.

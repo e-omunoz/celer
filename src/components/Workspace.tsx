@@ -110,6 +110,7 @@ import {
   type TableTab,
 } from "../state";
 import { engineOf, type Cell } from "../types";
+import { api } from "../api";
 import { CodeView, SqlEditor } from "./Editor";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
@@ -341,6 +342,21 @@ function SqlPane(props: { tab: SqlTab }) {
   };
   const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
   const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
+  // What the session does besides the statement (SQL Server reading the rest of the previous result to keep a
+  // transaction or #temp tables): asked every half second while it runs.
+  const [progress, setProgress] = createSignal<string | null>(null);
+  createEffect(() => {
+    const sessionId = props.tab.running ? props.tab.sessionId : null;
+    setProgress(null);
+    if (!sessionId) return;
+    const timer = window.setInterval(() => {
+      void api()
+        .sessionProgress(sessionId)
+        .then((text) => setProgress(props.tab.running ? text : null))
+        .catch(() => setProgress(null));
+    }, 500);
+    onCleanup(() => window.clearInterval(timer));
+  });
 
   function resize(event: MouseEvent) {
     event.preventDefault();
@@ -490,7 +506,7 @@ function SqlPane(props: { tab: SqlTab }) {
             </span>
           </Show>
           <Show when={props.tab.running}>
-            <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}</span>
+            <span class="running-timer"><span class="pulse" /> Ejecutando… {formatMs(elapsedLive())}<Show when={progress()}>{(text) => <> · {text()}</>}</Show></span>
           </Show>
           <Show when={!props.tab.running && !props.tab.activePlan && !props.tab.compare && result()?.columns.length}>
             <span class="muted small">
