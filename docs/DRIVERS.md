@@ -121,7 +121,12 @@ with the Java it found.
 
 - **One JVM for the whole app**, started on the first JDBC connection (or as soon as one is being opened, while the
   password is asked). Each request names its session; each session runs on its own thread in the JVM, so a slow query
-  never holds up another one, and a cancel is served at once by the reader thread with `Statement.cancel()`.
+  never holds up another one. The thread that reads Celer's requests never calls the driver.
+- **Cancel**: `Statement.cancel()` runs on a helper thread. Informix sends it as TCP urgent data, which some proxies
+  and firewalls drop; if the statement is still running 5 s later, the bridge cuts its connection
+  (`Connection.abort`, which closes the socket without waiting for the driver) and answers "Consulta cancelada (se
+  reabre la conexión…)". Celer opens a new connection on the same database (startup script and manual mode again) and
+  says so when an open transaction was lost with it.
 - **Only stdin and stdout**, never a network port. Frames have a length prefix; rows travel in batches in a compact
   binary format (a null bitmap per row and typed values: varints, doubles, UTF-8 text, bytes), with the first page
   inside the answer to the query and a 4 MB cap per batch. The protocol is described at the top of `jdbc.rs`.

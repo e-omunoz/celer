@@ -81,20 +81,41 @@ jobs:
           done
           docker exec ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster -"
           docker exec ifx bash -lc "cat \$INFORMIXDIR/etc/\$ONCONFIG | grep -E '^(DBSERVERNAME|DBSERVERALIASES)'; cat \$INFORMIXSQLHOSTS" || true
+          # JDBC goes to the container's own address: Informix's cancel is TCP urgent data, which Docker's port proxy
+          # (localhost) may drop. The cancel test also goes through localhost on purpose, to try Celer's fallback.
+          echo "IFX_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ifx)" >> "$GITHUB_ENV"
 
-      - name: Integration tests
+      # First, on an idle server: 200,000 rows over DRDA and over JDBC (a cancelled query may keep the server busy).
+      - name: Informix speed, DRDA and JDBC
         working-directory: src-tauri
+        timeout-minutes: 20
         env:
           CELER_MSSQL_TEST: "host=localhost port=1433 user=sa password=${{ env.MSSQL_PASSWORD }}"
           CELER_INFORMIX_TEST: "host=localhost port=9089 user=informix password=in4mix database=celer"
           CELER_IBM_LIB: ${{ github.workspace }}/clidriver/lib/libdb2.so
           LD_LIBRARY_PATH: ${{ github.workspace }}/clidriver/lib
-          CELER_INFORMIX_JDBC_TEST: "host=localhost port=9088 user=informix password=in4mix database=celer server=informix"
+          CELER_INFORMIX_JDBC_TEST: "host=${{ env.IFX_IP }} port=9088 user=informix password=in4mix database=celer server=informix proxied=localhost"
           CELER_JAVA: ${{ env.JAVA_HOME }}/bin/java
           CELER_JDBC_JARS: ${{ github.workspace }}/jdbc/jdbc-15.0.1.4.jar:${{ github.workspace }}/jdbc/bson-3.8.0.jar
           CELER_REQUIRE_BRIDGE: "1"
           CELER_NODE: node
-        run: cargo test --lib engine_tests -- --nocapture --test-threads=1
+        run: cargo test --lib engine_tests::informix_speed -- --exact --nocapture --test-threads=1
+
+      # A test that hangs prints the JDBC bridge's threads (jcmd) and fails before the step's timeout.
+      - name: Integration tests
+        working-directory: src-tauri
+        timeout-minutes: 20
+        env:
+          CELER_MSSQL_TEST: "host=localhost port=1433 user=sa password=${{ env.MSSQL_PASSWORD }}"
+          CELER_INFORMIX_TEST: "host=localhost port=9089 user=informix password=in4mix database=celer"
+          CELER_IBM_LIB: ${{ github.workspace }}/clidriver/lib/libdb2.so
+          LD_LIBRARY_PATH: ${{ github.workspace }}/clidriver/lib
+          CELER_INFORMIX_JDBC_TEST: "host=${{ env.IFX_IP }} port=9088 user=informix password=in4mix database=celer server=informix proxied=localhost"
+          CELER_JAVA: ${{ env.JAVA_HOME }}/bin/java
+          CELER_JDBC_JARS: ${{ github.workspace }}/jdbc/jdbc-15.0.1.4.jar:${{ github.workspace }}/jdbc/bson-3.8.0.jar
+          CELER_REQUIRE_BRIDGE: "1"
+          CELER_NODE: node
+        run: cargo test --lib engine_tests -- --skip informix_speed --nocapture --test-threads=1
 
       - name: Execution plans and server logs
         if: always()

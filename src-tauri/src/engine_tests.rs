@@ -138,7 +138,39 @@ fn result_set(d: &mut dyn Driver, sql: &str) -> ResultSet {
     ResultSet { columns, rows, has_more: false, rows_affected: None }
 }
 
+/// A test that hangs fails instead: after `secs` it prints the JDBC bridge's threads (if it runs) and ends the process.
+struct Watchdog(Option<std::sync::mpsc::Sender<()>>);
+
+fn watchdog(what: &'static str, secs: u64) -> Watchdog {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(Duration::from_secs(secs)) {
+            eprintln!("\n✗ {what}: sin respuesta en {secs} s");
+            dump_bridge_threads();
+            std::process::abort();
+        }
+    });
+    Watchdog(Some(tx))
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// `jcmd <pid> Thread.print` on the bridge's JVM, with the JDK of CELER_JAVA.
+fn dump_bridge_threads() {
+    let (Some(pid), Ok(java)) = (crate::jdbc::bridge_pid(), std::env::var("CELER_JAVA")) else { return };
+    let jcmd = std::path::Path::new(&java).with_file_name(if cfg!(windows) { "jcmd.exe" } else { "jcmd" });
+    eprintln!("Hilos de la JVM del puente ({pid}):");
+    let _ = Command::new(jcmd).args([pid.to_string().as_str(), "Thread.print"]).status();
+}
+
 fn assert_cancel(d: &mut dyn Driver, slow_sql: &str) {
+    let _guard = watchdog("cancelar una consulta", 120);
     let cancel = d.canceller();
     let t = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(800));
@@ -147,6 +179,7 @@ fn assert_cancel(d: &mut dyn Driver, slow_sql: &str) {
     let t0 = Instant::now();
     let r = d.execute(slow_sql, 10);
     t.join().unwrap();
+    println!("cancelar: la consulta paró {:?} después de cancelarla → {}", t0.elapsed().saturating_sub(Duration::from_millis(800)), r.as_ref().err().map(|e| e.to_string()).unwrap_or_default().replace('\n', " · "));
     assert!(r.is_err(), "la consulta lenta debía cancelarse");
     assert!(t0.elapsed() < Duration::from_secs(15), "cancelar tardó {:?}", t0.elapsed());
     // The session is usable again.
@@ -472,6 +505,61 @@ fn informix_jdbc_engine() {
     assert!(rows.iter().any(|r| r.iter().all(|c| matches!(c, Cell::Null))), "a row of NULLs");
     drop(d);
     informix_suite("JDBC", cfg, &jdbc_connect(rt));
+}
+
+/// Two JDBC sessions: while one is being cancelled (the bridge may have to cut its connection), the other keeps
+/// answering; the cancelled one works again afterwards, and a transaction lost with a cut connection is reported.
+/// `proxied` reaches the server through Docker's port proxy, which may drop the TCP urgent data of Informix's cancel.
+#[test]
+fn informix_jdbc_sessions() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut slow_cfg = cfg.clone();
+    if let Some(proxied) = spec("CELER_INFORMIX_JDBC_TEST").map(|s| get(&s, "proxied")).filter(|h| !h.is_empty()) {
+        slow_cfg.host = proxied;
+    }
+    let connect = jdbc_connect(rt);
+    let mut a = connect(slow_cfg).expect("sesión A");
+    let mut b = connect(cfg).expect("sesión B");
+    let _guard = watchdog("dos sesiones JDBC", 180);
+    a.execute("DROP TABLE IF EXISTS jtx; CREATE TABLE jtx (n INT)", 1).unwrap();
+    a.set_autocommit(false).unwrap();
+    a.execute("INSERT INTO jtx VALUES (1)", 1).unwrap();
+    let cancel = a.canceller();
+    let worker = std::thread::spawn(move || {
+        let r = a.execute("SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e", 10).map(|_| ());
+        (a, r, Instant::now())
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    let cancelled_at = Instant::now();
+    cancel();
+    // B answers all the while.
+    let mut slowest = Duration::ZERO;
+    let mut answers = 0;
+    while !worker.is_finished() && cancelled_at.elapsed() < Duration::from_secs(30) {
+        let t = Instant::now();
+        assert_eq!(scalar(b.as_mut(), "SELECT COUNT(*) FROM systables WHERE tabid = 1"), "1");
+        slowest = slowest.max(t.elapsed());
+        answers += 1;
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (mut a, r, ended) = worker.join().unwrap();
+    let err = r.expect_err("la consulta lenta debía cancelarse").to_string();
+    let stopped = ended.duration_since(cancelled_at);
+    let cut = err.contains("se reabre la conexión");
+    println!(
+        "JDBC cancelar: paró en {stopped:?} ({}); la otra sesión respondió {answers} veces mientras, la más lenta en {slowest:?}\n  {}",
+        if cut { "el servidor no obedeció: conexión cortada y reabierta" } else { "cancelada por el servidor" },
+        err.replace('\n', " · ")
+    );
+    assert!(stopped < Duration::from_secs(15), "cancelar tardó {stopped:?}");
+    assert!(answers > 0 && slowest < Duration::from_secs(3), "la otra sesión no respondió a tiempo ({answers}, {slowest:?})");
+    if cut {
+        assert!(err.contains("transacción"), "se perdió una transacción abierta y debe decirlo: {err}");
+    }
+    // A works again (a new connection when it was cut: the insert is gone either way after a rollback).
+    a.rollback().ok();
+    assert_eq!(scalar(a.as_mut(), "SELECT COUNT(*) FROM jtx"), "0");
+    a.set_autocommit(true).unwrap();
 }
 
 fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {

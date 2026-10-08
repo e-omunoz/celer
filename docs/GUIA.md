@@ -177,6 +177,11 @@ y carga el driver.
 Java se arranca una sola vez para todas las conexiones JDBC (mientras escribes la contraseña) y no abre ningún puerto:
 habla con Celer por su entrada y salida estándar.
 
+**Detener una consulta** funciona como en los demás motores. Si el servidor no la detiene en 5 segundos (algunos
+proxies y cortafuegos se comen el aviso de cancelación de Informix), Celer corta esa conexión y abre otra en la misma
+base de datos; si había una transacción abierta, avisa de que sus cambios se han deshecho. Las demás pestañas no se
+enteran.
+
 ### Client SDK (ODBC)
 
 No hace falta si conectas por JDBC. Si prefieres el driver ODBC:
