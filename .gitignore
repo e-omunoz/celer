@@ -34,3 +34,6 @@ installer/src-tauri/gen/schemas/
 # Local Claude Code session files
 .claude/settings.local.json
 .autocommit-pause
+
+# Macro review scratch output (screenshots, downloads)
+review-out/
