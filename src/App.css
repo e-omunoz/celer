@@ -546,6 +546,27 @@ kbd {
 .tree-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 36px 16px; color: var(--text-muted); text-align: center; }
 .tree-empty p { margin: 0; }
 .tree-empty small { color: var(--text-faint); }
+/* Explorer management (src/components/Sidebar.tsx, src/connManage.ts): nested folders, favourites, rename in place,
+   quick filters. */
+.tree-row.folder-row { color: var(--text); }
+.tree-row.folder-row .tree-name { font-weight: 500; }
+.tree-row.folder-row.drop-into { background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.tree-row.folder-row.dragging { opacity: 0.45; }
+.tree-row.root-drop { color: var(--text-faint); font-style: italic; }
+.tree-row.section-row { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+.section-star { flex: none; color: var(--warning); fill: currentColor; }
+.tree-row.conn.alias { font-weight: 400; }
+.fav-star { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; color: var(--text-faint); opacity: 0; transition: opacity var(--dur-fast); }
+.fav-star:hover { background: var(--hover); color: var(--text); }
+.tree-row:hover .fav-star, .tree-row.selected .fav-star { opacity: 1; }
+.fav-star.on { opacity: 1; color: var(--warning); }
+.fav-star.on svg { fill: currentColor; }
+.tree-rename { flex: 1; min-width: 0; height: 20px; padding: 0 4px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--accent); border-radius: 4px; outline: none; }
+.quick-filters { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 8px 6px; }
+.qf { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); font-size: 11.5px; transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast); }
+.qf:hover { background: var(--hover); color: var(--text); }
+.qf.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text, var(--accent)); }
+.tree-empty.small { padding: 16px; gap: 8px; }
 
 /* ============================================================================
    Center: tabs and panes
