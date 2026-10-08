@@ -6,6 +6,17 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **SQL Server**: the DDL of a table failed on Azure Synapse dedicated SQL pool ("Parse error … Incorrect syntax near 'FOR'", code 103010). Index and key columns are no longer joined with `FOR XML PATH`, which Synapse, PDW and Fabric lack; the explorer's "Índices" and "Claves foráneas" too. Same result on SQL Server.
+
+### Added
+- **Azure Synapse dedicated SQL pool / PDW**, recognised on connect (`SERVERPROPERTY('EngineEdition')`) and named in the server description:
+  - table DDL with its distribution (`HASH`, `ROUND_ROBIN`, `REPLICATE`) and storage (`CLUSTERED COLUMNSTORE INDEX` with its `ORDER`, `HEAP`, `CLUSTERED INDEX`), primary and unique keys `NOT ENFORCED`, no foreign keys;
+  - execution plan through `EXPLAIN`: the distributed steps, with a warning on big data movements;
+  - server activity from `sys.dm_pdw_exec_sessions` and `sys.dm_pdw_exec_requests`; "Terminar sesión" runs `KILL 'SID…'`;
+  - the explorer leaves out what Synapse lacks (foreign keys, triggers, synonyms, sequences), and syntax Synapse rejects says so instead of showing the parser's raw error.
+- **Fabric Warehouse / Synapse serverless**: table DDL with `IDENTITY` without seed and keys `NOT ENFORCED`.
+
 ## [2.0.1] - 2026-10-08
 
 ### Fixed
