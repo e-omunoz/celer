@@ -7,7 +7,9 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- **SQL Server**: running a statement after a big result left half read (the first page of 500) no longer waits up to 3 s for the rest of it and then reconnects. The result is cut with the TDS `ATTENTION` signal, as mssql-jdbc does, and the session stays on the same connection, with its transaction, `#temp` tables and `SET` options. When the cut is slow and the session has nothing of its own to keep, it goes on in a free connection and the old one finishes in the background.
+- **SQL Server**: running a statement after a big result left half read (the first page of 500) no longer waits up to 3 s for the rest of it and then reconnects, losing the session:
+  - a session with nothing of its own goes on at once in its reserve connection, opened in the background while the result was open (same database, startup script applied); the old one is cut with the TDS `ATTENTION` signal and closed in the background;
+  - a session with an open transaction, the manual transaction mode, `#temp` tables or `SET` options of its own keeps its connection: the rest is read, with its progress next to the running time, and "Detener" is the only way to cut it (then the session is lost).
 - **SQL Server**: a query whose server took more than 30 s to answer failed with a time-out from the driver; it now runs until it ends or is cancelled.
 - **Azure Synapse dedicated SQL pool**:
   - generated `SELECT`s use `TOP` (Synapse has no `OFFSET … FETCH`);
