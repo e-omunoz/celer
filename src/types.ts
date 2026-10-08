@@ -231,6 +231,16 @@ export interface Settings {
   motion: "system" | "reduce" | "full";
   /** Shortcuts the user changed, per command id (keymap.ts); an empty list leaves the command without one. */
   keymap: Record<string, string[]>;
+  /** Explorer: folders the user created, shown even when empty ("/" between nested levels: "Clientes/Egarsat"). */
+  connFolders: string[];
+  /** Explorer: folders shown closed. */
+  collapsedFolders: string[];
+  /** Explorer: connections in the order they were placed (manual) or by name. */
+  connSort: "manual" | "alpha";
+  /** Explorer: favourite connections (a star, and the "Favoritas" section on top). */
+  favoriteConns: string[];
+  /** Explorer: the connections connected to last, newest first. */
+  recentConns: { id: string; at: number }[];
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -282,6 +292,11 @@ export const defaultSettings: Settings = {
   confirmNoWhere: true,
   motion: "system",
   keymap: {},
+  connFolders: [],
+  collapsedFolders: [],
+  connSort: "manual",
+  favoriteConns: [],
+  recentConns: [],
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
