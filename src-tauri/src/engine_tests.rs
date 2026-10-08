@@ -222,6 +222,20 @@ fn mssql_engine() {
     assert!(columns[0].primary_key && !columns[0].nullable);
     assert!(d.ddl(&obj).unwrap().to_uppercase().contains("CREATE TABLE"));
     assert!(d.completion("celer_test").unwrap().tables.iter().any(|t| t.name == "celer_t"));
+    // Key and index columns joined in the driver (no FOR XML PATH): order, brackets and DESC as SQL Server has them.
+    assert!(!d.server_info().unwrap().contains("Synapse"));
+    d.execute("CREATE INDEX ix_celer_t_alta ON dbo.celer_t (alta DESC, nombre); CREATE UNIQUE INDEX [ux_celer_t_mom]]] ON dbo.celer_t (momento, id)", 10).unwrap();
+    let ddl = d.ddl(&obj).unwrap();
+    assert!(ddl.contains("    [id] int NOT NULL,"), "{ddl}");
+    assert!(ddl.contains("] PRIMARY KEY CLUSTERED ([id])"), "{ddl}");
+    assert!(ddl.contains(" FOREIGN KEY ([parent_id]) REFERENCES [dbo].[celer_p] ([id])"), "{ddl}");
+    assert!(ddl.contains("\nCREATE NONCLUSTERED INDEX [ix_celer_t_alta] ON [celer_test].[dbo].[celer_t] ([alta] DESC, [nombre]);"), "{ddl}");
+    assert!(ddl.contains("\nCREATE UNIQUE NONCLUSTERED INDEX [ux_celer_t_mom]]] ON [celer_test].[dbo].[celer_t] ([momento], [id]);"), "{ddl}");
+    let indexes = d.children(&[t_node.path.clone(), vec!["indexes".into()]].concat()).unwrap();
+    let ix = indexes.iter().find(|n| n.name == "ix_celer_t_alta").expect("ix_celer_t_alta");
+    assert_eq!(ix.detail.as_deref(), Some("(alta, nombre) · nonclustered"));
+    assert!(indexes.iter().any(|n| n.detail.as_deref() == Some("(id) · PK · clustered")), "{:?}", indexes.iter().map(|n| &n.detail).collect::<Vec<_>>());
+    assert_eq!(fk.detail.as_deref(), Some("parent_id → dbo.celer_p(id)"));
 
     // Paging through a cursor, closing it half way.
     d.execute("IF OBJECT_ID('dbo.many') IS NOT NULL DROP TABLE dbo.many; SELECT TOP 3000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n INTO dbo.many FROM sys.all_objects a CROSS JOIN sys.all_objects b", 10).unwrap();
