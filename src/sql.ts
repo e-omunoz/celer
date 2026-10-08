@@ -478,6 +478,22 @@ function xmlEscape(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Names made unique for JSON keys: a repeated name (a join's two `id`) gets _2, _3… (skipping names already taken). */
+export function uniqueNames(names: string[]): string[] {
+  const taken = new Set(names);
+  const seen = new Set<string>();
+  return names.map((name) => {
+    if (!seen.has(name)) {
+      seen.add(name);
+      return name;
+    }
+    let n = 2;
+    while (taken.has(`${name}_${n}`)) n++;
+    taken.add(`${name}_${n}`);
+    return `${name}_${n}`;
+  });
+}
+
 export function resultToText(result: ResultSet, format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xml", table = "resultado", delimiterOverride?: string): string {
   const delimiter = format === "tsv" ? "\t" : delimiterOverride ?? ",";
   if (format === "xml") {
@@ -511,10 +527,11 @@ export function resultToText(result: ResultSet, format: "csv" | "tsv" | "json" |
     return `<!doctype html><meta charset="utf-8"><table border="1" cellpadding="4"><thead><tr>${head}</tr></thead><tbody>\n${body}\n</tbody></table>`;
   }
   if (format === "json") {
+    const keys = uniqueNames(result.columns.map((col) => col.name));
     const objects = result.rows.map((row) => {
       const o: Record<string, Cell> = {};
-      result.columns.forEach((col, i) => {
-        o[col.name] = row[i] ?? null;
+      keys.forEach((key, i) => {
+        o[key] = row[i] ?? null;
       });
       return o;
     });

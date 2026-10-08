@@ -3,7 +3,7 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show, untrack 
 import { raw } from "../raw";
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
-import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral } from "../sql";
+import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
 import { copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
@@ -975,12 +975,14 @@ export function DataGrid(props: GridProps) {
         const esc = (value: string) => (/[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
         return [names.map(esc).join(","), ...rows.map((row) => cols.map((c) => esc(text(val(row, c)))).join(","))].join("\n");
       }
-      case "json":
+      case "json": {
+        const keys = uniqueNames(names);
         return JSON.stringify(
-          rows.map((row) => Object.fromEntries(cols.map((c) => [props.columns[c].name, val(row, c) ?? null]))),
+          rows.map((row) => Object.fromEntries(cols.map((c, i) => [keys[i], val(row, c) ?? null]))),
           null,
           2,
         );
+      }
       case "markdown": {
         const esc = (value: string) => value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
         return [

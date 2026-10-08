@@ -1,7 +1,8 @@
-// Checks for what a console export reads (src/sql.ts exportStatement):
+// Checks for what a console export reads and writes (src/sql.ts exportStatement, uniqueNames):
 //   node --experimental-strip-types dev/export-check.ts
 import assert from "node:assert/strict";
-import { exportStatement, isReadOnly } from "../src/sql.ts";
+import { exportStatement, isReadOnly, resultToText, uniqueNames } from "../src/sql.ts";
+import type { ColumnInfo } from "../src/types.ts";
 
 // A script: only the SELECT behind the result on show, never its writes.
 const script = "create table t(x int); insert into t values (1); select count(*) from t;";
@@ -23,5 +24,14 @@ assert.ok(!isReadOnly("select * into copia from t", "postgres"));
 assert.ok(!isReadOnly("select * from t into outfile '/tmp/x'", "mysql"));
 assert.ok(!isReadOnly("set search_path = x", "postgres"));
 assert.ok(!isReadOnly("drop table t", "postgres"));
+
+// JSON keys: columns that share a name all appear.
+assert.deepEqual(uniqueNames(["id", "name", "id", "id"]), ["id", "name", "id_2", "id_3"]);
+assert.deepEqual(uniqueNames(["id", "id", "id_2"]), ["id", "id_3", "id_2"]);
+const joined = resultToText(
+  { columns: [{ name: "id", typeName: "int", kind: "number" }, { name: "id", typeName: "int", kind: "number" }] as ColumnInfo[], rows: [[1, 2]], hasMore: false, rowsAffected: null },
+  "json",
+);
+assert.deepEqual(JSON.parse(joined), [{ id: 1, id_2: 2 }]);
 
 console.log("export-check: ok");

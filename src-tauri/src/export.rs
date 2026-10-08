@@ -67,7 +67,14 @@ pub fn export(
     let Some(first) = out.results.into_iter().find(|r| !r.columns.is_empty()) else {
         bail!("La consulta no devuelve filas para exportar");
     };
-    let cols = first.columns;
+    let mut cols = first.columns;
+    // JSON: one key per column, so columns that share a name (a join's two `id`) become id, id_2…
+    if o.format == "json" {
+        let keys = unique_names(cols.iter().map(|c| c.name.as_str()));
+        for (c, key) in cols.iter_mut().zip(keys) {
+            c.name = key;
+        }
+    }
     let mut has_more = first.has_more;
     let mut sink = match o.format.as_str() {
         "xlsx" => Sink::Xlsx {
@@ -146,6 +153,28 @@ fn text_of(c: &Cell, null_text: &str) -> String {
         Cell::Num(f) => f.to_string(),
         Cell::Text(s) => s.clone(),
     }
+}
+
+/// The names made unique: a repeated name gets `_2`, `_3`… (skipping names already taken).
+fn unique_names<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let names: Vec<&str> = names.collect();
+    let mut taken: std::collections::HashSet<String> = names.iter().map(|n| n.to_string()).collect();
+    let mut seen = std::collections::HashSet::new();
+    names
+        .iter()
+        .map(|&name| {
+            if seen.insert(name) {
+                return name.to_string();
+            }
+            let mut n = 2;
+            while taken.contains(&format!("{name}_{n}")) {
+                n += 1;
+            }
+            let key = format!("{name}_{n}");
+            taken.insert(key.clone());
+            key
+        })
+        .collect()
 }
 
 fn json_value(c: &Cell) -> serde_json::Value {
@@ -434,5 +463,12 @@ mod tests {
         assert_eq!(xml_root("public.events"), "events");
         assert_eq!(xml_root("\"Mixed Case\""), "rows");
         assert_eq!(xml_escape("a<b & \"c\"\u{1}"), "a&lt;b &amp; &quot;c&quot;");
+    }
+
+    #[test]
+    fn json_keys_are_unique() {
+        assert_eq!(unique_names(["id", "name", "id", "id"].into_iter()), ["id", "name", "id_2", "id_3"]);
+        assert_eq!(unique_names(["id", "id", "id_2"].into_iter()), ["id", "id_3", "id_2"]);
+        assert_eq!(unique_names(["a", "b"].into_iter()), ["a", "b"]);
     }
 }
