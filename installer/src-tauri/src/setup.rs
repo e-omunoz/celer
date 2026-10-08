@@ -115,6 +115,9 @@ pub struct Layout {
     pub desktop_lnk: PathBuf,
     /// Datos de usuario de la app; solo se borran si el usuario lo pide.
     pub data_dirs: Vec<PathBuf>,
+    /// Carpetas donde una desinstalación anterior pudo dejar su `uninstall.exe` (la carpeta por defecto): la
+    /// siguiente instalación lo retira.
+    pub leftover_dirs: Vec<PathBuf>,
     pub sys: SysDirs,
 }
 
@@ -143,6 +146,7 @@ impl Layout {
             start_menu_lnk: programs.join("Celer.lnk"),
             desktop_lnk: desktop.join("Celer.lnk"),
             data_dirs,
+            leftover_dirs: vec![default_dir()],
             sys: SysDirs::real(),
         }
     }
@@ -454,6 +458,20 @@ fn remove_file_if_exists(p: &Path) -> io::Result<()> {
     }
 }
 
+/// ¿`dir` es lo que deja una desinstalación: `uninstall.exe` sin `celer.exe`?
+pub fn is_leftover(dir: &Path) -> bool {
+    uninstaller_path(dir).is_file() && !exe_path(dir).exists()
+}
+
+/// Retira el `uninstall.exe` que dejó una desinstalación anterior (y la carpeta, si queda vacía).
+pub fn remove_leftover(dir: &Path) -> bool {
+    if !is_leftover(dir) {
+        return false;
+    }
+    remove_old_install(dir);
+    !uninstaller_path(dir).exists()
+}
+
 /// Quita los archivos conocidos de una instalación anterior en otra carpeta (best effort).
 fn remove_old_install(dir: &Path) {
     for f in [APP_EXE, UNINSTALL_EXE, "celer.exe.partial", "uninstall.exe.partial"] {
@@ -637,6 +655,9 @@ pub fn install(
     if let Some(od) = &old_dir {
         remove_old_install(od);
     }
+    for leftover in layout.leftover_dirs.iter().filter(|d| !same_path(d, &dir)) {
+        remove_leftover(leftover);
+    }
     if assoc_changed {
         win::notify_assoc_changed();
     }
@@ -686,10 +707,16 @@ fn extract(payload: &Payload, dest: &Path, progress: ProgressFn) -> Result<(), S
 
 // ---------------------------------------------------------------- desinstalar
 
-/// Resultado de desinstalar: si el desinstalador en ejecución debe borrarse al salir.
+/// Resultado de desinstalar.
+///
+/// Windows no deja borrar un ejecutable mientras corre, y `uninstall.exe` es el que está desinstalando. No se programa
+/// ningún borrado a escondidas (ni un `cmd` oculto que reintente `del`, ni `MoveFileEx` al reiniciar, que exige
+/// administrador, ni una copia en %TEMP%): `uninstall.exe` se queda en su carpeta, la pantalla final lo dice y la
+/// siguiente instalación de Celer lo retira (`remove_leftover`).
 #[derive(Debug, Default)]
 pub struct UninstallOutcome {
-    pub pending_self_delete: Option<(PathBuf, PathBuf)>, // (uninstall.exe, carpeta)
+    /// `uninstall.exe` que sigue en la carpeta porque es el proceso en ejecución.
+    pub left_behind: Option<PathBuf>,
 }
 
 /// Carpeta a desinstalar: la del propio `uninstall.exe` si está junto a `celer.exe`
@@ -757,38 +784,13 @@ pub fn uninstall(
     let uninst = uninstaller_path(&dir);
     let mut outcome = UninstallOutcome::default();
     if same_path(current_exe, &uninst) {
-        outcome.pending_self_delete = Some((uninst, dir.clone()));
+        outcome.left_behind = Some(uninst);
     } else {
         let _ = remove_file_if_exists(&uninst);
         let _ = fs::remove_dir(&dir); // solo si quedó vacía
     }
     report(progress, Step::Finish, 100.0, "Listo");
     Ok(outcome)
-}
-
-/// Lanza un `cmd` oculto que espera a que este proceso termine y borra `uninstall.exe`
-/// y la carpeta (solo si está vacía). Reintenta durante ~30 s.
-pub fn spawn_self_delete(exe: &Path, dir: &Path) -> io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    // Solo CREATE_NO_WINDOW: consola oculta que heredan `ping`/`del` (con DETACHED_PROCESS
-    // cmd se queda sin consola y sus hijos de consola fallan o abren ventana).
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    let (e, d) = (exe.display(), dir.display());
-    let script = format!(
-        "/d /c for /l %i in (1,1,30) do (ping -n 2 127.0.0.1 >nul & del /f /q \"{e}\" >nul 2>&1 & \
-         if not exist \"{e}\" (rmdir \"{d}\" >nul 2>&1 & exit))"
-    );
-    let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-    std::process::Command::new(system.join(r"System32\cmd.exe"))
-        .raw_arg(script)
-        .current_dir(&system) // no bloquear la carpeta que se va a borrar
-        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
 }
 
 /// Arranca Celer desacoplado del instalador.
@@ -931,6 +933,35 @@ mod tests {
     }
 
     #[test]
+    fn leftover_uninstaller_is_removed_only_alone() {
+        let base = std::env::temp_dir().join(format!("celer-setup-leftover-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        // Solo uninstall.exe: lo que deja una desinstalación. Se retira con la carpeta.
+        let alone = base.join("alone");
+        fs::create_dir_all(&alone).unwrap();
+        fs::write(uninstaller_path(&alone), b"MZ").unwrap();
+        assert!(is_leftover(&alone));
+        assert!(remove_leftover(&alone));
+        assert!(!alone.exists());
+        // Una instalación completa no se toca.
+        let full = base.join("full");
+        fs::create_dir_all(&full).unwrap();
+        fs::write(uninstaller_path(&full), b"MZ").unwrap();
+        fs::write(exe_path(&full), b"MZ").unwrap();
+        assert!(!is_leftover(&full));
+        assert!(!remove_leftover(&full));
+        assert!(exe_path(&full).is_file() && uninstaller_path(&full).is_file());
+        // Con archivos del usuario: se va uninstall.exe y la carpeta se queda.
+        let mixed = base.join("mixed");
+        fs::create_dir_all(&mixed).unwrap();
+        fs::write(uninstaller_path(&mixed), b"MZ").unwrap();
+        fs::write(mixed.join("notas.txt"), b"mio").unwrap();
+        assert!(remove_leftover(&mixed));
+        assert!(mixed.join("notas.txt").is_file() && !uninstaller_path(&mixed).exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn embedded_payload_is_sane() {
         let p = Payload::embedded();
         assert!(p.size > 1_000_000);
@@ -957,6 +988,7 @@ mod tests {
             start_menu_lnk: base.join(r"startmenu\Celer.lnk"),
             desktop_lnk: base.join(r"desktop\Celer.lnk"),
             data_dirs: vec![base.join(r"appdata").join(APP_IDENTIFIER)],
+            leftover_dirs: vec![base.join("leftover")],
             sys: SysDirs::real(),
         };
         // Limpieza previa de claves de prueba (por si un run anterior falló).
@@ -1034,7 +1066,7 @@ mod tests {
         assert_eq!(resolve_uninstall_dir(&layout, &setup_exe).unwrap(), dir);
         let mut ev = Vec::new();
         let out = uninstall(&layout, &dir, true, &setup_exe, &mut |p| ev.push(p)).expect("uninstall");
-        assert!(out.pending_self_delete.is_none());
+        assert!(out.left_behind.is_none());
         assert_eq!(ev.last().unwrap().pct, 100.0);
         assert!(!exe.exists() && !dir.join(UNINSTALL_EXE).exists());
         assert!(dir.join("notas-del-usuario.txt").is_file());

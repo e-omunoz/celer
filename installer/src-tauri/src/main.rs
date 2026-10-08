@@ -6,7 +6,6 @@ mod win;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -16,8 +15,6 @@ use setup::{InstallOptions, Layout, Payload, Progress};
 const PROGRESS_EVENT: &str = "setup-progress";
 
 static BUSY: AtomicBool = AtomicBool::new(false);
-/// (uninstall.exe, carpeta) a borrar cuando el proceso termine.
-static SELF_DELETE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 
 fn has_flag(flag: &str) -> bool {
     std::env::args().skip(1).any(|a| a.eq_ignore_ascii_case(flag))
@@ -175,8 +172,9 @@ fn yes() -> bool {
     true
 }
 
+/// Devuelve la ruta de `uninstall.exe` si se queda en la carpeta (es el proceso en ejecución; ver `UninstallOutcome`).
 #[tauri::command]
-async fn uninstall(app: AppHandle, options: UninstallOptions) -> Result<(), String> {
+async fn uninstall(app: AppHandle, options: UninstallOptions) -> Result<Option<String>, String> {
     let _busy = BusyGuard::take()?;
     let handle = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
@@ -190,21 +188,12 @@ async fn uninstall(app: AppHandle, options: UninstallOptions) -> Result<(), Stri
     })
     .await
     .map_err(|e| format!("Error interno del desinstalador: {e}"))??;
-    if let Some(p) = outcome.pending_self_delete {
-        *SELF_DELETE.lock().unwrap() = Some(p);
-    }
-    Ok(())
+    Ok(outcome.left_behind.map(|p| p.display().to_string()))
 }
 
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
-}
-
-fn run_pending_self_delete() {
-    if let Some((exe, dir)) = SELF_DELETE.lock().ok().and_then(|mut g| g.take()) {
-        let _ = setup::spawn_self_delete(&exe, &dir);
-    }
 }
 
 // ---------------------------------------------------------------- WebView2
@@ -239,11 +228,8 @@ fn run_silent() -> i32 {
     if is_uninstall() {
         let res = setup::resolve_uninstall_dir(&layout, &me)
             .and_then(|dir| setup::uninstall(&layout, &dir, !has_flag("--purge-data"), &me, &mut noop));
-        let res = res.map(|out| match &out.pending_self_delete {
-            Some((exe, dir)) => match setup::spawn_self_delete(exe, dir) {
-                Ok(()) => "desinstalado (uninstall.exe se borrará al salir)".to_string(),
-                Err(e) => format!("desinstalado, pero no se pudo programar el borrado de uninstall.exe: {e}"),
-            },
+        let res = res.map(|out| match &out.left_behind {
+            Some(exe) => format!("desinstalado ({} queda hasta la próxima instalación)", exe.display()),
             None => "desinstalado".to_string(),
         });
         return log_exit(res);
@@ -330,9 +316,5 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("no se pudo iniciar Celer Setup");
-    app.run(|_, event| {
-        if let tauri::RunEvent::Exit = event {
-            run_pending_self_delete();
-        }
-    });
+    app.run(|_, _| {});
 }

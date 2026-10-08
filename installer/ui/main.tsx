@@ -33,6 +33,8 @@ function App() {
   const [error, setError] = createSignal("");
   const [exePath, setExePath] = createSignal("");
   const [keepData, setKeepData] = createSignal(true);
+  /** uninstall.exe that stays in the folder (it is the running uninstaller); the next install removes it. */
+  const [leftBehind, setLeftBehind] = createSignal<string | null>(null);
   const [tip, setTip] = createSignal(0);
   const [loveBurst, setLoveBurst] = createSignal(false);
 
@@ -121,7 +123,7 @@ function App() {
     setProgress({ step: "prepare", pct: 0, detail: "Preparando" });
     setStep("uninstalling");
     try {
-      await setup.uninstall(keepData());
+      setLeftBehind(await setup.uninstall(keepData()));
       setStep("uninstalled");
     } catch (err) {
       setError(typeof err === "string" ? err : err instanceof Error ? err.message : "Error inesperado");
@@ -336,6 +338,11 @@ function App() {
               <section class="screen">
                 <h1>Hasta pronto.</h1>
                 <p class="lead">Celer se ha desinstalado{keepData() ? "; tus datos siguen ahí por si vuelves." : " junto con tus datos."}</p>
+                <Show when={leftBehind()}>
+                  <p class="fine">
+                    Queda {leftBehind()}: Windows no deja borrar un programa mientras se ejecuta. Puedes borrarlo tú; si vuelves a instalar Celer, se quitará solo.
+                  </p>
+                </Show>
               </section>
             </Match>
           </Switch>
