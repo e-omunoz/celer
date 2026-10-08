@@ -149,7 +149,7 @@ export function DriversSettings() {
                 </Show>
               }
             >
-              <Show when={info().jdbcUsed} fallback="No se encontró. Celer lo descarga de Maven Central (1,5 MB, con su firma SHA-256 comprobada).">
+              <Show when={info().jdbcUsed} fallback="No se encontró. Celer lo descarga de Maven Central (1,7 MB, con su firma SHA-256 comprobada).">
                 {(jdbc) => `${fileName(jdbc().jars[0])} · ${sourceLabel(jdbc().source)}${jdbc().jars.length > 1 ? ` · con ${jdbc().jars.slice(1).map(fileName).join(", ")}` : ""}`}
               </Show>
             </Status>
@@ -241,7 +241,7 @@ export function JdbcSetupDialog() {
             {needJdbc() ? <Download size={15} /> : <CircleCheck size={15} />}
             <div>
               <b>Driver JDBC de Informix {info()?.jdbcVersion ?? ""}</b>
-              <span>1,5 MB de Maven Central (com.ibm.informix:jdbc y org.mongodb:bson), con su firma SHA-256 comprobada.</span>
+              <span>1,7 MB de Maven Central (com.ibm.informix:jdbc y org.mongodb:bson), con su firma SHA-256 comprobada.</span>
             </div>
           </li>
         </Show>

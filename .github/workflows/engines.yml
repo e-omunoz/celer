@@ -54,9 +54,9 @@ jobs:
       - name: Informix JDBC driver, as Celer downloads it (same SHA-256)
         run: |
           mkdir -p jdbc && cd jdbc
-          curl -fsSLO https://repo1.maven.org/maven2/com/ibm/informix/jdbc/4.50.10.1/jdbc-4.50.10.1.jar
+          curl -fsSLO https://repo1.maven.org/maven2/com/ibm/informix/jdbc/15.0.1.4/jdbc-15.0.1.4.jar
           curl -fsSLO https://repo1.maven.org/maven2/org/mongodb/bson/3.8.0/bson-3.8.0.jar
-          echo "5847b88866fd8706d53ef08d9b6eb290e5e31759bcf5ed41f4296892058dc13c  jdbc-4.50.10.1.jar" | sha256sum -c
+          echo "152fe3380e414261266d7bde6bacae348c94b6db0cf16f969d1094368449cec7  jdbc-15.0.1.4.jar" | sha256sum -c
           echo "d30b5aeba3ae9b7c68c8a6103b41918c5f7318972007b9b92033ee861762d87e  bson-3.8.0.jar" | sha256sum -c
 
       - name: Build the tests
@@ -91,7 +91,7 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/clidriver/lib
           CELER_INFORMIX_JDBC_TEST: "host=localhost port=9088 user=informix password=in4mix database=celer server=informix"
           CELER_JAVA: ${{ env.JAVA_HOME }}/bin/java
-          CELER_JDBC_JARS: ${{ github.workspace }}/jdbc/jdbc-4.50.10.1.jar:${{ github.workspace }}/jdbc/bson-3.8.0.jar
+          CELER_JDBC_JARS: ${{ github.workspace }}/jdbc/jdbc-15.0.1.4.jar:${{ github.workspace }}/jdbc/bson-3.8.0.jar
           CELER_REQUIRE_BRIDGE: "1"
           CELER_NODE: node
         run: cargo test --lib engine_tests -- --nocapture --test-threads=1

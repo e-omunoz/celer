@@ -583,10 +583,12 @@ pub struct JdbcSpec {
     pub deps: &'static [MavenJar],
 }
 
-/// Informix: the driver DBeaver uses, and org.mongodb:bson, which its POM lists for the BSON type.
+/// Informix: IBM's driver from the 15.0 line, which also reads Informix 15 servers (4.50 fails to parse their version)
+/// and runs on Java 8+; and org.mongodb:bson, which its POM lists for the BSON type. A 4.50 found in DBeaver's cache is
+/// still used first: it is fine for 12.10 and 14.10 servers.
 pub const INFORMIX_JDBC: JdbcSpec = JdbcSpec {
     class: "com.informix.jdbc.IfxDriver",
-    jar: MavenJar { group: "com.ibm.informix", artifact: "jdbc", version: "4.50.10.1", sha256: "5847b88866fd8706d53ef08d9b6eb290e5e31759bcf5ed41f4296892058dc13c" },
+    jar: MavenJar { group: "com.ibm.informix", artifact: "jdbc", version: "15.0.1.4", sha256: "152fe3380e414261266d7bde6bacae348c94b6db0cf16f969d1094368449cec7" },
     deps: &[MavenJar { group: "org.mongodb", artifact: "bson", version: "3.8.0", sha256: "d30b5aeba3ae9b7c68c8a6103b41918c5f7318972007b9b92033ee861762d87e" }],
 };
 
@@ -755,9 +757,9 @@ mod tests {
         // Celer's own download, in the Maven layout.
         let dir = celer_maven(&app).join("com.ibm.informix");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("jdbc-4.50.10.1.jar"), b"x").unwrap();
+        fs::write(dir.join("jdbc-15.0.1.4.jar"), b"x").unwrap();
         let found = find_jdbc(&INFORMIX_JDBC, None, &app);
-        assert!(found.iter().any(|f| f.source == "Celer" && f.version == "4.50.10.1"), "{found:?}");
+        assert!(found.iter().any(|f| f.source == "Celer" && f.version == "15.0.1.4"), "{found:?}");
         assert_eq!(jar_version(Path::new("/x/jdbc-15.0.1.4.jar"), "jdbc-").as_deref(), Some("15.0.1.4"));
         assert!(version_key("4.50.10.1") > version_key("4.50.9"));
         let _ = fs::remove_dir_all(app);

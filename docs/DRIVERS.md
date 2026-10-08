@@ -19,7 +19,7 @@ transactions, object tree, table columns, DDL and autocompletion metadata. See [
 | **ODBC** | System driver manager (`odbc32.dll`, unixODBC, iODBC) | Reaches almost any database | Driver must be installed; quality varies |
 | **ADBC** | Arrow Database Connectivity driver manager | Columnar, very fast for analytics | Young ecosystem |
 | **HTTP / REST** | Engine's HTTP query API | No native protocol needed | Higher latency per request |
-| **JDBC bridge** | The vendor's pure-Java driver in one shared JVM, over stdin/stdout | The driver DBeaver uses; no native client install | Needs Java 11+ (DBeaver's JRE works) |
+| **JDBC bridge** | The vendor's pure-Java driver in one shared JVM, over stdin/stdout | The same drivers DBeaver uses; no native client install | Needs Java 11+ (DBeaver's JRE works) |
 
 ## Support matrix
 
@@ -95,7 +95,7 @@ Each driver declares what it supports so the UI only shows what works:
 | Native Rust crates | Compiled into Celer | MIT / Apache-2.0 (checked with `cargo deny`) |
 | IBM Data Server Driver (Informix DRDA, Db2) | Downloaded on demand from IBM's public site | IBM licence: not bundled |
 | Oracle Instant Client | Downloaded on demand from Oracle | Oracle licence: not bundled; user accepts it |
-| Informix JDBC driver (`com.ibm.informix:jdbc`, with `org.mongodb:bson`) | Found in DBeaver's cache, or downloaded on demand from Maven Central (SHA-256 fixed in `drivers.rs`) | IBM licence: not bundled |
+| Informix JDBC driver (`com.ibm.informix:jdbc`, with `org.mongodb:bson`) | Found in DBeaver's cache (its 4.50 first), or downloaded on demand from Maven Central: 15.0.1.4, which also reads Informix 15 servers (SHA-256 fixed in `drivers.rs`) | IBM licence: not bundled |
 | Java (Eclipse Temurin JRE 21) | Any Java 11+ already installed (DBeaver's first), or downloaded on demand from Adoptium (SHA-256 from its API) | GPLv2 with Classpath Exception: not bundled |
 | Informix Client SDK, other ODBC drivers | Installed by the user | Vendor licences |
 | SQLite, DuckDB | Bundled (compiled in) | Public domain / MIT |

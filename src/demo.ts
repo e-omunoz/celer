@@ -649,7 +649,7 @@ export function createDemoBackend(): Backend {
       throw new Error("La descarga del driver IBM solo está disponible en la aplicación de escritorio");
     },
     async informixDrivers() {
-      return { cli: null, java: [], javaUsed: null, javaMin: 11, jdbc: [], jdbcUsed: null, jdbcVersion: "4.50.10.1", odbc: [], sdkReady: false, bridge: false, jreDownload: false };
+      return { cli: null, java: [], javaUsed: null, javaMin: 11, jdbc: [], jdbcUsed: null, jdbcVersion: "15.0.1.4", odbc: [], sdkReady: false, bridge: false, jreDownload: false };
     },
     async jdbcDownload() {
       throw new Error("Las descargas de drivers solo están disponibles en la aplicación de escritorio");

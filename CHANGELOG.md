@@ -9,7 +9,7 @@ All notable changes to Celer are documented here. The format follows
 ### Added
 - **Informix over JDBC (SQLI)**: Celer connects like DBeaver does, with IBM's JDBC driver, to servers that only listen on SQLI (`onsoctcp`, port 9088) and without the Client SDK.
   - The connection form has a new protocol, **Automático** (the default for new connections): the Client SDK when its ODBC driver is installed, JDBC otherwise. Saved connections keep their protocol.
-  - Java 11 or newer is found on its own (Settings, `JAVA_HOME`, DBeaver's JRE, the `PATH`), and so is the JDBC driver (DBeaver's cache). What is missing can be downloaded, only when you ask, into Celer's data folder: Eclipse Temurin JRE 21 and the driver from Maven Central, each checked against its SHA-256, with progress and cancel. No administrator rights are needed.
+  - Java 11 or newer is found on its own (Settings, `JAVA_HOME`, DBeaver's JRE, the `PATH`), and so is the JDBC driver (DBeaver's cache). What is missing can be downloaded, only when you ask, into Celer's data folder: Eclipse Temurin JRE 21 and the driver from Maven Central (15.0.1.4, which also reads Informix 15 servers), each checked against its SHA-256, with progress and cancel. No administrator rights are needed.
   - One Java process serves every JDBC connection; it starts while the password is asked. Results come in compact binary batches, with real cancel, transactions, paging and database switching, and the same explorer, DDL, editing and scripts as the other Informix protocols.
   - "Probar conexión" says which way it connected.
 - **Settings › Drivers** shows what each Informix protocol has (IBM CLI, Java and the JDBC driver, the Client SDK), with download buttons, "Usar" for DBeaver's copies and a check that starts Java.

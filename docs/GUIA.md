@@ -167,7 +167,7 @@ Celer no instala nada en el sistema ni pide permisos de administrador. Busca, po
 - **Driver JDBC**: la ruta de *Ajustes › Drivers*, el que ya descargó DBeaver y el que haya descargado Celer.
 
 Si falta algo, Celer lo dice y ofrece descargarlo a su carpeta de datos, siempre después de que lo confirmes: el driver
-(1,5 MB, de Maven Central) y, solo si no hay ningún Java, Eclipse Temurin JRE 21 (unos 50 MB, de Adoptium). Cada
+(1,7 MB, de Maven Central) y, solo si no hay ningún Java, Eclipse Temurin JRE 21 (unos 50 MB, de Adoptium). Cada
 descarga se comprueba con su firma SHA-256, muestra el progreso y se puede cancelar. Las descargas usan el proxy del
 sistema.
 
