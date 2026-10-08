@@ -5,6 +5,7 @@ import { Mark } from "../brand/Mark";
 import { themeChoices } from "../commands";
 import { EngineIcon } from "../icons";
 import {
+  answerParams,
   answerPassword,
   applyTheme,
   browseSqlite,
@@ -24,6 +25,7 @@ import { ACCENTS, ENGINES, emptyConn, engineOf, type ConnConfig, type DbKind, ty
 import { CodeView } from "./Editor";
 import { ExportDialog } from "./ExportDialog";
 import { AiSettings } from "./AiSettings";
+import { SnippetSettings } from "./SnippetSettings";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
 import { checkForUpdates, openReleasePage } from "../update";
@@ -57,6 +59,7 @@ export function Modals() {
           </Dialog>
         )}
       </Show>
+      <Show when={state.paramAsk}>{(ask) => <ParamsDialog ask={ask()} />}</Show>
       <Show when={state.passwordAsk}>
         {(ask) => (
           <Dialog title={`Conectar a ${ask().name}`} onClose={() => answerPassword(null)} small>
@@ -74,6 +77,50 @@ export function Modals() {
         )}
       </Show>
     </>
+  );
+}
+
+/**
+ * Values for the statement's parameters. Numbers, NULL, TRUE and FALSE go in as they are and the rest as text;
+ * "SQL" writes the value verbatim (an expression, a list for IN…). Values are remembered per console.
+ */
+function ParamsDialog(props: { ask: NonNullable<typeof state.paramAsk> }) {
+  const [values, setValues] = createSignal({ ...props.ask.values });
+  const [raw, setRaw] = createSignal({ ...props.ask.raw });
+  const label = (name: string) => (name.startsWith("?") ? `Parámetro ${name.slice(1)} (?)` : name);
+  return (
+    <Dialog title={props.ask.names.length === 1 ? "Valor del parámetro" : "Valores de los parámetros"} onClose={() => answerParams(null)} class="params-dialog">
+      <form onSubmit={(event) => { event.preventDefault(); answerParams({ values: values(), raw: raw() }); }}>
+        <p class="dialog-lead">
+          La sentencia tiene {props.ask.names.length === 1 ? "un parámetro" : `${props.ask.names.length} parámetros`}. Los números, NULL, TRUE y FALSE se escriben tal
+          cual; el resto, como texto entre comillas.
+        </p>
+        <div class="params-list">
+          <For each={props.ask.names}>
+            {(name, index) => (
+              <label class="param-row">
+                <span class="param-name">{label(name)}</span>
+                <input
+                  value={values()[name] ?? ""}
+                  spellcheck={false}
+                  ref={(el) => index() === 0 && queueMicrotask(() => el.select())}
+                  onInput={(event) => setValues({ ...values(), [name]: event.currentTarget.value })}
+                />
+                <span class="check param-raw" title="Escribir el valor tal cual, sin comillas (una expresión, una lista para IN…)">
+                  <input type="checkbox" checked={raw()[name] ?? false} onChange={(event) => setRaw({ ...raw(), [name]: event.currentTarget.checked })} /> SQL
+                </span>
+              </label>
+            )}
+          </For>
+        </div>
+        <footer>
+          <span class="muted small">Se puede desactivar en Ajustes › Editor.</span>
+          <span class="spacer" />
+          <button type="button" class="btn" onClick={() => answerParams(null)}>Cancelar</button>
+          <button type="submit" class="btn primary">Ejecutar</button>
+        </footer>
+      </form>
+    </Dialog>
   );
 }
 
@@ -351,6 +398,7 @@ function ConnectionDialog(props: { cfg: ConnConfig }) {
 const SECTIONS = [
   ["appearance", "Apariencia"],
   ["editor", "Editor y resultados"],
+  ["templates", "Plantillas"],
   ["safety", "Seguridad"],
   ["ai", "IA y MCP"],
   ["drivers", "Drivers"],
@@ -434,9 +482,14 @@ function SettingsDialog() {
               </label>
             </div>
             <label class="check"><input type="checkbox" checked={s().zebra} onChange={(event) => void saveSettings({ zebra: event.currentTarget.checked })} /> Filas alternas en la tabla de resultados</label>
+            <label class="check"><input type="checkbox" checked={s().askParams} onChange={(event) => void saveSettings({ askParams: event.currentTarget.checked })} /> Pedir el valor de los parámetros (<code>:nombre</code>, <code>?</code>, <code>{"${nombre}"}</code>) antes de ejecutar</label>
             <p class="settings-note">Los resultados se leen por páginas con un cursor abierto: aunque la consulta devuelva millones de filas, sólo se traen las que ves. «Cargar todo» lee el resto bajo demanda.</p>
           </Show>
+          <Show when={section() === "templates"}>
+            <SnippetSettings />
+          </Show>
           <Show when={section() === "safety"}>
+            <label class="check"><input type="checkbox" checked={s().confirmNoWhere} onChange={(event) => void saveSettings({ confirmNoWhere: event.currentTarget.checked })} /> En todas las conexiones, confirmar UPDATE y DELETE sin WHERE (el editor ya los subraya)</label>
             <label class="check"><input type="checkbox" checked={s().confirmMutations} onChange={(event) => void saveSettings({ confirmMutations: event.currentTarget.checked })} /> En conexiones de producción, confirmar UPDATE/DELETE sin WHERE, DROP, TRUNCATE y ALTER</label>
             <p class="settings-note">Las conexiones de solo lectura rechazan cualquier sentencia que modifique datos, también desde el núcleo en Rust. Las contraseñas se guardan en el almacén de credenciales del sistema operativo.</p>
           </Show>

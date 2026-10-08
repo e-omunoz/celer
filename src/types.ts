@@ -169,6 +169,19 @@ export interface Settings {
   checkUpdates: boolean;
   /** A release the user chose to skip: no reminders until a newer one appears. */
   skippedVersion: string;
+  /** The user's live templates (they replace built-in ones with the same name). */
+  snippets: Snippet[];
+  /** Ask for the values of :name, ? and ${name} parameters before running. */
+  askParams: boolean;
+  /** On every connection, confirm a DELETE or UPDATE without WHERE. */
+  confirmNoWhere: boolean;
+}
+
+/** A live template for the SQL editor (see src/snippets.ts). */
+export interface Snippet {
+  name: string;
+  description: string;
+  body: string;
 }
 
 export interface UpdateInfo {
@@ -206,6 +219,9 @@ export const defaultSettings: Settings = {
   onboarded: false,
   checkUpdates: true,
   skippedVersion: "",
+  snippets: [],
+  askParams: true,
+  confirmNoWhere: true,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

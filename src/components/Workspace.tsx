@@ -1,3 +1,4 @@
+import { allSnippets } from "../snippets";
 import {
   AlignLeft,
   ArrowDownToLine,
@@ -352,6 +353,7 @@ function SqlPane(props: { tab: SqlTab }) {
           cursor={props.tab.cursor}
           kind={kindOf(props.tab.connId)}
           tables={completionTables(props.tab)}
+          snippets={allSnippets(kindOf(props.tab.connId), state.settings.snippets)}
           defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
           onOpenTable={(table) => openTableFromSql(props.tab, table)}
           fontSize={state.settings.editorFontSize}

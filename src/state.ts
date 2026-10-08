@@ -20,6 +20,7 @@ import type {
   ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
+import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
 import type { AiMessage } from "./ai";
 
 export type InspectorMode = "value" | "record" | "history" | "ai";
@@ -234,6 +235,8 @@ export const [state, setState] = createStore({
   driverProgress: "",
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
   passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
+  /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
+  paramAsk: null as ParamAsk | null,
   paletteOpen: false,
   paletteMode: "all" as "all" | "actions" | "tables",
   menu: null as { x: number; y: number; items: MenuItem[] } | null,
@@ -484,6 +487,38 @@ export async function saveSettings(patch: Partial<Settings>) {
 
 export function askPassword(name: string) {
   return new Promise<string | null>((resolve) => setState("passwordAsk", { name, resolve }));
+}
+
+/** What the parameters dialog edits; values are remembered per console. */
+export interface ParamAsk {
+  names: string[];
+  values: Record<string, string>;
+  raw: Record<string, boolean>;
+  sql: string;
+  resolve: (answer: { values: Record<string, string>; raw: Record<string, boolean> } | null) => void;
+}
+
+const rememberedParams: Record<string, { values: Record<string, string>; raw: Record<string, boolean> }> = {};
+
+function askParamValues(tabId: string, names: string[], sql: string) {
+  const previous = rememberedParams[tabId] ?? { values: {}, raw: {} };
+  return new Promise<{ values: Record<string, string>; raw: Record<string, boolean> } | null>((resolve) =>
+    setState("paramAsk", {
+      names,
+      values: Object.fromEntries(names.map((name) => [name, previous.values[name] ?? ""])),
+      raw: Object.fromEntries(names.map((name) => [name, previous.raw[name] ?? false])),
+      sql,
+      resolve: (answer) => {
+        if (answer) rememberedParams[tabId] = { values: { ...previous.values, ...answer.values }, raw: { ...previous.raw, ...answer.raw } };
+        resolve(answer);
+      },
+    }),
+  );
+}
+
+export function answerParams(answer: { values: Record<string, string>; raw: Record<string, boolean> } | null) {
+  state.paramAsk?.resolve(answer);
+  setState("paramAsk", null);
 }
 
 export function answerPassword(value: string | null) {
@@ -933,10 +968,27 @@ export async function runActive(mode: "statement" | "script" | "explain") {
     }
     sql = `${prefix} ${sql.replace(/;\s*$/, "")}`;
   }
+  // Parameters (:name, ?, ${name}): ask for their values and write them in as literals.
+  if (state.settings.askParams) {
+    const refs = findParams(sql, conn?.kind);
+    if (refs.length) {
+      const answer = await askParamValues(current.id, paramNames(refs), sql);
+      if (!answer) return;
+      sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
+    }
+  }
   if (conn?.production && state.settings.confirmMutations && needsProductionConfirm(sql, conn.kind)) {
     const ok = await confirmDialog(
       `Ejecutar en ${conn.name} (producción)`,
       "La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.",
+      "Ejecutar de todos modos",
+      true,
+    );
+    if (!ok) return;
+  } else if (state.settings.confirmNoWhere && hasUnfilteredWrite(sql, conn?.kind)) {
+    const ok = await confirmDialog(
+      "DELETE / UPDATE sin WHERE",
+      "La sentencia no tiene WHERE: afectará a todas las filas de la tabla.",
       "Ejecutar de todos modos",
       true,
     );

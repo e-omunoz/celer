@@ -1,6 +1,7 @@
 import {
   acceptCompletion,
   autocompletion,
+  snippetCompletion,
   closeBrackets,
   closeBracketsKeymap,
   completionKeymap,
@@ -31,6 +32,7 @@ import {
 import { tags } from "@lezer/highlight";
 import { createEffect, on, onCleanup, onMount, untrack } from "solid-js";
 import { splitSql } from "../sql";
+import { unfilteredWrites, type Snippet } from "../snippets";
 import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
 import type { CompletionTable, DbKind } from "../types";
 
@@ -96,6 +98,52 @@ const statementBand = (dialect: () => string) => ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+/**
+ * DELETE / UPDATE without WHERE: the keyword gets a wavy underline and a tooltip, before anything runs.
+ * Skipped on very long scripts (the check walks the whole text).
+ */
+const unfilteredWarning = (dialect: () => string) => ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = this.build(view);
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged) this.decorations = this.build(update.view);
+    }
+    build(view: EditorView): DecorationSet {
+      const text = view.state.doc.toString();
+      if (text.length > 200_000) return Decoration.none;
+      const builder = new RangeSetBuilder<Decoration>();
+      for (const w of unfilteredWrites(text, dialect())) {
+        builder.add(w.from, w.to, Decoration.mark({ class: "cm-unfiltered", attributes: { title: `${w.keyword} sin WHERE: afectará a todas las filas de la tabla` } }));
+      }
+      return builder.finish();
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
+/**
+ * Live templates: typing a template's name (sel, ins, upd…) offers it at the top of the completion list;
+ * Tab or Enter expands it, then Tab moves between its fields.
+ */
+function snippetSource(get: () => Snippet[]) {
+  return (ctx: CompletionContext): CompletionResult | null => {
+    const word = ctx.matchBefore(/[A-Za-z_][\w]*/);
+    if (!word || (word.from === word.to && !ctx.explicit)) return null;
+    const node = syntaxTree(ctx.state).resolveInner(ctx.pos, -1);
+    if (/String|Comment|QuotedIdentifier/.test(node.name)) return null;
+    // Not after a dot (that is a column or table name).
+    if (ctx.state.sliceDoc(word.from - 1, word.from) === ".") return null;
+    const typed = word.text.toLowerCase();
+    const options = get()
+      .filter((s) => s.name.toLowerCase().startsWith(typed))
+      .map((s) => snippetCompletion(s.body, { label: s.name, detail: `plantilla · ${s.description}`, type: "text", boost: s.name.toLowerCase() === typed ? 20 : 4 }));
+    return options.length ? { from: word.from, options, validFor: /^[\w]*$/ } : null;
+  };
+}
 
 /** The statement (text and start offset) that contains `pos`. */
 function statementAround(text: string, pos: number, dialect: string) {
@@ -205,6 +253,8 @@ export function SqlEditor(props: {
   kind: DbKind;
   /** Catalog for completion and Ctrl+click (tables with their columns). */
   tables: CompletionTable[];
+  /** Live templates offered by name (built-in and the user's). */
+  snippets?: Snippet[];
   defaultSchema?: string;
   /** Ctrl+click / F4 / Ctrl+B on a table (or an alias of one) in the SQL. */
   onOpenTable?: (table: CompletionTable) => void;
@@ -253,6 +303,7 @@ export function SqlEditor(props: {
       ".cm-panel.cm-search label": { fontSize: "12px" },
       ".cm-stmt": { background: "var(--editor-stmt)" },
       ".cm-table-link": { textDecoration: "underline", textUnderlineOffset: "3px", color: "var(--accent)", cursor: "pointer" },
+      ".cm-unfiltered": { textDecoration: "underline wavy var(--warning)", textUnderlineOffset: "3px", textDecorationSkipInk: "none" },
     });
   }
 
@@ -284,6 +335,7 @@ export function SqlEditor(props: {
   }
 
   const completionSource = catalogCompletion(() => ({ tables: props.tables, defaultSchema: props.defaultSchema, dialect: props.kind }));
+  const templates = snippetSource(() => props.snippets ?? []);
 
   let linked: { from: number; to: number } | null = null;
   function setLinked(v: EditorView, next: { from: number; to: number } | null) {
@@ -318,7 +370,8 @@ export function SqlEditor(props: {
           language.of(languageExtension()),
           // One stable source: CodeMirror matches results to sources by identity (a new function per call
           // would leave every result "pending" and never shown).
-          EditorState.languageData.of(() => [{ autocomplete: completionSource }]),
+          EditorState.languageData.of(() => [{ autocomplete: completionSource }, { autocomplete: templates }]),
+          unfilteredWarning(() => props.kind),
           linkField,
           theme.of(themeExtension()),
           keymap.of([
