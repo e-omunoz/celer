@@ -1,5 +1,6 @@
 //! Driver nativo de SQL Server (protocolo TDS con `tiberius`, sin drivers externos).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -238,110 +239,217 @@ impl MssqlDriver {
         )
     }
 
+    /// Columnas clave de cada índice de la tabla, por `index_id`, en orden: entre corchetes y con DESC (`quoted`,
+    /// para el DDL) o tal cual (para el explorador).
+    fn index_columns(&mut self, o: &ObjectRef, quoted: bool) -> Result<HashMap<i64, String>> {
+        let db = qi(&o.database);
+        let rows = self.query_rows(&format!(
+            "SELECT ic.index_id, c.name, ic.is_descending_key \
+             FROM {db}.sys.index_columns ic JOIN {db}.sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
+             WHERE ic.object_id = {} AND ic.is_included_column = 0 ORDER BY ic.index_id, ic.key_ordinal, ic.column_id",
+            self.obj_id(o)
+        ))?;
+        Ok(column_lists(rows.iter().map(|r| {
+            let name = cell_str(&r[1]);
+            let col = match (quoted, cell_i64(&r[2]) == 1) {
+                (false, _) => name,
+                (true, false) => qi(&name),
+                (true, true) => format!("{} DESC", qi(&name)),
+            };
+            (cell_i64(&r[0]), col)
+        })))
+    }
+
+    /// Columnas de cada clave foránea de la tabla, por `object_id` de la clave: las propias y las referenciadas.
+    fn fk_columns(&mut self, o: &ObjectRef, quoted: bool) -> Result<(HashMap<i64, String>, HashMap<i64, String>)> {
+        let db = qi(&o.database);
+        let rows = self.query_rows(&format!(
+            "SELECT k.constraint_object_id, pc.name, rc.name FROM {db}.sys.foreign_key_columns k \
+             JOIN {db}.sys.columns pc ON pc.object_id = k.parent_object_id AND pc.column_id = k.parent_column_id \
+             JOIN {db}.sys.columns rc ON rc.object_id = k.referenced_object_id AND rc.column_id = k.referenced_column_id \
+             WHERE k.parent_object_id = {} ORDER BY k.constraint_object_id, k.constraint_column_id",
+            self.obj_id(o)
+        ))?;
+        let name = |c: &Cell| if quoted { qi(&cell_str(c)) } else { cell_str(c) };
+        Ok((
+            column_lists(rows.iter().map(|r| (cell_i64(&r[0]), name(&r[1])))),
+            column_lists(rows.iter().map(|r| (cell_i64(&r[0]), name(&r[2])))),
+        ))
+    }
+
     fn table_ddl(&mut self, o: &ObjectRef) -> Result<String> {
-        let cols = self.query_rows(&self.columns_query(o))?;
-        if cols.is_empty() {
+        let columns = self.query_rows(&self.columns_query(o))?;
+        if columns.is_empty() {
             bail!("No se encontró el objeto {}", self.qualified_name(o));
-        }
-        let mut lines = Vec::new();
-        for r in &cols {
-            let name = cell_str(&r[0]);
-            if cell_i64(&r[9]) == 1 {
-                lines.push(format!("    {} AS {}", qi(&name), cell_str(&r[10])));
-                continue;
-            }
-            let ty = mssql_type(
-                &cell_str(&r[1]),
-                cell_i64(&r[2]),
-                cell_i64(&r[3]),
-                cell_i64(&r[4]),
-            );
-            let mut l = format!("    {} {}", qi(&name), ty);
-            if cell_i64(&r[6]) == 1 {
-                l.push_str(" IDENTITY(1,1)");
-            }
-            l.push_str(if cell_i64(&r[5]) == 1 {
-                " NULL"
-            } else {
-                " NOT NULL"
-            });
-            if let Cell::Text(d) = &r[8] {
-                l.push_str(&format!(" DEFAULT {d}"));
-            }
-            lines.push(l);
         }
         let db = qi(&o.database);
         let oid = self.obj_id(o);
         let idx = self.query_rows(&format!(
-            "SELECT i.name, i.is_primary_key, i.is_unique, i.type_desc, \
-               STUFF((SELECT ', ' + QUOTENAME(c.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END \
-                      FROM {db}.sys.index_columns ic JOIN {db}.sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
-                      WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0 \
-                      ORDER BY ic.key_ordinal FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, ''), \
-               i.is_unique_constraint \
-             FROM {db}.sys.indexes i WHERE i.object_id = {oid} AND i.type > 0 ORDER BY i.is_primary_key DESC, i.name"
+            "SELECT i.index_id, i.name, i.type, i.type_desc, i.is_primary_key, i.is_unique, i.is_unique_constraint \
+             FROM {db}.sys.indexes i WHERE i.object_id = {oid} ORDER BY i.is_primary_key DESC, i.name"
         ))?;
-        for r in idx.iter().filter(|r| cell_i64(&r[1]) == 1) {
-            let clustered = if cell_str(&r[3]).starts_with("CLUSTERED") {
-                " CLUSTERED"
-            } else {
-                " NONCLUSTERED"
-            };
-            lines.push(format!(
-                "    CONSTRAINT {} PRIMARY KEY{} ({})",
-                qi(&cell_str(&r[0])),
-                clustered,
-                cell_str(&r[4])
-            ));
-        }
+        let mut key_cols = self.index_columns(o, true)?;
+        let indexes = idx
+            .iter()
+            .map(|r| IndexDef {
+                name: cell_str(&r[1]),
+                type_code: cell_i64(&r[2]),
+                type_desc: cell_str(&r[3]),
+                primary: cell_i64(&r[4]) == 1,
+                unique: cell_i64(&r[5]) == 1,
+                unique_constraint: cell_i64(&r[6]) == 1,
+                columns: key_cols.remove(&cell_i64(&r[0])).unwrap_or_default(),
+            })
+            .collect();
         let fks = self.query_rows(&format!(
-            "SELECT fk.name, \
-               STUFF((SELECT ', ' + QUOTENAME(c.name) FROM {db}.sys.foreign_key_columns k JOIN {db}.sys.columns c ON c.object_id = k.parent_object_id AND c.column_id = k.parent_column_id \
-                      WHERE k.constraint_object_id = fk.object_id ORDER BY k.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, ''), \
-               QUOTENAME(rs.name) + '.' + QUOTENAME(rt.name), \
-               STUFF((SELECT ', ' + QUOTENAME(c.name) FROM {db}.sys.foreign_key_columns k JOIN {db}.sys.columns c ON c.object_id = k.referenced_object_id AND c.column_id = k.referenced_column_id \
-                      WHERE k.constraint_object_id = fk.object_id ORDER BY k.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, ''), \
+            "SELECT fk.object_id, fk.name, QUOTENAME(rs.name) + '.' + QUOTENAME(rt.name), \
                fk.delete_referential_action_desc, fk.update_referential_action_desc \
              FROM {db}.sys.foreign_keys fk JOIN {db}.sys.tables rt ON rt.object_id = fk.referenced_object_id \
              JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id WHERE fk.parent_object_id = {oid} ORDER BY fk.name"
         ))?;
-        for r in &fks {
-            let mut l = format!(
-                "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
-                qi(&cell_str(&r[0])),
-                cell_str(&r[1]),
-                cell_str(&r[2]),
-                cell_str(&r[3])
-            );
-            for (i, verb) in [(4, "DELETE"), (5, "UPDATE")] {
-                let a = cell_str(&r[i]);
-                if a != "NO_ACTION" {
-                    l.push_str(&format!(" ON {verb} {}", a.replace('_', " ")));
+        let (mut own, mut referenced) = if fks.is_empty() { Default::default() } else { self.fk_columns(o, true)? };
+        let foreign_keys = fks
+            .iter()
+            .map(|r| {
+                let id = cell_i64(&r[0]);
+                ForeignKeyDef {
+                    name: cell_str(&r[1]),
+                    columns: own.remove(&id).unwrap_or_default(),
+                    target: cell_str(&r[2]),
+                    target_columns: referenced.remove(&id).unwrap_or_default(),
+                    on_delete: cell_str(&r[3]),
+                    on_update: cell_str(&r[4]),
                 }
-            }
-            lines.push(l);
-        }
-        let mut out = format!(
-            "CREATE TABLE {} (\n{}\n);\n",
-            self.qualified_name(o),
-            lines.join(",\n")
-        );
-        for r in idx.iter().filter(|r| cell_i64(&r[1]) == 0) {
-            let unique = if cell_i64(&r[2]) == 1 { "UNIQUE " } else { "" };
-            let kind = if cell_str(&r[3]).starts_with("CLUSTERED") {
-                "CLUSTERED "
-            } else {
-                "NONCLUSTERED "
-            };
-            out.push_str(&format!(
-                "\nCREATE {unique}{kind}INDEX {} ON {} ({});",
-                qi(&cell_str(&r[0])),
-                self.qualified_name(o),
-                cell_str(&r[4])
-            ));
-        }
-        Ok(out)
+            })
+            .collect();
+        let parts = TableParts {
+            columns,
+            indexes,
+            foreign_keys,
+        };
+        Ok(build_table_ddl(&self.qualified_name(o), &parts))
     }
+}
+
+/// Junta en listas "a, b, c" las columnas que llegan como filas (grupo, columna) ya ordenadas. Sustituye a
+/// `FOR XML PATH` y `STRING_AGG`: el primero no existe en Azure Synapse, PDW ni Fabric, y el segundo tampoco
+/// antes de SQL Server 2017.
+fn column_lists(rows: impl IntoIterator<Item = (i64, String)>) -> HashMap<i64, String> {
+    let mut out: HashMap<i64, String> = HashMap::new();
+    for (key, col) in rows {
+        let list = out.entry(key).or_default();
+        if !list.is_empty() {
+            list.push_str(", ");
+        }
+        list.push_str(&col);
+    }
+    out
+}
+
+/// Un índice de la tabla (también el montón, `type_code` 0), con sus columnas clave ya escritas.
+struct IndexDef {
+    name: String,
+    type_code: i64,
+    type_desc: String,
+    primary: bool,
+    unique: bool,
+    unique_constraint: bool,
+    columns: String,
+}
+
+struct ForeignKeyDef {
+    name: String,
+    columns: String,
+    /// `[esquema].[tabla]` referenciada.
+    target: String,
+    target_columns: String,
+    on_delete: String,
+    on_update: String,
+}
+
+/// Lo que se lee del catálogo para escribir el DDL de una tabla.
+struct TableParts {
+    /// Filas de `columns_query`.
+    columns: Vec<Vec<Cell>>,
+    indexes: Vec<IndexDef>,
+    foreign_keys: Vec<ForeignKeyDef>,
+}
+
+/// Definición de una columna para CREATE TABLE.
+fn column_ddl(r: &[Cell]) -> String {
+    let name = cell_str(&r[0]);
+    if cell_i64(&r[9]) == 1 {
+        return format!("    {} AS {}", qi(&name), cell_str(&r[10]));
+    }
+    let ty = mssql_type(
+        &cell_str(&r[1]),
+        cell_i64(&r[2]),
+        cell_i64(&r[3]),
+        cell_i64(&r[4]),
+    );
+    let mut l = format!("    {} {}", qi(&name), ty);
+    if cell_i64(&r[6]) == 1 {
+        l.push_str(" IDENTITY(1,1)");
+    }
+    l.push_str(if cell_i64(&r[5]) == 1 {
+        " NULL"
+    } else {
+        " NOT NULL"
+    });
+    if let Cell::Text(d) = &r[8] {
+        l.push_str(&format!(" DEFAULT {d}"));
+    }
+    l
+}
+
+/// CREATE TABLE con su clave primaria y foráneas, y después los demás índices.
+fn build_table_ddl(table: &str, t: &TableParts) -> String {
+    let mut lines: Vec<String> = t.columns.iter().map(|r| column_ddl(r)).collect();
+    let indexes: Vec<&IndexDef> = t.indexes.iter().filter(|i| i.type_code > 0).collect();
+    for i in indexes.iter().filter(|i| i.primary) {
+        let clustered = if i.type_desc.starts_with("CLUSTERED") {
+            " CLUSTERED"
+        } else {
+            " NONCLUSTERED"
+        };
+        lines.push(format!(
+            "    CONSTRAINT {} PRIMARY KEY{} ({})",
+            qi(&i.name),
+            clustered,
+            i.columns
+        ));
+    }
+    for fk in &t.foreign_keys {
+        let mut l = format!(
+            "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+            qi(&fk.name),
+            fk.columns,
+            fk.target,
+            fk.target_columns
+        );
+        for (a, verb) in [(&fk.on_delete, "DELETE"), (&fk.on_update, "UPDATE")] {
+            if a != "NO_ACTION" {
+                l.push_str(&format!(" ON {verb} {}", a.replace('_', " ")));
+            }
+        }
+        lines.push(l);
+    }
+    let mut out = format!("CREATE TABLE {} (\n{}\n);\n", table, lines.join(",\n"));
+    for i in indexes.iter().filter(|i| !i.primary) {
+        let unique = if i.unique { "UNIQUE " } else { "" };
+        let kind = if i.type_desc.starts_with("CLUSTERED") {
+            "CLUSTERED "
+        } else {
+            "NONCLUSTERED "
+        };
+        out.push_str(&format!(
+            "\nCREATE {unique}{kind}INDEX {} ON {} ({});",
+            qi(&i.name),
+            table,
+            i.columns
+        ));
+    }
+    out
 }
 
 async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cli> {
@@ -1037,16 +1145,14 @@ impl Driver for MssqlDriver {
                 match *sub {
                     "indexes" => {
                         let rows = self.query_rows(&format!(
-                            "SELECT i.name, i.type_desc, i.is_unique, i.is_primary_key, \
-                               STUFF((SELECT ', ' + c.name FROM {d}.sys.index_columns ic JOIN {d}.sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
-                                      WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0 ORDER BY ic.key_ordinal \
-                                      FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, '') \
+                            "SELECT i.name, i.type_desc, i.is_unique, i.is_primary_key, i.index_id \
                              FROM {d}.sys.indexes i WHERE i.object_id = {oid} AND i.type > 0 ORDER BY i.is_primary_key DESC, i.name"
                         ))?;
+                        let mut cols = self.index_columns(&o, false)?;
                         Ok(rows
                             .iter()
                             .map(|r| {
-                                let mut det = format!("({})", cell_str(&r[4]));
+                                let mut det = format!("({})", cols.remove(&cell_i64(&r[4])).unwrap_or_default());
                                 if cell_i64(&r[3]) == 1 {
                                     det.push_str(" · PK");
                                 } else if cell_i64(&r[2]) == 1 {
@@ -1058,29 +1164,26 @@ impl Driver for MssqlDriver {
                             .collect())
                     }
                     "fks" => {
-                        // Column lists through FOR XML PATH (works on every SQL Server version, unlike STRING_AGG).
                         let rows = self.query_rows(&format!(
                             "SELECT fk.name, \
                                OBJECT_SCHEMA_NAME(fk.referenced_object_id, DB_ID({q})), \
                                OBJECT_NAME(fk.referenced_object_id, DB_ID({q})), \
-                               STUFF((SELECT ', ' + pc.name FROM {d}.sys.foreign_key_columns fkc \
-                                      JOIN {d}.sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id \
-                                      WHERE fkc.constraint_object_id = fk.object_id ORDER BY fkc.constraint_column_id FOR XML PATH('')), 1, 2, ''), \
-                               STUFF((SELECT ', ' + rc.name FROM {d}.sys.foreign_key_columns fkc \
-                                      JOIN {d}.sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id \
-                                      WHERE fkc.constraint_object_id = fk.object_id ORDER BY fkc.constraint_column_id FOR XML PATH('')), 1, 2, '') \
+                               fk.object_id \
                              FROM {d}.sys.foreign_keys fk WHERE fk.parent_object_id = {oid} ORDER BY fk.name",
                             q = ql(db),
                         ))?;
+                        let (mut own, mut referenced) = if rows.is_empty() { Default::default() } else { self.fk_columns(&o, false)? };
                         // Same "cols → schema.table(cols)" shape on every engine; `obj` is the referenced table.
                         Ok(rows
                             .iter()
                             .map(|r| {
                                 let (ref_schema, ref_table) = (cell_str(&r[1]), cell_str(&r[2]));
+                                let id = cell_i64(&r[3]);
+                                let (cols, ref_cols) = (own.remove(&id).unwrap_or_default(), referenced.remove(&id).unwrap_or_default());
                                 MetaNode::leaf(
                                     cell_str(&r[0]),
                                     "key",
-                                    Some(format!("{} → {}.{}({})", cell_str(&r[3]), ref_schema, ref_table, cell_str(&r[4]))),
+                                    Some(format!("{cols} → {ref_schema}.{ref_table}({ref_cols})")),
                                 )
                                 .with_obj(ObjectRef::new(db, &ref_schema, &ref_table, "table"))
                             })
@@ -1268,8 +1371,75 @@ impl Driver for MssqlDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::round_fraction;
+    use super::*;
     use chrono::{NaiveDate, NaiveTime};
+
+    /// Una fila de `columns_query`: nombre, tipo, max_length, precision, scale, nullable, identity, pk, default.
+    fn col(name: &str, ty: &str, len: i64, nullable: bool, identity: bool, default: Option<&str>) -> Vec<Cell> {
+        vec![
+            Cell::Text(name.into()),
+            Cell::Text(ty.into()),
+            Cell::Int(len),
+            Cell::Int(0),
+            Cell::Int(0),
+            Cell::Bool(nullable),
+            Cell::Bool(identity),
+            Cell::Int(0),
+            default.map(|d| Cell::Text(d.into())).unwrap_or(Cell::Null),
+            Cell::Bool(false),
+            Cell::Null,
+        ]
+    }
+
+    fn index(name: &str, type_code: i64, type_desc: &str, primary: bool, unique: bool, columns: &str) -> IndexDef {
+        IndexDef {
+            name: name.into(),
+            type_code,
+            type_desc: type_desc.into(),
+            primary,
+            unique,
+            unique_constraint: unique && !primary && type_code == 2,
+            columns: columns.into(),
+        }
+    }
+
+    #[test]
+    fn column_lists_keep_the_order_of_each_group() {
+        let rows = vec![(1, "[a]".to_string()), (1, "[b] DESC".to_string()), (2, "[c]".to_string()), (1, "[d]".to_string())];
+        let lists = column_lists(rows);
+        assert_eq!(lists[&1], "[a], [b] DESC, [d]");
+        assert_eq!(lists[&2], "[c]");
+        assert!(column_lists(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn table_ddl_on_sql_server() {
+        let parts = TableParts {
+            columns: vec![
+                col("id", "int", 4, false, true, None),
+                col("nombre", "nvarchar", 200, false, false, None),
+                col("activo", "bit", 1, true, false, Some("((1))")),
+                col("parent_id", "int", 4, true, false, None),
+            ],
+            indexes: vec![
+                index("PK_t", 1, "CLUSTERED", true, true, "[id]"),
+                index("", 0, "HEAP", false, false, ""),
+                index("IX_t_nombre", 2, "NONCLUSTERED", false, true, "[nombre] DESC, [activo]"),
+            ],
+            foreign_keys: vec![ForeignKeyDef {
+                name: "FK_t_p".into(),
+                columns: "[parent_id]".into(),
+                target: "[dbo].[p]".into(),
+                target_columns: "[id]".into(),
+                on_delete: "CASCADE".into(),
+                on_update: "NO_ACTION".into(),
+            }],
+        };
+        assert_eq!(
+            build_table_ddl("[db].[dbo].[t]", &parts),
+            "CREATE TABLE [db].[dbo].[t] (\n    [id] int IDENTITY(1,1) NOT NULL,\n    [nombre] nvarchar(100) NOT NULL,\n    [activo] bit NULL DEFAULT ((1)),\n    [parent_id] int NULL,\n    CONSTRAINT [PK_t] PRIMARY KEY CLUSTERED ([id]),\n    CONSTRAINT [FK_t_p] FOREIGN KEY ([parent_id]) REFERENCES [dbo].[p] ([id]) ON DELETE CASCADE\n);\n\nCREATE UNIQUE NONCLUSTERED INDEX [IX_t_nombre] ON [db].[dbo].[t] ([nombre] DESC, [activo]);"
+        );
+    }
 
     #[test]
     fn fractions_round_to_what_sql_server_reads_back() {
