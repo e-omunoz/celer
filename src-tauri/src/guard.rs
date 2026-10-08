@@ -508,23 +508,39 @@ impl Guarded {
     }
 
     /// Otra conexión en lugar de la que se cortó, en la base y con el modo de transacción de la sesión. El estado que
-    /// tuviera la vieja ya no existe: se olvida (quien llama ya lo ha contado).
+    /// tuviera la vieja ya no existe: se olvida (quien llama ya lo ha contado). If no other connection can be opened,
+    /// that loss is kept for the next statement or COMMIT, which must not then run in silence on a later connection.
     fn recover(&mut self) -> Result<u64> {
         let t0 = Instant::now();
+        let lost = if self.inner.is_some() { self.lost_state() } else { String::new() };
         drop(self.inner.take());
         self.in_tx = false;
         self.tx_maybe = false;
         self.temp = false;
         self.settings = false;
         self.cursor = false;
-        let mut d = connect_retrying(&self.connect, true)?;
-        let here = d.current_database().unwrap_or_default();
-        if !self.database.is_empty() && !here.eq_ignore_ascii_case(&self.database) {
-            d.use_database(&self.database)?;
-        }
-        if !self.autocommit {
-            d.set_autocommit(false)?;
-        }
+        let opened = (|| -> Result<Box<dyn Driver>> {
+            let mut d = connect_retrying(&self.connect, true)?;
+            let here = d.current_database().unwrap_or_default();
+            if !self.database.is_empty() && !here.eq_ignore_ascii_case(&self.database) {
+                d.use_database(&self.database)?;
+            }
+            if !self.autocommit {
+                d.set_autocommit(false)?;
+            }
+            Ok(d)
+        })();
+        let d = match opened {
+            Ok(d) => d,
+            Err(e) => {
+                if !lost.is_empty() {
+                    self.pending_loss = Some(format!(
+                        "SESSION_LOST: La conexión con el servidor se cortó y con ella se han perdido {lost}. La sentencia no se ha ejecutado: revisa y vuelve a lanzarla."
+                    ));
+                }
+                return Err(e);
+            }
+        };
         *self.cancel_slot.lock() = d.canceller();
         *self.progress_slot.lock() = d.progress();
         self.inner = Some(d);
@@ -845,6 +861,9 @@ impl Driver for Guarded {
 fn end_tx(g: &mut Guarded, commit: bool) -> Result<bool> {
     if let Some(loss) = g.pending_loss.take() {
         if commit {
+            if loss.contains("transacción") {
+                bail!("{loss}\n\nEl COMMIT no se ha hecho: los cambios de esa transacción no se han guardado.");
+            }
             bail!(loss);
         }
     }
@@ -1135,6 +1154,31 @@ mod tests {
         server.cut.store(true, Ordering::SeqCst);
         let e = g.execute("SELECT 1", 10).unwrap_err().to_string();
         assert!(e.contains("SET"), "{e}");
+    }
+
+    #[test]
+    fn a_transaction_lost_while_the_server_was_down_is_not_committed_later() {
+        let server = Arc::new(Server::default());
+        let mut g = Guarded::open(connector(&server), opts(DbKind::Postgres, "")).unwrap();
+        g.execute("BEGIN", 10).unwrap();
+        g.execute("INSERT INTO t VALUES (1)", 10).unwrap();
+        // The explorer finds the cut while the server cannot be reached.
+        server.cut.store(true, Ordering::SeqCst);
+        *server.refuse.lock() = (1, "Login timeout expired".into());
+        let e = g.children(&[]).unwrap_err().to_string();
+        assert!(e.starts_with("CONN_DOWN:"), "{e}");
+        // The network is back: COMMIT does not run on the new connection and says the changes were not saved.
+        let e = g.commit().unwrap_err().to_string();
+        assert!(e.starts_with("SESSION_LOST:") && e.contains("no se han guardado"), "{e}");
+        assert!(!server.executed.lock().iter().any(|s| s.starts_with("2:")), "nothing ran on the new connection");
+        // Same with the next statement instead of COMMIT.
+        g.execute("BEGIN", 10).unwrap();
+        server.cut.store(true, Ordering::SeqCst);
+        *server.refuse.lock() = (1, "Login timeout expired".into());
+        assert!(g.ping().is_err());
+        let e = g.execute("INSERT INTO t VALUES (2)", 10).unwrap_err().to_string();
+        assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción"), "{e}");
+        assert!(!server.executed.lock().iter().any(|s| s.contains("VALUES (2)")));
     }
 
     #[test]
