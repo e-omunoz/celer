@@ -1,12 +1,19 @@
 //! Driver nativo de SQL Server (protocolo TDS con `tiberius`, sin drivers externos).
+//!
+//! Conexiones: todas viven en un runtime compartido (`rt`). Un resultado que se deja a medias (la interfaz pide 500
+//! filas y después lanza otra consulta) no se lee entero: se corta con la señal ATTENTION de TDS, como hace
+//! mssql-jdbc, y la conexión sigue siendo la misma. Las conexiones de las sesiones que se cierran sin estado propio
+//! quedan libres un rato (`pool`) para la siguiente sesión de la misma configuración, que se ahorra el login (con su
+//! TLS). Con `CELER_MSSQL_TRACE` en el entorno, los tiempos de cada lote salen también por la salida de error.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
 use futures_util::TryStreamExt;
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 use tiberius::{
     AuthMethod, Client, ColumnData, ColumnType, Config, EncryptionLevel, FromSql, QueryItem,
     SqlBrowser,
@@ -23,6 +30,24 @@ type Cli = Client<Compat<TcpStream>>;
 
 const BINARY_PREVIEW: usize = 4096;
 
+/// Tamaño de paquete TDS que se pide al conectar (el de mssql-jdbc; tiberius pide 4096): menos paquetes por resultado.
+const PACKET_SIZE: u32 = 8000;
+/// Al dejar un resultado a medias: lo que se sigue leyendo antes de mandar ATTENTION. Un resto pequeño, que ya
+/// viaja por la red, acaba en ese tiempo y la conexión queda limpia sin cortar nada.
+const DRAIN_BUDGET: Duration = Duration::from_millis(50);
+/// Lo que se espera a la siguiente fila para cortar el resultado entre dos filas (no a mitad de una).
+const STUCK_CAP: Duration = Duration::from_secs(30);
+/// Lo que se espera el acuse del ATTENTION.
+const ATTENTION_CAP: Duration = Duration::from_secs(10);
+/// Sin estado de sesión que conservar, lo que se espera al corte antes de seguir con una conexión libre del pool…
+const PATIENCE: Duration = Duration::from_millis(250);
+/// … y, si no hay ninguna libre, antes de abrir otra.
+const PATIENCE_MAX: Duration = Duration::from_secs(5);
+/// Conexiones libres: cuánto se guardan, a partir de cuándo se comprueban antes de usarlas y cuántas por configuración.
+const IDLE_TTL: Duration = Duration::from_secs(300);
+const IDLE_PING: Duration = Duration::from_secs(20);
+const IDLE_MAX: usize = 3;
+
 enum Item {
     Meta(Vec<ColumnInfo>),
     Row(Vec<Cell>),
@@ -32,8 +57,160 @@ enum Item {
 
 struct Cursor {
     rx: mpsc::Receiver<Item>,
-    done: oneshot::Receiver<Option<Cli>>,
+    done: oneshot::Receiver<Finished>,
     peeked: Option<Item>,
+    /// Pide al lector que deje el resultado (lo corta con ATTENTION).
+    abandon: CancellationToken,
+}
+
+/// Cómo terminó el lector de un lote: con la conexión (None si se perdió) y, si el resultado se dejó a medias, cómo
+/// se cortó.
+struct Finished {
+    client: Option<Cli>,
+    cut: Option<Cut>,
+}
+
+/// Un resultado dejado a medias: las filas que aún se leyeron y si hizo falta ATTENTION.
+#[derive(Clone, Copy, Debug)]
+struct Cut {
+    rows: u64,
+    attention: bool,
+}
+
+/// El runtime de todas las conexiones de SQL Server, con hilos propios: el lector de un resultado sigue trayendo
+/// filas mientras la interfaz pinta las primeras, una conexión que se deja termina de cortarse en segundo plano y
+/// las conexiones libres pasan de una sesión a otra (una conexión solo funciona en el runtime que la abrió).
+fn rt() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("celer-mssql")
+            .enable_all()
+            .build()
+            .expect("runtime de SQL Server")
+    })
+}
+
+/// Lo que se sabe de una conexión al abrirla (en una sola ida y vuelta) y que viaja con ella por el pool.
+#[derive(Clone)]
+struct Facts {
+    /// La base con la que se abrió ("" = la predeterminada del login).
+    home: String,
+    /// La base en la que está.
+    database: String,
+    engine: Engine,
+    /// La descripción del servidor (`server_info`).
+    info: String,
+}
+
+impl Facts {
+    fn serves(&self, wanted: &str) -> bool {
+        self.home == wanted || (!wanted.is_empty() && self.database.eq_ignore_ascii_case(wanted))
+    }
+}
+
+/// Una conexión libre: abierta con la configuración de su clave, en autocommit y sin estado de sesión.
+struct Idle {
+    client: Cli,
+    facts: Facts,
+    since: Instant,
+}
+
+/// Las conexiones libres, con la clave de su configuración (`pool_key`).
+fn pool() -> &'static Mutex<Vec<(String, Idle)>> {
+    static POOL: OnceLock<Mutex<Vec<(String, Idle)>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// La clave de una configuración en el pool, sin guardar la contraseña en claro: todo lo que decide cómo es la
+/// conexión (servidor, usuario, cifrado, script de inicio…) salvo la base, que va en cada conexión libre.
+fn pool_key(cfg: &ConnConfig) -> String {
+    let mut c = cfg.clone();
+    c.database.clear();
+    c.id.clear();
+    c.name.clear();
+    c.color.clear();
+    c.folder.clear();
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_string(&c).unwrap_or_default().as_bytes());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Deja una conexión libre para otra sesión, si caben más; las caducadas se cierran.
+fn put_idle(key: String, idle: Idle) {
+    let mut pool = pool().lock();
+    pool.retain(|(_, i)| i.since.elapsed() < IDLE_TTL);
+    if pool.iter().filter(|(k, _)| *k == key).count() < IDLE_MAX {
+        pool.push((key, idle));
+    }
+}
+
+fn has_idle(key: &str, wanted: &str) -> bool {
+    pool().lock().iter().any(|(k, i)| k == key && i.facts.serves(wanted) && i.since.elapsed() < IDLE_TTL)
+}
+
+/// Una conexión libre para la base `wanted`, la más reciente. Si lleva un rato parada se comprueba antes con un
+/// SELECT 1: un cortafuegos puede haberla cerrado sin avisar.
+fn take_idle(key: &str, wanted: &str) -> Option<Idle> {
+    loop {
+        let mut idle = {
+            let mut pool = pool().lock();
+            pool.retain(|(_, i)| i.since.elapsed() < IDLE_TTL);
+            let at = pool.iter().rposition(|(k, i)| k == key && i.facts.serves(wanted))?;
+            pool.remove(at).1
+        };
+        if idle.since.elapsed() < IDLE_PING {
+            return Some(idle);
+        }
+        let alive = rt().block_on(async {
+            let ping = async { idle.client.simple_query("SELECT 1").await?.into_results().await };
+            matches!(tokio::time::timeout(Duration::from_secs(5), ping).await, Ok(Ok(_)))
+        });
+        if alive {
+            return Some(idle);
+        }
+    }
+}
+
+/// Abre una conexión en la base `database` ("" = la predeterminada del login) con el script de inicio, y lee de una
+/// vez la base, la familia del servidor y su descripción.
+async fn open_connection(cfg: &ConnConfig, database: &str) -> Result<Idle> {
+    let mut client = connect_client(cfg, Some(database.to_string())).await?;
+    let facts = async {
+        client
+            .simple_query(
+                "SELECT DB_NAME(), CAST(SERVERPROPERTY('EngineEdition') AS int), @@VERSION, \
+                 CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(50)), CAST(SERVERPROPERTY('Edition') AS nvarchar(100))",
+            )
+            .await?
+            .into_first_result()
+            .await
+    }
+    .await;
+    let row: Vec<Cell> = facts.ok().and_then(|rows| rows.into_iter().next()).map(row_to_cells).unwrap_or_default();
+    let cell = |i: usize| row.get(i).map(cell_str).unwrap_or_default();
+    let version = cell(2);
+    let engine = Engine::detect(row.get(1).map(cell_i64).unwrap_or(0), &version);
+    let mut info = String::new();
+    if !row.is_empty() {
+        let first = version.lines().next().unwrap_or("").trim().to_string();
+        info = format!("{} — {} ({})", first, cell(4), cell(3));
+        if let Some(label) = engine.label() {
+            info.push_str(&format!(" · {label}"));
+        }
+    }
+    let actual = cell(0);
+    Ok(Idle {
+        client,
+        facts: Facts {
+            home: database.to_string(),
+            database: if actual.is_empty() { database.to_string() } else { actual },
+            engine,
+            info,
+        },
+        since: Instant::now(),
+    })
 }
 
 /// Familia del servidor según `SERVERPROPERTY('EngineEdition')`: decide qué SQL de catálogo y qué DDL se escriben.
@@ -42,7 +219,7 @@ enum Engine {
     /// SQL Server, Azure SQL Database y Managed Instance, Azure SQL Edge, SQL database de Fabric.
     SqlServer,
     /// Azure Synapse dedicated SQL pool y Analytics Platform System / PDW (EngineEdition 6): tablas distribuidas,
-    /// claves solo NOT ENFORCED, sin claves foráneas, triggers, secuencias ni FOR XML.
+    /// claves solo NOT ENFORCED, sin claves foráneas, triggers, secuencias, FOR XML ni USE.
     Synapse,
     /// Synapse serverless SQL pool y Warehouse / SQL analytics endpoint de Fabric (EngineEdition 11).
     Warehouse,
@@ -69,71 +246,299 @@ impl Engine {
     }
 }
 
+/// Lo que un lote deja en la sesión, visto por encima (fuera de cadenas y comentarios): decide si otra conexión
+/// valdría igual que esta.
+#[derive(Debug, Default, PartialEq)]
+struct Effects {
+    /// SET de una opción de sesión (no el de un UPDATE ni el de una variable), contexto de sesión, rol de aplicación.
+    session: bool,
+    /// Crea tablas #temporales.
+    temp: bool,
+    /// Abre una transacción (BEGIN TRAN).
+    tran: bool,
+    /// Cambia de base (USE).
+    uses: bool,
+    /// El lote es solo `USE base`: la base.
+    use_only: Option<String>,
+}
+
+/// Palabras, identificadores entre corchetes o comillas dobles, cadenas (`'`) y signos de un lote de T-SQL, sin
+/// comentarios.
+fn sql_tokens(sql: &str) -> Vec<String> {
+    let c: Vec<char> = sql.chars().collect();
+    let is_word = |ch: char| ch.is_alphanumeric() || matches!(ch, '_' | '@' | '#' | '$');
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < c.len() {
+        let ch = c[i];
+        if ch.is_whitespace() {
+            i += 1;
+        } else if ch == '-' && c.get(i + 1) == Some(&'-') {
+            while i < c.len() && c[i] != '\n' {
+                i += 1;
+            }
+        } else if ch == '/' && c.get(i + 1) == Some(&'*') {
+            // Los comentarios de T-SQL se anidan.
+            let mut depth = 0;
+            while i < c.len() {
+                if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if c[i] == '*' && c.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        } else if ch == '\'' || ch == '"' || ch == '[' {
+            let close = if ch == '[' { ']' } else { ch };
+            let start = i;
+            i += 1;
+            while i < c.len() {
+                if c[i] == close {
+                    if c.get(i + 1) == Some(&close) {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push(if ch == '\'' { "'".to_string() } else { c[start..i].iter().collect() });
+        } else if is_word(ch) {
+            let start = i;
+            while i < c.len() && is_word(c[i]) {
+                i += 1;
+            }
+            out.push(c[start..i].iter().collect());
+        } else {
+            out.push(ch.to_string());
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Un identificador sin corchetes ni comillas dobles.
+fn unquote_ident(s: &str) -> String {
+    if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+        inner.replace("]]", "]")
+    } else if let Some(inner) = s.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        inner.replace("\"\"", "\"")
+    } else {
+        s.to_string()
+    }
+}
+
+fn session_effects(sql: &str) -> Effects {
+    let raw = sql_tokens(sql);
+    let t: Vec<String> = raw.iter().map(|s| s.to_uppercase()).collect();
+    let at = |i: usize| t.get(i).map(String::as_str).unwrap_or("");
+    let name = |s: &str| s.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '[' | '"'));
+    let mut e = Effects::default();
+    for i in 0..t.len() {
+        match at(i) {
+            "SET" => {
+                // `UPDATE … SET col = …`, `SET t.col = …`, `SET @v = …` y `SET col += …` asignan; lo demás es una opción.
+                let next = at(i + 2);
+                let assigns = next == "="
+                    || next == "."
+                    || (matches!(next, "+" | "-" | "*" | "/" | "%" | "&" | "^" | "|") && at(i + 3) == "=");
+                if name(at(i + 1)) && !assigns {
+                    e.session = true;
+                }
+            }
+            "TABLE" | "INTO" if at(i + 1).starts_with('#') => e.temp = true,
+            "BEGIN" if matches!(at(i + 1), "TRAN" | "TRANSACTION" | "DISTRIBUTED") => e.tran = true,
+            // `OPTION (USE HINT …)` y `USE PLAN` no cambian de base.
+            "USE" if i == 0 || !matches!(at(i - 1), "(" | ",") => e.uses = true,
+            "SP_SET_SESSION_CONTEXT" | "SP_GETAPPLOCK" | "SP_SETAPPROLE" => e.session = true,
+            _ => {}
+        }
+    }
+    let code: Vec<&str> = raw.iter().map(String::as_str).filter(|s| *s != ";").collect();
+    if code.len() == 2 && code[0].eq_ignore_ascii_case("USE") && name(code[1]) {
+        e.use_only = Some(unquote_ident(code[1]));
+    }
+    e
+}
+
 pub struct MssqlDriver {
     cfg: ConnConfig,
-    rt: tokio::runtime::Runtime,
+    /// `pool_key(cfg)`: las conexiones libres que puede tomar y dejar esta sesión.
+    key: String,
     client: Option<Cli>,
+    /// La base con que se abrió la conexión actual ("" = la predeterminada del login) y en la que estaba al abrirse.
+    home: String,
+    home_db: String,
     cursor: Option<Cursor>,
     cancel: Arc<Mutex<Option<CancellationToken>>>,
     database: String,
     autocommit: bool,
     in_tx: bool,
+    /// Un BEGIN TRAN en modo automático: se mira @@TRANCOUNT tras cada lote hasta que vuelva a 0.
+    tx_maybe: bool,
+    /// Estado que otra conexión no tendría: SET del usuario, tablas #temporales, contexto de sesión.
+    session_state: bool,
     showplan: bool,
     engine: Engine,
+    info: String,
+    /// Lo que pasó en el lote además de la consulta (conectar, cortar el resultado anterior), para la salida.
+    notes: Vec<String>,
 }
 
 impl MssqlDriver {
     pub fn connect(cfg: ConnConfig) -> Result<MssqlDriver> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let client = rt.block_on(connect_client(&cfg, None))?;
         let mut d = MssqlDriver {
-            database: cfg.database.clone(),
+            key: pool_key(&cfg),
             cfg,
-            rt,
-            client: Some(client),
+            client: None,
+            home: String::new(),
+            home_db: String::new(),
             cursor: None,
             cancel: Arc::new(Mutex::new(None)),
+            database: String::new(),
             autocommit: true,
             in_tx: false,
+            tx_maybe: false,
+            session_state: false,
             showplan: false,
             engine: Engine::SqlServer,
+            info: String::new(),
+            notes: Vec::new(),
         };
-        if d.database.is_empty() {
-            d.database = d.current_database().unwrap_or_default();
-        }
-        let edition = d
-            .query_rows("SELECT CAST(SERVERPROPERTY('EngineEdition') AS int), @@VERSION")
-            .unwrap_or_default();
-        if let Some(r) = edition.first() {
-            d.engine = Engine::detect(cell_i64(&r[0]), &cell_str(&r[1]));
-        }
+        let home = d.cfg.database.clone();
+        d.attach(&home)?;
+        trace(&d.notes.join(" · "));
+        d.notes.clear();
         Ok(d)
     }
 
-    /// Devuelve el cliente, reconectando si la conexión se perdió o se canceló.
-    fn take_client(&mut self) -> Result<Cli> {
-        if let Some(c) = self.client.take() {
-            return Ok(c);
-        }
-        let db = if self.database.is_empty() {
-            None
-        } else {
-            Some(self.database.clone())
+    /// Pone una conexión en la base `wanted` ("" = la predeterminada del login): una libre del pool si la hay o una
+    /// nueva (con el script de inicio), y el modo de transacción de la sesión. Lo que la sesión tuviera (transacción,
+    /// tablas temporales, SET) no pasa a la conexión nueva: se avisa.
+    fn attach(&mut self, wanted: &str) -> Result<()> {
+        let t0 = Instant::now();
+        let (mut idle, reused) = match take_idle(&self.key, wanted) {
+            Some(i) => (i, true),
+            None => (rt().block_on(open_connection(&self.cfg, wanted))?, false),
         };
-        let mut c = self.rt.block_on(connect_client(&self.cfg, db))?;
         if !self.autocommit {
-            self.rt.block_on(async {
-                c.simple_query("SET IMPLICIT_TRANSACTIONS ON")
-                    .await?
-                    .into_results()
-                    .await
+            rt().block_on(async {
+                idle.client.simple_query("SET IMPLICIT_TRANSACTIONS ON").await?.into_results().await
             })?;
         }
+        let lost = self.lost_state();
+        if !lost.is_empty() {
+            self.notes.push(format!("conexión nueva: se han perdido {lost}"));
+        }
         self.in_tx = false;
+        self.tx_maybe = false;
+        self.session_state = false;
         self.showplan = false;
-        Ok(c)
+        self.adopt(idle);
+        let how = if reused { "conexión libre reutilizada" } else { "conexión abierta" };
+        self.notes.push(format!("{how} en {} ms", t0.elapsed().as_millis()));
+        Ok(())
+    }
+
+    fn adopt(&mut self, idle: Idle) {
+        self.client = Some(idle.client);
+        self.home = idle.facts.home;
+        self.home_db = idle.facts.database.clone();
+        self.database = idle.facts.database;
+        self.engine = idle.facts.engine;
+        self.info = idle.facts.info;
+    }
+
+    /// Lo que se sabe de la conexión actual, para dejarla en el pool.
+    fn facts(&self) -> Facts {
+        Facts {
+            home: if self.database.eq_ignore_ascii_case(&self.home_db) { self.home.clone() } else { self.database.clone() },
+            database: self.database.clone(),
+            engine: self.engine,
+            info: self.info.clone(),
+        }
+    }
+
+    /// Si la sesión tiene algo que otra conexión no tendría: transacción (o modo manual), SET, tablas temporales.
+    fn keeps_session(&self) -> bool {
+        !self.autocommit || self.in_tx || self.tx_maybe || self.session_state || self.showplan
+    }
+
+    /// Lo que la sesión perdería con otra conexión, para avisar ("" si nada).
+    fn lost_state(&self) -> String {
+        let mut lost = Vec::new();
+        if self.in_tx || self.tx_maybe {
+            lost.push("la transacción abierta");
+        }
+        if self.session_state {
+            lost.push("las tablas temporales y los SET de la sesión");
+        }
+        if self.showplan {
+            lost.push("SHOWPLAN_XML");
+        }
+        lost.join(", ")
+    }
+
+    /// Devuelve el cliente, reconectando (en la misma base) si la conexión se perdió o se canceló.
+    fn take_client(&mut self) -> Result<Cli> {
+        if self.client.is_none() {
+            let db = self.database.clone();
+            self.attach(&db)?;
+        }
+        self.client.take().ok_or_else(|| anyhow!("Sin conexión con el servidor"))
+    }
+
+    /// Deja una conexión de reserva abierta en segundo plano para la base actual, si el pool no tiene ya una.
+    fn ensure_reserve(&self) {
+        if has_idle(&self.key, &self.database) {
+            return;
+        }
+        let (cfg, key, wanted) = (self.cfg.clone(), self.key.clone(), self.database.clone());
+        let _ = std::thread::Builder::new().name("celer-mssql-reserve".into()).spawn(move || {
+            if let Ok(idle) = rt().block_on(open_connection(&cfg, &wanted)) {
+                put_idle(key, idle);
+            }
+        });
+    }
+
+    /// Azure Synapse dedicated no admite USE ni consulta otras bases con nombres de tres partes: cambiar de base es
+    /// abrir la conexión en ella. La vieja queda libre en el pool si no lleva estado de sesión.
+    fn reconnect_to(&mut self, db: &str) -> Result<()> {
+        if db.eq_ignore_ascii_case(&self.database) {
+            return Ok(());
+        }
+        self.close_cursor()?;
+        self.refresh_tx_state();
+        if self.in_tx {
+            bail!("Hay una transacción abierta: confírmala o deshazla antes de cambiar de base de datos (Azure Synapse no admite USE: cambiar de base es abrir otra conexión)");
+        }
+        let reusable = !self.keeps_session();
+        let facts = self.facts();
+        let old = self.client.take();
+        if let Err(e) = self.attach(db) {
+            self.client = old;
+            return Err(e);
+        }
+        if let (true, Some(client)) = (reusable, old) {
+            put_idle(self.key.clone(), Idle { client, facts, since: Instant::now() });
+        }
+        Ok(())
+    }
+
+    /// Para leer el catálogo de otra base en Azure Synapse dedicated, la sesión se conecta a ella.
+    fn synapse_enter(&mut self, db: &str) -> Result<()> {
+        if self.engine == Engine::Synapse && !db.is_empty() {
+            self.reconnect_to(db)
+        } else {
+            Ok(())
+        }
     }
 
     fn start(&mut self, sql: String, dml: bool) -> Result<()> {
@@ -141,16 +546,19 @@ impl MssqlDriver {
         let client = self.take_client()?;
         let token = CancellationToken::new();
         *self.cancel.lock() = Some(token.clone());
+        let abandon = CancellationToken::new();
+        let leave = abandon.clone();
         let (tx, rx) = mpsc::channel(1024);
         let (dtx, drx) = oneshot::channel();
-        self.rt.spawn(async move {
-            let c = run_query(client, sql, dml, tx, token).await;
-            let _ = dtx.send(c);
+        rt().spawn(async move {
+            let done = run_query(client, sql, dml, tx, token, leave).await;
+            let _ = dtx.send(done);
         });
         self.cursor = Some(Cursor {
             rx,
             done: drx,
             peeked: None,
+            abandon,
         });
         Ok(())
     }
@@ -160,7 +568,7 @@ impl MssqlDriver {
         if let Some(it) = cur.peeked.take() {
             return Some(it);
         }
-        self.rt.block_on(cur.rx.recv())
+        rt().block_on(cur.rx.recv())
     }
 
     fn peek_back(&mut self, it: Item) {
@@ -173,9 +581,64 @@ impl MssqlDriver {
     fn finish(&mut self) {
         if let Some(cur) = self.cursor.take() {
             drop(cur.rx);
-            self.client = self.rt.block_on(cur.done).ok().flatten();
+            self.client = rt().block_on(cur.done).ok().and_then(|f| f.client);
         }
         *self.cancel.lock() = None;
+    }
+
+    /// Recoge la conexión tras cortar un resultado a medias y anota cómo fue.
+    fn after_cut(&mut self, finished: Option<Finished>, t0: Instant) {
+        let ms = t0.elapsed().as_millis();
+        let (client, cut) = match finished {
+            Some(f) => (f.client, f.cut),
+            None => (None, None),
+        };
+        let how = match cut {
+            Some(Cut { rows, attention: true }) => format!("resultado anterior cortado con ATTENTION en {ms} ms ({rows} filas más leídas)"),
+            Some(Cut { rows, attention: false }) => format!("resto del resultado anterior leído en {ms} ms ({rows} filas)"),
+            None => format!("resultado anterior cerrado en {ms} ms"),
+        };
+        if client.is_none() {
+            self.notes.push(format!("{how}; la conexión no se pudo conservar"));
+        } else {
+            self.notes.push(how);
+        }
+        self.client = client;
+    }
+
+    /// Sin estado de sesión que conservar y con un corte que tarda: la sesión sigue con una conexión libre si la hay
+    /// (si no, espera al corte hasta PATIENCE_MAX, y si tampoco llega abrirá otra) y la vieja termina de cortarse en
+    /// segundo plano y queda libre en el pool. Deja además una de reserva para la próxima vez.
+    fn leave_slow_cut(&mut self, mut done: oneshot::Receiver<Finished>, t0: Instant) {
+        let adopted = take_idle(&self.key, &self.database);
+        if adopted.is_none() {
+            let wait = PATIENCE_MAX.saturating_sub(PATIENCE);
+            if let Ok(r) = rt().block_on(async { tokio::time::timeout(wait, &mut done).await }) {
+                *self.cancel.lock() = None;
+                self.after_cut(r.ok(), t0);
+                self.ensure_reserve();
+                return;
+            }
+        }
+        let (key, facts) = (self.key.clone(), self.facts());
+        rt().spawn(async move {
+            if let Ok(Finished { client: Some(client), .. }) = done.await {
+                put_idle(key, Idle { client, facts, since: Instant::now() });
+            }
+        });
+        *self.cancel.lock() = None;
+        let ms = t0.elapsed().as_millis();
+        match adopted {
+            Some(idle) => {
+                self.adopt(idle);
+                self.notes.push(format!("resultado anterior abandonado a los {ms} ms: sigue en una conexión libre (la otra se corta en segundo plano)"));
+            }
+            None => {
+                self.client = None;
+                self.notes.push(format!("resultado anterior abandonado a los {ms} ms: se abre otra conexión"));
+            }
+        }
+        self.ensure_reserve();
     }
 
     /// Lee resultados hasta que uno supera `fetch` filas (queda abierto) o acaba el lote.
@@ -232,22 +695,34 @@ impl MssqlDriver {
         self.close_cursor()?;
         let mut client = self.take_client()?;
         let sql = sql.to_string();
-        let (res, client) = self.rt.block_on(async move {
-            let r: Result<Vec<Vec<Cell>>> = async {
-                // Con el mensaje del servidor, como en las consultas del usuario (sin "Token error … on server …").
-                let stream = client.simple_query(sql).await.map_err(|e| anyhow!(friendly_error(&e)))?;
-                let rows = stream.into_first_result().await.map_err(|e| anyhow!(friendly_error(&e)))?;
+        let (res, client) = rt().block_on(async move {
+            let r: std::result::Result<Vec<Vec<Cell>>, tiberius::error::Error> = async {
+                let stream = client.simple_query(sql).await?;
+                let rows = stream.into_first_result().await?;
                 Ok(rows.into_iter().map(row_to_cells).collect())
             }
             .await;
             (r, client)
         });
-        self.client = Some(client);
-        res
+        match res {
+            Ok(rows) => {
+                self.client = Some(client);
+                Ok(rows)
+            }
+            Err(e) => {
+                // Un error de red deja la conexión inservible: la siguiente sentencia abre otra.
+                if !is_fatal(&e) {
+                    self.client = Some(client);
+                }
+                // Con el mensaje del servidor, como en las consultas del usuario (sin "Token error … on server …").
+                Err(anyhow!(friendly_error(&e)))
+            }
+        }
     }
 
+    /// Mira @@TRANCOUNT en modo manual y tras un BEGIN TRAN en automático; si no, no hay transacción y no se pregunta.
     fn refresh_tx_state(&mut self) {
-        if self.autocommit {
+        if self.autocommit && !self.tx_maybe {
             self.in_tx = false;
             return;
         }
@@ -261,6 +736,95 @@ impl MssqlDriver {
             .and_then(|r| r.first().and_then(|r| r.first()).map(cell_i64))
             .unwrap_or(0)
             > 0;
+        if self.autocommit && !self.in_tx {
+            self.tx_maybe = false;
+        }
+    }
+
+    /// Los tiempos de lo que no es la consulta en sí (abrir o cambiar de conexión, cortar el resultado anterior) para
+    /// la salida, si hubo algo de eso; con CELER_MSSQL_TRACE, siempre, y también por la salida de error.
+    fn timing_line(&mut self, first_ms: u128) -> Option<String> {
+        let always = std::env::var_os("CELER_MSSQL_TRACE").is_some();
+        if self.notes.is_empty() && !always {
+            return None;
+        }
+        let mut parts = std::mem::take(&mut self.notes);
+        parts.push(format!("primera respuesta del servidor en {first_ms} ms"));
+        let line = format!("Tiempos: {}", parts.join(" · "));
+        trace(&line);
+        Some(line)
+    }
+
+    /// Columnas de una tabla (`columns_query`). En Synapse, si sys.indexes no marca la clave primaria, se toma de
+    /// sus restricciones (`synapse_keys`).
+    fn column_rows(&mut self, o: &ObjectRef) -> Result<Vec<Vec<Cell>>> {
+        let mut rows = self.query_rows(&self.columns_query(o))?;
+        if self.engine == Engine::Synapse && !rows.is_empty() && !rows.iter().any(|r| cell_i64(&r[7]) == 1) {
+            let pk: Vec<String> = self
+                .synapse_keys(o, false)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|k| k.primary)
+                .flat_map(|k| k.columns.split(", ").map(str::to_string).collect::<Vec<_>>())
+                .collect();
+            for r in rows.iter_mut() {
+                if pk.contains(&cell_str(&r[0])) {
+                    r[7] = Cell::Int(1);
+                }
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Azure Synapse dedicated: las claves primarias y únicas (siempre NOT ENFORCED) de `sys.key_constraints`, con sus
+    /// columnas de `sys.index_columns` o, si su índice no figura allí, de `INFORMATION_SCHEMA.KEY_COLUMN_USAGE`. La
+    /// documentación no dice si estas claves salen en `sys.indexes`: así se ven en los dos casos.
+    fn synapse_keys(&mut self, o: &ObjectRef, quoted: bool) -> Result<Vec<IndexDef>> {
+        let db = qi(&o.database);
+        let keys = self.query_rows(&format!(
+            "SELECT k.name, k.type, k.unique_index_id FROM {db}.sys.key_constraints k WHERE k.parent_object_id = {} ORDER BY k.type, k.name",
+            self.obj_id(o)
+        ))?;
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut by_index = self.index_columns(o, quoted).unwrap_or_default();
+        let mut by_name: HashMap<String, String> = HashMap::new();
+        if keys.iter().any(|k| !by_index.contains_key(&cell_i64(&k[2]))) {
+            let rows = self
+                .query_rows(&format!(
+                    "SELECT CONSTRAINT_NAME, COLUMN_NAME FROM {db}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE \
+                     WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION",
+                    ql(&o.schema),
+                    ql(&o.name)
+                ))
+                .unwrap_or_default();
+            for r in rows {
+                let col = if quoted { qi(&cell_str(&r[1])) } else { cell_str(&r[1]) };
+                let list = by_name.entry(cell_str(&r[0])).or_default();
+                if !list.is_empty() {
+                    list.push_str(", ");
+                }
+                list.push_str(&col);
+            }
+        }
+        Ok(keys
+            .iter()
+            .map(|k| {
+                let name = cell_str(&k[0]);
+                let primary = cell_str(&k[1]).trim() == "PK";
+                let columns = by_index.remove(&cell_i64(&k[2])).or_else(|| by_name.remove(&name)).unwrap_or_default();
+                IndexDef {
+                    name,
+                    type_code: 2,
+                    type_desc: "NONCLUSTERED".into(),
+                    primary,
+                    unique: true,
+                    unique_constraint: !primary,
+                    columns,
+                }
+            })
+            .collect())
     }
 
     /// Si una tabla tiene la carpeta `key` ("indexes", "fks", "triggers") en este servidor: Synapse dedicated no tiene
@@ -331,6 +895,7 @@ impl MssqlDriver {
     }
 
     fn table_ddl(&mut self, o: &ObjectRef) -> Result<String> {
+        self.synapse_enter(&o.database)?;
         let columns = self.query_rows(&self.columns_query(o))?;
         if columns.is_empty() {
             bail!("No se encontró el objeto {}", self.qualified_name(o));
@@ -342,7 +907,7 @@ impl MssqlDriver {
              FROM {db}.sys.indexes i WHERE i.object_id = {oid} ORDER BY i.is_primary_key DESC, i.name"
         ))?;
         let mut key_cols = self.index_columns(o, true)?;
-        let indexes = idx
+        let mut indexes: Vec<IndexDef> = idx
             .iter()
             .map(|r| IndexDef {
                 name: cell_str(&r[1]),
@@ -354,6 +919,14 @@ impl MssqlDriver {
                 columns: key_cols.remove(&cell_i64(&r[0])).unwrap_or_default(),
             })
             .collect();
+        // Synapse: las claves NOT ENFORCED que sys.indexes no tenga (sin columnas no se pueden escribir).
+        if self.engine == Engine::Synapse {
+            for key in self.synapse_keys(o, true).unwrap_or_default() {
+                if !key.columns.is_empty() && !indexes.iter().any(|i| i.name == key.name) {
+                    indexes.push(key);
+                }
+            }
+        }
         // Synapse dedicated no tiene claves foráneas.
         let fks = if self.engine == Engine::Synapse {
             Vec::new()
@@ -644,6 +1217,10 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
         config.database(&db);
     }
     config.application_name("Celer");
+    config.packet_size(PACKET_SIZE);
+    // tiberius corta por defecto una respuesta que tarde más de 30 s (una consulta larga de Synapse, por ejemplo):
+    // aquí la consulta dura lo que tenga que durar y se para con Cancelar.
+    config.command_timeout(None);
     if cfg.integrated_auth {
         #[cfg(windows)]
         config.authentication(AuthMethod::Integrated);
@@ -719,9 +1296,10 @@ fn is_fatal(e: &tiberius::error::Error) -> bool {
     !matches!(e, tiberius::error::Error::Server(_))
 }
 
+/// Cómo acabó el lote para la conexión: utilizable (con el corte del resultado, si se dejó a medias) o perdida.
 enum Outcome {
-    Ok,
-    Broken,
+    Ok(Option<Cut>),
+    Broken(Option<Cut>),
 }
 
 async fn run_query(
@@ -730,20 +1308,21 @@ async fn run_query(
     dml: bool,
     tx: mpsc::Sender<Item>,
     token: CancellationToken,
-) -> Option<Cli> {
+    abandon: CancellationToken,
+) -> Finished {
     let outcome = {
-        let work = stream_query(&mut client, sql, dml, &tx);
+        let work = stream_query(&mut client, sql, dml, &tx, &abandon);
         tokio::select! {
             o = work => o,
             _ = token.cancelled() => {
                 let _ = tx.try_send(Item::Error("Consulta cancelada por el usuario (la conexión se ha reiniciado)".into()));
-                Outcome::Broken
+                Outcome::Broken(None)
             }
         }
     };
     match outcome {
-        Outcome::Ok => Some(client),
-        Outcome::Broken => None,
+        Outcome::Ok(cut) => Finished { client: Some(client), cut },
+        Outcome::Broken(cut) => Finished { client: None, cut },
     }
 }
 
@@ -752,20 +1331,21 @@ async fn stream_query(
     sql: String,
     dml: bool,
     tx: &mpsc::Sender<Item>,
+    abandon: &CancellationToken,
 ) -> Outcome {
     if dml {
         return match client.execute(sql, &[]).await {
             Ok(r) => {
                 let _ = tx.send(Item::Count(r.total() as i64)).await;
-                Outcome::Ok
+                Outcome::Ok(None)
             }
             Err(e) => {
                 let fatal = is_fatal(&e);
                 let _ = tx.send(Item::Error(friendly_error(&e))).await;
                 if fatal {
-                    Outcome::Broken
+                    Outcome::Broken(None)
                 } else {
-                    Outcome::Ok
+                    Outcome::Ok(None)
                 }
             }
         };
@@ -775,34 +1355,64 @@ async fn stream_query(
         Err(e) => {
             let fatal = is_fatal(&e);
             let _ = tx.send(Item::Error(friendly_error(&e))).await;
-            return if fatal { Outcome::Broken } else { Outcome::Ok };
+            return if fatal { Outcome::Broken(None) } else { Outcome::Ok(None) };
         }
     };
-    // Si la interfaz deja de leer (cierra el cursor), seguimos vaciando el flujo sin enviar.
-    let mut sending = true;
     loop {
-        match stream.try_next().await {
+        // Si se pide dejar el resultado mientras se espera al servidor, la lectura en curso no se pierde: el flujo
+        // la guarda y la siguiente llamada la continúa.
+        let next = tokio::select! {
+            biased;
+            _ = abandon.cancelled() => break,
+            r = stream.try_next() => r,
+        };
+        let sent = match next {
             Ok(Some(QueryItem::Metadata(m))) => {
-                if sending {
-                    let cols = m.columns().iter().map(column_info).collect();
-                    sending = tx.send(Item::Meta(cols)).await.is_ok();
-                }
+                let cols = m.columns().iter().map(column_info).collect();
+                tx.send(Item::Meta(cols)).await.is_ok()
             }
-            Ok(Some(QueryItem::Row(r))) => {
-                if sending {
-                    sending = tx.send(Item::Row(row_to_cells(r))).await.is_ok();
-                }
-            }
-            Ok(None) => return Outcome::Ok,
+            Ok(Some(QueryItem::Row(r))) => tx.send(Item::Row(row_to_cells(r))).await.is_ok(),
+            Ok(None) => return Outcome::Ok(None),
             Err(e) => {
-                if sending {
-                    sending = tx.send(Item::Error(friendly_error(&e))).await.is_ok();
+                let fatal = is_fatal(&e);
+                let sent = tx.send(Item::Error(friendly_error(&e))).await.is_ok();
+                if fatal {
+                    return Outcome::Broken(None);
                 }
-                if is_fatal(&e) {
-                    return Outcome::Broken;
-                }
+                sent
             }
+        };
+        // La interfaz ha cerrado el cursor.
+        if !sent {
+            break;
         }
+    }
+    // El resultado se deja a medias. Lo que ya viene de camino se sigue leyendo durante DRAIN_BUDGET (un resto pequeño
+    // acaba ahí); si no ha terminado, se corta con ATTENTION entre dos filas y se descarta hasta el acuse del
+    // servidor. La conexión queda limpia, con su sesión: no hace falta leer el resto ni volver a conectar.
+    let deadline = Instant::now() + DRAIN_BUDGET;
+    let mut cut = Cut { rows: 0, attention: false };
+    while Instant::now() < deadline {
+        match tokio::time::timeout(STUCK_CAP, stream.try_next()).await {
+            Ok(Ok(Some(QueryItem::Row(_)))) => cut.rows += 1,
+            Ok(Ok(Some(_))) => {}
+            Ok(Ok(None)) => return Outcome::Ok(Some(cut)),
+            Ok(Err(e)) if !is_fatal(&e) => {}
+            _ => return Outcome::Broken(Some(cut)),
+        }
+    }
+    drop(stream);
+    cut.attention = true;
+    match tokio::time::timeout(ATTENTION_CAP, client.cancel_query()).await {
+        Ok(Ok(())) => Outcome::Ok(Some(cut)),
+        _ => Outcome::Broken(Some(cut)),
+    }
+}
+
+/// Con CELER_MSSQL_TRACE en el entorno, los tiempos de conexión y de cada lote por la salida de error.
+fn trace(msg: &str) {
+    if !msg.is_empty() && std::env::var_os("CELER_MSSQL_TRACE").is_some() {
+        eprintln!("celer mssql: {msg}");
     }
 }
 
@@ -1018,7 +1628,21 @@ pub fn fmt_rows(n: i64) -> String {
 impl Driver for MssqlDriver {
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
+        self.notes.clear();
         let kw = first_keyword(sql);
+        let effects = session_effects(sql);
+        if let (Engine::Synapse, Some(db)) = (self.engine, &effects.use_only) {
+            self.reconnect_to(db)?;
+            let mut out = ExecOutput::default();
+            out.messages.push(format!(
+                "Base de datos: {} (Azure Synapse no admite USE: Celer abre la conexión en esa base)",
+                self.database
+            ));
+            out.messages.extend(self.timing_line(0));
+            out.in_transaction = self.in_tx;
+            out.elapsed_ms = t0.elapsed().as_millis() as u64;
+            return Ok(out);
+        }
         let upper = sql.trim_end().trim_end_matches(';').to_ascii_uppercase();
         // With SHOWPLAN_XML on, a DML statement answers with its plan as a result set, not a row count.
         let dml = matches!(kw.as_str(), "INSERT" | "UPDATE" | "DELETE" | "MERGE")
@@ -1027,12 +1651,20 @@ impl Driver for MssqlDriver {
             && !upper.contains(';')
             && !upper.contains("\nGO");
         self.start(sql.to_string(), dml)?;
+        let sent = Instant::now();
+        self.session_state |= effects.session || effects.temp;
+        self.tx_maybe |= effects.tran;
         if kw == "SET" {
             let words: Vec<&str> = upper.split_whitespace().collect();
             if words.get(1) == Some(&"SHOWPLAN_XML") {
                 self.showplan = words.get(2) == Some(&"ON");
             }
         }
+        // Hasta la primera respuesta del servidor (filas, recuento o error), para los tiempos.
+        if let Some(first) = self.next_item() {
+            self.peek_back(first);
+        }
+        let first_ms = sent.elapsed().as_millis();
         let mut out = ExecOutput::default();
         out.results = self.pump(fetch.max(1), &mut out.messages);
         if out.results.is_empty() && !out.messages.is_empty() && self.cursor.is_none() {
@@ -1040,13 +1672,14 @@ impl Driver for MssqlDriver {
             self.refresh_tx_state();
             bail!(msg);
         }
-        if kw == "USE" && self.cursor.is_none() {
-            if let Ok(db) = self.current_database() {
+        if effects.uses && self.cursor.is_none() {
+            if let Some(db) = self.query_rows("SELECT DB_NAME()").ok().and_then(|r| r.first().map(|r| cell_str(&r[0]))) {
                 self.database = db;
             }
         }
         self.refresh_tx_state();
         out.in_transaction = self.in_tx;
+        out.messages.extend(self.timing_line(first_ms));
         out.elapsed_ms = t0.elapsed().as_millis() as u64;
         Ok(out)
     }
@@ -1086,26 +1719,30 @@ impl Driver for MssqlDriver {
         }
     }
 
+    /// Deja el resultado abierto sin leer el resto: el lector lo corta con ATTENTION (`stream_query`). Con
+    /// transacción o estado de sesión se espera a ese corte para seguir en la misma conexión (Cancelar en la
+    /// interfaz cancela también la espera, y entonces la sesión se pierde); sin ellos, solo un momento: si tarda, la
+    /// sesión sigue en otra conexión (`leave_slow_cut`).
     fn close_cursor(&mut self) -> Result<()> {
-        if let Some(cur) = self.cursor.take() {
-            drop(cur.rx);
-            // El hilo de lectura vacía el resto del flujo. Si tarda, se corta la conexión.
-            let token = self.cancel.lock().clone();
+        let Some(cur) = self.cursor.take() else { return Ok(()) };
+        let t0 = Instant::now();
+        drop(cur.rx);
+        cur.abandon.cancel();
+        let mut done = cur.done;
+        let finished = if self.keeps_session() {
+            rt().block_on(&mut done).ok()
+        } else {
             // The timer is created inside the runtime: built outside it, tokio panics ("no reactor running").
-            match self
-                .rt
-                .block_on(async { tokio::time::timeout(Duration::from_secs(3), cur.done).await })
-            {
-                Ok(Ok(c)) => self.client = c,
-                _ => {
-                    if let Some(t) = token {
-                        t.cancel();
-                    }
-                    self.client = None;
+            match rt().block_on(async { tokio::time::timeout(PATIENCE, &mut done).await }) {
+                Ok(r) => r.ok(),
+                Err(_) => {
+                    self.leave_slow_cut(done, t0);
+                    return Ok(());
                 }
             }
-            *self.cancel.lock() = None;
-        }
+        };
+        *self.cancel.lock() = None;
+        self.after_cut(finished, t0);
         Ok(())
     }
 
@@ -1115,8 +1752,11 @@ impl Driver for MssqlDriver {
         }
         if on {
             self.query_rows("IF @@TRANCOUNT > 0 COMMIT; SET IMPLICIT_TRANSACTIONS OFF")?;
-        } else {
-            self.query_rows("SET IMPLICIT_TRANSACTIONS ON")?;
+        } else if let Err(e) = self.query_rows("SET IMPLICIT_TRANSACTIONS ON") {
+            if self.engine == Engine::Synapse {
+                bail!("Azure Synapse no ha aceptado el modo manual de transacciones (SET IMPLICIT_TRANSACTIONS ON); la consola sigue en automático. {e}");
+            }
+            return Err(e);
         }
         self.autocommit = on;
         self.refresh_tx_state();
@@ -1136,6 +1776,9 @@ impl Driver for MssqlDriver {
     }
 
     fn children(&mut self, path: &[String]) -> Result<Vec<MetaNode>> {
+        if let Some(db) = path.first() {
+            self.synapse_enter(db)?;
+        }
         let p: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
         match p.as_slice() {
             [] => {
@@ -1196,6 +1839,20 @@ impl Driver for MssqlDriver {
                 let d = qi(db);
                 let s = ql(schema);
                 let (sql, kind, branch) = match *folder {
+                    // Synapse dedicated: sys.partitions no tiene las filas, que están repartidas por las distribuciones de
+                    // los nodos (la consulta de tamaños de tabla de la documentación de Microsoft, sin el espacio).
+                    "tables" if self.engine == Engine::Synapse => (
+                        format!(
+                            "SELECT t.name, SUM(nps.row_count) FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id \
+                             LEFT JOIN sys.pdw_table_mappings tm ON tm.object_id = t.object_id \
+                             LEFT JOIN sys.pdw_nodes_tables nt ON nt.name = tm.physical_name \
+                             LEFT JOIN sys.dm_pdw_nodes_db_partition_stats nps ON nps.object_id = nt.object_id \
+                               AND nps.pdw_node_id = nt.pdw_node_id AND nps.distribution_id = nt.distribution_id AND nps.index_id <= 1 \
+                             WHERE s.name = {s} GROUP BY t.name ORDER BY t.name"
+                        ),
+                        "table",
+                        true,
+                    ),
                     "tables" => (
                         format!(
                             "SELECT t.name, SUM(CASE WHEN p.index_id IN (0,1) THEN p.rows ELSE 0 END) FROM {d}.sys.tables t \
@@ -1235,7 +1892,13 @@ impl Driver for MssqlDriver {
                     ),
                     _ => return Ok(vec![]),
                 };
-                let rows = self.query_rows(&sql)?;
+                let rows = match self.query_rows(&sql) {
+                    // Sin permiso para las vistas de los nodos (VIEW DATABASE STATE), las tablas sin recuento.
+                    Err(_) if self.engine == Engine::Synapse && *folder == "tables" => self.query_rows(&format!(
+                        "SELECT t.name, NULL FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE s.name = {s} ORDER BY t.name"
+                    ))?,
+                    r => r?,
+                };
                 Ok(rows
                     .iter()
                     .map(|r| {
@@ -1262,7 +1925,7 @@ impl Driver for MssqlDriver {
             [db, schema, folder, name] => {
                 let kind = if *folder == "views" { "view" } else { "table" };
                 let o = ObjectRef::new(db, schema, name, kind);
-                let cols = self.query_rows(&self.columns_query(&o))?;
+                let cols = self.column_rows(&o)?;
                 let mut nodes: Vec<MetaNode> = cols
                     .iter()
                     .map(|r| {
@@ -1326,7 +1989,7 @@ impl Driver for MssqlDriver {
                              FROM {d}.sys.indexes i WHERE i.object_id = {oid} AND i.type > 0 ORDER BY i.is_primary_key DESC, i.name"
                         ))?;
                         let mut cols = self.index_columns(&o, false)?;
-                        Ok(rows
+                        let mut nodes: Vec<MetaNode> = rows
                             .iter()
                             .map(|r| {
                                 let mut det = format!("({})", cols.remove(&cell_i64(&r[4])).unwrap_or_default());
@@ -1338,7 +2001,17 @@ impl Driver for MssqlDriver {
                                 det.push_str(&format!(" · {}", cell_str(&r[1]).to_lowercase()));
                                 MetaNode::leaf(cell_str(&r[0]), "index", Some(det))
                             })
-                            .collect())
+                            .collect();
+                        // Synapse: las claves NOT ENFORCED que sys.indexes no tenga.
+                        if self.engine == Engine::Synapse {
+                            for key in self.synapse_keys(&o, false).unwrap_or_default() {
+                                if !nodes.iter().any(|n| n.name == key.name) {
+                                    let what = if key.primary { "PK" } else { "único" };
+                                    nodes.push(MetaNode::leaf(key.name, "index", Some(format!("({}) · {what} · not enforced", key.columns))));
+                                }
+                            }
+                        }
+                        Ok(nodes)
                     }
                     "fks" => {
                         let rows = self.query_rows(&format!(
@@ -1385,7 +2058,8 @@ impl Driver for MssqlDriver {
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {
-        let rows = self.query_rows(&self.columns_query(obj))?;
+        self.synapse_enter(&obj.database)?;
+        let rows = self.column_rows(obj)?;
         Ok(rows
             .iter()
             .map(|r| {
@@ -1407,6 +2081,7 @@ impl Driver for MssqlDriver {
     }
 
     fn ddl(&mut self, obj: &ObjectRef) -> Result<String> {
+        self.synapse_enter(&obj.database)?;
         match obj.kind.as_str() {
             "table" => self.table_ddl(obj),
             "synonym" => {
@@ -1460,6 +2135,7 @@ impl Driver for MssqlDriver {
     }
 
     fn completion(&mut self, database: &str) -> Result<CompletionSchema> {
+        self.synapse_enter(database)?;
         let d = qi(database);
         let rows = self.query_rows(&format!(
             "SELECT TOP 200000 s.name, o.name, c.name FROM {d}.sys.objects o JOIN {d}.sys.schemas s ON s.schema_id = o.schema_id \
@@ -1488,14 +2164,22 @@ impl Driver for MssqlDriver {
         Ok(rows.iter().map(|r| cell_str(&r[0])).collect())
     }
 
+    /// La base se sigue al conectar, con USE y al cambiar de base: no hace falta preguntarla.
     fn current_database(&mut self) -> Result<String> {
+        if !self.database.is_empty() {
+            return Ok(self.database.clone());
+        }
         let rows = self.query_rows("SELECT DB_NAME()")?;
         Ok(rows.first().map(|r| cell_str(&r[0])).unwrap_or_default())
     }
 
     fn use_database(&mut self, db: &str) -> Result<()> {
-        self.query_rows(&format!("USE {}", qi(db)))?;
-        self.database = db.to_string();
+        if self.engine == Engine::Synapse {
+            return self.reconnect_to(db);
+        }
+        // USE no devuelve filas: el primer resultado es el de DB_NAME(), en la misma ida y vuelta.
+        let rows = self.query_rows(&format!("USE {}; SELECT DB_NAME()", qi(db)))?;
+        self.database = rows.first().map(|r| cell_str(&r[0])).filter(|s| !s.is_empty()).unwrap_or_else(|| db.to_string());
         Ok(())
     }
 
@@ -1517,7 +2201,11 @@ impl Driver for MssqlDriver {
         qi(s)
     }
 
+    /// Leída al conectar (`open_connection`); si entonces no se pudo, se pregunta.
     fn server_info(&mut self) -> Result<String> {
+        if !self.info.is_empty() {
+            return Ok(self.info.clone());
+        }
         let rows = self.query_rows(
             "SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(50)), CAST(SERVERPROPERTY('Edition') AS nvarchar(100)), @@VERSION",
         )?;
@@ -1542,6 +2230,29 @@ impl Driver for MssqlDriver {
                 t.cancel();
             }
         })
+    }
+}
+
+impl Drop for MssqlDriver {
+    /// La sesión se cierra: su conexión queda libre para otra sesión de la misma configuración si no lleva estado
+    /// propio (con un resultado a medias, después de cortarlo en segundo plano).
+    fn drop(&mut self) {
+        if self.keeps_session() {
+            return;
+        }
+        let (key, facts) = (self.key.clone(), self.facts());
+        if let Some(cur) = self.cursor.take() {
+            drop(cur.rx);
+            cur.abandon.cancel();
+            let done = cur.done;
+            rt().spawn(async move {
+                if let Ok(Finished { client: Some(client), .. }) = done.await {
+                    put_idle(key, Idle { client, facts, since: Instant::now() });
+                }
+            });
+        } else if let Some(client) = self.client.take() {
+            put_idle(key, Idle { client, facts, since: Instant::now() });
+        }
     }
 }
 
@@ -1577,6 +2288,48 @@ mod tests {
             unique_constraint: unique && !primary && type_code == 2,
             columns: columns.into(),
         }
+    }
+
+    #[test]
+    fn batch_effects_on_the_session() {
+        let e = |sql: &str| session_effects(sql);
+        // Assignments are not session options.
+        assert_eq!(e("UPDATE t SET a = 1, [b] = 2 WHERE id = 3"), Effects::default());
+        assert_eq!(e("UPDATE t SET t.a = 1; SET @x = 2; SET @y += 1; UPDATE t SET c += 1"), Effects::default());
+        assert_eq!(e("MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.a = s.a;"), Effects::default());
+        assert!(e("SET NOCOUNT ON; SELECT 1").session);
+        assert!(e("set lock_timeout -1").session);
+        assert!(e("SET TRANSACTION ISOLATION LEVEL SNAPSHOT").session);
+        assert!(e("EXEC sys.sp_set_session_context @key = N'k', @value = 1").session);
+        // Strings and comments do not count.
+        assert_eq!(e("SELECT 'SET NOCOUNT ON', N'CREATE TABLE #x' -- SET ANSI_NULLS OFF\n/* BEGIN TRAN /* USE x */ */"), Effects::default());
+        assert!(e("CREATE TABLE #tmp (id int)").temp);
+        assert!(e("SELECT * INTO ##global FROM t").temp);
+        assert!(!e("SELECT * INTO dbo.t2 FROM t").temp);
+        assert!(e("begin tran; insert into t values (1)").tran);
+        assert!(e("BEGIN TRANSACTION").tran && !e("BEGIN TRY SELECT 1 END TRY BEGIN CATCH END CATCH").tran);
+        assert!(e("SELECT 1; USE master").uses);
+        assert!(!e("SELECT * FROM t OPTION (USE HINT ('DISABLE_OPTIMIZED_NESTED_LOOP'))").uses);
+        assert_eq!(e("USE [mi]]base];").use_only.as_deref(), Some("mi]base"));
+        assert_eq!(e("  use Ventas  ").use_only.as_deref(), Some("Ventas"));
+        assert_eq!(e("USE ventas; SELECT 1").use_only, None);
+    }
+
+    #[test]
+    fn pool_key_and_databases() {
+        let mut a = ConnConfig { host: "srv".into(), user: "u".into(), password: Some("secreto".into()), database: "dw".into(), ..Default::default() };
+        let key = pool_key(&a);
+        assert_eq!(key.len(), 64);
+        assert!(!key.contains("secreto"));
+        // The database travels with each idle connection, not in the key; the password and the startup script do.
+        a.database = "otra".into();
+        assert_eq!(pool_key(&a), key);
+        a.password = Some("otro".into());
+        assert_ne!(pool_key(&a), key);
+        let f = Facts { home: String::new(), database: "Ventas".into(), engine: Engine::SqlServer, info: String::new() };
+        assert!(f.serves("") && f.serves("ventas") && !f.serves("compras"));
+        let f = Facts { home: "dw".into(), database: "dw".into(), engine: Engine::Synapse, info: String::new() };
+        assert!(f.serves("dw") && !f.serves(""));
     }
 
     #[test]
