@@ -1,6 +1,8 @@
-// Actualizaciones: consulta el último release en GitHub, descarga Celer Setup (verificando su SHA-256
-// con el SHA256SUMS.txt publicado junto a él) y lo lanza en modo `--update`, que espera a que Celer
-// se cierre, instala con las mismas opciones y lo vuelve a abrir.
+// Actualizaciones: consulta el último release en GitHub y, solo cuando el usuario pulsa «Actualizar», descarga
+// Celer Setup a la carpeta de datos local de Celer, verifica su SHA-256 con el SHA256SUMS.txt publicado junto a él
+// y lo ejecuta directamente (sin cmd ni PowerShell) en modo `--update`, que espera a que Celer se cierre, instala
+// con las mismas opciones y lo vuelve a abrir. Las copias portables, MSI, macOS y Linux no ejecutan nada: abren la
+// página de la versión.
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -11,8 +13,14 @@ use sha2::{Digest, Sha256};
 
 pub const REPO: &str = "e-omunoz/celer";
 const API_LATEST: &str = "https://api.github.com/repos/e-omunoz/celer/releases/latest";
+/// Celer Setup en los releases desde 2.0.2: un nombre fijo, para que `releases/latest/download/<nombre>` funcione.
+pub const SETUP_ASSET: &str = "Celer-Setup-Windows.exe";
+/// Prefijo de Celer Setup en cualquier release (hasta 2.0.1 era `Celer-Setup-x.y.z.exe`). Las copias 2.0.1 ya
+/// instaladas buscan este prefijo y `.exe`, así que también encuentran `Celer-Setup-Windows.exe`.
 const SETUP_PREFIX: &str = "Celer-Setup-";
 const SUMS_NAME: &str = "SHA256SUMS.txt";
+/// Subcarpeta de la carpeta de datos local de Celer donde se descarga el instalador.
+pub const DOWNLOAD_SUBDIR: &str = "updates";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,8 +38,8 @@ pub struct UpdateInfo {
     pub sums_url: String,
     /// Celer instalado con Celer Setup (hay un uninstall.exe al lado): la actualización es automática.
     pub installed: bool,
-    /// "setup" (automática), "portable" (abre el instalador), "msi" (descargar el .msi nuevo),
-    /// "other" (macOS/Linux: descargar el paquete del sistema).
+    /// "setup" (automática), "portable" (abre la página de la versión), "msi" (copias del antiguo paquete MSI:
+    /// abre la página de la versión), "other" (macOS/Linux: descargar el paquete del sistema).
     pub install_kind: &'static str,
 }
 
@@ -137,12 +145,8 @@ pub fn check() -> Result<UpdateInfo> {
     let current = current_version();
     let latest = release.tag_name.trim_start_matches(['v', 'V']).to_string();
     let kind = install_kind();
-    // Only Celer Setup can update in place; MSI, macOS and Linux get the release page for their package.
-    let setup = release
-        .assets
-        .iter()
-        .filter(|_| kind == "setup" || kind == "portable")
-        .find(|a| a.name.starts_with(SETUP_PREFIX) && a.name.to_ascii_lowercase().ends_with(".exe"));
+    // Only a copy installed by Celer Setup updates itself; portable, MSI, macOS and Linux get the release page.
+    let setup = if kind == "setup" { setup_asset(&release.assets) } else { None };
     let sums = release.assets.iter().find(|a| a.name == SUMS_NAME);
     Ok(UpdateInfo {
         available: is_newer(&latest, &current),
@@ -158,6 +162,15 @@ pub fn check() -> Result<UpdateInfo> {
         installed: installed_by_setup(),
         install_kind: kind,
     })
+}
+
+/// Celer Setup entre los ficheros de un release: `Celer-Setup-Windows.exe` o, en releases antiguos,
+/// `Celer-Setup-x.y.z.exe`.
+fn setup_asset(assets: &[Asset]) -> Option<&Asset> {
+    assets
+        .iter()
+        .find(|a| a.name == SETUP_ASSET)
+        .or_else(|| assets.iter().find(|a| safe_name(&a.name).is_ok()))
 }
 
 /// Busca el hash de `name` en un SHA256SUMS ("<hex>  <nombre>" por línea).
@@ -189,30 +202,62 @@ fn safe_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-pub fn download_dir() -> PathBuf {
-    std::env::temp_dir().join("celer-update")
+/// Instalador descargado y verificado en esta sesión, con su SHA-256: lo único que `launch_installer` ejecuta.
+static VERIFIED: std::sync::Mutex<Option<(PathBuf, String)>> = std::sync::Mutex::new(None);
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = std::fs::File::open(path).with_context(|| format!("No se pudo leer {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex(&hasher.finalize()))
 }
 
-/// Descarga el instalador a %TEMP%\celer-update y comprueba su SHA-256. Devuelve la ruta.
-pub fn download(url: &str, name: &str, sums_url: &str, progress: impl Fn(u64, u64)) -> Result<PathBuf> {
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Borra lo que dejaron descargas anteriores (instaladores ya usados, descargas a medias).
+fn clean_downloads(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let ours = safe_name(name.trim_end_matches(".partial")).is_ok();
+        if ours && entry.path().is_file() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Descarga el instalador a `dir` (la carpeta `updates` de los datos locales de Celer) y comprueba su SHA-256
+/// con el SHA256SUMS.txt del mismo release: sin esa comprobación no se descarga nada. Devuelve la ruta.
+pub fn download(dir: &Path, url: &str, name: &str, sums_url: &str, progress: impl Fn(u64, u64)) -> Result<PathBuf> {
     check_url(url)?;
     let name = safe_name(name)?;
-    let expected = if sums_url.is_empty() {
-        None
-    } else {
-        check_url(sums_url)?;
-        let sums = agent()
-            .get(sums_url)
-            .call()
-            .map_err(|e| anyhow!("No se pudo leer {SUMS_NAME}: {e}"))?
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| anyhow!("No se pudo leer {SUMS_NAME}: {e}"))?;
-        Some(expected_hash(&sums, name).ok_or_else(|| anyhow!("{SUMS_NAME} no incluye {name}."))?)
-    };
+    if sums_url.is_empty() {
+        bail!("Esta versión no publica {SUMS_NAME}: descárgala desde GitHub.");
+    }
+    check_url(sums_url)?;
+    let sums = agent()
+        .get(sums_url)
+        .call()
+        .map_err(|e| anyhow!("No se pudo leer {SUMS_NAME}: {e}"))?
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| anyhow!("No se pudo leer {SUMS_NAME}: {e}"))?;
+    let expected = expected_hash(&sums, name).ok_or_else(|| anyhow!("{SUMS_NAME} no incluye {name}."))?;
 
-    let dir = download_dir();
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(dir).with_context(|| format!("No se pudo crear {}", dir.display()))?;
+    if let Ok(mut verified) = VERIFIED.lock() {
+        *verified = None;
+    }
+    clean_downloads(dir);
     let dest = dir.join(name);
     let partial = dir.join(format!("{name}.partial"));
     let resp = agent().get(url).call().map_err(|e| anyhow!("No se pudo descargar la actualización: {e}"))?;
@@ -238,37 +283,42 @@ pub fn download(url: &str, name: &str, sums_url: &str, progress: impl Fn(u64, u6
         let _ = std::fs::remove_file(&partial);
         bail!("La descarga está incompleta ({done} de {total} bytes).");
     }
-    let got: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if let Some(expected) = expected {
-        if got != expected {
-            let _ = std::fs::remove_file(&partial);
-            bail!("El instalador descargado no coincide con su firma SHA-256; no se ejecutará.");
-        }
+    let got = hex(&hasher.finalize());
+    if got != expected {
+        let _ = std::fs::remove_file(&partial);
+        bail!("El instalador descargado no coincide con su SHA-256 publicado; no se ejecutará.");
     }
     let _ = std::fs::remove_file(&dest);
     std::fs::rename(&partial, &dest)?;
+    if let Ok(mut verified) = VERIFIED.lock() {
+        *verified = Some((dest.clone(), expected));
+    }
     Ok(dest)
 }
 
-/// Lanza el instalador descargado. Con Celer instalado: `--update`, sin preguntas; con `relaunch`
-/// muestra el progreso y reabre Celer, sin él (al cerrar la app) actualiza en silencio.
-/// En copias portables o de desarrollo abre el instalador normal.
-pub fn launch_installer(path: &Path, relaunch: bool) -> Result<()> {
-    let dir = download_dir();
+/// Ejecuta el instalador descargado y verificado en esta sesión, directamente (sin intérprete de órdenes de por
+/// medio), tras volver a comprobar su SHA-256. Solo en copias instaladas por Celer Setup: `--update`, sin preguntas;
+/// con `relaunch` muestra el progreso y reabre Celer, sin él (al cerrar la app) actualiza en silencio.
+pub fn launch_installer(dir: &Path, path: &Path, relaunch: bool) -> Result<()> {
+    if install_kind() != "setup" {
+        bail!("Esta copia de Celer no se actualiza sola: descarga la versión nueva desde GitHub.");
+    }
+    let verified = VERIFIED.lock().ok().and_then(|v| v.clone());
     let ok = path.parent().map(|p| p == dir).unwrap_or(false)
         && path.file_name().and_then(|n| n.to_str()).map(|n| safe_name(n).is_ok()).unwrap_or(false)
         && path.is_file();
-    if !ok {
+    let Some((verified_path, hash)) = verified.filter(|(p, _)| ok && p == path) else {
         bail!("Instalador no válido.");
+    };
+    if sha256_file(&verified_path)? != hash {
+        bail!("El instalador ha cambiado desde que se descargó; no se ejecutará.");
     }
-    let mut cmd = std::process::Command::new(path);
-    if installed_by_setup() {
-        cmd.arg("--update");
-        if !relaunch {
-            cmd.arg("--silent");
-        }
+    let mut cmd = std::process::Command::new(&verified_path);
+    cmd.current_dir(dir).arg("--update");
+    if !relaunch {
+        cmd.arg("--silent");
     }
-    cmd.spawn().with_context(|| format!("No se pudo abrir {}", path.display()))?;
+    cmd.spawn().with_context(|| format!("No se pudo abrir {}", verified_path.display()))?;
     Ok(())
 }
 
@@ -295,13 +345,81 @@ mod tests {
         assert_eq!(expected_hash("zzz  Celer-Setup-1.2.0.exe", "Celer-Setup-1.2.0.exe"), None);
     }
 
+    /// The single SHA256SUMS.txt of a release from 2.0.2 on, as `sha256sum` writes it (also in binary mode).
+    #[test]
+    fn sums_with_fixed_names() {
+        let (setup, portable) = ("c".repeat(64), "d".repeat(64));
+        let sums = format!(
+            "{setup}  Celer-Setup-Windows.exe\n{portable} *Celer-Portable-Windows.exe\n{}  Celer-macOS.dmg\n{}  Celer-Linux.deb\n",
+            "e".repeat(64),
+            "f".repeat(64)
+        );
+        assert_eq!(expected_hash(&sums, SETUP_ASSET), Some(setup));
+        assert_eq!(expected_hash(&sums, "Celer-Portable-Windows.exe"), Some(portable));
+        assert_eq!(expected_hash(&sums, "Celer-Setup-2.0.2.exe"), None);
+    }
+
     #[test]
     fn only_our_release_urls_and_names() {
         assert!(check_url("https://github.com/e-omunoz/celer/releases/download/v1.2.0/Celer-Setup-1.2.0.exe").is_ok());
+        assert!(check_url("https://github.com/e-omunoz/celer/releases/download/v2.0.2/Celer-Setup-Windows.exe").is_ok());
         assert!(check_url("https://evil.example/Celer-Setup-1.2.0.exe").is_err());
         assert!(check_url("https://github.com/other/celer/releases/download/v1/x.exe").is_err());
         assert!(safe_name("Celer-Setup-1.2.0.exe").is_ok());
+        assert!(safe_name(SETUP_ASSET).is_ok());
         assert!(safe_name("..\\Celer-Setup-1.2.0.exe").is_err());
         assert!(safe_name("Celer-1.2.0-portable.exe").is_err());
+        assert!(safe_name("Celer-Portable-Windows.exe").is_err());
+    }
+
+    fn asset(name: &str) -> Asset {
+        Asset { name: name.into(), browser_download_url: format!("https://github.com/{REPO}/releases/download/v2.0.2/{name}"), size: 1 }
+    }
+
+    /// What a new release offers: the fixed name, never the portable copy or a package of another system.
+    #[test]
+    fn finds_setup_in_new_and_old_releases() {
+        let new = ["Celer-Portable-Windows.exe", "Celer-macOS.dmg", "Celer-Setup-Windows.exe", "SHA256SUMS.txt"].map(asset);
+        assert_eq!(setup_asset(&new).map(|a| a.name.as_str()), Some(SETUP_ASSET));
+        let old = ["Celer-2.0.1-portable.exe", "Celer-2.0.1-nsis-setup.exe", "Celer-Setup-2.0.1.exe", "SHA256SUMS.txt"].map(asset);
+        assert_eq!(setup_asset(&old).map(|a| a.name.as_str()), Some("Celer-Setup-2.0.1.exe"));
+        let none = ["Celer-Portable-Windows.exe", "Celer-Linux.deb"].map(asset);
+        assert!(setup_asset(&none).is_none());
+    }
+
+    /// Celer 2.0.1 (already installed) picks the asset with `starts_with("Celer-Setup-") && ends_with(".exe")`,
+    /// checks the URL and the name as below and looks the hash up in SHA256SUMS.txt: the fixed name passes all of it.
+    #[test]
+    fn celer_2_0_1_accepts_the_fixed_name() {
+        let name = "Celer-Setup-Windows.exe";
+        assert!(name.starts_with("Celer-Setup-") && name.to_ascii_lowercase().ends_with(".exe"));
+        let old_safe_name = |n: &str| {
+            n.starts_with("Celer-Setup-")
+                && n.to_ascii_lowercase().ends_with(".exe")
+                && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+        };
+        assert!(old_safe_name(name));
+        // 2.0.1 also offers the Setup to portable copies: the portable asset must not match its filter.
+        assert!(!old_safe_name("Celer-Portable-Windows.exe"));
+        assert!(check_url(&asset(name).browser_download_url).is_ok());
+        let sums = format!("{}  {name}\n", "0".repeat(64));
+        assert_eq!(expected_hash(&sums, name), Some("0".repeat(64)));
+    }
+
+    #[test]
+    fn downloads_are_cleaned_and_only_verified_files_run() {
+        let dir = std::env::temp_dir().join(format!("celer-update-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["Celer-Setup-Windows.exe", "Celer-Setup-Windows.exe.partial", "Celer-Setup-2.0.1.exe", "notes.txt"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        clean_downloads(&dir);
+        let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(left, vec!["notes.txt".to_string()], "only our installers are removed");
+        // Nothing was downloaded and verified in this session: nothing runs.
+        std::fs::write(dir.join(SETUP_ASSET), b"MZ").unwrap();
+        assert!(launch_installer(&dir, &dir.join(SETUP_ASSET), true).is_err());
+        assert_eq!(sha256_file(&dir.join("notes.txt")).unwrap(), hex(&Sha256::digest(b"x")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

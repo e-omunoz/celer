@@ -1,5 +1,6 @@
-// Updates: checks GitHub for a newer release, downloads Celer Setup (verified against SHA256SUMS in the
-// core) and hands over to it. The installer waits for Celer to close, updates in place and reopens it.
+// Updates: checks GitHub for a newer release. Nothing is downloaded or run until the user presses «Actualizar»: then
+// the core downloads Celer Setup to Celer's data folder, verifies it against SHA256SUMS.txt and runs it. The installer
+// waits for Celer to close, updates in place and reopens it. Portable copies, MSI, macOS and Linux get the release page.
 import { createStore } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { beforeClose, notify, saveSettings, state } from "./state";
@@ -16,6 +17,8 @@ export const [update, setUpdate] = createStore({
   path: "",
   dialogOpen: false,
   checkedAt: 0,
+  /** The user chose «Al cerrar Celer»: the downloaded update installs when the window closes. */
+  installOnExit: false,
 });
 
 const FIRST_CHECK_MS = 6_000;
@@ -54,11 +57,12 @@ export async function checkForUpdates(manual: boolean) {
   }
 }
 
+/** «Actualizar»: downloads and verifies Celer Setup, then closes Celer through the usual guard and runs it. */
 export async function downloadUpdate() {
   const info = update.info;
   if (!info?.available) return;
   if (!info.assetUrl) {
-    // A release without Celer Setup: send the user to the release page.
+    // Not a copy installed by Celer Setup (or a release without it): send the user to the release page.
     await openReleasePage();
     return;
   }
@@ -72,7 +76,9 @@ export async function downloadUpdate() {
     setUpdate({ status: "ready", path, done: update.total });
   } catch (err) {
     setUpdate({ status: "error", error: errorText(err) });
+    return;
   }
+  await installUpdate();
 }
 
 /** Closes Celer through the usual guard (open transactions, unsaved edits) and runs the installer. */
@@ -87,9 +93,14 @@ export async function installUpdate() {
   }
 }
 
-/** Closing Celer with an update downloaded installs it silently (Celer is not reopened). */
+/** «Al cerrar Celer»: the downloaded update installs silently when the window closes (Celer is not reopened). */
+export function installLater() {
+  setUpdate({ installOnExit: true, dialogOpen: false });
+}
+
+/** Closing Celer installs a downloaded update only if the user chose «Al cerrar Celer». */
 export async function installOnClose() {
-  if (update.status !== "ready" || !update.path) return;
+  if (update.status !== "ready" || !update.path || !update.installOnExit) return;
   await api().updateInstall(update.path, false).catch(() => {});
 }
 

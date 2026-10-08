@@ -208,7 +208,7 @@ export interface UpdateInfo {
   sumsUrl: string;
   /** Installed with Celer Setup: the update installs itself and reopens Celer. */
   installed: boolean;
-  /** setup: automatic · portable: opens the installer · msi / other (macOS, Linux): download from GitHub. */
+  /** setup: automatic, after «Actualizar» · portable / msi / other (macOS, Linux): the release page, nothing is run. */
   installKind: "setup" | "portable" | "msi" | "other";
 }
 
