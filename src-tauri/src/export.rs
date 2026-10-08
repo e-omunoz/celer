@@ -63,6 +63,20 @@ pub fn export(
     engine: DbKind,
     progress: &dyn Fn(u64),
 ) -> Result<u64> {
+    // Whole binary values, not the grid's 4 KB preview.
+    crate::model::set_full_binary(true);
+    let written = export_rows(d, sql, o, engine, progress);
+    crate::model::set_full_binary(false);
+    written
+}
+
+fn export_rows(
+    d: &mut dyn Driver,
+    sql: &str,
+    o: &ExportOptions,
+    engine: DbKind,
+    progress: &dyn Fn(u64),
+) -> Result<u64> {
     let out = d.execute(sql, PAGE)?;
     let Some(first) = out.results.into_iter().find(|r| !r.columns.is_empty()) else {
         bail!("La consulta no devuelve filas para exportar");
@@ -502,6 +516,24 @@ mod tests {
         assert_eq!(xml_root("public.events"), "events");
         assert_eq!(xml_root("\"Mixed Case\""), "rows");
         assert_eq!(xml_escape("a<b & \"c\"\u{1}"), "a&lt;b &amp; &quot;c&quot;");
+    }
+
+    #[test]
+    fn exports_whole_binary_values() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        d.execute("CREATE TABLE b (v BLOB); INSERT INTO b VALUES (zeroblob(5000))", 10).unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-bin-{}.csv", std::process::id()));
+        let o = ExportOptions { path: path.to_string_lossy().into_owned(), header: false, bom: false, ..ExportOptions::default() };
+        export(&mut d, "SELECT v FROM b", &o, DbKind::Sqlite, &|_| {}).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(text.trim_end().len(), 2 + 10_000, "{}…", &text[..40]);
+        // The grid still gets the preview afterwards.
+        let out = d.execute("SELECT v FROM b", 10).unwrap();
+        assert!(matches!(&out.results[0].rows[0][0], Cell::Text(s) if s.ends_with('…')));
     }
 
     #[test]

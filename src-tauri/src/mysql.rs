@@ -913,10 +913,12 @@ impl MysqlDriver {
         let (done_tx, done_rx) = mpsc::channel::<Conn>();
         let left = Arc::new(AtomicUsize::new(stmts.len()));
         let worker_left = left.clone();
+        let full_binary = crate::model::full_binary();
         self.busy.store(true, Ordering::Relaxed);
         let spawned = std::thread::Builder::new()
             .name("celer-mysql-reader".into())
             .spawn(move || {
+                crate::model::set_full_binary(full_binary);
                 let conn = worker(conn, stmts, &tx, &worker_left);
                 drop(tx);
                 if let Some(c) = conn {

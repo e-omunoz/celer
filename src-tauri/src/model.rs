@@ -17,6 +17,20 @@ pub enum Cell {
 
 pub const JS_SAFE_INT: i64 = 9_007_199_254_740_991;
 
+thread_local! {
+    static FULL_BINARY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whole binary values instead of the grid's preview, for the session thread that runs an export (a driver that
+/// reads in a thread of its own copies it there, see mysql.rs).
+pub fn set_full_binary(on: bool) {
+    FULL_BINARY.with(|f| f.set(on));
+}
+
+pub fn full_binary() -> bool {
+    FULL_BINARY.with(|f| f.get())
+}
+
 impl Cell {
     pub fn int(v: i64) -> Cell {
         if (-JS_SAFE_INT..=JS_SAFE_INT).contains(&v) {
@@ -32,7 +46,9 @@ impl Cell {
             Cell::Text(v.to_string())
         }
     }
+    /// Binary as 0x… text, cut at `limit` bytes for the grid, except while the thread reads whole values (export).
     pub fn hex(bytes: &[u8], limit: usize) -> Cell {
+        let limit = if full_binary() { usize::MAX } else { limit };
         let mut s = String::with_capacity(2 + bytes.len().min(limit) * 2 + 3);
         s.push_str("0x");
         for b in bytes.iter().take(limit) {
