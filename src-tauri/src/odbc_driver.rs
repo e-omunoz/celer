@@ -92,6 +92,9 @@ impl Link for OdbcConn {
     }
 
     fn reconnect(&mut self, cfg: &ConnConfig, database: Option<&str>) -> Result<()> {
+        if is_drda(cfg) {
+            crate::drivers::cli_acr_off(None, &cfg.host, cfg.port.unwrap_or(9089), database.unwrap_or(&cfg.database));
+        }
         let mut conn = OdbcConn::connect(self.api.clone(), &conn_string(cfg, database), 20).map_err(|e| explain_odbc(cfg, e))?;
         conn.cancel_slot = self.cancel_slot.clone();
         *self = conn;
@@ -158,6 +161,10 @@ pub type OdbcDriver = LinkDriver<OdbcConn>;
 
 impl LinkDriver<OdbcConn> {
     pub fn connect(cfg: ConnConfig, lib_path: String) -> Result<OdbcDriver> {
+        // Before the IBM CLI driver loads (it reads its db2dsdriver.cfg then): no reconnection of its own.
+        if is_drda(&cfg) {
+            crate::drivers::cli_acr_off(Some(std::path::Path::new(&lib_path)), &cfg.host, cfg.port.unwrap_or(9089), &cfg.database);
+        }
         let api = Api::load(&lib_path)?;
         let conn = OdbcConn::connect(api, &conn_string(&cfg, None), 20).map_err(|e| explain_odbc(&cfg, e))?;
         LinkDriver::over(cfg, conn)
@@ -597,6 +604,11 @@ fn run_startup<L: Link>(conn: &mut L, cfg: &ConnConfig) -> Result<()> {
 
 /// Construye la cadena de conexión según el tipo de conexión. An empty database is left out (`DATABASE=;` makes the
 /// IBM CLI driver fail with CLI0199E; DRDA needs one, which lib.rs asks for before connecting).
+/// Informix over DRDA, through IBM's CLI driver (the Client SDK's ODBC driver is "sqli"; JDBC does not come here).
+fn is_drda(cfg: &ConnConfig) -> bool {
+    cfg.kind == DbKind::Informix && cfg.informix_mode != "sqli"
+}
+
 pub fn conn_string(cfg: &ConnConfig, database: Option<&str>) -> String {
     let db = database.unwrap_or(&cfg.database).trim();
     let pwd = cfg.password.clone().unwrap_or_default();

@@ -113,6 +113,15 @@ The three share the Informix dialect in `odbc_driver.rs` (catalog queries, batch
 database switching): it runs over a `Link` (`exec`, `query_all`, transactions, cancel, reconnect), which `OdbcConn`
 (odbc.rs) and `JdbcConn` (jdbc.rs) implement.
 
+**DRDA and the CLI driver's own reconnection.** IBM's CLI driver comes with automatic client reroute (ACR) on, with
+seamless failover: when the server ends a session (`onmode -z`, a restart, the network), the driver opens another one
+and runs the statement again without telling anyone, so `guard.rs` never sees the cut and cannot say what was lost.
+There is no connection string keyword for it, only `enableACR` in the `<acr>` section of a database in
+`db2dsdriver.cfg`, which the driver matches by database name, host and port. Before each DRDA connection Celer adds
+that database to its own `drivers/db2dsdriver.cfg` in its data folder (no passwords; `enableACR` false) and points
+`DB2DSDRIVER_CFG_PATH` to it (`drivers.rs`, `cli_acr_off`). A `db2dsdriver.cfg` of the user's (that variable already
+set, or the file in the driver's `cfg/` folder) is left as it is and wins. SQLI (Client SDK) and JDBC are not affected.
+
 ### The JDBC bridge
 
 `src-tauri/bridge/CelerBridge.java` is a small program with no dependencies, compiled with `javac --release 11` by

@@ -510,6 +510,8 @@ type Connect = dyn Fn(ConnConfig) -> anyhow::Result<Box<dyn Driver>>;
 fn informix_cfg() -> Option<(ConnConfig, String)> {
     let s = spec("CELER_INFORMIX_TEST")?;
     let lib = std::env::var("CELER_IBM_LIB").ok()?;
+    // Celer's db2dsdriver.cfg (no reconnection by the CLI driver itself), as the app writes it in its data folder.
+    crate::drivers::use_cli_cfg_dir(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/target/celer-engine-tests")));
     let mut cfg = ConnConfig::default();
     cfg.kind = DbKind::Informix;
     cfg.host = get(&s, "host");

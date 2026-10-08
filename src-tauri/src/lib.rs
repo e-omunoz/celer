@@ -188,6 +188,7 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
                         "IBM_DRIVER_MISSING: No se encontró el driver IBM Data Server (ODBC/CLI). Descárgalo desde Ajustes → Drivers.".to_string()
                     })?;
                     drivers::prepare_env(&dll);
+                    drivers::use_cli_cfg_dir(&store.dir);
                     route = format!("{prefix}DRDA · IBM Data Server Driver (CLI)");
                     Some(dll.to_string_lossy().to_string())
                 }

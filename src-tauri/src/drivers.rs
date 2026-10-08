@@ -699,8 +699,123 @@ pub fn download_jdbc(spec: &JdbcSpec, app_dir: &Path, progress: impl Fn(&str, u6
     Ok(found(jar, paths, spec.jar.version.into(), "Celer"))
 }
 
+// ───────────────────────────────────────── IBM CLI (DRDA): sin reconexión automática del propio driver
+
+/// El driver IBM CLI trae activada la reconexión automática (ACR, «automatic client reroute») con reintento
+/// transparente: si el servidor corta la sesión (`onmode -z`, un reinicio, la red), el driver abre otra por su cuenta y
+/// repite la sentencia sin decir nada. Celer ya reconecta en `guard.rs`, y avisa cuando se pierde algo (transacción,
+/// tablas temporales, `SET`); con ACR el corte ni siquiera le llega. No hay palabra clave de la cadena de conexión
+/// para apagarlo: solo `enableACR` en la sección `<acr>` de la base en `db2dsdriver.cfg`, que el driver busca por
+/// nombre de base, servidor y puerto. Celer escribe el suyo en su carpeta de datos (`drivers/db2dsdriver.cfg`, sin
+/// contraseñas), con una entrada por cada base a la que conecta por DRDA, y lo señala con `DB2DSDRIVER_CFG_PATH`.
+/// Si el usuario tiene su propio `db2dsdriver.cfg` (esa variable ya puesta, o el fichero en `cfg/` del driver), se
+/// respeta tal cual y no se toca.
+struct CliCfg {
+    /// El fichero de Celer, o None si manda el del usuario.
+    file: Option<PathBuf>,
+    entries: std::collections::BTreeSet<(String, String, u16)>,
+}
+
+static CLI_CFG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static CLI_CFG: std::sync::Mutex<Option<CliCfg>> = std::sync::Mutex::new(None);
+
+/// La carpeta de datos de Celer: su `db2dsdriver.cfg` va en `drivers/`.
+pub fn use_cli_cfg_dir(dir: &Path) {
+    let _ = CLI_CFG_DIR.set(dir.to_path_buf());
+}
+
+/// Antes de conectar por DRDA a `database` en `host:port`: el `db2dsdriver.cfg` de Celer lleva esa base con ACR
+/// apagado. `lib` es la biblioteca del driver (`None` al reconectar, cuando ya se decidió qué fichero manda).
+pub fn cli_acr_off(lib: Option<&Path>, host: &str, port: u16, database: &str) {
+    let (host, database) = (host.trim(), database.trim());
+    if host.is_empty() || database.is_empty() {
+        return;
+    }
+    let mut guard = CLI_CFG.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        let (Some(lib), Some(dir)) = (lib, CLI_CFG_DIR.get()) else { return };
+        *guard = Some(cli_cfg_start(lib, dir));
+    }
+    let Some(cfg) = guard.as_mut() else { return };
+    let Some(file) = cfg.file.clone() else { return };
+    if cfg.entries.insert((database.to_string(), host.to_string(), port)) {
+        if let Err(e) = write_cli_cfg(&file, &cfg.entries) {
+            eprintln!("Celer: no se pudo escribir {}: {e}", file.display());
+        }
+    }
+}
+
+fn cli_cfg_start(lib: &Path, dir: &Path) -> CliCfg {
+    let file = dir.join("drivers").join("db2dsdriver.cfg");
+    let users = std::env::var_os("DB2DSDRIVER_CFG_PATH").filter(|v| !v.is_empty() && Path::new(v) != file);
+    let in_driver = lib.parent().and_then(Path::parent).map(|home| home.join("cfg").join("db2dsdriver.cfg"));
+    if users.is_some() || in_driver.is_some_and(|f| f.is_file()) {
+        return CliCfg { file: None, entries: Default::default() };
+    }
+    let entries = fs::read_to_string(&file).map(|text| parse_cli_cfg(&text)).unwrap_or_default();
+    // Antes de que el driver se cargue: lo lee al iniciarse.
+    std::env::set_var("DB2DSDRIVER_CFG_PATH", &file);
+    CliCfg { file: Some(file), entries }
+}
+
+fn xml_attr(value: &str) -> String {
+    value.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn cli_cfg_text(entries: &std::collections::BTreeSet<(String, String, u16)>) -> String {
+    let mut out = String::from(
+        "<configuration>\n   <!-- Escrito por Celer: sin reconexión automática del driver (ACR) en las bases a las que conecta por DRDA; Celer reconecta y avisa por su cuenta -->\n   <databases>\n",
+    );
+    for (database, host, port) in entries {
+        out.push_str(&format!(
+            "      <database name=\"{}\" host=\"{}\" port=\"{port}\">\n         <acr>\n            <parameter name=\"enableACR\" value=\"false\"/>\n         </acr>\n      </database>\n",
+            xml_attr(database),
+            xml_attr(host)
+        ));
+    }
+    out.push_str("   </databases>\n</configuration>\n");
+    out
+}
+
+/// Las bases del fichero que escribió Celer (lo que no sea suyo no se lee).
+fn parse_cli_cfg(text: &str) -> std::collections::BTreeSet<(String, String, u16)> {
+    let attr = |line: &str, name: &str| -> Option<String> {
+        let start = line.find(&format!(" {name}=\""))? + name.len() + 3;
+        let end = start + line[start..].find('"')?;
+        Some(line[start..end].replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("<database "))
+        .filter_map(|line| Some((attr(line, "name")?, attr(line, "host")?, attr(line, "port")?.parse().ok()?)))
+        .collect()
+}
+
+fn write_cli_cfg(file: &Path, entries: &std::collections::BTreeSet<(String, String, u16)>) -> Result<()> {
+    if let Some(dir) = file.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = file.with_extension("cfg.tmp");
+    fs::write(&tmp, cli_cfg_text(entries))?;
+    fs::rename(&tmp, file)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn cli_cfg_turns_acr_off_per_database_and_reads_back() {
+        let mut entries = std::collections::BTreeSet::new();
+        entries.insert(("ventas".to_string(), "db.example.com".to_string(), 9089u16));
+        entries.insert(("a\"b&c".to_string(), "h<1>".to_string(), 1u16));
+        let text = cli_cfg_text(&entries);
+        assert!(text.contains("<database name=\"ventas\" host=\"db.example.com\" port=\"9089\">"), "{text}");
+        assert_eq!(text.matches("<parameter name=\"enableACR\" value=\"false\"/>").count(), 2, "{text}");
+        assert!(text.contains("name=\"a&quot;b&amp;c\" host=\"h&lt;1&gt;\""), "{text}");
+        assert_eq!(parse_cli_cfg(&text), entries);
+    }
+
     use super::*;
 
     fn temp(name: &str) -> PathBuf {

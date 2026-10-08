@@ -125,6 +125,7 @@ jobs:
           mkdir -p out
           cp target-showplan-*.xml out/ 2>/dev/null || true
           cp target-informix-speed.txt out/informix-speed.txt 2>/dev/null || true
+          cp src-tauri/target/celer-engine-tests/drivers/db2dsdriver.cfg out/ 2>/dev/null || true
           docker logs mssql > out/mssql.log 2>&1 || true
           docker logs ifx > out/informix.log 2>&1 || true
 
