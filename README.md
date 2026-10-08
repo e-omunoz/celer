@@ -24,9 +24,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Setup-Windows.exe"><img alt="Download for Windows (Celer-Setup-Windows.exe)" src="docs/media/download-windows.svg" width="270" /></a>
-  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-macOS.dmg"><img alt="Download for macOS (Celer-macOS.dmg)" src="docs/media/download-macos.svg" width="270" /></a>
-  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Portable-Linux.AppImage"><img alt="Download for Linux (Celer-Portable-Linux.AppImage)" src="docs/media/download-linux.svg" width="270" /></a>
+  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Setup-Windows.exe"><img alt="Download for Windows (Celer-Setup-Windows.exe)" src="docs/media/download-windows.svg" width="250" /></a>
+  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-macOS.dmg"><img alt="Download for macOS (Celer-macOS.dmg)" src="docs/media/download-macos.svg" width="250" /></a>
+  <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Portable-Linux.AppImage"><img alt="Download for Linux (Celer-Portable-Linux.AppImage)" src="docs/media/download-linux.svg" width="250" /></a>
   <br/>
   <sub>
     Portable: <a href="https://github.com/e-omunoz/celer/releases/latest/download/Celer-Portable-Windows.exe">Windows</a> ·
