@@ -1,7 +1,7 @@
 // Checks for src/sqlgen.ts and the Informix DATETIME fitting in src/sql.ts:
 //   node --experimental-strip-types dev/sqlgen-check.ts
 import assert from "node:assert/strict";
-import { fitInformixDatetime, sqlLiteral } from "../src/sql.ts";
+import { fitInformixDatetime, quoteIdentFor, sqlLiteral } from "../src/sql.ts";
 import { changesSql, filterSql, fitValue } from "../src/sqlgen.ts";
 import type { TableColumn } from "../src/types.ts";
 
@@ -43,5 +43,9 @@ assert.match(changesSql({ ...keyed, rows: [["2024-03-15 10:20:00", 1]], edits: {
 assert.equal(sqlLiteral("true", "bool", "informix"), "'t'");
 assert.equal(sqlLiteral("0", "bool", "informix"), "'f'");
 assert.equal(sqlLiteral("true", "bool", "mssql"), "1");
+
+// Informix names go unquoted (without DELIMIDENT "x" is a string).
+assert.equal(quoteIdentFor("nombre", "informix"), "nombre");
+assert.equal(quoteIdentFor("nombre", "mssql"), "[nombre]");
 
 console.log("sqlgen-check: all good");

@@ -255,6 +255,8 @@ export function wherePosition(message: string, select: string, where: string): n
 export function quoteIdentFor(name: string, dialect?: string): string {
   if (dialect === "mysql") return `\`${name.replace(/`/g, "``")}\``;
   if (dialect === "mssql") return `[${name.replace(/]/g, "]]")}]`;
+  // Without DELIMIDENT Informix takes "x" as a string, not a name (same as the core's quote_ident).
+  if (dialect === "informix") return name;
   return `"${name.replace(/"/g, '""')}"`;
 }
 const BREAK_BEFORE = [
