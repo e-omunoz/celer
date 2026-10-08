@@ -28,7 +28,8 @@ foreach ($l in $labels) {
 }
 Write-Host "labels: $($labels.Count)"
 
-$existing = gh api "repos/$repo/milestones?state=open" --jq ".[] | select(.title == `"$Milestone`") | .number"
+# Filtered here, not in --jq: PowerShell 5 splits a jq filter with embedded quotes into several arguments.
+$existing = (gh api "repos/$repo/milestones?state=all" | ConvertFrom-Json) | Where-Object { $_.title -eq $Milestone } | Select-Object -ExpandProperty number -First 1
 if (-not $existing) {
   gh api "repos/$repo/milestones" -f title="$Milestone" -f description="Issues found and fixed by the macro review" | Out-Null
   Write-Host "milestone created: $Milestone"
