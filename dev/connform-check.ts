@@ -35,6 +35,15 @@ assert.equal(info?.instance, "PROD");
 assert.equal(info?.database, "ventas");
 assert.equal(info?.integratedAuth, true);
 assert.equal(info?.encryption, "login");
+// IPv6: bracketed in the URL (with or without port), bare in serverName; a server part that cannot be read is not
+// taken for localhost.
+info = parseJdbc("jdbc:sqlserver://[2001:db8::5]:1500;databaseName=dw");
+assert.equal(info?.host, "2001:db8::5");
+assert.equal(info?.port, 1500);
+assert.equal(info?.database, "dw");
+assert.equal(parseJdbc("jdbc:sqlserver://[fe80::1]\\SQLEXPRESS;databaseName=dw")?.instance, "SQLEXPRESS");
+assert.equal(parseJdbc("jdbc:sqlserver://;serverName=2001:db8::7;databaseName=dw")?.host, "2001:db8::7");
+assert.equal(parseJdbc("jdbc:sqlserver://srv:12:34;databaseName=dw"), null);
 // jTDS.
 info = parseJdbc("jdbc:jtds:sqlserver://legacy:1433/stock;instance=SQL2008;ssl=require;user=sa");
 assert.equal(info?.kind, "mssql");

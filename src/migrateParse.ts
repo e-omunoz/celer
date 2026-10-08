@@ -167,16 +167,24 @@ export function parseJdbc(url: string): JdbcInfo | null {
   const jtds = /^jdbc:jtds:sqlserver:\/\/([^:/;\\]*)(?::(\d+))?(?:\/([^;]*))?(.*)$/i.exec(u);
   if (mssql || jtds) {
     const info = make("mssql");
-    const setServer = (server: string) => {
-      const m = /^([^:\\]*)(?:\\([^:]+))?(?::(\d+))?$/.exec(server.trim());
-      if (!m) return;
-      if (m[1]) info.host = m[1];
+    // server[\instance][:port]; the server can be a bracketed IPv6 address ([2001:db8::5]:1500) or a bare one.
+    const setServer = (server: string): boolean => {
+      const text = server.trim();
+      if (/^[0-9a-f]*:[0-9a-f:.]*:[0-9a-f.]*$/i.test(text)) {
+        info.host = text;
+        return true;
+      }
+      const m = /^(\[[0-9a-f:.%a-z]+\]|[^:\\[\]]*)(?:\\([^:]+))?(?::(\d+))?$/i.exec(text);
+      if (!m) return false;
+      if (m[1]) info.host = m[1].replace(/^\[(.*)\]$/, "$1");
       if (m[2]) info.instance = m[2];
       if (m[3]) info.port = Number(m[3]);
+      return true;
     };
     let props: [string, string][];
     if (mssql) {
-      setServer(mssql[1]);
+      // A server part Celer cannot read is not taken for localhost: the URL is not understood.
+      if (!setServer(mssql[1])) return null;
       props = splitProps(mssql[2], ";");
     } else {
       const j = jtds!;
