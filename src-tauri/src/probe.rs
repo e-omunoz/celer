@@ -85,7 +85,13 @@ pub fn run(cfg: &ConnConfig, connector: Connector, route: &str) -> Report {
             let text = e.to_string();
             let hint = explain(cfg, &text);
             let label = if cfg.kind == DbKind::Sqlite { "Abrir la base" } else { "Inicio de sesión" };
-            r.fail("login", label, t0, text, hint);
+            if missing_database(&text) {
+                // The server took the user and password and then refused the database: that step failed.
+                r.step("login", label, "ok", ms(t0), login_detail(cfg, route));
+                r.fail("database", "Base de datos", Instant::now(), text, hint);
+            } else {
+                r.fail("login", label, t0, text, hint);
+            }
             r.total_ms = ms(start);
             return r;
         }
@@ -113,6 +119,14 @@ pub fn run(cfg: &ConnConfig, connector: Connector, route: &str) -> Report {
     r.ok = r.error.is_empty();
     r.total_ms = ms(start);
     r
+}
+
+/// The connect error says the login was accepted but the database does not exist or cannot be opened
+/// (PostgreSQL 3D000, MySQL 1049, SQL Server 4060).
+fn missing_database(error: &str) -> bool {
+    let m = error.to_lowercase();
+    ["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database"].iter().any(|w| m.contains(w))
+        || (m.contains("database") && m.contains("does not exist"))
 }
 
 /// La consulta más barata de cada motor (ODBC genérico: ninguna vale para todos).
@@ -478,6 +492,45 @@ mod tests {
         assert_eq!(ids, vec!["resolve", "tcp"], "{:?}", r.steps);
         assert_eq!(r.steps[1].status, "failed");
         assert!(r.hint.contains("nadie escucha"), "{}", r.hint);
+    }
+
+    #[test]
+    fn a_missing_database_fails_the_database_step() {
+        let mut c = cfg(DbKind::Odbc);
+        c.user = "app".into();
+        for error in ["db error: FATAL: database \"no_such_db\" does not exist", "ERROR 1049 (42000): Unknown database 'no_such_db'", "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login."] {
+            let text = error.to_string();
+            let connector: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("{text}") });
+            let r = run(&c, connector, "");
+            let steps: Vec<(&str, &str)> = r.steps.iter().map(|s| (s.id, s.status)).collect();
+            assert_eq!(steps, vec![("login", "ok"), ("database", "failed")], "{error}");
+            assert!(!r.ok && r.hint.starts_with("La base de datos"), "{}", r.hint);
+        }
+        let connector: Connector = std::sync::Arc::new(|| -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("password authentication failed for user \"app\"") });
+        let r = run(&c, connector, "");
+        assert_eq!(r.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), vec![("login", "failed")]);
+    }
+
+    #[test]
+    fn a_missing_postgres_database_fails_the_database_step() {
+        let Some(spec) = std::env::var("CELER_PG_TEST").ok() else { return };
+        let mut c = ConnConfig { kind: DbKind::Postgres, encryption: "off".into(), ..Default::default() };
+        for part in spec.split_whitespace() {
+            match part.split_once('=') {
+                Some(("host", v)) => c.host = v.into(),
+                Some(("port", v)) => c.port = v.parse().ok(),
+                Some(("user", v)) => c.user = v.into(),
+                Some(("password", v)) => c.password = Some(v.into()),
+                _ => {}
+            }
+        }
+        c.database = "no_such_db".into();
+        let cfg = c.clone();
+        let connector: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn crate::session::Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?)) });
+        let r = run(&c, connector, "");
+        let login = r.steps.iter().find(|s| s.id == "login").unwrap();
+        let database = r.steps.iter().find(|s| s.id == "database").unwrap();
+        assert_eq!((login.status, database.status), ("ok", "failed"), "{:?} {}", r.steps, r.error);
     }
 
     #[test]
