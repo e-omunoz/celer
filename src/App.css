@@ -974,6 +974,39 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .settings-body h4 { margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .settings-note { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.55; }
 
+/* Settings › Drivers, JDBC setup and the Informix guide */
+.settings-note.warn { color: var(--warning); }
+.driver-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--panel); color: var(--text-faint); }
+.driver-row.ok { color: var(--success); }
+.driver-row > svg { flex: none; margin-top: 2px; }
+.driver-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.driver-main b { font-weight: 600; font-size: 12.5px; color: var(--text); }
+.driver-main span { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.driver-alt { display: flex; align-items: center; gap: 8px; margin-top: -6px; padding-left: 36px; font-size: 12px; color: var(--text-muted); }
+.driver-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.driver-actions .btn svg, .driver-row .btn svg { margin-right: 2px; vertical-align: -2px; }
+.driver-ok { color: var(--success); }
+.driver-bad { color: var(--danger); white-space: pre-wrap; }
+.driver-progress { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--accent-soft); font-size: 12.5px; }
+.driver-progress .grow { flex: 1; min-width: 0; }
+.driver-progress progress { width: 140px; height: 6px; accent-color: var(--accent); }
+.text-link { color: var(--accent-text); font-size: inherit; text-decoration: none; cursor: pointer; }
+.text-link:hover { text-decoration: underline; }
+.setup-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.setup-list li { display: flex; gap: 10px; padding: 9px 11px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--panel); color: var(--accent-text); }
+.setup-list li.done { color: var(--success); }
+.setup-list li > svg { flex: none; margin-top: 2px; }
+.setup-list li div { display: flex; flex-direction: column; gap: 3px; }
+.setup-list b { color: var(--text); font-weight: 600; font-size: 12.5px; }
+.setup-list span { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.ifx-guide .test-result { margin-bottom: 12px; }
+.guide-tabs { align-self: flex-start; margin-bottom: 12px; flex-wrap: wrap; }
+.guide-body { font-size: 13px; line-height: 1.6; color: var(--text); max-height: min(420px, 55vh); overflow-y: auto; }
+.guide-body p { margin: 0 0 10px; }
+.guide-body ul, .guide-body ol { margin: 0 0 10px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.guide-body code, .guide-code { font-family: var(--mono); font-size: 12px; }
+.guide-code { margin: 0 0 10px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--border); }
+
 /* Settings › Atajos de teclado */
 .keymap { display: flex; flex-direction: column; gap: 10px; }
 .keymap-head { display: flex; align-items: center; gap: 8px; }

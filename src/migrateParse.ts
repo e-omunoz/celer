@@ -1,6 +1,6 @@
 // Parsers for the migration assistant: DBeaver data-sources.json (+ encrypted credentials-config.json) and
 // DbVisualizer dbvis.xml → Celer connection configs. Pure functions (no store, no IPC) so they can be tested.
-import { emptyConn, type ConnConfig, type DbKind } from "./types";
+import { emptyConn, type ConnConfig, type DbKind } from "./types.ts";
 
 export interface MigrationSource {
   tool: "dbeaver" | "dbvisualizer";
@@ -26,8 +26,12 @@ export const toolLabel = (tool: MigrationSource["tool"]) => TOOL_LABEL[tool];
 
 // ---------------------------------------------------------------- shared helpers
 
-/** host, port, database from a JDBC URL (jdbc:postgresql://h:p/db, jdbc:sqlserver://h:p;databaseName=db, jdbc:sqlite:path). */
-export function parseJdbcUrl(url: string): { host?: string; port?: number; database?: string; file?: string; instance?: string } {
+/**
+ * host, port, database from a JDBC URL (jdbc:postgresql://h:p/db, jdbc:sqlserver://h:p;databaseName=db, jdbc:sqlite:path).
+ * Informix (jdbc:informix-sqli://h:p/db:informixserver=x;prop=v…): the server name, and the other properties as
+ * Celer's "Parámetros extra" (`params`; user and password are not taken from the URL).
+ */
+export function parseJdbcUrl(url: string): { host?: string; port?: number; database?: string; file?: string; instance?: string; params?: string } {
   const u = url.trim();
   const sqlite = /^jdbc:sqlite:(.+)$/i.exec(u);
   if (sqlite) return { file: sqlite[1] };
@@ -36,11 +40,39 @@ export function parseJdbcUrl(url: string): { host?: string; port?: number; datab
     const db = /databaseName=([^;]+)/i.exec(mssql[5] ?? "")?.[1] ?? mssql[4];
     return { host: mssql[1], instance: mssql[2], port: mssql[3] ? Number(mssql[3]) : undefined, database: db };
   }
-  const informix = /^jdbc:informix-sqli:\/\/([^:/]+):(\d+)\/([^:;]+)/i.exec(u);
-  if (informix) return { host: informix[1], port: Number(informix[2]), database: informix[3] };
+  const informix = /^jdbc:informix-sqli:\/\/([^:/]+):(\d+)(?:\/([^:;]*))?(?:[:;](.*))?$/i.exec(u);
+  if (informix) {
+    const props = informixProps(informix[4] ?? "");
+    const server = props.find(([key]) => key.toLowerCase() === "informixserver")?.[1];
+    const params = props.filter(([key]) => !["informixserver", "user", "password"].includes(key.toLowerCase())).map(([key, value]) => `${key}=${value}`).join(";");
+    return { host: informix[1], port: Number(informix[2]), database: informix[3] || undefined, instance: server, params: params || undefined };
+  }
   const generic = /^jdbc:[\w-]+(?::[\w-]+)?:\/\/([^:/?;]+)(?::(\d+))?(?:\/([^?;]*))?/i.exec(u);
   if (generic) return { host: generic[1], port: generic[2] ? Number(generic[2]) : undefined, database: generic[3] || undefined };
   return {};
+}
+
+/** "informixserver=x;DB_LOCALE=es_ES.819" → [key, value] pairs (a value may hold "="). */
+function informixProps(text: string): [string, string][] {
+  return text
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.includes("="))
+    .map((part) => [part.slice(0, part.indexOf("=")).trim(), part.slice(part.indexOf("=") + 1).trim()] as [string, string])
+    .filter(([key]) => key.length > 0);
+}
+
+/** Informix: the server name and extra parameters from the URL (and DBeaver's driver properties); "Automático". */
+function applyInformix(cfg: ConnConfig, fromUrl: ReturnType<typeof parseJdbcUrl>, server: string | undefined, properties?: Record<string, unknown>) {
+  cfg.informixMode = "auto";
+  cfg.instance = fromUrl.instance || server || cfg.instance;
+  const extra = informixProps(fromUrl.params ?? "");
+  const skip = new Set(["user", "password", "informixserver", ...extra.map(([key]) => key.toLowerCase())]);
+  for (const [key, value] of Object.entries(properties ?? {})) {
+    if (skip.has(key.toLowerCase()) || value === null || typeof value === "object") continue;
+    extra.push([key, String(value)]);
+  }
+  cfg.extra = extra.map(([key, value]) => `${key}=${value}`).join(";");
 }
 
 function kindFor(source: string): DbKind | null {
@@ -112,6 +144,7 @@ export async function parseDbeaver(source: MigrationSource): Promise<Candidate[]
       cfg.database = "";
     }
     if (kind === "mssql" && cfg.host.includes("\\")) [cfg.host, cfg.instance] = cfg.host.split("\\");
+    if (kind === "informix") applyInformix(cfg, fromUrl, conf.server, conf.properties as Record<string, unknown> | undefined);
     out.push({ key: `dbeaver:${source.project}:${id}`, tool: "dbeaver", project: source.project, cfg, driver, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${c.provider ?? c.driver ?? "desconocido"})` });
   }
   return out;
@@ -151,6 +184,7 @@ export function parseDbVisualizer(source: MigrationSource): Candidate[] {
       cfg.host = "";
       cfg.database = "";
     }
+    if (kind === "informix") applyInformix(cfg, fromUrl, vars.informixserver || vars["informix server"] || vars.servername);
     out.push({ key: `dbvis:${db.getAttribute("id") ?? index}`, tool: "dbvisualizer", project: source.project, cfg, driver: driverName, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${driverName || "desconocido"})` });
   });
   return out;

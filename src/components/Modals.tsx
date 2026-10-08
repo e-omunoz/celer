@@ -1,4 +1,4 @@
-import { CircleAlert, CircleCheck, FolderOpen, LoaderCircle, X } from "lucide-solid";
+import { BookOpen, CircleAlert, CircleCheck, FolderOpen, LoaderCircle, X } from "lucide-solid";
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { isTauri } from "../api";
 import { Mark } from "../brand/Mark";
@@ -11,7 +11,6 @@ import {
   browseSqlite,
   connect,
   dismissConfirm,
-  downloadDriver,
   kindOf,
   runPreview,
   saveSettings,
@@ -36,6 +35,15 @@ import { dataCompare } from "../dataCompareRun";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
 import { checkForUpdates, openReleasePage } from "../update";
+import { DriversSettings, InformixGuideDialog, JdbcSetupDialog, openInformixGuide } from "./InformixDrivers";
+
+/** Informix: what each protocol needs, under the protocol select. */
+const INFORMIX_MODES: Record<string, string> = {
+  auto: "El Client SDK si está instalado; si no, JDBC (Celer ofrece descargar lo que falte).",
+  jdbc: "SQLI, el protocolo nativo (puerto 9088), con Java y el driver JDBC de IBM, como DBeaver.",
+  sqli: "SQLI con el driver ODBC del Informix Client SDK, que tiene que estar instalado.",
+  drda: "DRDA (a menudo el puerto 9089) con el driver IBM CLI: el servidor necesita un listener drsoctcp.",
+};
 
 export function Modals() {
   return (
@@ -67,6 +75,8 @@ export function Modals() {
         )}
       </Show>
       <Show when={state.paramAsk}>{(ask) => <ParamsDialog ask={ask()} />}</Show>
+      <Show when={state.jdbcSetup}><JdbcSetupDialog /></Show>
+      <Show when={state.informixGuide}><InformixGuideDialog /></Show>
       <Show when={state.er}><ErDiagram /></Show>
       <Show when={state.activity}><ActivityView /></Show>
       <Show when={schemaCompare.open}><SchemaCompareView /></Show>
@@ -224,6 +234,13 @@ function ConnectionDialog(props: { cfg: ConnConfig }) {
     setState({ testOutput: "", testOk: null });
   }
 
+  /** The usual port goes with the protocol (SQLI 9088, DRDA 9089) unless the user typed another one. */
+  function pickInformixMode(mode: string) {
+    const port = cfg().port;
+    const next = mode === "drda" ? 9089 : 9088;
+    setCfg({ ...cfg(), informixMode: mode, port: port === 9088 || port === 9089 || port === null ? next : port });
+  }
+
   function autoName(c: ConnConfig) {
     if (c.name.trim()) return c.name.trim();
     if (c.kind === "sqlite") return c.filePath ? c.filePath.split(/[\\/]/).pop() || "SQLite" : "SQLite";
@@ -301,7 +318,7 @@ function ConnectionDialog(props: { cfg: ConnConfig }) {
               </label>
               <label class="field" style={{ width: "96px" }}>
                 <span>Puerto</span>
-                <input type="number" value={cfg().port ?? ""} placeholder={String(engineOf(kind()).port ?? "")} onInput={(event) => set("port", event.currentTarget.value ? Number(event.currentTarget.value) : null)} />
+                <input type="number" value={cfg().port ?? ""} placeholder={kind() === "informix" && cfg().informixMode === "drda" ? "9089" : String(engineOf(kind()).port ?? "")} onInput={(event) => set("port", event.currentTarget.value ? Number(event.currentTarget.value) : null)} />
               </label>
             </div>
             <div class="form-row">
@@ -368,10 +385,16 @@ function ConnectionDialog(props: { cfg: ConnConfig }) {
               <Show when={kind() === "informix"}>
                 <label class="field">
                   <span>Protocolo</span>
-                  <select value={cfg().informixMode} onChange={(event) => set("informixMode", event.currentTarget.value)}>
-                    <option value="drda">DRDA (IBM CLI)</option>
+                  <select value={cfg().informixMode} onChange={(event) => pickInformixMode(event.currentTarget.value)}>
+                    <option value="auto">Automático (recomendado)</option>
+                    <option value="jdbc">SQLI (JDBC)</option>
                     <option value="sqli">SQLI (Client SDK / ODBC)</option>
+                    <option value="drda">DRDA (IBM CLI)</option>
                   </select>
+                  <small class="field-hint">
+                    {INFORMIX_MODES[cfg().informixMode] ?? ""}{" "}
+                    <button type="button" class="text-link" onClick={() => openInformixGuide()}>¿Cuál elijo?</button>
+                  </small>
                 </label>
               </Show>
               <Show when={network() || kind() === "sqlite"}>
@@ -399,6 +422,9 @@ function ConnectionDialog(props: { cfg: ConnConfig }) {
               <Show when={!state.testing} fallback={<><LoaderCircle size={15} class="spin" /> Probando conexión…</>}>
                 {state.testOk ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
                 <pre>{state.testOutput}</pre>
+                <Show when={state.testGuide}>
+                  <button type="button" class="btn tiny" onClick={() => openInformixGuide(state.testGuide)}><BookOpen size={13} /> Guía</button>
+                </Show>
               </Show>
             </div>
           </Show>
@@ -534,13 +560,7 @@ function SettingsDialog() {
             <AiSettings />
           </Show>
           <Show when={section() === "drivers"}>
-            <p class="settings-note">PostgreSQL, MySQL/MariaDB, SQL Server y SQLite son nativos: no hace falta instalar nada. Informix (DRDA) usa el driver IBM Data Server, que Celer puede descargar.</p>
-            <label class="field">
-              <span>Ruta del driver IBM (opcional)</span>
-              <input value={s().ibmDriverPath} placeholder="detección automática" onChange={(event) => void saveSettings({ ibmDriverPath: event.currentTarget.value })} />
-            </label>
-            <p class="settings-note">Estado: {state.driverPath || "no encontrado"} {state.driverProgress}</p>
-            <button type="button" class="btn" disabled={!isTauri()} onClick={() => void downloadDriver()}>Descargar driver IBM</button>
+            <DriversSettings />
           </Show>
           <p class="settings-foot">{isTauri() ? "Aplicación de escritorio" : "Modo navegador: SQLite en memoria (demo)."} · Celer {state.appInfo.version} · {state.appInfo.dataDir}</p>
         </div>

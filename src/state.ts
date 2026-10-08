@@ -12,6 +12,7 @@ import type {
   ConnSummary,
   DbKind,
   HistoryEntry,
+  InformixDrivers,
   MetaNode,
   ObjectRef,
   ResultSet,
@@ -298,6 +299,16 @@ export const [state, setState] = createStore({
   appInfo: { version: "", dataDir: "" },
   driverPath: null as string | null,
   driverProgress: "",
+  /** A driver download in progress (it can be cancelled). */
+  driverDownload: null as { what: string; done: number; total: number } | null,
+  /** Settings › Drivers: what Informix can connect with on this machine. */
+  informixDrivers: null as InformixDrivers | null,
+  /** A JDBC connection lacks Java or the driver: what is missing, and what to retry once it is downloaded. */
+  jdbcSetup: null as { missing: ("java" | "jdbc")[]; text: string; retry: (() => void) | null } | null,
+  /** The Informix drivers guide, open on a topic (jdbc, sdk, drda, locale, server), with the error that led there. */
+  informixGuide: null as { topic: string; message: string } | null,
+  /** "Probar conexión" failed with something the guide explains: its topic. */
+  testGuide: "",
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
   passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
   /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
@@ -519,6 +530,7 @@ export async function boot() {
   void api().onDriverDownload((progress) => {
     const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
     setState("driverProgress", progress.total ? `${pct}%` : `${progress.done} bytes`);
+    if (state.driverDownload) setState("driverDownload", { what: progress.what || state.driverDownload.what, done: progress.done, total: progress.total });
   });
 }
 
@@ -910,7 +922,7 @@ export async function moveConnection(id: string, folder: string, beforeId?: stri
 }
 
 export function openConnDialog(cfg?: ConnConfig) {
-  setState({ testOutput: "", testOk: null, testing: false });
+  setState({ testOutput: "", testOk: null, testing: false, testGuide: "" });
   setState("connDialog", cfg ? { ...cfg, password: "" } : emptyConn(isTauri() ? "postgres" : "sqlite"));
 }
 
@@ -965,19 +977,60 @@ export async function duplicateConnection(id: string) {
 }
 
 export async function testConnection(cfg: ConnConfig) {
-  setState({ testOutput: "", testOk: null, testing: true });
+  setState({ testOutput: "", testOk: null, testing: true, testGuide: "" });
   try {
     setState({ testOutput: await api().testConnection(cfg), testOk: true });
   } catch (err) {
-    setState({ testOutput: errorText(err), testOk: false });
+    const message = errorText(err);
+    const code = errorCode(message);
+    setState({ testOutput: plainError(message), testOk: false, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
+    // The dialog stays open: only what has to be downloaded is offered on top of it.
+    if (code?.code === "JDBC_SETUP") offerDriverHelp(message, () => void testConnection(cfg));
   } finally {
     setState("testing", false);
   }
 }
 
+/** A code the core puts in front of some errors: "JDBC_SETUP:java,jdbc: …", "INFORMIX_GUIDE:sdk: …", "IBM_DRIVER_MISSING: …". */
+export function errorCode(message: string): { code: string; arg: string; text: string } | null {
+  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
+  return match ? { code: match[1], arg: match[2] ?? "", text: match[3] } : null;
+}
+
+/** An error as the user reads it (without its code). */
+export function plainError(message: string) {
+  return errorCode(message)?.text ?? message;
+}
+
+/**
+ * Offers what a driver error asks for: the downloads Informix over JDBC lacks (then `retry`), the Informix guide on
+ * the error's topic, or Settings › Drivers. Returns whether it did.
+ */
+export function offerDriverHelp(message: string, retry: (() => void) | null): boolean {
+  const code = errorCode(message);
+  if (!code) return false;
+  if (code.code === "JDBC_SETUP") {
+    const missing = code.arg.split(",").filter((m): m is "java" | "jdbc" => m === "java" || m === "jdbc");
+    setState("jdbcSetup", { missing, text: code.text, retry });
+    void refreshInformixDrivers();
+    return true;
+  }
+  if (code.code === "INFORMIX_GUIDE") {
+    setState("informixGuide", { topic: code.arg || "jdbc", message: code.text });
+    return true;
+  }
+  if (code.code === "IBM_DRIVER_MISSING" || code.code === "JDBC_BRIDGE_MISSING") {
+    setState({ settingsOpen: true, settingsSection: "drivers" });
+    return true;
+  }
+  return false;
+}
+
 export async function connect(connId: string, password?: string) {
   const conn = connectionById(connId);
   if (!conn || state.connecting[connId]) return;
+  // Informix over JDBC: Java starts now, while the password is asked.
+  if (isTauri() && conn.kind === "informix" && (conn.informixMode === "jdbc" || conn.informixMode === "auto")) void api().jdbcPrewarm(connId).catch(() => {});
   if (password) setState("passwords", connId, password);
   else if (needsPassword(conn)) {
     const typed = await askPassword(conn.name);
@@ -1018,15 +1071,15 @@ export async function connect(connId: string, password?: string) {
     persistSoon();
   } catch (err) {
     const message = errorText(err);
-    notify(`No se pudo conectar a «${conn.name}»`, "error", message);
-    gib("connect-failed", { detail: message });
+    notify(`No se pudo conectar a «${conn.name}»`, "error", plainError(message));
+    gib("connect-failed", { detail: plainError(message) });
     // Forget a typed password that did not work, so the next attempt asks again.
     if (!conn.hasPassword) {
       setState(produce((draft) => {
         delete draft.passwords[connId];
       }));
     }
-    if (message.includes("IBM_DRIVER_MISSING")) setState({ settingsOpen: true, settingsSection: "drivers" });
+    offerDriverHelp(message, () => void connect(connId));
   } finally {
     // A disconnect in between owns the flag now (a newer connect may be running).
     if (connectGeneration(connId) === generation) setState("connecting", connId, false);
@@ -1405,7 +1458,7 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     pushOutput(current.id, { at: Date.now(), sql, ok: false, text: message, elapsedMs: null });
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
-    if (message.includes("IBM_DRIVER_MISSING")) setState({ settingsOpen: true, settingsSection: "drivers" });
+    offerDriverHelp(message, null);
   }
 }
 
@@ -2644,15 +2697,64 @@ export async function saveScript(saveAs = false) {
 }
 
 export async function downloadDriver() {
-  setState("driverProgress", "0%");
+  setState({ driverProgress: "0%", driverDownload: { what: "IBM Data Server Driver", done: 0, total: 0 } });
   try {
     const path = await api().ibmDriverDownload();
     setState({ driverPath: path, driverProgress: "" });
     notify("Driver IBM instalado", "success");
   } catch (err) {
     setState("driverProgress", "");
-    notify(errorText(err), "error");
+    if (!/cancelada/i.test(errorText(err))) notify(errorText(err), "error");
+  } finally {
+    setState("driverDownload", null);
+    void refreshInformixDrivers();
   }
+}
+
+export async function refreshInformixDrivers() {
+  if (!isTauri()) return;
+  try {
+    setState("informixDrivers", await api().informixDrivers());
+  } catch (err) {
+    notify("No se pudo comprobar los drivers", "error", errorText(err));
+  }
+}
+
+/**
+ * Downloads Java (Eclipse Temurin JRE 21) or the Informix JDBC driver into Celer's data folder. Only on the user's
+ * request: the buttons that call this say what is downloaded and from where. Returns whether it worked.
+ */
+export async function downloadJdbcPiece(what: "java" | "jdbc"): Promise<boolean> {
+  if (state.driverDownload) return false;
+  setState("driverDownload", { what: what === "java" ? "Java (Temurin JRE 21)" : "Driver JDBC de Informix", done: 0, total: 0 });
+  try {
+    await api().jdbcDownload(what);
+    notify(what === "java" ? "Java descargado" : "Driver JDBC descargado", "success");
+    return true;
+  } catch (err) {
+    if (!/cancelada/i.test(errorText(err))) notify("No se pudo completar la descarga", "error", errorText(err));
+    return false;
+  } finally {
+    setState("driverDownload", null);
+    await refreshInformixDrivers();
+  }
+}
+
+export function cancelDriverDownload() {
+  void api().driverDownloadCancel();
+}
+
+/** The JDBC setup dialog: downloads what is missing, in turn, then retries what failed. */
+export async function completeJdbcSetup(what: ("java" | "jdbc")[]) {
+  const setup = state.jdbcSetup;
+  for (const piece of what) {
+    if (!(await downloadJdbcPiece(piece))) return;
+  }
+  const drivers = state.informixDrivers;
+  const ready = !drivers || (drivers.javaUsed && drivers.jdbcUsed);
+  if (!ready) return;
+  setState("jdbcSetup", null);
+  setup?.retry?.();
 }
 
 // ---------------------------------------------------------------- completion

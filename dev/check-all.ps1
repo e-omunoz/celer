@@ -40,6 +40,7 @@ Step "table SQL builders" { & $node --experimental-strip-types --no-warnings dev
 Step "XML formatting" { & $node --experimental-strip-types --no-warnings dev\prettyxml-check.ts }
 Step "keyboard shortcuts" { & $node --experimental-strip-types --no-warnings dev\keymap-check.ts }
 Step "import formats" { & $node --experimental-strip-types --no-warnings dev\import-check.ts }
+Step "connection import (JDBC URLs)" { & $node --experimental-strip-types --no-warnings dev\migrate-check.ts }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
 

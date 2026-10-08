@@ -35,7 +35,7 @@ export const ENGINES: { kind: DbKind; label: string; hint: string; port: number 
   { kind: "mysql", label: "MySQL / MariaDB", hint: "Nativo · también TiDB, PlanetScale", port: 3306, user: "root", color: "#C0765A" },
   { kind: "mssql", label: "SQL Server", hint: "TDS nativo · autenticación SQL y Windows", port: 1433, user: "sa", color: "#CC2927" },
   { kind: "sqlite", label: "SQLite", hint: "Embebido · un fichero o en memoria", port: null, user: "", color: "#4F8FBF" },
-  { kind: "informix", label: "Informix", hint: "IBM CLI (DRDA) o Client SDK", port: 9088, user: "informix", color: "#4B6EAF" },
+  { kind: "informix", label: "Informix", hint: "JDBC o Client SDK (SQLI), IBM CLI (DRDA)", port: 9088, user: "informix", color: "#4B6EAF" },
   { kind: "odbc", label: "ODBC", hint: "Cualquier origen de datos ODBC", port: null, user: "", color: "#7C8796" },
 ];
 
@@ -57,6 +57,7 @@ export interface ConnConfig {
   integratedAuth: boolean;
   encryption: string;
   trustCert: boolean;
+  /** Informix: "auto" (Client SDK if installed, else JDBC) | "jdbc" | "sqli" (Client SDK, ODBC) | "drda" (IBM CLI). */
   informixMode: string;
   odbcConnStr: string;
   extra: string;
@@ -157,6 +158,10 @@ export interface Settings {
   editorFontSize: number;
   pageSize: number;
   ibmDriverPath: string;
+  /** Java for Informix over JDBC: an executable or a JRE/JDK folder (empty: found on its own). */
+  javaPath: string;
+  /** Informix JDBC driver: a jar or a folder with one (empty: DBeaver's or the one Celer downloaded). */
+  informixJdbcPath: string;
   sidebarWidth: number;
   inspectorWidth: number;
   editorRatio: number;
@@ -214,6 +219,8 @@ export const defaultSettings: Settings = {
   editorFontSize: 13,
   pageSize: 500,
   ibmDriverPath: "",
+  javaPath: "",
+  informixJdbcPath: "",
   sidebarWidth: 280,
   inspectorWidth: 320,
   editorRatio: 0.45,
@@ -249,7 +256,7 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     integratedAuth: false,
     encryption: kind === "mssql" ? "required" : "login",
     trustCert: true,
-    informixMode: "drda",
+    informixMode: "auto",
     odbcConnStr: "",
     extra: "",
     color: "",
@@ -258,6 +265,38 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     folder: "",
     filePath: kind === "sqlite" ? "" : "",
   };
+}
+
+export interface JavaFound {
+  path: string;
+  major: number;
+  version: string;
+  /** settings | JAVA_HOME | DBeaver | PATH | Celer */
+  source: string;
+}
+
+export interface JdbcFound {
+  jars: string[];
+  version: string;
+  /** settings | DBeaver | Celer */
+  source: string;
+}
+
+/** What Informix can connect with on this machine (Settings › Drivers). */
+export interface InformixDrivers {
+  cli: string | null;
+  java: JavaFound[];
+  javaUsed: JavaFound | null;
+  javaMin: number;
+  jdbc: JdbcFound[];
+  jdbcUsed: JdbcFound | null;
+  jdbcVersion: string;
+  /** Informix ODBC drivers registered (the Client SDK's). */
+  odbc: string[];
+  sdkReady: boolean;
+  /** The JDBC bridge is part of this build. */
+  bridge: boolean;
+  jreDownload: boolean;
 }
 
 export type McpLevel = "none" | "schema" | "read" | "write";

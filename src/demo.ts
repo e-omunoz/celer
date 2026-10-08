@@ -112,7 +112,7 @@ function demoConnection(): ConnConfig {
     integratedAuth: false,
     encryption: "off",
     trustCert: true,
-    informixMode: "drda",
+    informixMode: "auto",
     odbcConnStr: "",
     extra: "",
     color: "#c2410c",
@@ -648,6 +648,17 @@ export function createDemoBackend(): Backend {
     async ibmDriverDownload() {
       throw new Error("La descarga del driver IBM solo está disponible en la aplicación de escritorio");
     },
+    async informixDrivers() {
+      return { cli: null, java: [], javaUsed: null, javaMin: 11, jdbc: [], jdbcUsed: null, jdbcVersion: "4.50.10.1", odbc: [], sdkReady: false, bridge: false, jreDownload: false };
+    },
+    async jdbcDownload() {
+      throw new Error("Las descargas de drivers solo están disponibles en la aplicación de escritorio");
+    },
+    async jdbcCheck() {
+      throw new Error("Informix por JDBC solo está disponible en la aplicación de escritorio");
+    },
+    async jdbcPrewarm() {},
+    async driverDownloadCancel() {},
     async mcpConfigGet() {
       return { enabled: false, maxRows: 200, timeoutSecs: 30, redactPattern: "", connections: {} };
     },

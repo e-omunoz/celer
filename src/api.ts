@@ -11,7 +11,7 @@ import type {
   SessionInfo,
   TableColumn,
 } from "./types";
-import type { McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
+import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
 import type { MigrationSource } from "./migrate";
 import { createDemoBackend } from "./demo";
 
@@ -56,6 +56,15 @@ export interface Backend {
   odbcDsns(): Promise<string[]>;
   ibmDriverStatus(): Promise<string | null>;
   ibmDriverDownload(): Promise<string>;
+  /** IBM CLI, Java and the JDBC driver, the Client SDK's ODBC driver: what is installed and what connections use. */
+  informixDrivers(): Promise<InformixDrivers>;
+  /** Downloads Java (Temurin JRE 21) or the Informix JDBC driver (Maven Central), with progress (onDriverDownload). */
+  jdbcDownload(what: "java" | "jdbc"): Promise<string>;
+  /** Starts the JDBC bridge with the Java and driver connections would use and loads the driver. */
+  jdbcCheck(): Promise<string>;
+  /** Starts Java ahead of an Informix JDBC connection (while the password is asked). */
+  jdbcPrewarm(connId: string): Promise<void>;
+  driverDownloadCancel(): Promise<void>;
   appInfo(): Promise<{ version: string; dataDir: string }>;
   migrationSources(): Promise<MigrationSource[]>;
   updateCheck(): Promise<UpdateInfo>;
@@ -75,7 +84,7 @@ export interface Backend {
   pickSavePath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
   pickOpenPath(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
   onExportProgress(cb: (progress: { exportId: string; rows: number }) => void): Promise<() => void>;
-  onDriverDownload(cb: (progress: { done: number; total: number }) => void): Promise<() => void>;
+  onDriverDownload(cb: (progress: { done: number; total: number; what?: string }) => void): Promise<() => void>;
 }
 
 export function isTauri(): boolean {
@@ -126,6 +135,11 @@ function tauriBackend(): Backend {
     odbcDsns: () => invoke("odbc_dsns"),
     ibmDriverStatus: () => invoke("ibm_driver_status"),
     ibmDriverDownload: () => invoke("ibm_driver_download"),
+    informixDrivers: () => invoke("informix_drivers"),
+    jdbcDownload: (what) => invoke("jdbc_download", { what }),
+    jdbcCheck: () => invoke("jdbc_check"),
+    jdbcPrewarm: (connId) => invoke("jdbc_prewarm", { connId }),
+    driverDownloadCancel: () => invoke("driver_download_cancel"),
     appInfo: () => invoke("app_info"),
     migrationSources: () => invoke("migration_sources"),
     updateCheck: () => invoke("update_check"),
@@ -168,7 +182,7 @@ function tauriBackend(): Backend {
     },
     onDriverDownload: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");
-      return listen<{ done: number; total: number }>("driver-download", (e) => cb(e.payload));
+      return listen<{ done: number; total: number; what?: string }>("driver-download", (e) => cb(e.payload));
     },
   };
 }
