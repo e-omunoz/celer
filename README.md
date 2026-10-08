@@ -209,7 +209,7 @@ to Celer Setup, uninstall the MSI copy (your data is kept) and install `Celer-Se
 | `Ctrl+N` | Go to table |
 | `Ctrl+Shift+A` | Actions |
 | `Ctrl+Shift+L` | New console |
-| `Ctrl+Shift+N` | New window (drag a tab out of the tab bar to move it to one) |
+| `Ctrl+Shift+N` | New window (drag a tab out of the tab bar to move it to one). With the focus in the explorer it creates a folder; in a table grid it sets NULL |
 | `Ctrl+Alt+N` | New connection |
 | `Ctrl+Alt+L` | Format SQL |
 | `Ctrl+Shift+E` | Execution plan |

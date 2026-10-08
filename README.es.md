@@ -208,7 +208,7 @@ pasar a Celer Setup, desinstala la copia MSI (tus datos se conservan) e instala 
 | `Ctrl+N` | Ir a tabla |
 | `Ctrl+Shift+A` | Acciones |
 | `Ctrl+Shift+L` | Nueva consola |
-| `Ctrl+Shift+N` | Ventana nueva (arrastra una pestaña fuera de la barra para llevarla a otra) |
+| `Ctrl+Shift+N` | Ventana nueva (arrastra una pestaña fuera de la barra para llevarla a otra). Con el foco en el explorador crea una carpeta; en la rejilla de una tabla pone NULL |
 | `Ctrl+Alt+N` | Nueva conexión |
 | `Ctrl+Alt+L` | Formatear SQL |
 | `Ctrl+Shift+E` | Plan de ejecución |

@@ -229,7 +229,8 @@ Celer puede tener varias ventanas, por ejemplo una en cada monitor. Todas compar
 biblioteca, los ajustes, el tema, los atajos y a Gib; cada una tiene sus pestañas, su explorador y su panel derecho.
 
 - **Ventana nueva**: **Ctrl+Mayús+N** (o *Nuevo › Nueva ventana*). Se abre conectada a lo mismo que la ventana desde
-  la que la abres.
+  la que la abres. El atajo depende de dónde esté el foco: en el explorador crea una carpeta y en la rejilla de una
+  tabla pone NULL en la celda; en el resto de Celer (editor, pestañas, paneles) abre la ventana nueva.
 - **Sacar una pestaña**: arrástrala fuera de la barra de pestañas y suéltala donde quieras: la ventana nueva aparece
   ahí. También con el botón derecho sobre la pestaña: *Mover a una ventana nueva*.
 - **Llevarla a otra ventana**: arrástrala a la barra de pestañas de otra ventana de Celer (se marca al pasar por

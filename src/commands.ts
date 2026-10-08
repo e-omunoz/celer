@@ -103,7 +103,7 @@ export function commands(): Command[] {
     { id: "library-only-conn", label: "Biblioteca: solo los scripts de la conexión activa (activar o quitar)", group: "Biblioteca", run: () => { openInspector("library"); setOnlyConn(!library.onlyConn); } },
     { id: "collapse", label: "Contraer el árbol", group: "Ventana", run: collapseAll },
     // Several windows (desktop only).
-    { id: "new-window", label: "Ventana nueva, con su explorador y sus pestañas", group: "Ventana", run: () => void openNewWindow(), enabled: isTauri },
+    { id: "new-window", label: "Ventana nueva, con su explorador y sus pestañas (en el explorador, Ctrl+Mayús+N crea una carpeta; en la rejilla, pone NULL)", group: "Ventana", run: () => void openNewWindow(), enabled: isTauri },
     { id: "tab-new-window", label: "Mover la pestaña a una ventana nueva", group: "Ventana", run: () => void sendTab(state.activeTabId, null), enabled: () => isTauri() && Boolean(activeTab()) },
     { id: "detach-panel", label: "Abrir el panel en su propia ventana (biblioteca, IA, plan, diagrama o comparación)", group: "Ventana", run: () => { const kind = detachablePanel(); if (kind) void detachPanel(kind); }, enabled: () => isTauri() && Boolean(detachablePanel()) },
     { id: "detach-library", label: "Biblioteca de scripts en su propia ventana", group: "Biblioteca", run: () => void detachPanel("library"), enabled: isTauri },
