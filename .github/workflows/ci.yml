@@ -37,6 +37,16 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The pure TypeScript logic checks (dev/*-check.ts): a few seconds, no app or database needed.
+      - name: Logic checks
+        shell: bash
+        run: |
+          for check in dev/*-check.ts; do
+            echo "::group::$check"
+            node --experimental-strip-types --no-warnings "$check" || exit 1
+            echo "::endgroup::"
+          done
+
       - name: Typecheck and build the app UI
         run: npm run build
 
