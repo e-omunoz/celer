@@ -47,6 +47,17 @@ export default function App() {
   onMount(() => {
     void boot().then(startUpdateChecks);
     revealWindow();
+    // Window in the background: Gib's idle loops pause (App.css, data-focus).
+    const focus = () => (document.documentElement.dataset.focus = document.hasFocus() && !document.hidden ? "in" : "out");
+    focus();
+    window.addEventListener("focus", focus);
+    window.addEventListener("blur", focus);
+    document.addEventListener("visibilitychange", focus);
+    onCleanup(() => {
+      window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", focus);
+      document.removeEventListener("visibilitychange", focus);
+    });
     let lastShift = 0;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "F5" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r")) {

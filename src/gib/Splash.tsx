@@ -39,10 +39,10 @@ export function Splash() {
   });
 
   async function run() {
-    const reduce = reducedMotion();
     const started = performance.now();
     while (!state.ready) await sleep(30);
-    if (reduce || state.settings.companion === "off") {
+    // Read once the settings are loaded: "Animaciones: reducidas" in Celer counts, not only the system's.
+    if (reducedMotion() || state.settings.companion === "off") {
       await finish(false);
       return;
     }
