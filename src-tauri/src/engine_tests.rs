@@ -364,6 +364,46 @@ fn mssql_engine() {
     assert_eq!(scalar(d, "SELECT DB_NAME()"), "celer_test");
 }
 
+/// A big result left half read (a page of 500, as the interface asks for): how long the next statement takes, and
+/// whether the session (its SPID, a #temp table, an open transaction) survives it.
+#[test]
+fn mssql_abandoned_cursor() {
+    let Some(mut d) = mssql("tempdb") else { return };
+    let d: &mut dyn Driver = &mut d;
+    // 200.000 rows of ~200 bytes: far more than the network buffers hold, so the server is still sending.
+    d.execute("IF OBJECT_ID('dbo.celer_big') IS NOT NULL DROP TABLE dbo.celer_big;
+               SELECT TOP 200000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n, REPLICATE(N'x', 100) AS relleno
+               INTO dbo.celer_big FROM sys.all_objects a CROSS JOIN sys.all_objects b", 10).unwrap();
+    let page = |d: &mut dyn Driver| {
+        let t0 = Instant::now();
+        let out = d.execute("SELECT n, relleno FROM dbo.celer_big", 500).unwrap();
+        assert!(out.results[0].has_more && out.results[0].rows.len() == 500);
+        t0.elapsed().as_millis()
+    };
+    let spid = scalar(d, "SELECT @@SPID");
+    for round in 1..=3 {
+        let first = page(d);
+        let t0 = Instant::now();
+        let out = d.execute("SELECT @@SPID", 10).unwrap();
+        let next = t0.elapsed().as_millis();
+        let now = txt(&out.results[0].rows[0][0]);
+        eprintln!("cursor abandonado, ronda {round}: primera página {first} ms, siguiente consulta {next} ms, SPID {spid} → {now}; {:?}", out.messages);
+    }
+
+    // A #temp table and an open transaction (autocommit mode, BEGIN TRAN) across an abandoned cursor.
+    d.execute("CREATE TABLE #celer_tmp (id int); INSERT INTO #celer_tmp VALUES (1)", 10).unwrap();
+    d.execute("BEGIN TRAN; INSERT INTO #celer_tmp VALUES (2)", 10).unwrap();
+    page(d);
+    let t0 = Instant::now();
+    let kept = d.execute("SELECT COUNT(*), @@TRANCOUNT FROM #celer_tmp", 10);
+    let next = t0.elapsed().as_millis();
+    match kept {
+        Ok(out) => eprintln!("#temp y transacción tras el cursor abandonado ({next} ms): filas {}, @@TRANCOUNT {}", txt(&out.results[0].rows[0][0]), txt(&out.results[0].rows[0][1])),
+        Err(e) => eprintln!("#temp y transacción tras el cursor abandonado ({next} ms): perdidas ({e})"),
+    }
+    let _ = d.execute("IF @@TRANCOUNT > 0 ROLLBACK", 10);
+}
+
 /// "cols → table(cols)": the format the interface reads FK nodes with.
 fn regex_lite(detail: &str) -> bool {
     let Some((left, right)) = detail.split_once('→') else { return false };
