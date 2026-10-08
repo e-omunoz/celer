@@ -33,6 +33,7 @@ Step "templates and parameters" { & $node --experimental-strip-types --no-warnin
 Step "ER layout" { & $node --experimental-strip-types --no-warnings dev\erlayout-check.ts }
 Step "plan readers" { & $node --experimental-strip-types --no-warnings dev\plan-check.ts }
 Step "result comparison" { & $node --experimental-strip-types --no-warnings dev\compare-check.ts }
+Step "keyboard shortcuts" { & $node --experimental-strip-types --no-warnings dev\keymap-check.ts }
 Step "import formats" { & $node --experimental-strip-types --no-warnings dev\import-check.ts }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }

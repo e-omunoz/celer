@@ -31,6 +31,7 @@ import {
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { createEffect, on, onCleanup, onMount, untrack } from "solid-js";
+import { chordsFor, codeMirrorKey } from "../keymap";
 import { splitSql } from "../sql";
 import { unfilteredWrites, type Snippet } from "../snippets";
 import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
@@ -38,6 +39,7 @@ import type { CompletionTable, DbKind } from "../types";
 
 const language = new Compartment();
 const theme = new Compartment();
+const userKeys = new Compartment();
 
 const sqlHighlight = HighlightStyle.define([
   { tag: [tags.keyword, tags.operatorKeyword, tags.modifier], color: "var(--syntax-keyword)" },
@@ -278,10 +280,18 @@ export function SqlEditor(props: {
   onCancel: () => void;
   onFormat: () => void;
   onReady?: (view: EditorView) => void;
+  /** The user's shortcuts (settings.keymap): run, run script, plan and format follow them. */
+  keymap?: Record<string, string[]>;
 }) {
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
   let applying = false;
+
+  /** The editor's commands on their shortcuts (defaults or the user's). */
+  function commandKeys(): Extension {
+    const bind = (id: string, run: () => void) => chordsFor(id, props.keymap).map((chord) => ({ key: codeMirrorKey(chord), preventDefault: true, run: () => (run(), true) }));
+    return keymap.of([...bind("run", props.onRun), ...bind("run-script", props.onRunAll), ...bind("explain", props.onExplain), ...bind("format", props.onFormat)]);
+  }
 
   function themeExtension(): Extension {
     return EditorView.theme({
@@ -383,13 +393,9 @@ export function SqlEditor(props: {
           unfilteredWarning(() => props.kind),
           linkField,
           theme.of(themeExtension()),
+          // Before the built-in bindings: a user's shortcut wins over the editor's own.
+          userKeys.of(commandKeys()),
           keymap.of([
-            { key: "Mod-Enter", preventDefault: true, run: () => { props.onRun(); return true; } },
-            { key: "Mod-Shift-Enter", preventDefault: true, run: () => { props.onRunAll(); return true; } },
-            { key: "Alt-x", preventDefault: true, run: () => { props.onRunAll(); return true; } },
-            { key: "Mod-Shift-e", preventDefault: true, run: () => { props.onExplain(); return true; } },
-            { key: "Mod-F2", preventDefault: true, run: () => { props.onCancel(); return true; } },
-            { key: "Mod-Alt-l", preventDefault: true, run: () => { props.onFormat(); return true; } },
             // Go to the table under the caret (DataGrip: F4 / Ctrl+B).
             { key: "F4", preventDefault: true, run: (v) => openTableAt(v.state, v.state.selection.main.head) },
             { key: "Mod-b", preventDefault: true, run: (v) => openTableAt(v.state, v.state.selection.main.head) },
@@ -485,6 +491,14 @@ export function SqlEditor(props: {
     on(
       () => props.fontSize,
       () => view?.dispatch({ effects: theme.reconfigure(themeExtension()) }),
+      { defer: true },
+    ),
+  );
+
+  createEffect(
+    on(
+      () => JSON.stringify(props.keymap ?? {}),
+      () => view?.dispatch({ effects: userKeys.reconfigure(commandKeys()) }),
       { defer: true },
     ),
   );

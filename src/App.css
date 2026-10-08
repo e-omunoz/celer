@@ -953,6 +953,32 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .settings-body { flex: 1; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
 .settings-body h4 { margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .settings-note { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.55; }
+
+/* Settings › Atajos de teclado */
+.keymap { display: flex; flex-direction: column; gap: 10px; }
+.keymap-head { display: flex; align-items: center; gap: 8px; }
+.keymap-head .btn { flex: none; }
+.keymap-list section h5 { margin: 12px 0 4px; padding: 0 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
+.keymap-list section:first-child h5 { margin-top: 2px; }
+.keymap-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 32px; padding: 3px 4px 3px 8px; border-radius: 6px; }
+.keymap-row:hover { background: var(--hover); }
+.keymap-row.recording { background: var(--accent-soft); }
+.keymap-label { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keymap-row.changed .keymap-label::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
+.keymap-keys { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.keymap-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 2px 2px 4px; border-radius: 6px; }
+.keymap-chip button { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; color: var(--text-faint); opacity: 0; transition: opacity var(--dur-fast); }
+.keymap-chip button:hover { color: var(--danger); background: var(--hover); }
+.keymap-row:hover .keymap-chip button, .keymap-chip button:focus-visible { opacity: 1; }
+.keymap-chip.listening { padding: 3px 8px; font-size: 12px; color: var(--accent-text); border: 1px dashed var(--accent); animation: keymap-listen 1.2s ease-in-out infinite; }
+.keymap-chip.listening small { color: var(--text-faint); margin-left: 4px; }
+@keyframes keymap-listen { 50% { border-color: transparent; } }
+:root[data-motion="reduce"] .keymap-chip.listening { animation: none; }
+.keymap-actions { display: flex; gap: 2px; }
+.keys { display: inline-flex; gap: 3px; }
+.keys kbd { font-size: 11px; }
+.keymap-pending { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; background: color-mix(in srgb, var(--warning) 12%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent); }
+.keymap-pending > span { flex: 1; min-width: 0; }
 .settings-foot { margin: auto 0 0; padding-top: 12px; color: var(--text-faint); font-size: 11.5px; word-break: break-all; }
 .theme-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .theme-card { display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 8px; border-radius: 10px; border: 1px solid var(--border); font-size: 12px; font-weight: 500; transition: border-color var(--dur-fast), transform var(--dur-fast); }

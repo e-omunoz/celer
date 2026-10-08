@@ -113,6 +113,7 @@ import { CodeView, SqlEditor } from "./Editor";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
+import { withShortcut } from "../commands";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 
 export function Workspace() {
@@ -362,14 +363,14 @@ function SqlPane(props: { tab: SqlTab }) {
             </button>
           }
         >
-          <button type="button" class="tb-btn run" title="Ejecutar sentencia o selección (Ctrl+Intro)" onClick={() => { gib("mouse-run"); void runActive("statement"); }}>
+          <button type="button" class="tb-btn run" title={withShortcut("Ejecutar sentencia o selección", "run")} onClick={() => { gib("mouse-run"); void runActive("statement"); }}>
             <Play size={14} fill="currentColor" /> <span>Ejecutar</span>
           </button>
         </Show>
-        <button type="button" class="tb-icon" title="Ejecutar script completo (Ctrl+Mayús+Intro)" disabled={props.tab.running} onClick={() => void runActive("script")}>
+        <button type="button" class="tb-icon" title={withShortcut("Ejecutar script completo", "run-script")} disabled={props.tab.running} onClick={() => void runActive("script")}>
           <PlayCircle size={16} />
         </button>
-        <button type="button" class="tb-icon" title="Plan de ejecución (Ctrl+Mayús+E)" disabled={props.tab.running} onClick={() => void runActive("explain")}>
+        <button type="button" class="tb-icon" title={withShortcut("Plan de ejecución", "explain")} disabled={props.tab.running} onClick={() => void runActive("explain")}>
           <Gauge size={16} />
         </button>
         <span class="tb-sep" />
@@ -377,21 +378,21 @@ function SqlPane(props: { tab: SqlTab }) {
           <button type="button" classList={{ on: props.tab.autocommit }} onClick={() => !props.tab.autocommit && void changeAutocommit(true)}>Auto</button>
           <button type="button" classList={{ on: !props.tab.autocommit }} onClick={() => props.tab.autocommit && void changeAutocommit(false)}>Manual</button>
         </div>
-        <button type="button" class="tb-icon commit" title="Commit (Ctrl+Alt+Mayús+C)" disabled={!props.tab.inTransaction} onClick={() => void commitActive(false)}>
+        <button type="button" class="tb-icon commit" title={withShortcut("Commit", "commit")} disabled={!props.tab.inTransaction} onClick={() => void commitActive(false)}>
           <Check size={16} />
         </button>
-        <button type="button" class="tb-icon rollback" title="Rollback (Ctrl+Alt+Mayús+R)" disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>
+        <button type="button" class="tb-icon rollback" title={withShortcut("Rollback", "rollback")} disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>
           <Undo2 size={16} />
         </button>
         <Show when={props.tab.inTransaction}><span class="tag warn">Transacción abierta</span></Show>
         <span class="tb-sep" />
-        <button type="button" class="tb-icon secondary" title="Formatear SQL (Ctrl+Alt+L)" onClick={formatActive}>
+        <button type="button" class="tb-icon secondary" title={withShortcut("Formatear SQL", "format")} onClick={formatActive}>
           <AlignLeft size={16} />
         </button>
-        <button type="button" class="tb-icon secondary" title="Abrir script (Ctrl+O)" onClick={() => void openScript()}>
+        <button type="button" class="tb-icon secondary" title={withShortcut("Abrir script", "open")} onClick={() => void openScript()}>
           <FolderOpen size={16} />
         </button>
-        <button type="button" class="tb-icon secondary" title="Guardar script (Ctrl+S)" onClick={() => void saveScript()}>
+        <button type="button" class="tb-icon secondary" title={withShortcut("Guardar script", "save")} onClick={() => void saveScript()}>
           <Save size={16} />
         </button>
         <span class="spacer" />
@@ -405,6 +406,7 @@ function SqlPane(props: { tab: SqlTab }) {
           kind={kindOf(props.tab.connId)}
           tables={completionTables(props.tab)}
           snippets={allSnippets(kindOf(props.tab.connId), state.settings.snippets)}
+          keymap={state.settings.keymap}
           defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
           onOpenTable={(table) => openTableFromSql(props.tab, table)}
           fontSize={state.settings.editorFontSize}
@@ -678,7 +680,7 @@ function TablePane(props: { tab: TableTab }) {
       <Switch>
         <Match when={props.tab.section === "data"}>
           <div class="data-toolbar">
-            <button type="button" class="tb-icon" title="Recargar (F5)" onClick={() => void reloadTableSafe(props.tab.id)}><RefreshCw size={14} class={props.tab.loading ? "spin" : ""} /></button>
+            <button type="button" class="tb-icon" title={withShortcut("Recargar", "reload-table")} onClick={() => void reloadTableSafe(props.tab.id)}><RefreshCw size={14} class={props.tab.loading ? "spin" : ""} /></button>
             <Show when={editable()}>
               <span class="tb-sep" />
               <button type="button" class="tb-icon" title="Añadir fila (Alt+Insert)" onClick={() => insertTableRow(props.tab.id)}><Plus size={15} /></button>

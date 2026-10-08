@@ -273,6 +273,8 @@ export const [state, setState] = createStore({
   historyQuery: "",
   history: [] as HistoryEntry[],
   settingsOpen: false,
+  /** The settings section shown when the dialog opens (commands can open a given one). */
+  settingsSection: "appearance" as string,
   connDialog: null as ConnConfig | null,
   testOutput: "",
   testOk: null as boolean | null,
@@ -1003,7 +1005,7 @@ export async function connect(connId: string, password?: string) {
         delete draft.passwords[connId];
       }));
     }
-    if (message.includes("IBM_DRIVER_MISSING")) setState("settingsOpen", true);
+    if (message.includes("IBM_DRIVER_MISSING")) setState({ settingsOpen: true, settingsSection: "drivers" });
   } finally {
     // A disconnect in between owns the flag now (a newer connect may be running).
     if (connectGeneration(connId) === generation) setState("connecting", connId, false);
@@ -1362,7 +1364,7 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     pushOutput(current.id, { at: Date.now(), sql, ok: false, text: message, elapsedMs: null });
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
-    if (message.includes("IBM_DRIVER_MISSING")) setState("settingsOpen", true);
+    if (message.includes("IBM_DRIVER_MISSING")) setState({ settingsOpen: true, settingsSection: "drivers" });
   }
 }
 

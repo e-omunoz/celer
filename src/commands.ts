@@ -31,6 +31,7 @@ import { askAi } from "./ai";
 import { checkForUpdates } from "./update";
 import { openMigration } from "./migrate";
 import { saveToLibrary } from "./library";
+import { chordLabel, chordOf, chordsFor, EDITOR_COMMANDS } from "./keymap";
 
 export interface Command {
   id: string;
@@ -58,45 +59,48 @@ const sqlOnly = () => activeTab()?.kind === "sql";
 
 export function commands(): Command[] {
   const list: Command[] = [
-    { id: "run", label: "Ejecutar sentencia o selección", group: "Consulta", keys: "Ctrl+Intro", run: () => void runActive("statement"), enabled: sqlOnly },
-    { id: "run-script", label: "Ejecutar script completo", group: "Consulta", keys: "Ctrl+Mayús+Intro", run: () => void runActive("script"), enabled: sqlOnly },
-    { id: "explain", label: "Plan de ejecución (EXPLAIN)", group: "Consulta", keys: "Ctrl+Mayús+E", run: () => void runActive("explain"), enabled: sqlOnly },
+    { id: "run", label: "Ejecutar sentencia o selección", group: "Consulta", run: () => void runActive("statement"), enabled: sqlOnly },
+    { id: "run-script", label: "Ejecutar script completo", group: "Consulta", run: () => void runActive("script"), enabled: sqlOnly },
+    { id: "explain", label: "Plan de ejecución (EXPLAIN)", group: "Consulta", run: () => void runActive("explain"), enabled: sqlOnly },
     { id: "explain-analyze", label: "Plan real: ejecuta y mide (EXPLAIN ANALYZE)", group: "Consulta", run: () => void runActive("analyze"), enabled: sqlOnly },
-    { id: "stop", label: "Detener ejecución", group: "Consulta", keys: "Ctrl+F2", run: () => void cancelActive() },
-    { id: "format", label: "Formatear SQL", group: "Consulta", keys: "Ctrl+Alt+L", run: formatActive, enabled: sqlOnly },
-    { id: "commit", label: "Commit", group: "Transacción", keys: "Ctrl+Alt+Mayús+C", run: () => void commitActive(false), enabled: () => Boolean(activeSql()?.inTransaction) },
-    { id: "rollback", label: "Rollback", group: "Transacción", keys: "Ctrl+Alt+Mayús+R", run: () => void commitActive(true), enabled: () => Boolean(activeSql()?.inTransaction) },
+    { id: "stop", label: "Detener ejecución", group: "Consulta", run: () => void cancelActive() },
+    { id: "format", label: "Formatear SQL", group: "Consulta", run: formatActive, enabled: sqlOnly },
+    { id: "commit", label: "Commit", group: "Transacción", run: () => void commitActive(false), enabled: () => Boolean(activeSql()?.inTransaction) },
+    { id: "rollback", label: "Rollback", group: "Transacción", run: () => void commitActive(true), enabled: () => Boolean(activeSql()?.inTransaction) },
     { id: "export", label: "Exportar resultado…", group: "Consulta", run: () => void startExport(), enabled: sqlOnly },
-    { id: "new-console", label: "Nueva consola", group: "Archivo", keys: "Ctrl+Mayús+L", run: () => openQuery(contextConnId()) },
-    { id: "new-conn", label: "Nueva conexión…", group: "Archivo", keys: "Ctrl+Alt+N", run: () => openConnDialog() },
+    { id: "new-console", label: "Nueva consola", group: "Archivo", run: () => openQuery(contextConnId()) },
+    { id: "new-conn", label: "Nueva conexión…", group: "Archivo", run: () => openConnDialog() },
     { id: "disconnect", label: "Desconectar", group: "Conexión", run: () => { const id = contextConnId(); if (id) void disconnect(id); }, enabled: () => Boolean(contextConnId() && state.sessions[contextConnId()!]) },
     { id: "activity", label: "Actividad del servidor (sesiones y consultas en curso)", group: "Conexión", run: () => { const id = contextConnId(); if (id) void openActivity(id); }, enabled: () => { const k = state.connections.find((c) => c.id === contextConnId())?.kind; return Boolean(k && k !== "sqlite" && k !== "odbc"); } },
     { id: "disconnect-all", label: "Desconectar todas", group: "Conexión", run: () => void disconnectAll(), enabled: () => Object.keys(state.sessions).length > 0 },
     { id: "import-conns", label: "Importar conexiones de DBeaver o DbVisualizer…", group: "Archivo", run: () => void openMigration() },
-    { id: "open", label: "Abrir script…", group: "Archivo", keys: "Ctrl+O", run: () => void openScript() },
-    { id: "save", label: "Guardar script", group: "Archivo", keys: "Ctrl+S", run: () => void saveScript(), enabled: sqlOnly },
-    { id: "save-as", label: "Guardar script como…", group: "Archivo", keys: "Ctrl+Mayús+S", run: () => void saveScript(true), enabled: sqlOnly },
-    { id: "close-tab", label: "Cerrar pestaña", group: "Ventana", keys: "Ctrl+W", run: () => state.activeTabId && void closeTab(state.activeTabId) },
-    { id: "next-tab", label: "Pestaña siguiente", group: "Ventana", keys: "Ctrl+Tab", run: () => cycleTab(1) },
-    { id: "prev-tab", label: "Pestaña anterior", group: "Ventana", keys: "Ctrl+Mayús+Tab", run: () => cycleTab(-1) },
-    { id: "toggle-explorer", label: "Mostrar u ocultar el explorador", group: "Ventana", keys: "Alt+1", run: () => setState("explorerOpen", !state.explorerOpen) },
-    { id: "toggle-inspector", label: "Mostrar u ocultar el panel de valor", group: "Ventana", keys: "Alt+7", run: () => toggleInspector("value") },
-    { id: "ai", label: "Asistente IA: preguntar o generar SQL", group: "IA", keys: "Ctrl+Alt+I", run: () => openInspector("ai") },
+    { id: "open", label: "Abrir script…", group: "Archivo", run: () => void openScript() },
+    { id: "save", label: "Guardar script", group: "Archivo", run: () => void saveScript(), enabled: sqlOnly },
+    { id: "save-as", label: "Guardar script como…", group: "Archivo", run: () => void saveScript(true), enabled: sqlOnly },
+    { id: "close-tab", label: "Cerrar pestaña", group: "Ventana", run: () => state.activeTabId && void closeTab(state.activeTabId) },
+    { id: "next-tab", label: "Pestaña siguiente", group: "Ventana", run: () => cycleTab(1) },
+    { id: "prev-tab", label: "Pestaña anterior", group: "Ventana", run: () => cycleTab(-1) },
+    { id: "toggle-explorer", label: "Mostrar u ocultar el explorador", group: "Ventana", run: () => setState("explorerOpen", !state.explorerOpen) },
+    { id: "toggle-inspector", label: "Mostrar u ocultar el panel de valor", group: "Ventana", run: () => toggleInspector("value") },
+    { id: "ai", label: "Asistente IA: preguntar o generar SQL", group: "IA", run: () => openInspector("ai") },
     { id: "ai-explain", label: "IA: explicar la consulta", group: "IA", run: () => void askAi("explain"), enabled: sqlOnly },
     { id: "ai-fix", label: "IA: corregir el último error", group: "IA", run: () => void askAi("fix"), enabled: () => Boolean(activeSql()?.error) },
     { id: "ai-optimize", label: "IA: optimizar la consulta", group: "IA", run: () => void askAi("optimize"), enabled: sqlOnly },
     { id: "ai-schema", label: "Copiar esquema para IA", group: "IA", run: () => { const id = activeTab()?.connId; if (id) void copySchemaForAi(id); }, enabled: () => Boolean(activeTab()?.connId && state.sessions[activeTab()!.connId!]) },
-    { id: "history", label: "Historial de consultas", group: "Ventana", keys: "Ctrl+Alt+E", run: () => openInspector("history") },
+    { id: "history", label: "Historial de consultas", group: "Ventana", run: () => openInspector("history") },
     { id: "library", label: "Biblioteca de scripts", group: "Ventana", run: () => openInspector("library") },
-    { id: "save-library", label: "Guardar la consola en la biblioteca", group: "Archivo", keys: "Ctrl+Alt+B", run: () => void saveToLibrary(), enabled: sqlOnly },
+    { id: "save-library", label: "Guardar la consola en la biblioteca", group: "Archivo", run: () => void saveToLibrary(), enabled: sqlOnly },
     { id: "collapse", label: "Contraer el árbol", group: "Ventana", run: collapseAll },
-    { id: "go-table", label: "Ir a tabla…", group: "Navegar", keys: "Ctrl+N", run: () => openPalette("tables") },
-    { id: "reload-table", label: "Recargar tabla", group: "Datos", keys: "F5", run: () => { const tab = activeTab(); if (tab?.kind === "table") void reloadTableSafe(tab.id); }, enabled: () => activeTab()?.kind === "table" },
-    { id: "settings", label: "Ajustes…", group: "Preferencias", keys: "Ctrl+Alt+S", run: () => setState("settingsOpen", true) },
+    { id: "go-table", label: "Ir a tabla…", group: "Navegar", run: () => openPalette("tables") },
+    { id: "palette", label: "Buscar en todo (tablas y acciones)", group: "Navegar", run: () => openPalette("all") },
+    { id: "palette-actions", label: "Buscar una acción", group: "Navegar", run: () => openPalette("actions") },
+    { id: "shortcuts", label: "Atajos de teclado…", group: "Preferencias", run: () => setState({ settingsOpen: true, settingsSection: "keys" }) },
+    { id: "reload-table", label: "Recargar tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void reloadTableSafe(tab.id); }, enabled: () => activeTab()?.kind === "table" },
+    { id: "settings", label: "Ajustes…", group: "Preferencias", run: () => setState("settingsOpen", true) },
     { id: "zebra", label: "Filas alternas en la tabla de resultados", group: "Preferencias", run: () => void saveSettings({ zebra: !state.settings.zebra }) },
     { id: "density", label: "Densidad: compacta / cómoda", group: "Preferencias", run: () => void saveSettings({ density: state.settings.density === "compact" ? "comfortable" : "compact" }) },
-    { id: "font-up", label: "Aumentar tamaño del editor", group: "Preferencias", keys: "Ctrl++", run: () => void saveSettings({ editorFontSize: Math.min(24, state.settings.editorFontSize + 1) }) },
-    { id: "font-down", label: "Reducir tamaño del editor", group: "Preferencias", keys: "Ctrl+-", run: () => void saveSettings({ editorFontSize: Math.max(10, state.settings.editorFontSize - 1) }) },
+    { id: "font-up", label: "Aumentar tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.min(24, state.settings.editorFontSize + 1) }) },
+    { id: "font-down", label: "Reducir tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.max(10, state.settings.editorFontSize - 1) }) },
     { id: "guide", label: "Guía de inicio", group: "Ayuda", run: () => setState("onboardingOpen", true) },
     { id: "gib-tip", label: "Gib: un consejo", group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
     { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
@@ -105,6 +109,11 @@ export function commands(): Command[] {
   ];
   for (const theme of THEMES) {
     list.push({ id: `theme-${theme.id}`, label: `Tema: ${theme.label}`, group: "Tema", run: () => void saveSettings({ theme: theme.id }) });
+  }
+  const user = state.settings.keymap;
+  for (const command of list) {
+    const first = chordsFor(command.id, user)[0];
+    if (first) command.keys = chordLabel(first);
   }
   return list;
 }
@@ -122,45 +131,41 @@ export function handleGlobalKey(event: KeyboardEvent): boolean {
   // The target can be the window or the document (keys sent to the window): only elements have closest().
   const target = event.target instanceof Element ? event.target : null;
   const typing = Boolean(target?.closest("input, textarea, select, [contenteditable=true]")) && !target?.closest(".cm-editor");
-  const run = (id: string) => {
-    const command = commands().find((item) => item.id === id);
-    if (!command || (command.enabled && !command.enabled())) return false;
-    event.preventDefault();
-    command.run();
-    return true;
-  };
-  if (ctrl && event.shiftKey && key === "a") return openWith(event, "actions");
-  if (ctrl && !event.shiftKey && key === "k") return openWith(event, "all");
-  if (ctrl && !event.shiftKey && !event.altKey && key === "n") return openWith(event, "tables");
-  if (ctrl && event.altKey && key === "n") return run("new-conn");
-  if (ctrl && event.shiftKey && key === "l") return run("new-console");
-  if (ctrl && event.altKey && key === "s") return run("settings");
-  if (ctrl && event.altKey && key === "e") return run("history");
-  if (ctrl && event.altKey && !event.shiftKey && key === "b") return run("save-library");
-  if (ctrl && event.altKey && key === "i") return run("ai");
-  if (ctrl && event.altKey && event.shiftKey && key === "c") return run("commit");
-  if (ctrl && event.altKey && event.shiftKey && key === "r") return run("rollback");
-  if (ctrl && !event.shiftKey && key === "w") return run("close-tab");
-  if (ctrl && key === "tab") return run(event.shiftKey ? "prev-tab" : "next-tab");
-  if (ctrl && !event.shiftKey && key === "o") return run("open");
-  if (ctrl && !event.shiftKey && !event.altKey && key === "s") return run("save");
-  if (ctrl && event.shiftKey && !event.altKey && key === "s") return run("save-as");
-  if (ctrl && key === "f2") return run("stop");
-  if (event.altKey && !ctrl && key === "1") return run("toggle-explorer");
-  if (event.altKey && !ctrl && key === "7") return run("toggle-inspector");
+  const chord = chordOf(event);
+  if (!chord) return false;
+  // Shortcuts that only make sense away from a text field (F5 reloads a table, not while typing).
+  const bound = commandForChord(chord);
+  if (bound && !(EDITOR_SET.has(bound.id)) && !(typing && bound.id === "reload-table")) {
+    if (!bound.enabled || bound.enabled()) {
+      event.preventDefault();
+      bound.run();
+      return true;
+    }
+  }
   // Never let WebView2 reload the page (that would drop results, edits and open transactions).
   if (key === "f5" || (ctrl && key === "r")) {
     event.preventDefault();
-    if (key === "f5" && !typing) run("reload-table");
     return true;
   }
-  if (ctrl && (key === "+" || key === "=")) return run("font-up");
-  if (ctrl && key === "-") return run("font-down");
   return false;
 }
 
-function openWith(event: KeyboardEvent, mode: "all" | "actions" | "tables") {
-  event.preventDefault();
-  openPalette(mode);
-  return true;
+const EDITOR_SET = new Set<string>(EDITOR_COMMANDS);
+
+/** The command a chord runs (the user's shortcuts first, then the defaults of the commands left untouched). */
+export function commandForChord(chord: string): Command | undefined {
+  const user = state.settings.keymap;
+  return commands().find((command) => chordsFor(command.id, user).includes(chord));
+}
+
+/** The shortcut of a command as shown in menus and tooltips ("Ctrl+Mayús+E"), or "" when it has none. */
+export function shortcutLabel(id: string): string {
+  const first = chordsFor(id, state.settings.keymap)[0];
+  return first ? chordLabel(first) : "";
+}
+
+/** "Label (Ctrl+…)" for a tooltip. */
+export function withShortcut(label: string, id: string): string {
+  const keys = shortcutLabel(id);
+  return keys ? `${label} (${keys})` : label;
 }

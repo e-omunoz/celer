@@ -26,6 +26,7 @@ import { CodeView } from "./Editor";
 import { ExportDialog } from "./ExportDialog";
 import { AiSettings } from "./AiSettings";
 import { SnippetSettings } from "./SnippetSettings";
+import { KeymapSettings } from "./KeymapSettings";
 import { ErDiagram } from "./ErDiagram";
 import { ActivityView } from "./ActivityView";
 import { ImportDialog } from "./ImportDialog";
@@ -414,17 +415,20 @@ const SECTIONS = [
   ["appearance", "Apariencia"],
   ["editor", "Editor y resultados"],
   ["templates", "Plantillas"],
+  ["keys", "Atajos de teclado"],
   ["safety", "Seguridad"],
   ["ai", "IA y MCP"],
   ["drivers", "Drivers"],
 ] as const;
 
 function SettingsDialog() {
-  const [section, setSection] = createSignal<(typeof SECTIONS)[number][0]>("appearance");
+  type Section = (typeof SECTIONS)[number][0];
+  const section = () => (SECTIONS.some(([id]) => id === state.settingsSection) ? state.settingsSection : "appearance") as Section;
+  const setSection = (id: Section) => setState("settingsSection", id);
   const s = () => state.settings;
   const close = () => {
     applyTheme();
-    setState("settingsOpen", false);
+    setState({ settingsOpen: false, settingsSection: "appearance" });
   };
   return (
     <Dialog title="Ajustes" wide class="settings" onClose={close}>
@@ -510,6 +514,9 @@ function SettingsDialog() {
           </Show>
           <Show when={section() === "templates"}>
             <SnippetSettings />
+          </Show>
+          <Show when={section() === "keys"}>
+            <KeymapSettings />
           </Show>
           <Show when={section() === "safety"}>
             <label class="check"><input type="checkbox" checked={s().confirmNoWhere} onChange={(event) => void saveSettings({ confirmNoWhere: event.currentTarget.checked })} /> En todas las conexiones, confirmar UPDATE y DELETE sin WHERE (el editor ya los subraya)</label>

@@ -179,6 +179,8 @@ export interface Settings {
   confirmNoWhere: boolean;
   /** Animations: follow the system setting, keep them to a minimum, or always on. */
   motion: "system" | "reduce" | "full";
+  /** Shortcuts the user changed, per command id (keymap.ts); an empty list leaves the command without one. */
+  keymap: Record<string, string[]>;
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -227,6 +229,7 @@ export const defaultSettings: Settings = {
   askParams: true,
   confirmNoWhere: true,
   motion: "system",
+  keymap: {},
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
