@@ -1098,11 +1098,10 @@ impl Driver for MysqlDriver {
         self.refresh_tx_state();
         out.in_transaction = self.in_tx;
         out.elapsed_ms = t0.elapsed().as_millis() as u64;
+        // A failed statement fails the whole batch, even after others gave results, as in postgres.rs:
+        // saveTable rolls back on the error instead of committing the statements before it.
         if let Some(e) = error {
-            if out.results.is_empty() {
-                bail!(e);
-            }
-            out.messages.push(e);
+            bail!(e);
         }
         Ok(out)
     }
@@ -1140,9 +1139,7 @@ impl Driver for MysqlDriver {
                     out.extra = extra;
                     self.refresh_tx_state();
                     if let Some(e) = error {
-                        if out.extra.is_empty() {
-                            bail!(e);
-                        }
+                        bail!(e);
                     }
                     return Ok(out);
                 }
@@ -1945,12 +1942,16 @@ mod tests {
         assert!(out.results.iter().any(|r| r.rows_affected == Some(3)));
         assert!(out.messages.iter().any(|m| m.contains("1292")), "{:?}", out.messages);
         assert!(out.messages.iter().any(|m| m == "3 filas afectadas"));
-        // Error: sin resultados previos -> Err; con resultados -> mensaje.
+        // Error: el lote falla aunque sentencias anteriores dieran resultados (saveTable deshace con él).
         let err = d.execute("SELECT * FROM no_such_table", 10).unwrap_err();
         assert!(err.to_string().contains("1146"), "{err}");
-        let out = d.execute("SELECT 1; SELECT * FROM no_such_table; SELECT 2", 10).unwrap();
-        assert_eq!(out.results.len(), 1);
-        assert!(out.messages.iter().any(|m| m.contains("1146")));
+        let err = d.execute("SELECT 1; SELECT * FROM no_such_table; SELECT 2", 10).unwrap_err();
+        assert!(err.to_string().contains("1146"), "{err}");
+        // También tras un resultado paginado: el error llega con fetch.
+        let out = d.execute("SELECT * FROM celer.events LIMIT 20; SELECT 1; SELECT * FROM no_such_table", 10).unwrap();
+        assert!(out.results[0].has_more);
+        let err = d.fetch(100).unwrap_err();
+        assert!(err.to_string().contains("1146"), "{err}");
         // Sigue funcionando después.
         let out = d.execute("SELECT 3", 10).unwrap();
         assert_eq!(cell_i64(&out.results[0].rows[0][0]), 3);
@@ -2067,6 +2068,22 @@ mod tests {
         let out = d.execute("START TRANSACTION; INSERT INTO tx_t VALUES (4)", 10).unwrap();
         assert!(out.in_transaction);
         assert!(!d.rollback().unwrap());
+        // Como saveTable: un lote cuya segunda sentencia falla es un error y el ROLLBACK lo deshace todo.
+        d.execute("CREATE TEMPORARY TABLE tx_nn (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB; \
+                   INSERT INTO tx_nn VALUES (1, 1), (2, 2)", 10)
+            .unwrap();
+        d.set_autocommit(false).unwrap();
+        let err = d
+            .execute("UPDATE tx_nn SET v = 10 WHERE id = 1; UPDATE tx_nn SET v = NULL WHERE id = 2", 1)
+            .unwrap_err();
+        assert!(err.to_string().contains("1048"), "{err}");
+        d.rollback().unwrap();
+        d.set_autocommit(true).unwrap();
+        assert_eq!(scalar_i64(&mut d, "SELECT v FROM tx_nn WHERE id = 1"), 1);
+    }
+
+    fn scalar_i64(d: &mut MysqlDriver, sql: &str) -> i64 {
+        cell_i64(&d.execute(sql, 10).unwrap().results[0].rows[0][0])
     }
 
     #[test]
