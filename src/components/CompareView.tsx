@@ -67,6 +67,7 @@ export function CompareView(props: { tab: SqlTab }) {
             busyKey={props.tab.id}
             dialect={kindOf(props.tab.connId)}
             edits={c().changed}
+            editsAreBefore
             deleted={c().gone}
             insertStart={c().newFrom}
           />

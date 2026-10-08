@@ -33,6 +33,7 @@ import type { ConnSummary, MetaNode } from "../types";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
 import { compareWithMarked, isMarked, markForCompare, schemaCompare, schemaTitle } from "../schemaCompareRun";
+import { compareDataWithMarked, dataCompare, isTableMarked, markTableForCompare, tableTitle } from "../dataCompareRun";
 import { engineOf } from "../types";
 
 const ROW = 24;
@@ -284,6 +285,11 @@ export function Sidebar() {
         { label: "Copiar estructura para IA", icon: "ai", run: () => void copySchemaForAi(connId, obj) },
         { separator: true },
       );
+      // Comparing the rows of two tables: mark one, then "Comparar datos con…" on the other.
+      const tableRef = { connId, obj };
+      const marked = dataCompare.mark;
+      if (marked && !isTableMarked(tableRef)) items.push({ label: `Comparar datos con «${tableTitle(marked)}»`, icon: "compare", run: () => void compareDataWithMarked(tableRef) });
+      items.push({ label: isTableMarked(tableRef) ? "Marcada para comparar datos" : "Marcar para comparar datos", icon: "compare", run: () => markTableForCompare(tableRef) }, { separator: true });
     } else if (obj) {
       items.push({ label: "Abrir definición", icon: "code", run: () => void generateSql(connId, obj, "ddl") }, { separator: true });
     }

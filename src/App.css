@@ -1745,7 +1745,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .sc-dot.only-source { background: var(--success); }
 .sc-dot.only-target { background: var(--danger); }
 .sc-dot.same { background: color-mix(in srgb, var(--text) 25%, transparent); }
-.sc-body { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 12px; height: min(52vh, 460px); }
+.sc-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 12px; height: min(52vh, 460px); }
 .sc-list { overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
 .sc-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-radius: 5px; font-size: 12.5px; text-align: left; }
 .sc-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
@@ -1758,9 +1758,15 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .sc-cols th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text-faint); padding: 4px 8px; border-bottom: 1px solid var(--border); }
 .sc-cols td { padding: 5px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
 .sc-cols th { white-space: nowrap; }
-.sc-cols td:last-child { font-family: inherit; color: var(--text-muted); }
+.sc-cols td:last-child { font-family: inherit; color: var(--text-muted); white-space: normal; min-width: 96px; }
 .sc-cols td svg { color: var(--text-faint); vertical-align: middle; }
+.sc-cols td:nth-child(3), .sc-cols th:nth-child(3) { padding: 5px 2px; }
 .sc-cols tr.only-source td:first-child code { color: var(--success); }
 .sc-cols tr.only-target td:first-child code { color: var(--danger); }
 .sc-cols tr.type td:first-child code, .sc-cols tr.nullable td:first-child code { color: var(--warning); }
 @media (max-width: 760px) { .sc-body { grid-template-columns: 1fr; height: auto; } .sc-list { max-height: 30vh; } }
+
+/* Data comparison */
+.dc-head { margin: 0 0 8px; padding: 0; border-bottom: 0; }
+.dc-grid { height: min(52vh, 460px); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; }
+.dc-grid > * { flex: 1; min-width: 0; }

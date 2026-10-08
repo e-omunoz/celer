@@ -26,22 +26,25 @@
 - [x] Workspace restore: open tabs and their content survive restarts
 
 ## Phase 2 — Tier 1 drivers
-- [ ] PostgreSQL family (PostgreSQL, CockroachDB, YugabyteDB, TimescaleDB, Redshift)
-- [ ] MySQL / MariaDB family
+- [x] PostgreSQL (native; CockroachDB, YugabyteDB, TimescaleDB, Redshift speak its protocol)
+- [x] MySQL / MariaDB family
 - [x] SQLite (embedded). libSQL / Turso still planned
 - [ ] Oracle (Instant Client, downloaded on demand)
 - [ ] IBM Db2 (LUW, i, z/OS) via the IBM CLI driver
 - [ ] Generic connection form driven by each driver's field description
 - [ ] Capability flags wired into the UI
 
-## Phase 3 — Productivity
-- [ ] Execution plans (graphical for SQL Server and PostgreSQL, text elsewhere)
-- [ ] Command palette (Ctrl+K) and configurable shortcuts
-- [ ] Snippets and saved scripts
-- [ ] Result comparison and filtering inside the grid
-- [ ] ER diagram of a schema
-- [ ] Data import from CSV / Excel
-- [ ] Schema and data compare between two connections
+## Phase 3 — Productivity ✅
+- [x] Execution plans as a tree for every engine, with real rows and times (EXPLAIN ANALYZE)
+- [x] Command palette (Ctrl+K) and configurable shortcuts
+- [x] Live templates, query parameters and a script library
+- [x] Result comparison (pinned vs current) and a quick filter inside the grid
+- [x] ER diagram of a schema (SVG export)
+- [x] Data import from CSV, JSON and Excel / OpenDocument
+- [x] Schema compare between two connections, with a synchronization script
+- [x] Server activity: sessions and running queries, cancel and kill
+- [x] Typed cell editors: booleans, dates, foreign-key lookup
+- [x] Data compare between two tables, with a synchronization script
 
 ## Phase 4 — Tier 2 drivers (analytics and cloud)
 - [ ] DuckDB (including CSV / Parquet / JSON files)
@@ -56,10 +59,10 @@
 - [ ] Elasticsearch / OpenSearch
 
 ## Phase 6 — Release
-- [ ] Signed Windows installer (NSIS / MSI) and portable build
-- [ ] Auto-update
-- [ ] Linux (AppImage, deb) and macOS (dmg) builds
-- [ ] User documentation
+- [x] Windows installers (Celer Setup, NSIS, MSI) and portable build — code signing still to come
+- [x] Auto-update (Windows)
+- [x] Linux (AppImage, deb, rpm) and macOS (universal dmg) builds
+- [x] User documentation ([GUIA.md](GUIA.md))
 
 ## Performance targets
 

@@ -19,6 +19,9 @@ All notable changes to Celer are documented here. The format follows
   - Lists the tables that exist on only one side, and columns with another type or nullability.
   - Writes a script that makes the target match the source, in a console of the target, to review before running it.
   - Anything that would delete data stays commented out.
+- **Data comparison** of two tables: mark one, then "Comparar datos con…" on the other.
+  - Rows are matched by the primary key; changed cells, rows only in one table and new rows are marked (hover a changed cell for its previous value).
+  - A script makes the target's rows match: INSERT and UPDATE, with the DELETEs commented out.
 - **Server activity**: sessions and running queries, with cancel and kill (PostgreSQL, MySQL/MariaDB, SQL Server, Informix).
 - **Compare results**: pin a result, run again and compare. Changed cells, new rows and rows that are gone are marked, matched by a key that is guessed or chosen.
 - **Pinned results** that survive new runs, and a **quick filter** over the loaded rows.

@@ -12,11 +12,12 @@
   <a href="https://github.com/e-omunoz/celer/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/e-omunoz/celer?style=flat-square&color=F26B2A&label=versi%C3%B3n"></a>
   <a href="https://github.com/e-omunoz/celer/releases"><img alt="Descargas" src="https://img.shields.io/github/downloads/e-omunoz/celer/total?style=flat-square&color=4C88B8&label=descargas"></a>
   <a href="https://github.com/e-omunoz/celer/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/e-omunoz/celer/ci.yml?branch=main&style=flat-square&label=build"></a>
-  <img alt="Windows 10 y 11" src="https://img.shields.io/badge/Windows-10%20·%2011-2B2724?style=flat-square">
+  <img alt="Windows, macOS y Linux" src="https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-2B2724?style=flat-square">
 </p>
 
 <p align="center">
   <a href="https://github.com/e-omunoz/celer/releases/latest"><b>Descargar</b></a> ·
+  <a href="docs/GUIA.md">Guía de uso</a> ·
   <a href="CHANGELOG.md">Cambios</a> ·
   <a href="SECURITY.md">Seguridad</a> ·
   <a href="README.md">English</a>
@@ -43,28 +44,44 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
   en unos dos segundos.
 - **Un editor que conoce tu esquema.** El autocompletado ofrece tablas tras `FROM`/`JOIN`, las columnas de las tablas
   de la sentencia en el resto, y `alias.` o `esquema.` acotan la lista. **Ctrl+clic** (o F4 / Ctrl+B) sobre una tabla
-  la abre. La sentencia bajo el cursor se resalta; Ctrl+Enter la ejecuta.
+  la abre. La sentencia bajo el cursor se resalta; Ctrl+Enter la ejecuta. Plantillas (`sel`, `ins`, `cte`…),
+  parámetros (`:nombre`, `?`) que se piden antes de ejecutar y aviso ante un `DELETE` o `UPDATE` sin `WHERE`.
 - **Tablas que se exploran.** Filtros por columna (igual, contiene, entre, lista de valores…), tu propio `WHERE` y
   `ORDER BY` con ayuda en vivo (avisa cuando `"texto"` se leería como nombre de columna y lo corrige en un clic),
-  orden en el servidor y recuento exacto bajo demanda. Edita celdas y guárdalo todo en una transacción.
+  orden en el servidor y recuento exacto bajo demanda. Edita celdas con editores que conocen el tipo (verdadero/falso,
+  un calendario, las filas referenciadas de una clave foránea) y guárdalo todo en una transacción.
 - **Claves foráneas que se siguen.** Las columnas FK se marcan en la cabecera; Ctrl+clic en un valor abre la fila
   referenciada, o abre la tabla referenciada desde la pestaña *Claves*.
+- **Descubre por qué una consulta es lenta.** Planes de ejecución en árbol para todos los motores, con filas y tiempos
+  reales (EXPLAIN ANALYZE) y avisos útiles. La actividad del servidor muestra sesiones y consultas en curso, con
+  cancelar y matar.
+- **Entiende y compara esquemas.** Diagrama entidad-relación de cualquier esquema (exportable a SVG) y comparación de
+  esquemas entre dos conexiones que escribe el script para igualarlos. Los datos de dos tablas se comparan igual.
+- **Resultados que se conservan.** Fija un resultado, vuelve a ejecutar y compáralos: se marcan las celdas cambiadas y
+  las filas nuevas o que faltan. Filtro rápido sobre las filas cargadas.
 - **Nunca se congela.** Las operaciones largas muestran a Gib con su portátil, el progreso en vivo y **Cancelar**:
   cargar todas las filas se detiene tras el bloque en curso y conserva lo recibido; las consultas se cancelan en el
   servidor.
-- **Exportar e importar.** CSV, TSV, Excel, JSON, `INSERT`s SQL, Markdown o HTML directos a disco; importa CSV/TSV con
-  mapeo de columnas en una sola transacción.
+- **Exportar e importar.** CSV, TSV, Excel, JSON, XML, `INSERT`s SQL, Markdown o HTML directos a disco; importa CSV,
+  JSON u hojas de Excel / OpenDocument con mapeo de columnas en una sola transacción. Genera SELECT con joins, INSERT,
+  UPDATE, UPSERT/MERGE y DDL desde el explorador.
 - **IA con permisos.** Un asistente que escribe, explica, corrige y optimiza SQL con Claude usando tu esquema, nunca
   tus filas. Un **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y otros clientes usen tus
   conexiones con un nivel de permiso por conexión, límites de filas y tiempo, columnas enmascaradas y registro de
   auditoría.
 - **Trae tus conexiones.** Impórtalas desde **DBeaver** (con las contraseñas guardadas, si quieres) y
   **DbVisualizer**, con carpetas y marcas de producción. Arrastra conexiones entre carpetas en el explorador.
-- **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), una
-  guía de inicio y **Gib**: piensa mientras corren las consultas, tiene una idea cuando acaba una larga y comparte
-  trucos.
+- **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
+  configurables, biblioteca de scripts, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
+  tiene una idea cuando acaba una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como
+  a una mosca si le molestas mientras espera.
 - **Actualizaciones en la app.** Celer comprueba en GitHub si hay versiones nuevas, te enseña las novedades y las
   instala en un clic, tras verificar la descarga con las sumas SHA-256 de la versión.
+
+<p align="center">
+  <img src="docs/media/gib-idle.gif" alt="Las rutinas de Gib cuando no hay nada que hacer: bostezar, un café, programar con el portátil, malabares, bailar, leer y apartar el cursor" width="290" /><br/>
+  <sub>Gib cuando no estás: un café, el portátil, malabares… y aparta el cursor si le molestas mientras espera.</sub>
+</p>
 
 <table>
   <tr>
@@ -74,6 +91,14 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
   <tr>
     <td><img src="docs/media/table.png" alt="Visor de tabla con un filtro" /><br/><sub>Visor de tabla con filtros por columna</sub></td>
     <td><img src="docs/media/keys.png" alt="Pestaña Claves con un botón para abrir la tabla referenciada" /><br/><sub>Claves foráneas: salta a la tabla o fila referenciada</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/plan.png" alt="Plan de ejecución en árbol con filas y tiempos reales" /><br/><sub>Plan de ejecución con filas y tiempos reales</sub></td>
+    <td><img src="docs/media/er.png" alt="Diagrama entidad-relación de un esquema" /><br/><sub>Diagrama entidad-relación</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/schemas.png" alt="Comparación de esquemas con las columnas que difieren" /><br/><sub>Comparación de esquemas y script para igualarlos</sub></td>
+    <td><img src="docs/media/shortcuts.png" alt="Ajustes de atajos de teclado" /><br/><sub>Atajos que puedes cambiar</sub></td>
   </tr>
   <tr>
     <td><img src="docs/media/busy.png" alt="Gib con su portátil mientras cargan 200.000 filas, con botón Cancelar" /><br/><sub>Cargando 200.000 filas, cancelable</sub></td>
@@ -104,6 +129,13 @@ Como los ejecutables aún no están firmados, SmartScreen puede avisar la primer
 todas formas*). Cada versión se puede verificar con su `SHA256SUMS.txt`, como se explica en [SECURITY.md](SECURITY.md).
 
 En cada versión también: `Celer-x.y.z-portable.exe` (sin instalar) y `Celer-x.y.z-nsis-setup.exe` (instalador clásico).
+
+### macOS y Linux
+
+Las versiones incluyen también `Celer-x.y.z-macos-universal.dmg` (Apple silicon e Intel) y, para Linux,
+`Celer-x.y.z-linux-x86_64.AppImage`, `.deb` y `.rpm`. No están firmados: en macOS ábrelo la primera vez con clic
+derecho › *Abrir*; en Linux haz ejecutable el AppImage (`chmod +x`). La actualización desde la app es para Windows; en
+macOS y Linux descarga el paquete nuevo.
 
 ### Despliegue en empresas
 
@@ -157,8 +189,11 @@ Devuelve 0 si todo va bien; los errores se escriben en `%TEMP%\celer-setup.log`.
 | `Ctrl+F2` | Detener |
 | `Ctrl+Alt+I` | Asistente de IA |
 | `Ctrl+Alt+E` | Historial |
+| `Ctrl+Alt+B` | Guardar la consola en la biblioteca de scripts |
 | `Ctrl+Alt+S` | Ajustes |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
+
+Todos los atajos se pueden cambiar en *Ajustes › Atajos de teclado*. En macOS, `Ctrl` es `⌘`.
 
 ## Privacidad y seguridad
 

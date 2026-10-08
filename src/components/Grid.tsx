@@ -37,6 +37,8 @@ export interface GridProps {
   pkCols?: number[];
   deleted?: number[];
   edits?: Record<string, string | null>;
+  /** `edits` holds the previous values (comparisons): hovering a marked cell shows it. */
+  editsAreBefore?: boolean;
   insertStart?: number;
   hasMore?: boolean;
   loading?: boolean;
@@ -653,6 +655,14 @@ export function DataGrid(props: GridProps) {
     } else {
       scroller.style.cursor = "default";
       if (hoverCol() !== -1) setHoverCol(-1);
+    }
+    // In a comparison, a changed cell tells its previous value.
+    if (props.edits && props.editsAreBefore && !(event.buttons & 1)) {
+      const target = y >= HEAD_H ? hit(event) : null;
+      const source = target?.type === "cell" ? ordered()[target.row] : undefined;
+      const old = source !== undefined && target?.type === "cell" ? props.edits[`${source}:${target.col}`] : undefined;
+      const title = old === undefined ? "" : `Antes: ${old === null ? "NULL" : old.length > 300 ? `${old.slice(0, 300)}…` : old}`;
+      if (scroller.title !== title) scroller.title = title;
     }
     if (!selecting || !(event.buttons & 1)) return;
     const target = hit(event);

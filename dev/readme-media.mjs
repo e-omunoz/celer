@@ -147,7 +147,11 @@ async function openPostgres() {
   await js(`
     const conn = [...document.querySelectorAll('.tree-row.conn')].find((e) => e.textContent.includes('Postgres local'));
     if (!rowByText('events')) { dbl(conn); await until(() => rowByText('events'), 10000); }
-    await sleep(200);
+    // Fresh tree (no schemas left behind by test runs).
+    conn.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 160, clientY: 220 }));
+    (await until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => /^Actualizar/.test(b.textContent)), 3000))?.click();
+    await sleep(800);
+    await until(() => rowByText('events'), 10000);
   `);
 }
 async function openEvents() {

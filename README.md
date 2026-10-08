@@ -17,6 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/e-omunoz/celer/releases/latest"><b>Download</b></a> ·
+  <a href="docs/GUIA.md">User guide (Spanish)</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="SECURITY.md">Security</a> ·
   <a href="README.es.md">Español</a>
@@ -58,7 +59,8 @@ without administrator rights, and keeps itself up to date.
   ANALYZE) and warnings worth acting on. Server activity shows the sessions and running queries, with cancel and
   kill.
 - **Understand and compare schemas.** An entity-relationship diagram of any schema (export to SVG), and a schema
-  comparison between two connections that writes the script to make them match.
+  comparison between two connections that writes the script to make them match. The rows of two tables can be
+  compared the same way.
 - **Results you can keep.** Pin a result, run again and compare both: changed cells and new or missing rows are
   marked. Quick filter over the loaded rows.
 - **Never frozen.** Long operations show Gib at his laptop with live progress and **Cancelar**: loading every row
@@ -77,6 +79,11 @@ without administrator rights, and keeps itself up to date.
   you poke him while he waits.
 - **Updates in the app.** Celer checks GitHub for new releases, shows what's new and installs them in one click,
   after verifying the download against the release's SHA-256 sums.
+
+<p align="center">
+  <img src="docs/media/gib-idle.gif" alt="Gib's idle routines: yawning, a coffee, coding on his laptop, juggling, dancing, reading, and swatting the cursor away" width="290" /><br/>
+  <sub>Gib when you are idle: a coffee, the laptop, juggling… and he swats the cursor if you poke him while he waits.</sub>
+</p>
 
 <table>
   <tr>
@@ -125,6 +132,13 @@ Every release can be verified with its `SHA256SUMS.txt`, as described in [SECURI
 
 Also in every release: `Celer-x.y.z-portable.exe` (runs without installing) and `Celer-x.y.z-nsis-setup.exe`
 (classic installer).
+
+### macOS and Linux
+
+Releases also carry `Celer-x.y.z-macos-universal.dmg` (Apple silicon and Intel) and, for Linux,
+`Celer-x.y.z-linux-x86_64.AppImage`, `.deb` and `.rpm`. They are not signed: on macOS open it the first time with
+right click › *Open*; on Linux make the AppImage executable (`chmod +x`). Updates inside the app are for Windows;
+on macOS and Linux download the new package.
 
 ### Deploying in an organization
 
@@ -178,8 +192,11 @@ The exit code is 0 on success; errors are written to `%TEMP%\celer-setup.log`.
 | `Ctrl+F2` | Stop |
 | `Ctrl+Alt+I` | AI assistant |
 | `Ctrl+Alt+E` | History |
+| `Ctrl+Alt+B` | Save the console in the script library |
 | `Ctrl+Alt+S` | Settings |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
+
+Every shortcut can be changed in *Ajustes › Atajos de teclado*. On macOS, `Ctrl` is `⌘`.
 
 ## Privacy and security
 

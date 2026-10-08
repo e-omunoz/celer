@@ -34,6 +34,7 @@ Step "ER layout" { & $node --experimental-strip-types --no-warnings dev\erlayout
 Step "plan readers" { & $node --experimental-strip-types --no-warnings dev\plan-check.ts }
 Step "result comparison" { & $node --experimental-strip-types --no-warnings dev\compare-check.ts }
 Step "foreign-key lookup SQL" { & $node --experimental-strip-types --no-warnings dev\fklookup-check.ts }
+Step "data comparison script" { & $node --experimental-strip-types --no-warnings dev\datacompare-check.ts }
 Step "schema comparison logic" { & $node --experimental-strip-types --no-warnings dev\schemacompare-check.ts }
 Step "XML formatting" { & $node --experimental-strip-types --no-warnings dev\prettyxml-check.ts }
 Step "keyboard shortcuts" { & $node --experimental-strip-types --no-warnings dev\keymap-check.ts }
@@ -50,6 +51,7 @@ Step "misc (startup script, pins, undo)" { & $node dev\misc-check.mjs }
 Step "import (Excel, JSON)" { & $node dev\import-e2e-check.mjs }
 Step "grid editors (bool, date, FK lookup) and explorer refresh" { & $node dev\grid-editors-check.mjs }
 Step "schema comparison" { & $node dev\schema-compare-check.mjs }
+Step "data comparison" { & $node dev\data-compare-check.mjs }
 Step "keyboard shortcuts (desktop)" { & $node dev\keymap-e2e-check.mjs }
 Step "startup script (MariaDB, SQLite)" { & $node dev\startup-engines-check.mjs }
 Step "Gib companion" { & $node dev\gib-companion-check.mjs "$env:TEMP\gib-companion" }

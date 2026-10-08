@@ -31,6 +31,8 @@ import { ErDiagram } from "./ErDiagram";
 import { ActivityView } from "./ActivityView";
 import { SchemaCompareView } from "./SchemaCompareView";
 import { schemaCompare } from "../schemaCompareRun";
+import { DataCompareView } from "./DataCompareView";
+import { dataCompare } from "../dataCompareRun";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
 import { checkForUpdates, openReleasePage } from "../update";
@@ -68,6 +70,7 @@ export function Modals() {
       <Show when={state.er}><ErDiagram /></Show>
       <Show when={state.activity}><ActivityView /></Show>
       <Show when={schemaCompare.open}><SchemaCompareView /></Show>
+      <Show when={dataCompare.open}><DataCompareView /></Show>
       <Show when={state.passwordAsk}>
         {(ask) => (
           <Dialog title={`Conectar a ${ask().name}`} onClose={() => answerPassword(null)} small>
