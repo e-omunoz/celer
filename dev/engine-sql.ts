@@ -8,7 +8,7 @@ import { compareResults } from "../src/compare.ts";
 import { dataSyncScript } from "../src/dataCompareSql.ts";
 import { lookupSql } from "../src/fkLookupSql.ts";
 import { compareSchemas, syncScript, type SchemaTable } from "../src/schemaCompare.ts";
-import { changesSql, filterSql, limitClause, upsertSql } from "../src/sqlgen.ts";
+import { changesSql, filterSql, selectLimit, upsertSql } from "../src/sqlgen.ts";
 import type { Cell, DbKind, ResultSet, TableColumn } from "../src/types.ts";
 
 interface Table {
@@ -81,8 +81,14 @@ const shownMomento = momento >= 0 ? String(t.rows.find((r) => Number(r[col("id")
 if (momento >= 0) out.push({ name: `filter datetime = shown value (${shownMomento})`, sql: filter("momento", "eq", shownMomento), rows: 1 });
 
 // ---------------------------------------------------------------- generated scripts
-const limit = limitClause(kind, 100);
-out.push({ name: "generated select", sql: `SELECT ${t.quoted.join(", ")}\nFROM ${t.qualified}\n${limit}`, rows: 4 });
+const limit = selectLimit(kind, 100);
+out.push({ name: "generated select", sql: `SELECT ${limit.top}${t.quoted.join(", ")}\nFROM ${t.qualified}\n${limit.tail}`, rows: 4 });
+if (kind === "mssql") {
+  // Azure Synapse dedicated / PDW: TOP instead of OFFSET … FETCH (SQL Server runs it as well).
+  const top = selectLimit(kind, 100, "Microsoft Azure SQL Data Warehouse — DataWarehouse (10.0) · Azure Synapse dedicated / PDW");
+  if (!top.top || top.tail) throw new Error(`Synapse limit: ${JSON.stringify(top)}`);
+  out.push({ name: "generated select (Synapse: TOP)", sql: `SELECT ${top.top}${t.quoted.join(", ")}\nFROM ${t.qualified}\n${top.tail}`, rows: 4 });
+}
 out.push({ name: "generated count", sql: `SELECT COUNT(*) FROM ${t.qualified}`, rows: 1 });
 
 // ---------------------------------------------------------------- table viewer changes (one transaction in the app)
