@@ -445,6 +445,13 @@ fn informix_engine() {
     let fk = fks.iter().find(|n| n.kind == "key").expect("la clave foránea");
     assert!(regex_lite(fk.detail.as_deref().unwrap_or("")), "detalle de FK: {:?}", fk.detail);
     assert_eq!(fk.obj.as_ref().unwrap().name, "celer_p");
+    assert_eq!(fk.detail.as_deref(), Some("parent_id → celer_p(id)"));
+    // The table viewer asks in the other engines' order [db, owner, "tables", table, …].
+    let owner = obj.schema.clone();
+    let viewer_fks = d.children(&p(&["celer", &owner, "tables", "celer_t", "fks"])).unwrap();
+    assert_eq!(viewer_fks.len(), 1, "claves pedidas por el visor de tablas");
+    let viewer_idx = d.children(&p(&["celer", &owner, "tables", "celer_t", "indexes"])).unwrap();
+    assert!(!viewer_idx.is_empty(), "índices pedidos por el visor de tablas");
     let columns = d.table_columns(&obj).unwrap();
     assert!(columns[0].primary_key, "{columns:?}");
     assert!(d.ddl(&obj).unwrap().to_uppercase().contains("CREATE TABLE"));

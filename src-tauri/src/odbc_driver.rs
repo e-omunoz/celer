@@ -195,6 +195,39 @@ impl OdbcDriver {
             .unwrap_or_default())
     }
 
+    /// Column names of an index of table `tabid`, in key order.
+    fn ifx_index_cols(&self, db: &str, tabid: i64, idxname: &str) -> Result<Vec<String>> {
+        let parts = (1..=16).map(|i| format!("part{i}")).collect::<Vec<_>>().join(", ");
+        let rows = self.q(&format!("SELECT {parts} FROM {db}sysindexes WHERE tabid = {tabid} AND idxname = {}", lit(idxname)))?;
+        let Some(row) = rows.first() else { return Ok(vec![]) };
+        let cols = self.q(&format!("SELECT colno, TRIM(colname) FROM {db}syscolumns WHERE tabid = {tabid}"))?;
+        Ok(row
+            .iter()
+            .map(cell_i64)
+            .filter(|n| *n != 0)
+            .filter_map(|n| cols.iter().find(|c| cell_i64(&c[0]) == n.abs()).map(|c| cell_str(&c[1])))
+            .collect())
+    }
+
+    /// Foreign keys of a table: (constraint, columns, referenced owner, referenced table, referenced columns).
+    fn ifx_foreign_keys(&self, o: &ObjectRef) -> Result<Vec<(String, Vec<String>, String, String, Vec<String>)>> {
+        let db = self.ifx_db(&o.database);
+        let tabid = self.ifx_tabid(o)?;
+        let rows = self.q(&format!(
+            "SELECT TRIM(c.constrname), TRIM(c.idxname), r.ptabid, TRIM(pt.tabname), TRIM(pt.owner), TRIM(pc.idxname) \
+             FROM {db}sysconstraints c, {db}sysreferences r, {db}systables pt, {db}sysconstraints pc \
+             WHERE c.tabid = {tabid} AND c.constrtype = 'R' AND r.constrid = c.constrid \
+               AND pt.tabid = r.ptabid AND pc.constrid = r.primary ORDER BY 1"
+        ))?;
+        rows.iter()
+            .map(|r| {
+                let cols = self.ifx_index_cols(&db, tabid, &cell_str(&r[1]))?;
+                let ref_cols = self.ifx_index_cols(&db, cell_i64(&r[2]), &cell_str(&r[5]))?;
+                Ok((cell_str(&r[0]), cols, cell_str(&r[4]), cell_str(&r[3]), ref_cols))
+            })
+            .collect()
+    }
+
     fn ifx_indexes(&self, o: &ObjectRef) -> Result<Vec<(String, bool, String, bool)>> {
         let db = self.ifx_db(&o.database);
         let tabid = self.ifx_tabid(o)?;
@@ -543,7 +576,12 @@ impl Driver for OdbcDriver {
     }
 
     fn children(&mut self, path: &[String]) -> Result<Vec<MetaNode>> {
-        let p: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+        let mut p: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+        // The interface also asks with the other engines' order [db, schema(owner), folder, table, …]: the tree
+        // here is [db, folder, owner, table, …].
+        if self.dialect == Dialect::Informix && p.len() >= 4 && matches!(p[2], "tables" | "views") && !matches!(p[1], "tables" | "views") {
+            p.swap(1, 2);
+        }
         if self.dialect == Dialect::Generic {
             return match p.as_slice() {
                 [] => Ok(vec![
@@ -687,11 +725,23 @@ impl Driver for OdbcDriver {
                     })
                     .collect();
                 if *folder == "tables" {
-                    let mut p: Vec<String> = path.to_vec();
-                    p.push("indexes".into());
-                    nodes.push(MetaNode::branch("Índices", "folder", p));
+                    let base = vec![db.to_string(), folder.to_string(), owner.to_string(), name.to_string()];
+                    nodes.push(MetaNode::branch("Índices", "folder", [base.clone(), vec!["indexes".into()]].concat()));
+                    nodes.push(MetaNode::branch("Claves foráneas", "folder", [base, vec!["fks".into()]].concat()));
                 }
                 Ok(nodes)
+            }
+            [db, _folder, owner, name, "fks"] => {
+                let o = ObjectRef::new(db, owner, name, "table");
+                // `obj` is the referenced table, so the interface can jump to it (same format as the other engines).
+                Ok(self
+                    .ifx_foreign_keys(&o)?
+                    .into_iter()
+                    .map(|(constraint, cols, ref_owner, ref_table, ref_cols)| {
+                        MetaNode::leaf(constraint, "key", Some(format!("{} → {}({})", cols.join(", "), ref_table, ref_cols.join(", "))))
+                            .with_obj(ObjectRef::new(db, &ref_owner, &ref_table, "table"))
+                    })
+                    .collect())
             }
             [db, _folder, owner, name, "indexes"] => {
                 let o = ObjectRef::new(db, owner, name, "table");
