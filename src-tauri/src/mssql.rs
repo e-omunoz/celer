@@ -814,9 +814,10 @@ impl Driver for MssqlDriver {
             drop(cur.rx);
             // El hilo de lectura vacía el resto del flujo. Si tarda, se corta la conexión.
             let token = self.cancel.lock().clone();
+            // The timer is created inside the runtime: built outside it, tokio panics ("no reactor running").
             match self
                 .rt
-                .block_on(tokio::time::timeout(Duration::from_secs(3), cur.done))
+                .block_on(async { tokio::time::timeout(Duration::from_secs(3), cur.done).await })
             {
                 Ok(Ok(c)) => self.client = c,
                 _ => {

@@ -427,7 +427,8 @@ fn informix_engine() {
     println!("fila 1: {:?}", rows[0].iter().map(txt).collect::<Vec<_>>());
     assert_eq!(txt(&rows[2][1]), "Zoë Martín");
     assert_eq!(txt(&rows[1][1]), "Luis Peña");
-    assert_eq!(cols[2].kind, ColKind::Bool, "BOOLEAN");
+    // Over DRDA a BOOLEAN arrives as SMALLINT (0 / 1): what every DRDA client shows.
+    assert!(matches!(cols[2].kind, ColKind::Bool | ColKind::Number), "BOOLEAN: {:?}", cols[2]);
     assert_eq!(cols[3].kind, ColKind::Date, "DATE");
     assert_eq!(cols[4].kind, ColKind::Number, "DECIMAL");
 
@@ -520,8 +521,10 @@ fn informix_engine() {
     let statements = generated(shape);
     run_generated(d, &statements);
     let (_, rows) = all_rows(d, "SELECT id, nombre, activo, importe FROM dc_b ORDER BY id");
+    // Booleans as true/false or 1/0 (DRDA).
     let got: Vec<String> = rows.iter().map(|r| r.iter().map(txt).collect::<Vec<_>>().join("|")).collect();
-    assert_eq!(got, vec!["1|Ana|true|1.50", "2|Luis|false|NULL", "3|Viejo|true|NULL", "4|Zoë|NULL|-2.25"]);
+    let norm = |s: &str| s.replace("|true|", "|1|").replace("|false|", "|0|");
+    assert_eq!(got.iter().map(|g| norm(g)).collect::<Vec<_>>(), vec!["1|Ana|1|1.50", "2|Luis|0|NULL", "3|Viejo|1|NULL", "4|Zoë|NULL|-2.25"]);
 
     // Startup script: run on connect; a broken one says so.
     let (mut cfg, lib) = informix_cfg().unwrap();
