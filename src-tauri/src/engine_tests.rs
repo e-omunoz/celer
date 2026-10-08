@@ -364,8 +364,9 @@ fn mssql_engine() {
     assert_eq!(scalar(d, "SELECT DB_NAME()"), "celer_test");
 }
 
-/// A big result left half read (a page of 500, as the interface asks for): the next statement must not wait for the
-/// rest of it, nor for a new connection. The session survives: same SPID, #temp tables, open transaction.
+/// A big result left half read (a page of 500, as the interface asks for). Without session state, the next statement
+/// goes on at once in the session's reserve connection; with a transaction or #temp tables, the session keeps its
+/// connection (same SPID) and they survive.
 #[test]
 fn mssql_abandoned_cursor() {
     let Some(mut d) = mssql("tempdb") else { return };
@@ -380,23 +381,26 @@ fn mssql_abandoned_cursor() {
         assert!(out.results[0].has_more && out.results[0].rows.len() == 500);
         t0.elapsed().as_millis()
     };
-    let spid = scalar(d, "SELECT @@SPID");
     for round in 1..=3 {
         let first = page(d);
         let t0 = Instant::now();
-        let out = d.execute("SELECT @@SPID", 10).unwrap();
+        let out = d.execute("SELECT DB_NAME(), @@LANGUAGE", 10).unwrap();
         let next = t0.elapsed().as_millis();
-        let now = txt(&out.results[0].rows[0][0]);
-        eprintln!("cursor abandonado, ronda {round}: primera página {first} ms, siguiente consulta {next} ms, SPID {spid} → {now}; {:?}", out.messages);
-        assert_eq!(now, spid, "el cursor se cortó con ATTENTION en la misma conexión");
-        assert!(next < 1500, "la consulta tras el cursor abandonado tardó {next} ms");
-        assert!(out.messages.iter().any(|m| m.contains("ATTENTION")), "{:?}", out.messages);
+        eprintln!("cursor abandonado sin estado, ronda {round}: primera página {first} ms, siguiente consulta {next} ms; {:?}", out.messages);
+        assert!(next < 500, "la consulta tras el cursor abandonado tardó {next} ms");
+        assert!(out.messages.iter().any(|m| m.contains("sigue en la conexión de reserva")), "{:?}", out.messages);
+        // Same database (and startup script) on the reserve.
+        assert_eq!(txt(&out.results[0].rows[0][0]), "tempdb");
+        // How the old connection was cut and closed, in the background, comes with the next statement.
+        let later = d.execute("SELECT 1", 10).unwrap();
+        eprintln!("  después: {:?}", later.messages);
     }
     // "Pedir más" still works after a cut: a new cursor pages on.
     page(d);
     assert_eq!(d.fetch(500).unwrap().rows.len(), 500);
 
     // A #temp table and an open transaction (autocommit mode, BEGIN TRAN) across an abandoned cursor.
+    let spid = scalar(d, "SELECT @@SPID");
     d.execute("CREATE TABLE #celer_tmp (id int); INSERT INTO #celer_tmp VALUES (1)", 10).unwrap();
     let out = d.execute("BEGIN TRAN; INSERT INTO #celer_tmp VALUES (2)", 10).unwrap();
     assert!(out.in_transaction);
@@ -415,6 +419,7 @@ fn mssql_abandoned_cursor() {
     d.execute("INSERT INTO #celer_tmp VALUES (3)", 10).unwrap();
     page(d);
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "2");
+    assert_eq!(scalar(d, "SELECT @@SPID"), spid);
     assert!(!d.rollback().unwrap());
     d.set_autocommit(true).unwrap();
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "1");
