@@ -161,6 +161,7 @@ All notable changes to Celer are documented here. The format follows
 - **AI assistants (MCP) could read protected columns** (`password_hash` and the like, shown as `[oculto]`) through a whole row (`SELECT t FROM users t`, `row_to_json(t)`), a column alias list (`WITH s(a, b) AS (SELECT * FROM users) …`), a `UNION` under another query's column names, or on MySQL / SQL Server a column of another database. These queries are now refused on tables with protected columns, and other databases' protected columns count. The documentation now says that masking works on names and is best-effort.
 - **The AI assistants' log could hide the query that ran**: it kept the first 500 characters of the SQL, so a long leading comment left the real query out. The log now keeps the SQL without its comments, and a long one keeps its first and last 2,000 characters.
 - **Moving a tab with a big loaded result to another window was slow**: the result was copied twice through the app's internal store before being sent. It is now sent as it is, and a tab with more than 100,000 loaded rows says the move may take a few seconds.
+- **Faint syntax and object colours in "Alto contraste claro" and Sand**: type names, parameters, punctuation and the explorer/E-R object icons kept the dark theme's pale colours, about 2:1 on white. Both themes now have their own dark values (4.5:1 or better in Alto contraste claro, 3:1 or better for Sand's icons).
 
 ## [2.0.1] - 2026-10-08
 
