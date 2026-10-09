@@ -475,6 +475,13 @@ fn mssql_abandoned_cursor() {
     d.rollback().unwrap();
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM #celer_tmp"), "1");
 
+    // EXECUTE AS is session state: the session keeps its connection across a cut.
+    d.execute("GRANT SELECT ON dbo.celer_big TO guest; EXECUTE AS USER = 'guest'", 10).unwrap();
+    page(d);
+    assert_eq!(scalar(d, "SELECT USER_NAME()"), "guest");
+    assert_eq!(scalar(d, "SELECT @@SPID"), spid);
+    d.execute("REVERT", 10).unwrap();
+
     // Manual mode keeps its transaction across a cut too.
     d.set_autocommit(false).unwrap();
     d.execute("INSERT INTO #celer_tmp VALUES (3)", 10).unwrap();

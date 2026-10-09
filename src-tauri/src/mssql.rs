@@ -280,7 +280,8 @@ impl Engine {
 /// valdría igual que esta.
 #[derive(Debug, Default, PartialEq)]
 struct Effects {
-    /// SET de una opción de sesión (no el de un UPDATE ni el de una variable), contexto de sesión, rol de aplicación.
+    /// SET de una opción de sesión (no el de un UPDATE ni el de una variable), contexto de sesión, rol de aplicación,
+    /// EXECUTE AS y SETUSER, claves abiertas, cursores globales.
     session: bool,
     /// Crea tablas #temporales.
     temp: bool,
@@ -469,7 +470,17 @@ fn session_effects(sql: &str) -> Effects {
             "BEGIN" if matches!(at(i + 1), "TRAN" | "TRANSACTION" | "DISTRIBUTED") => e.tran = true,
             // `OPTION (USE HINT …)` y `USE PLAN` no cambian de base.
             "USE" if i == 0 || !matches!(at(i - 1), "(" | ",") => e.uses = true,
-            "SP_SET_SESSION_CONTEXT" | "SP_GETAPPLOCK" | "SP_SETAPPROLE" => e.session = true,
+            "SP_SET_SESSION_CONTEXT" | "SP_GETAPPLOCK" | "SP_SETAPPROLE" | "SETUSER" => e.session = true,
+            // EXECUTE AS cambia el usuario de la sesión; no la cláusula de un CREATE PROC … WITH [opción,] EXECUTE AS.
+            "EXEC" | "EXECUTE" if at(i + 1) == "AS" && (i == 0 || !matches!(at(i - 1), "WITH" | ",")) => e.session = true,
+            "OPEN" if matches!(at(i + 1), "SYMMETRIC" | "MASTER") && at(i + 2) == "KEY" => e.session = true,
+            // Un cursor con nombre es GLOBAL salvo que diga LOCAL: dura lo que la conexión (una variable @c, el lote).
+            "DECLARE" if !at(i + 1).starts_with('@') => {
+                let decl: Vec<&str> = (i + 2..i + 10).map(at).take_while(|w| !matches!(*w, "FOR" | "")).collect();
+                if decl.contains(&"CURSOR") && !decl.contains(&"LOCAL") {
+                    e.session = true;
+                }
+            }
             _ => {}
         }
     }
@@ -654,7 +665,7 @@ impl MssqlDriver {
             lost.push("la transacción abierta");
         }
         if self.session_state {
-            lost.push("las tablas temporales y los SET de la sesión");
+            lost.push("las tablas temporales, los SET y el resto del estado de la sesión (EXECUTE AS, claves abiertas, cursores)");
         }
         if self.showplan {
             lost.push("SHOWPLAN_XML");
@@ -2623,6 +2634,17 @@ mod tests {
         assert!(e("set lock_timeout -1").session);
         assert!(e("SET TRANSACTION ISOLATION LEVEL SNAPSHOT").session);
         assert!(e("EXEC sys.sp_set_session_context @key = N'k', @value = 1").session);
+        // A user of its own, open keys and global cursors last as long as the connection.
+        assert!(e("EXECUTE AS USER = 'reader'").session && e("exec as login = 'otro'; SELECT 1").session);
+        assert!(e("SETUSER 'reader'").session);
+        assert!(e("OPEN SYMMETRIC KEY k DECRYPTION BY CERTIFICATE c").session && e("OPEN MASTER KEY DECRYPTION BY PASSWORD = 'x'").session);
+        assert!(e("DECLARE c CURSOR FOR SELECT 1").session && e("DECLARE c INSENSITIVE SCROLL CURSOR FOR SELECT 1").session);
+        assert!(e("DECLARE c CURSOR GLOBAL FAST_FORWARD FOR SELECT 1").session);
+        assert_eq!(e("DECLARE c CURSOR LOCAL FOR SELECT 1"), Effects::default());
+        assert_eq!(e("DECLARE @c CURSOR; DECLARE @n int = 1"), Effects::default());
+        assert_eq!(e("CREATE PROCEDURE p WITH EXECUTE AS OWNER AS SELECT 1"), Effects::default());
+        assert_eq!(e("CREATE PROCEDURE p WITH RECOMPILE, EXECUTE AS CALLER AS SELECT 1"), Effects::default());
+        assert_eq!(e("EXEC dbo.p @as = 1; OPEN c"), Effects::default());
         // Strings and comments do not count.
         assert_eq!(e("SELECT 'SET NOCOUNT ON', N'CREATE TABLE #x' -- SET ANSI_NULLS OFF\n/* BEGIN TRAN /* USE x */ */"), Effects::default());
         assert!(e("CREATE TABLE #tmp (id int)").temp);
