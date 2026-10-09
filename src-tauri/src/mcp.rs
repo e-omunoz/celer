@@ -1542,6 +1542,18 @@ impl McpServer {
         let conns = self.store.load_connections();
         let conn_id = arg_str(args, "connId");
         let conn = conns.iter().find(|c| c.id == conn_id).cloned();
+        // The user's ${variables} (the connection's, then the global ones) become their values before anything else:
+        // the statement filter, the run and the audit see the SQL that is actually sent.
+        let substituted;
+        let args = match (name, conn.as_ref(), args.get("sql").and_then(|s| s.as_str())) {
+            ("run_query" | "execute_statement", Some(c), Some(sql)) if sql.contains("${") => {
+                let mut with = args.clone();
+                with["sql"] = Value::String(crate::variables::substitute(sql, c.kind, &crate::variables::for_connection(&self.store, &c.id)));
+                substituted = with;
+                &substituted
+            }
+            _ => args,
+        };
         let res = if !TOOL_NAMES.contains(&name) {
             Err(format!("Herramienta desconocida: {name}"))
         } else if !self.preview && !cfg.enabled {
@@ -2758,6 +2770,21 @@ mod tests {
                 .await
         });
         assert!(r.is_err());
+
+        // Variables ${name}: the connection's value, else the global one; the audit keeps the SQL sent.
+        std::fs::write(
+            dir.join("variables.json"),
+            r#"{"version":1,"global":[{"name":"uid","value":"3"}],"connections":{"read":[{"name":"uid","value":"2"}]}}"#,
+        )
+        .unwrap();
+        let q = c.ok("run_query", json!({"connId": "read", "sql": "SELECT id, name FROM users WHERE id = ${uid}"}));
+        assert_eq!(q["rows"], json!([[2, "luis"]]));
+        let q = c.ok("run_query", json!({"connId": "prod", "sql": "SELECT id, name FROM users WHERE id = ${uid} AND name <> '${uid}'"}));
+        assert_eq!(q["rows"], json!([[3, "eva"]]));
+        let audit = read_audit(&store, 2);
+        assert!(audit.iter().any(|a| a.detail == "SELECT id, name FROM users WHERE id = 2"), "{audit:?}");
+        assert!(audit.iter().any(|a| a.detail == "SELECT id, name FROM users WHERE id = 3 AND name <> '${uid}'"), "{audit:?}");
+        std::fs::remove_file(dir.join("variables.json")).unwrap();
 
         // Auditoría
         let audit = read_audit(&store, 1000);

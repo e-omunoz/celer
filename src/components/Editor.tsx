@@ -24,6 +24,7 @@ import {
   highlightSpecialChars,
   keymap,
   lineNumbers,
+  hoverTooltip,
   rectangularSelection,
   ViewPlugin,
   type DecorationSet,
@@ -35,6 +36,7 @@ import { chordsFor, codeMirrorKey } from "../keymap";
 import { splitSql } from "../sql";
 import { unfilteredWrites, type Snippet } from "../snippets";
 import { compatibility, guessEngines } from "../engineCompat";
+import { SCOPE_LABELS, variableAt, variableLiteral, type ResolvedVar } from "../variables";
 import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
 import type { CompletionTable, DbKind } from "../types";
 
@@ -177,6 +179,60 @@ function snippetSource(get: () => { snippets: Snippet[]; dialect: string }) {
   };
 }
 
+/**
+ * Variables: after "${" the names defined for this console (its own, its connection's, the global ones), with the
+ * value each one would put in the SQL.
+ */
+function variableSource(get: () => { vars: Map<string, ResolvedVar>; dialect: string }) {
+  return (ctx: CompletionContext): CompletionResult | null => {
+    const typed = ctx.matchBefore(/\$\{\w*/);
+    if (!typed) return null;
+    const node = syntaxTree(ctx.state).resolveInner(ctx.pos, -1);
+    if (/String|Comment|QuotedIdentifier/.test(node.name)) return null;
+    const { vars, dialect } = get();
+    if (!vars.size) return null;
+    const options: Completion[] = [...vars.values()].map((v) => ({
+      label: v.name,
+      detail: `${variableLiteral(v, dialect)} · ${SCOPE_LABELS[v.scope].toLowerCase()}`,
+      type: "variable",
+      boost: 30,
+      // closeBrackets may have put the "}" already.
+      apply: (view, _completion, from, to) => {
+        const close = view.state.sliceDoc(to, to + 1) === "}" ? "" : "}";
+        view.dispatch({ changes: { from, to, insert: v.name + close }, selection: { anchor: from + v.name.length + 1 } });
+      },
+    }));
+    return { from: typed.from + 2, options, validFor: /^\w*$/ };
+  };
+}
+
+/** Hover over ${name}: its current value and where it comes from, or that it will be asked for. */
+function variableHover(get: () => { vars: Map<string, ResolvedVar>; dialect: string; scopeOf: (v: ResolvedVar) => string }) {
+  return hoverTooltip((view, pos) => {
+    const line = view.state.doc.lineAt(pos);
+    const { vars, dialect, scopeOf } = get();
+    // The line is enough to find it (a variable does not span lines); strings and comments are told apart there too.
+    const ref = variableAt(line.text, pos - line.from, dialect);
+    if (!ref) return null;
+    const variable = vars.get(ref.name);
+    return {
+      pos: line.from + ref.from,
+      end: line.from + ref.to,
+      above: true,
+      create: () => {
+        const dom = document.createElement("div");
+        dom.className = "cm-var-tip";
+        const name = document.createElement("code");
+        name.textContent = `\${${ref.name}}`;
+        const text = document.createElement("span");
+        text.textContent = variable ? ` = ${variableLiteral(variable, dialect)}  (${scopeOf(variable)})` : " sin valor: se pedirá al ejecutar";
+        dom.append(name, text);
+        return { dom };
+      },
+    };
+  });
+}
+
 /** The statement (text and start offset) that contains `pos`. */
 function statementAround(text: string, pos: number, dialect: string) {
   const parts = splitSql(text, dialect);
@@ -287,6 +343,10 @@ export function SqlEditor(props: {
   tables: CompletionTable[];
   /** Live templates offered by name (built-in and the user's). */
   snippets?: Snippet[];
+  /** The variables that apply in this console (completion after "${" and hover). */
+  variables?: Map<string, ResolvedVar>;
+  /** Where a variable's value comes from, for the hover ("conexión «Prod»"). */
+  variableScope?: (variable: ResolvedVar) => string;
   defaultSchema?: string;
   /** Ctrl+click / F4 / Ctrl+B on a table (or an alias of one) in the SQL. */
   onOpenTable?: (table: CompletionTable) => void;
@@ -338,6 +398,8 @@ export function SqlEditor(props: {
       ".cm-completionIcon": { opacity: "0.75", width: "1.2em" },
       ".cm-stmt": { background: "var(--editor-stmt)" },
       ".cm-table-link": { textDecoration: "underline", textUnderlineOffset: "3px", color: "var(--accent)", cursor: "pointer" },
+      ".cm-var-tip": { padding: "4px 8px", fontFamily: "var(--mono)", fontSize: "12px", color: "var(--text)" },
+      ".cm-var-tip code": { color: "var(--syntax-param)" },
       ".cm-unfiltered": { textDecoration: "underline wavy var(--warning)", textUnderlineOffset: "3px", textDecorationSkipInk: "none" },
     });
   }
@@ -371,6 +433,8 @@ export function SqlEditor(props: {
 
   const completionSource = catalogCompletion(() => ({ tables: props.tables, defaultSchema: props.defaultSchema, dialect: props.kind }));
   const templates = snippetSource(() => ({ snippets: props.snippets ?? [], dialect: props.kind }));
+  const variableCompletion = variableSource(() => ({ vars: props.variables ?? new Map(), dialect: props.kind }));
+  const variableTips = variableHover(() => ({ vars: props.variables ?? new Map(), dialect: props.kind, scopeOf: (v) => props.variableScope?.(v) ?? SCOPE_LABELS[v.scope].toLowerCase() }));
 
   let linked: { from: number; to: number } | null = null;
   function setLinked(v: EditorView, next: { from: number; to: number } | null) {
@@ -406,7 +470,8 @@ export function SqlEditor(props: {
           language.of(languageExtension()),
           // One stable source: CodeMirror matches results to sources by identity (a new function per call
           // would leave every result "pending" and never shown).
-          EditorState.languageData.of(() => [{ autocomplete: completionSource }, { autocomplete: templates }]),
+          EditorState.languageData.of(() => [{ autocomplete: completionSource }, { autocomplete: templates }, { autocomplete: variableCompletion }]),
+          variableTips,
           unfilteredWarning(() => props.kind),
           linkField,
           theme.of(themeExtension()),

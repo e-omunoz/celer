@@ -1,4 +1,5 @@
-import { BookMarked, Braces, Code2, Copy, ExternalLink, Filter, History, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
+import { BookMarked, Braces, Code2, Copy, ExternalLink, Filter, History, Rows3, Search, Sparkles, Trash2, Variable, WrapText, X } from "lucide-solid";
+import { VariablesPanel } from "./VariablesPanel";
 import { guessEngines, isCompatible, kindLabel } from "../engineCompat";
 import type { HistoryEntry } from "../types";
 import { EngineBadge } from "./EngineBadge";
@@ -21,6 +22,7 @@ export function Inspector() {
           <button type="button" classList={{ on: state.inspectorMode === "record" }} title="Registro: la fila como formulario" onClick={() => openInspector("record")}><Rows3 size={13} /><span class="seg-label">Registro</span></button>
           <button type="button" classList={{ on: state.inspectorMode === "history" }} title={withShortcut("Historial de consultas", "history")} onClick={() => openInspector("history")}><History size={13} /><span class="seg-label">Historial</span></button>
           <button type="button" classList={{ on: state.inspectorMode === "library" }} title={withShortcut("Biblioteca de scripts guardados", "library")} onClick={() => openInspector("library")}><BookMarked size={13} /><span class="seg-label">Biblioteca</span></button>
+          <button type="button" classList={{ on: state.inspectorMode === "variables" }} title={withShortcut("Variables: ${nombre} con un valor por consola, conexión o global", "variables")} onClick={() => openInspector("variables")}><Variable size={13} /><span class="seg-label">Variables</span></button>
           <button type="button" classList={{ on: state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => openInspector("ai")}><Sparkles size={13} /><span class="seg-label">IA</span></button>
         </div>
         <span class="spacer" />
@@ -34,6 +36,7 @@ export function Inspector() {
         <Match when={state.inspectorMode === "record"}><RecordView /></Match>
         <Match when={state.inspectorMode === "history"}><HistoryView /></Match>
         <Match when={state.inspectorMode === "library"}><LibraryView /></Match>
+        <Match when={state.inspectorMode === "variables"}><VariablesPanel /></Match>
         <Match when={state.inspectorMode === "ai"}><AiPanel /></Match>
       </Switch>
     </aside>

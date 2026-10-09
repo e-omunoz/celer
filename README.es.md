@@ -87,7 +87,7 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
 - **Trae tus conexiones.** Impórtalas desde **DBeaver** (con las contraseñas guardadas, si quieres) y
   **DbVisualizer**, con carpetas y marcas de producción. Arrastra conexiones entre carpetas en el explorador.
 - **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
-  configurables, biblioteca de scripts, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
+  configurables, biblioteca de scripts que ejecuta cualquier script guardado en cualquier conexión o en varias a la vez, `${variables}` por consola, conexión o globales, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
   tiene una idea cuando acaba una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como
   a una mosca si le molestas mientras espera.
 - **Actualizaciones en la app.** Celer comprueba en GitHub si hay versiones nuevas, te enseña las novedades y las
@@ -217,6 +217,7 @@ pasar a Celer Setup, desinstala la copia MSI (tus datos se conservan) e instala 
 | `Ctrl+Alt+E` | Historial |
 | `Ctrl+Alt+B` | Guardar la consola en la biblioteca de scripts |
 | `Alt+8` | Biblioteca de scripts |
+| `Alt+9` | Variables (valores de `${nombre}` por consola, conexión o globales) |
 | `Ctrl+Alt+S` | Ajustes |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
 

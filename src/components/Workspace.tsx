@@ -121,6 +121,7 @@ import { askAi } from "../ai";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
 import { unsupportedReason } from "../engineCompat";
+import { resolvedFor, scopeText } from "../variableStore";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
 import { windowName } from "../windowModel";
@@ -497,6 +498,8 @@ function SqlPane(props: { tab: SqlTab }) {
           kind={kindOf(props.tab.connId)}
           tables={completionTables(props.tab)}
           snippets={allSnippets(kindOf(props.tab.connId), state.settings.snippets)}
+          variables={resolvedFor(props.tab)}
+          variableScope={(variable) => scopeText(variable, props.tab.connId)}
           keymap={state.settings.keymap}
           defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
           onOpenTable={(table) => openTableFromSql(props.tab, table)}

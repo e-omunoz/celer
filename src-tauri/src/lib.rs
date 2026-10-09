@@ -6,6 +6,7 @@ mod guard;
 mod jdbc;
 mod mcp;
 mod migrate;
+mod variables;
 mod model;
 mod mssql;
 mod mysql;
@@ -802,13 +803,13 @@ fn clear_history(state: State<'_, Arc<AppState>>) -> CmdResult<()> {
 // Off the main thread: a locked file is retried for a moment.
 #[tauri::command(async)]
 fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_json::Value> {
-    if !matches!(name.as_str(), "settings" | "workspace" | "library") {
+    if !matches!(name.as_str(), "settings" | "workspace" | "library" | "variables") {
         return Err("Nombre no permitido".into());
     }
     state.store.load_json(&format!("{name}.json")).map_err(err)
 }
 
-/// Ajustes y biblioteca, que comparten todas las ventanas. `merge`: `value` trae solo unas claves, que se
+/// Ajustes, biblioteca y variables, que comparten todas las ventanas. `merge`: `value` trae solo unas claves, que se
 /// ponen sobre lo que tiene el fichero (dos ventanas que cambian ajustes distintos a la vez no se deshacen nada).
 /// La disposición de las ventanas (`workspace.json`) la escribe windows.rs con la parte de cada una.
 #[tauri::command]
@@ -819,7 +820,7 @@ fn save_json(
     value: serde_json::Value,
     merge: Option<bool>,
 ) -> CmdResult<()> {
-    if !matches!(name.as_str(), "settings" | "library") {
+    if !matches!(name.as_str(), "settings" | "library" | "variables") {
         return Err("Nombre no permitido".into());
     }
     let file = format!("{name}.json");

@@ -156,6 +156,17 @@ function demoLibrary() {
         updatedAt: at,
       },
       {
+        id: "demo-vars",
+        name: "Clientes de una ciudad",
+        sql: "SELECT name, city\nFROM customers\nWHERE city = ${ciudad}\nLIMIT ${limite};",
+        connId: null,
+        folder: "Informes",
+        tags: ["clientes"],
+        createdAt: at,
+        updatedAt: at,
+        description: "Usa las variables ${ciudad} (de la conexión) y ${limite} (global): cámbialas en el panel Variables.",
+      },
+      {
         id: "demo-script",
         name: "Resumen en dos pasos",
         sql: "-- Primero los clientes activos, después sus pedidos.\nSELECT count(*) AS activos FROM customers WHERE active = 1;\nSELECT count(*) AS pedidos FROM orders;",
@@ -719,6 +730,8 @@ export function createDemoBackend(): Backend {
     async loadJson(name) {
       const value = localStorage.getItem(`celer.${name}`);
       if (!value && name === "library") return demoLibrary();
+      // A first variable of each scope that the demo library uses.
+      if (!value && name === "variables") return { version: 1, global: [{ name: "limite", value: "5" }], connections: { demo: [{ name: "ciudad", value: "Madrid" }] } };
       return value ? JSON.parse(value) : null;
     },
     async saveJson(name, value, merge) {

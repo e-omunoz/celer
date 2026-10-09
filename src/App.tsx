@@ -17,6 +17,7 @@ import { PanelApp, WindowAskDialog } from "./components/Windows";
 import { gibHere, openNewWindow, panelKind, prepareWindow, startWindows, windowLabel } from "./windows";
 import { EngineIcon } from "./icons";
 import { library, loadLibrary } from "./library";
+import { loadVariables } from "./variableStore";
 import { RunOnDialog } from "./components/RunOnDialog";
 import {
   activeTab,
@@ -59,6 +60,8 @@ export default function App() {
       if (windowLabel === "main") startUpdateChecks();
       // The library early: consoles opened from it show whether they have unsaved changes, and the palette lists it.
       void loadLibrary();
+      // The variables too: the editor completes them and a run substitutes them.
+      void loadVariables();
     });
     // Shown once it is where it was last time (and painted).
     void prepareWindow().then(revealWindow);

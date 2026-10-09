@@ -32,12 +32,14 @@ import { insertAt } from "./windowModel";
 import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
 import { libraryDirty, scriptById } from "./library";
 import type { ScriptParam } from "./libraryModel";
+import { normalizeVariables, substituteVariables, type Variable } from "./variables";
+import { loadVariables, resolvedFor } from "./variableStore";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
 import type { ColumnOrder } from "./columnOrder";
 
-export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
+export type InspectorMode = "value" | "record" | "history" | "library" | "variables" | "ai";
 
 export interface OutputEntry {
   at: number;
@@ -85,6 +87,8 @@ export interface SqlTab {
   fileSaved?: string;
   /** The script library entry the console was opened from (saving to the library updates it). */
   libraryId?: string;
+  /** The console's own variables (variables.ts): they win over the connection's and the global ones. */
+  vars?: Variable[];
   /** The last execution plan (Ctrl+Shift+E), shown in its own result tab. */
   plan: { plan: Plan; sql: string } | null;
   activePlan: boolean;
@@ -207,6 +211,7 @@ export interface SavedSqlTab {
   /** The file's text as last read or written, kept only when the console differs from it. */
   fileSaved?: string;
   libraryId?: string;
+  vars?: Variable[];
 }
 
 export interface SavedTableTab {
@@ -560,6 +565,7 @@ export function restoreTabs(saved: SavedTab[], activeTabId: string, known: (conn
             fileCrlf: tab.fileCrlf,
             fileSaved: tab.filePath ? (tab.fileSaved ?? tab.sql) : undefined,
             libraryId: tab.libraryId,
+            vars: normalizeVariables(tab.vars).length ? normalizeVariables(tab.vars) : undefined,
           },
     );
   if (!tabs.length) return;
@@ -664,7 +670,7 @@ export function savedTabs(): SavedTab[] {
   return state.tabs.map(
     (tab): SavedTab =>
       tab.kind === "sql"
-        ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, fileSaved: tab.filePath && tab.fileSaved !== tab.sql ? tab.fileSaved : undefined, libraryId: tab.libraryId }
+        ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, fileSaved: tab.filePath && tab.fileSaved !== tab.sql ? tab.fileSaved : undefined, libraryId: tab.libraryId, vars: tab.vars }
         : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
   );
 }
@@ -1730,13 +1736,26 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   const conn = connectionById(current.connId);
   let sql = text?.trim() || current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
   if (!sql) return false;
+  // Variables (${name}): the console's, its connection's or the global value, written in as literals. What is sent,
+  // and so what the history and the output log keep, has the values; a name nobody defines is asked for below.
+  await loadVariables();
+  sql = substituteVariables(sql, resolvedFor(current), conn?.kind).sql;
   // Parameters (:name, ?, ${name}): ask for their values and write them in as literals.
   if (state.settings.askParams) {
     const refs = findParams(sql, conn?.kind);
     if (refs.length) {
       const declared = options.declared ?? (current.libraryId ? scriptById(current.libraryId)?.params : undefined) ?? [];
-      const answer = options.params ?? (await askParamValues(current.id, paramNames(refs), sql, declared));
+      const names = paramNames(refs);
+      const given = options.params;
+      // Values already given cover it (another target of the same run); a name they lack (a variable this target's
+      // connection does not define) is asked, with the given ones pre-filled.
+      const prefill = names.map((name): ScriptParam => {
+        const own = declared.find((p) => p.name === name);
+        return { name, default: given && name in given.values ? given.values[name] : (own?.default ?? ""), description: own?.description ?? "" };
+      });
+      let answer = given && names.every((name) => name in given.values) ? given : await askParamValues(current.id, names, sql, prefill);
       if (!answer) return false;
+      if (given && answer !== given) answer = { values: { ...given.values, ...answer.values }, raw: { ...given.raw, ...answer.raw } };
       options.onParams?.(answer);
       sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
     }

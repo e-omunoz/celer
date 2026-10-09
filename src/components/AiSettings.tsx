@@ -60,7 +60,7 @@ export function AiSettings() {
   return (
     <>
       <h4>Asistente integrado</h4>
-      <p class="settings-note">El panel de IA (Ctrl+Alt+I) genera, explica y corrige SQL con Claude. Envía el esquema y el SQL del editor, nunca filas de datos.</p>
+      <p class="settings-note">El panel de IA (Ctrl+Alt+I) genera, explica y corrige SQL con Claude. Envía el esquema y el SQL del editor, nunca filas de datos. De las variables <code>{"${nombre}"}</code> envía el nombre, y su valor solo en las conexiones con nivel «Lectura» o «Lectura y escritura» aquí abajo.</p>
       <div class="form-row">
         <label class="field">
           <span>Modelo</span>

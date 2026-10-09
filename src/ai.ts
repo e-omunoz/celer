@@ -2,6 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { api, errorText } from "./api";
 import { activeSql, connectionById, notify, openInspector, setState, state } from "./state";
 import { engineOf } from "./types";
+import { findVariables, variableLiteral } from "./variables";
+import { resolvedFor, scopeText } from "./variableStore";
 
 export type AiModel = "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-4-5";
 
@@ -55,7 +57,38 @@ export function aiContextSummary() {
   };
 }
 
-function buildPrompt(action: AiAction, request: string): { system: string; user: string } {
+/**
+ * Whether the assistant may see data of a connection: the AI access level of Ajustes › IA lets it read rows ("read" or
+ * "write"). Variable values are data: below that level only their names are sent.
+ */
+async function dataAllowed(connId: string | null | undefined): Promise<boolean> {
+  if (!connId) return false;
+  try {
+    const level = (await api().mcpConfigGet()).connections[connId]?.level ?? "none";
+    return level === "read" || level === "write";
+  } catch {
+    return false;
+  }
+}
+
+/** The ${variables} of the SQL sent: their names and scope always, their values only where data is allowed. */
+async function variablesContext(): Promise<string> {
+  const tab = activeSql();
+  if (!tab) return "";
+  const kind = connectionById(tab.connId)?.kind;
+  const names = [...new Set(findVariables(tab.selection.trim() || tab.sql, kind).map((ref) => ref.name))];
+  if (!names.length) return "";
+  const resolved = resolvedFor(tab);
+  const values = await dataAllowed(tab.connId);
+  const lines = names.map((name) => {
+    const variable = resolved.get(name);
+    if (!variable) return `${name}: sin valor (Celer lo pide al ejecutar)`;
+    return values ? `${name} = ${variableLiteral(variable, kind)} (${scopeText(variable, tab.connId)})` : `${name}: con valor (${scopeText(variable, tab.connId)}); el valor no se envía`;
+  });
+  return `<variables nota="\${nombre} es una variable de Celer: se sustituye por su valor al ejecutar">\n${lines.join("\n")}\n</variables>`;
+}
+
+function buildPrompt(action: AiAction, request: string, variables = ""): { system: string; user: string } {
   const tab = activeSql();
   const conn = connectionById(tab?.connId);
   const engine = conn ? engineOf(conn.kind).label : "SQL estándar";
@@ -66,11 +99,13 @@ function buildPrompt(action: AiAction, request: string): { system: string; user:
     "Responde en español, de forma breve y directa. Cuando propongas una consulta, ponla en un único bloque ```sql para que el usuario pueda insertarla o ejecutarla.",
     "Usa solo las tablas y columnas del esquema que se te da; si falta información o el esquema no contiene lo necesario, dilo en lugar de inventar nombres.",
     "Para sentencias que modifican datos (UPDATE, DELETE, DDL), avisa del efecto y sugiere un WHERE o una transacción cuando sea prudente.",
+    "Las referencias ${nombre} son variables de Celer: déjalas tal cual en el SQL que propongas.",
   ].join("\n");
   const parts: string[] = [];
   if (schema.text) parts.push(`<esquema tablas="${schema.tables}">\n${schema.text}</esquema>`);
   const sql = tab?.selection.trim() || tab?.sql.trim() || "";
   if (sql && action !== "generate") parts.push(`<sql_actual>\n${sql.slice(0, 12_000)}\n</sql_actual>`);
+  if (variables && action !== "generate") parts.push(variables);
   if (action === "fix" && tab?.error) parts.push(`<error_del_servidor>\n${tab.error.slice(0, 4000)}\n</error_del_servidor>`);
   const task: Record<AiAction, string> = {
     ask: request,
@@ -101,7 +136,7 @@ export async function askAi(action: AiAction, request = "") {
     setState("ai", "needsKey", true);
     return;
   }
-  const { system, user } = buildPrompt(action, request);
+  const { system, user } = buildPrompt(action, request, await variablesContext());
   const labels: Record<AiAction, string> = {
     ask: request,
     generate: `Generar SQL: ${request}`,

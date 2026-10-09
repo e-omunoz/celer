@@ -20,6 +20,7 @@ export const DEFAULT_KEYS: Record<string, string[]> = {
   "save-as": ["Ctrl+Shift+S"],
   "save-library": ["Ctrl+Alt+B"],
   library: ["Alt+8"],
+  variables: ["Alt+9"],
   "close-tab": ["Ctrl+W"],
   "next-tab": ["Ctrl+Tab"],
   "prev-tab": ["Ctrl+Shift+Tab"],

@@ -14,7 +14,7 @@ La ventana tiene tres zonas:
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
 - **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
 - **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
-  (Alt+8) y el asistente de IA.
+  (Alt+8), las variables (Alt+9) y el asistente de IA.
 
 ## Conexiones
 
@@ -149,6 +149,8 @@ en una tabla o una exportación en curso, lo pregunta antes.
   Las tuyas se crean en *Ajustes › Plantillas*, donde puedes indicar su motor (o dejar que Celer lo detecte); las de
   otro motor salen en las sugerencias marcadas *otro motor* y al final.
 - **Parámetros**: `:nombre`, `?` o `${nombre}` en una consulta abren un diálogo para darles valor antes de ejecutar.
+- **Variables**: `${nombre}` con un valor guardado no se pregunta: se pone su valor (ver *Variables* más abajo).
+  Tras escribir `${` el editor sugiere las variables con su valor, y al pasar el ratón por encima se ve cuál se usará.
 - **UPDATE / DELETE sin WHERE** se subrayan mientras escribes y piden confirmación al ejecutarlos.
 - **Transacciones**: *Auto* confirma cada sentencia; en *Manual* aparecen Commit y Rollback
   (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R).
@@ -263,6 +265,25 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
 
 La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas, y los
 `.sql` exportados antes se importan igual que siempre.
+
+### Variables
+
+Valores que defines una vez y escribes como `${nombre}` en consolas y scripts de la biblioteca (un cliente, un esquema,
+una fecha de corte…). Se ven y se editan en la pestaña **Variables** del panel derecho (**Alt+9**):
+
+- **Ámbitos**: de *esta consola*, de su *conexión* o *globales*. Al ejecutar vale el de la consola; si no tiene, el de la
+  conexión; si tampoco, el global. Por eso el mismo script, ejecutado en otra conexión (con *Ejecutar en…*), toma los
+  valores de esa conexión; *Ejecutar en…* los muestra en cada destino antes de ejecutar.
+- **Cómo se escriben**: números, NULL, TRUE y FALSE tal cual; el resto como texto entre comillas. Marca **SQL** para
+  que vaya tal cual (un nombre de tabla, una lista para `IN`…). Dentro de cadenas y comentarios no se sustituye nada.
+- **Sin valor**: una `${nombre}` que ningún ámbito define se pide al ejecutar, como un parámetro.
+- La sintaxis no choca con la de ningún motor (`:nombre`, `?`, `$1`, `@var`).
+- El **historial** y el registro del servidor MCP guardan el SQL que se envió, con los valores puestos. Las herramientas
+  MCP también sustituyen las variables de la conexión y las globales.
+- Al **asistente de IA** se le envían los nombres; los valores, solo si la conexión le permite leer datos (nivel
+  *Lectura* o *Lectura y escritura* en *Ajustes › IA*).
+- Las de conexión y las globales se guardan en `variables.json` (las comparten todas las ventanas); las de una consola,
+  con la consola.
 
 ### Motor de cada script, plantilla y consulta
 

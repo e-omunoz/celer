@@ -1147,8 +1147,27 @@ fn library_suite(d: &mut dyn Driver, kind: &str, schema: Option<&str>) {
     for (id, name) in [(1, "uno"), (2, "dos"), (3, "tres")] {
         d.execute(&format!("INSERT INTO {table} (id, nombre) VALUES ({id}, '{name}')"), 10).unwrap();
     }
-    let statements = library_statements(json!({ "kind": kind, "schema": schema }));
+    let statements = library_statements(json!({ "kind": kind, "schema": schema, "table": table }));
     run_generated(d, &statements);
+    // The MCP tools substitute ${variables} in the core (variables.rs): the same query, on the same engine.
+    let kind_of = match kind {
+        "postgres" => DbKind::Postgres,
+        "mysql" => DbKind::Mysql,
+        "mssql" => DbKind::Mssql,
+        "sqlite" => DbKind::Sqlite,
+        "informix" => DbKind::Informix,
+        _ => DbKind::Odbc,
+    };
+    let vars: std::collections::HashMap<String, crate::variables::Var> = [
+        ("tabla".to_string(), crate::variables::Var { value: table.clone(), raw: true }),
+        ("desde".to_string(), crate::variables::Var { value: "2".into(), raw: false }),
+    ]
+    .into_iter()
+    .collect();
+    let sql = crate::variables::substitute("SELECT id, nombre FROM ${tabla} WHERE id >= ${desde} AND nombre <> '${desde}' ORDER BY id", kind_of, &vars);
+    let (_, rows) = all_rows(d, &sql);
+    assert_eq!(rows.len(), 2, "{sql}");
+    println!("✓ MCP variables (core)");
     d.execute(&format!("DROP TABLE {table}"), 10).unwrap();
 }
 

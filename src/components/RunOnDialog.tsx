@@ -6,6 +6,8 @@ import { closeRunOn, defaultTargets, library, runLibraryOn, scriptById, scriptGu
 import { schemaSetupSql, statementCount, targetHasDatabase, type RunTarget } from "../libraryModel";
 import { compatibility, kindLabel } from "../engineCompat";
 import { EngineBadge } from "./EngineBadge";
+import { findVariables, variableLiteral } from "../variables";
+import { resolvedFor } from "../variableStore";
 import { connect, connectionById, state } from "../state";
 import { Dialog } from "./Modals";
 
@@ -24,6 +26,8 @@ function RunOnForm(props: { scriptId: string }) {
   const statements = createMemo(() => statementCount(script().sql, connectionById(targets()[0]?.connId)?.kind));
   const [action, setAction] = createSignal<"run" | "open">("run");
   const guess = createMemo(() => scriptGuess(script()));
+  /** The ${variables} of the script: each target shows the values its connection gives them. */
+  const usedVars = createMemo(() => [...new Set(findVariables(script().sql).map((ref) => ref.name))]);
   const patch = (index: number, change: Partial<RunTarget>) => setTargets((list) => list.map((t, i) => (i === index ? { ...t, ...change } : t)));
   const add = () => {
     const used = new Set(targets().map((t) => t.connId));
@@ -99,6 +103,16 @@ function RunOnForm(props: { scriptId: string }) {
                     <p class="field-warn runon-engine-warn">
                       El script es para {guess().engines.map(kindLabel).join(", ")} y esta conexión es {kindLabel(kind()!)}
                       {guess().source === "connection" ? " (se guardó con otra conexión)" : ": se pedirá confirmación"}.
+                    </p>
+                  </Show>
+                  <Show when={usedVars().length}>
+                    <p class="muted small runon-vars">
+                      {usedVars()
+                        .map((name) => {
+                          const variable = resolvedFor(undefined, target().connId).get(name);
+                          return variable ? `\${${name}} = ${variableLiteral(variable, kind())}` : `\${${name}} sin valor: se pedirá`;
+                        })
+                        .join(" · ")}
                     </p>
                   </Show>
                   <div class="runon-row-actions">

@@ -59,12 +59,12 @@ export interface Backend {
   addHistory(entry: HistoryEntry): Promise<void>;
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
-  loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
+  loadJson(name: "settings" | "workspace" | "library" | "variables"): Promise<unknown>;
   /**
    * Writes a shared file through the core, which tells the other windows. `merge`: `value` holds only some top-level
    * keys, merged into what the file has. In the desktop app the workspace is written by windows.ts instead.
    */
-  saveJson(name: "settings" | "workspace" | "library", value: unknown, merge?: boolean): Promise<void>;
+  saveJson(name: "settings" | "workspace" | "library" | "variables", value: unknown, merge?: boolean): Promise<void>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */

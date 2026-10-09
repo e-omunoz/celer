@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { exportBundle, parseSqlFile, schemaSetupSql, type LibraryScript } from "../src/libraryModel.ts";
 import { bindParams, findParams } from "../src/snippets.ts";
 import type { DbKind } from "../src/types.ts";
+import { resolveVariables, substituteVariables } from "../src/variables.ts";
 
 interface Statement {
   name: string;
@@ -14,7 +15,7 @@ interface Statement {
   rows?: number;
 }
 
-const { kind, schema } = JSON.parse(readFileSync(0, "utf8").replace(/^﻿/, "")) as { kind: DbKind; schema?: string };
+const { kind, schema, table } = JSON.parse(readFileSync(0, "utf8").replace(/^﻿/, "")) as { kind: DbKind; schema?: string; table?: string };
 const out: Statement[] = [];
 
 /** The seeded check script (the test creates celer_lib_check with ids 1, 2 and 3 in the default schema). */
@@ -46,5 +47,20 @@ const setup = schemaSetupSql(kind, schema);
 if (setup) out.push({ name: "library target schema", sql: setup });
 out.push({ name: "library check script (declared default)", sql: bound(entry.sql, defaults), rows: 2 });
 out.push({ name: "library check script (value typed)", sql: bound(entry.sql, { minimo: "3" }), rows: 1 });
+
+// The same entry with variables: the table is a variable of each connection (raw SQL), the first id a global one;
+// a string that looks like a variable stays as it is. Substituted as runActive does, before the parameters.
+const withVars = "SELECT id, nombre\nFROM ${tabla}\nWHERE id >= ${desde} AND nombre <> '${desde}'\nORDER BY id";
+const connVars = [{ name: "tabla", value: table ?? "celer_lib_check", raw: true }];
+out.push({ name: "library script with variables", sql: substituteVariables(withVars, resolveVariables({ connection: connVars, global: [{ name: "desde", value: "2" }] }), kind).sql, rows: 2 });
+// The console's own value wins over the global one.
+out.push({
+  name: "variables: the console's value first",
+  sql: substituteVariables(withVars, resolveVariables({ console: [{ name: "desde", value: "3" }], connection: connVars, global: [{ name: "desde", value: "1" }] }), kind).sql,
+  rows: 1,
+});
+// A variable without a value is asked for like a parameter (here "1" typed in the prompt).
+const partial = substituteVariables(withVars, resolveVariables({ connection: connVars }), kind).sql;
+out.push({ name: "variable without value, asked as a parameter", sql: bound(partial, { desde: "1" }), rows: 3 });
 
 process.stdout.write(JSON.stringify(out, null, 1));

@@ -109,6 +109,7 @@ export function commands(): Command[] {
     { id: "ai-schema", label: "Copiar esquema para IA", group: "IA", run: () => { const id = activeTab()?.connId; if (id) void copySchemaForAi(id); }, enabled: () => Boolean(activeTab()?.connId && state.sessions[activeTab()!.connId!]) },
     { id: "history", label: "Historial de consultas", group: "Ventana", run: () => openInspector("history") },
     { id: "library", label: "Biblioteca de scripts", group: "Ventana", run: () => openInspector("library") },
+    { id: "variables", label: "Variables (${nombre}): ver y editar sus valores", group: "Ventana", run: () => openInspector("variables") },
     { id: "save-library", label: "Guardar la consola en la biblioteca (o sus cambios)", group: "Biblioteca", run: () => void saveToLibrary(), enabled: sqlOnly },
     { id: "library-save-new", label: "Guardar la consola en la biblioteca como script nuevo", group: "Biblioteca", run: () => void saveToLibrary(true), enabled: sqlOnly },
     { id: "library-search", label: "Buscar en la biblioteca de scripts", group: "Biblioteca", run: () => { openInspector("library"); void loadLibrary(); setLibrary("focusSearch", library.focusSearch + 1); } },

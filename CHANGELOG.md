@@ -30,6 +30,15 @@ All notable changes to Celer are documented here. The format follows
   generic ODBC is never flagged. «Solo los compatibles con esta conexión» filters the library, the history and the
   template settings, and other-engine templates sink in the editor's suggestions. «Ejecutar en…» warns per target and
   asks before running a script marked or written for another engine.
+- **Variables** (#118): values written as `${name}` in consoles and library scripts, defined per console, per
+  connection or globally (the console's value wins, then the connection's, then the global one), edited in the new
+  «Variables» tab of the right panel (Alt+9), completed in the editor after `${` and shown on hover. Numbers, NULL and
+  booleans go in as they are and the rest quoted, or as raw SQL when marked; strings and comments are never touched,
+  and a name without a value is still asked for like a parameter. The same library script run on another connection
+  («Ejecutar en…» shows them per target) takes that connection's values. The history and the MCP audit log keep the
+  SQL actually sent, the MCP tools substitute the connection's and global variables too, and the AI assistant gets the
+  names, with their values only where the connection lets the AI read data. `${name}` is now also found on Informix,
+  where braces start a comment.
 - **Features an engine lacks are greyed out** with «No disponible en <motor>» instead of failing on click (one support
   table): the execution plan (not on Informix or generic ODBC), the real plan (PostgreSQL and MariaDB), server
   activity (not on SQLite or generic ODBC), and the E-R diagram and schema comparison (not on generic ODBC), in the

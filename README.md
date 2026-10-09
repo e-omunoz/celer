@@ -89,7 +89,7 @@ without administrator rights, and keeps itself up to date.
 - **Bring your connections.** Import them from **DBeaver** (saved passwords included, if you want) and
   **DbVisualizer**, with folders and production flags. Drag connections between folders in the explorer.
 - **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift),
-  shortcuts you can change, a script library, a startup script per connection, and **Gib**: he thinks while queries
+  shortcuts you can change, a script library that runs any saved script on any connection or several at once, `${variables}` per console, connection or global, a startup script per connection, and **Gib**: he thinks while queries
   run, has an idea when a long one finishes, goes for a coffee or juggles when you are away, and swats the cursor if
   you poke him while he waits.
 - **Updates in the app.** Celer checks GitHub for new releases, shows what's new and installs them in one click,
@@ -218,6 +218,7 @@ to Celer Setup, uninstall the MSI copy (your data is kept) and install `Celer-Se
 | `Ctrl+Alt+E` | History |
 | `Ctrl+Alt+B` | Save the console in the script library |
 | `Alt+8` | Script library |
+| `Alt+9` | Variables (`${name}` values per console, connection or global) |
 | `Ctrl+Alt+S` | Settings |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
 
