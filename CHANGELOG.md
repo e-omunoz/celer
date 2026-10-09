@@ -170,6 +170,7 @@ All notable changes to Celer are documented here. The format follows
 - **Faint text that carries information was hard to read** in Celer Claro, Celer Oscuro, Darcula and Fjord: explorer row counts, headings such as "EMPEZAR" and the hints under fields were at 2.6–3.9:1. The faint text colour now reaches 4.5:1 on the panels and surfaces in every theme.
 - **The start guide's appearance step left out the high-contrast themes** its welcome card mentions. "Alto contraste oscuro" and "Alto contraste claro" are now offered there too.
 - **A console with no connection was titled "console"**, in English. It is now "consola", and still takes the connection's name when you pick one.
+- **The table viewer hid its ORDER BY field in narrow panes** (under 760 px, e.g. a 1024-wide window with the explorer open), so an active ordering was out of sight. The field now stays, wrapping with the rest of the toolbar.
 
 ## [2.0.1] - 2026-10-08
 
