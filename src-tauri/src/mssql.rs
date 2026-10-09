@@ -15,7 +15,7 @@
 //! sesión de la misma configuración, que se ahorra el login (con su TLS). Con `CELER_MSSQL_TRACE` en el entorno, los
 //! tiempos de cada lote salen también por la salida de error.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -354,6 +354,88 @@ fn sql_tokens(sql: &str) -> Vec<String> {
     out
 }
 
+/// Los lotes de un script separados por líneas `GO` (o `GO n`: el lote n veces), como hacen SSMS y sqlcmd: una
+/// línea con solo GO fuera de cadenas, identificadores y comentarios. Sin GO, un solo lote con el texto entero.
+fn split_go(sql: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut batch = String::new();
+    // Dentro de un comentario /* */ (se anidan) o de una cadena o identificador que cierra con este carácter.
+    let (mut depth, mut quote) = (0usize, None::<char>);
+    for line in sql.split_inclusive('\n') {
+        if depth == 0 && quote.is_none() {
+            if let Some(times) = go_line(line) {
+                if !batch.trim().is_empty() {
+                    out.extend(std::iter::repeat_n(batch.clone(), times));
+                }
+                batch.clear();
+                continue;
+            }
+        }
+        let c: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < c.len() {
+            let next = c.get(i + 1).copied();
+            if let Some(q) = quote {
+                if c[i] == q {
+                    if next == Some(q) {
+                        i += 1;
+                    } else {
+                        quote = None;
+                    }
+                }
+            } else if depth > 0 {
+                if c[i] == '/' && next == Some('*') {
+                    depth += 1;
+                    i += 1;
+                } else if c[i] == '*' && next == Some('/') {
+                    depth -= 1;
+                    i += 1;
+                }
+            } else {
+                match c[i] {
+                    '-' if next == Some('-') => break,
+                    '/' if next == Some('*') => {
+                        depth = 1;
+                        i += 1;
+                    }
+                    '\'' | '"' => quote = Some(c[i]),
+                    '[' => quote = Some(']'),
+                    _ => {}
+                }
+            }
+            i += 1;
+        }
+        batch.push_str(line);
+    }
+    if !batch.trim().is_empty() || out.is_empty() {
+        out.push(batch);
+    }
+    out
+}
+
+/// "Quedan 3 lotes …": `n` lotes con el verbo en singular o plural y el resto de la frase; nada si `n` es 0.
+fn batches_note(one: &str, many: &str, n: usize, rest: &str) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some(format!("{one} 1 lote {rest}")),
+        n => Some(format!("{many} {n} lotes {rest}")),
+    }
+}
+
+/// Si la línea es un separador de lotes: `GO` o `GO n`, con un comentario `--` detrás si acaso. Las veces del lote.
+fn go_line(line: &str) -> Option<usize> {
+    let code = line.split("--").next().unwrap_or("");
+    let mut words = code.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("GO") {
+        return None;
+    }
+    match (words.next(), words.next()) {
+        (None, _) => Some(1),
+        (Some(n), None) => n.parse().ok().filter(|n| *n >= 1),
+        _ => None,
+    }
+}
+
 /// Un identificador sin corchetes ni comillas dobles.
 fn unquote_ident(s: &str) -> String {
     if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
@@ -398,27 +480,39 @@ fn session_effects(sql: &str) -> Effects {
     e
 }
 
-/// Si un lote que empieza por INSERT, UPDATE, DELETE o MERGE es una sola sentencia: ninguna otra empieza fuera de
-/// paréntesis (T-SQL no pide `;` entre sentencias). Valen las partes de la propia sentencia: el SELECT o EXEC de un
-/// INSERT (con UNION y demás), el SET de un UPDATE y el UPDATE SET, INSERT y DELETE tras THEN de un MERGE.
+/// Si un lote es una sola sentencia: ninguna otra empieza fuera de paréntesis (T-SQL no pide `;` entre sentencias).
+/// Valen las partes de la propia sentencia: los SELECT tras UNION y demás, el SELECT o EXEC de un INSERT, el SET de
+/// un UPDATE, el UPDATE SET, INSERT y DELETE tras THEN de un MERGE, la consulta de un WITH o de un DECLARE CURSOR, y
+/// el cuerpo de un CREATE/ALTER de procedimiento, función, trigger o vista.
 fn single_statement(sql: &str) -> bool {
-    let t: Vec<String> = sql_tokens(sql).iter().map(|s| s.to_uppercase()).collect();
+    let t: Vec<String> = sql_tokens(sql).iter().filter(|s| *s != ";").map(|s| s.to_uppercase()).collect();
     let Some(first) = t.first().map(String::as_str) else { return true };
+    if matches!(first, "CREATE" | "ALTER") {
+        let mut what = 1;
+        if t.get(1).map(String::as_str) == Some("OR") {
+            what = 3;
+        }
+        if matches!(t.get(what).map(String::as_str), Some("PROC" | "PROCEDURE" | "FUNCTION" | "TRIGGER" | "VIEW")) {
+            return true;
+        }
+    }
+    // The statement itself: after a WITH, the one its CTEs are for.
+    let mut main = first;
     let (mut depth, mut sources, mut sets) = (0usize, 0, 0);
     for i in 1..t.len() {
         let prev = t[i - 1].as_str();
-        match t[i].as_str() {
+        let word = t[i].as_str();
+        match word {
             "(" => depth += 1,
             ")" => depth = depth.saturating_sub(1),
             _ if depth > 0 => {}
-            "SELECT" | "EXEC" | "EXECUTE" if first == "INSERT" => {
-                if sources > 0 && !matches!(prev, "UNION" | "ALL" | "EXCEPT" | "INTERSECT") {
-                    return false;
-                }
-                sources += 1;
-            }
-            "INSERT" | "UPDATE" | "DELETE" if first == "MERGE" && prev == "THEN" => {}
-            "SET" if (first == "UPDATE" && sets == 0) || (first == "MERGE" && prev == "UPDATE") => sets += 1,
+            "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" if main == "WITH" => main = word,
+            "SELECT" if matches!(prev, "UNION" | "ALL" | "EXCEPT" | "INTERSECT") => {}
+            "SELECT" if main == "DECLARE" && prev == "FOR" => {}
+            "UPDATE" if prev == "FOR" => {}
+            "SELECT" | "EXEC" | "EXECUTE" if main == "INSERT" && sources == 0 => sources += 1,
+            "INSERT" | "UPDATE" | "DELETE" if main == "MERGE" && prev == "THEN" => {}
+            "SET" if (main == "UPDATE" && sets == 0) || (main == "MERGE" && prev == "UPDATE") => sets += 1,
             "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "SET" | "EXEC" | "EXECUTE" | "CREATE" | "ALTER" | "DROP"
             | "DECLARE" | "PRINT" | "IF" | "WHILE" | "BEGIN" | "TRUNCATE" | "USE" | "RAISERROR" | "GRANT" | "REVOKE"
             | "DENY" | "COMMIT" | "ROLLBACK" | "WAITFOR" | "DBCC" => return false,
@@ -456,6 +550,11 @@ pub struct MssqlDriver {
     reserve: Option<oneshot::Receiver<Option<Idle>>>,
     /// Mientras se lee el resto de un resultado para conservar la sesión, para `progress`.
     drain: Arc<Mutex<Option<Drain>>>,
+    /// Los lotes de un script con GO que quedan por enviar, y cuántos tenía: se envían al acabar el resultado abierto.
+    batches: VecDeque<String>,
+    batch_total: usize,
+    /// Lotes del script anterior que no se enviaron porque su resultado se cerró antes de acabar, para avisar.
+    discarded: usize,
 }
 
 impl MssqlDriver {
@@ -480,6 +579,9 @@ impl MssqlDriver {
             late: Arc::new(Mutex::new(Vec::new())),
             reserve: None,
             drain: Arc::new(Mutex::new(None)),
+            batches: VecDeque::new(),
+            batch_total: 0,
+            discarded: 0,
         };
         let home = d.cfg.database.clone();
         d.attach(&home)?;
@@ -1703,8 +1805,9 @@ pub fn fmt_rows(n: i64) -> String {
     format!("{} {}", fmt_count(n), if n == 1 { "fila" } else { "filas" })
 }
 
-impl Driver for MssqlDriver {
-    fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
+impl MssqlDriver {
+    /// Envía un lote (sin GO) y lee sus resultados hasta que uno queda abierto o acaba.
+    fn execute_batch(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
         self.notes = std::mem::take(&mut *self.late.lock());
         let kw = first_keyword(sql);
@@ -1767,7 +1870,27 @@ impl Driver for MssqlDriver {
         Ok(out)
     }
 
-    fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
+    /// Envía los lotes pendientes del script (GO) en orden, añadiendo sus resultados, hasta que uno deja un
+    /// resultado abierto o no quedan. Un error para el script: los lotes de después no se envían.
+    fn run_batches(&mut self, fetch: usize, results: &mut Vec<ResultSet>, messages: &mut Vec<String>) -> Result<()> {
+        while self.cursor.is_none() {
+            let Some(batch) = self.batches.pop_front() else { break };
+            let n = self.batch_total - self.batches.len();
+            match self.execute_batch(&batch, fetch) {
+                Ok(o) => {
+                    results.extend(o.results);
+                    messages.extend(o.messages);
+                }
+                Err(e) => {
+                    self.batches.clear();
+                    bail!("Lote {n} de {}: {e}", self.batch_total);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn fetch_rows(&mut self, n: usize) -> Result<FetchOutput> {
         let mut out = FetchOutput::default();
         if self.cursor.is_none() {
             return Ok(out);
@@ -1801,6 +1924,42 @@ impl Driver for MssqlDriver {
             }
         }
     }
+}
+
+impl Driver for MssqlDriver {
+    /// Un script con líneas GO se envía lote a lote, como en SSMS; sin GO, el texto es un solo lote.
+    fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
+        let t0 = Instant::now();
+        self.close_cursor()?;
+        let mut notes = Vec::new();
+        notes.extend(batches_note("No se ejecutó", "No se ejecutaron", std::mem::take(&mut self.discarded), "del script anterior: su resultado se cerró antes de leerlo hasta el final."));
+        self.batches = split_go(sql).into();
+        self.batch_total = self.batches.len();
+        let mut out = if self.batch_total == 1 {
+            let batch = self.batches.pop_front().unwrap_or_default();
+            self.execute_batch(&batch, fetch)?
+        } else {
+            let mut out = ExecOutput::default();
+            self.run_batches(fetch, &mut out.results, &mut out.messages)?;
+            out.messages.extend(batches_note("Queda", "Quedan", self.batches.len(), "del script sin ejecutar: se envían al leer este resultado hasta el final; si ejecutas otra cosa antes, se descartan."));
+            out.in_transaction = self.in_tx;
+            out.elapsed_ms = t0.elapsed().as_millis() as u64;
+            out
+        };
+        notes.append(&mut out.messages);
+        out.messages = notes;
+        Ok(out)
+    }
+
+    fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
+        let mut out = self.fetch_rows(n)?;
+        // El resultado acabó: siguen los lotes que quedaban del script.
+        if self.cursor.is_none() && !self.batches.is_empty() {
+            let mut msgs = Vec::new();
+            self.run_batches(n.max(1), &mut out.extra, &mut msgs)?;
+        }
+        Ok(out)
+    }
 
     /// Cierra el resultado abierto. Si el lector ya lo había leído entero, la conexión sigue. Si no:
     /// - con transacción, modo manual, tablas #temporales o SET del usuario, se lee el resto en la misma conexión
@@ -1809,6 +1968,8 @@ impl Driver for MssqlDriver {
     fn close_cursor(&mut self) -> Result<()> {
         let Some(mut cur) = self.cursor.take() else { return Ok(()) };
         let t0 = Instant::now();
+        self.discarded += self.batches.len();
+        self.batches.clear();
         if let Ok(finished) = cur.done.try_recv() {
             *self.cancel.lock() = None;
             self.after_cut(Some(finished), t0);
@@ -2462,6 +2623,23 @@ mod tests {
     }
 
     #[test]
+    fn scripts_split_on_go_lines() {
+        let b = |sql: &str| split_go(sql).iter().map(|s| s.trim().to_string()).collect::<Vec<_>>();
+        assert_eq!(b("CREATE TABLE dbo.a (id int)\nGO\nCREATE VIEW dbo.v AS SELECT id FROM dbo.a\nGO\n"), vec!["CREATE TABLE dbo.a (id int)", "CREATE VIEW dbo.v AS SELECT id FROM dbo.a"]);
+        // Case, blanks, a trailing comment, CRLF, and GO n (the batch n times).
+        assert_eq!(b("SELECT 1\r\n  go  -- fin\r\nINSERT t DEFAULT VALUES\r\nGO 3\r\nSELECT 2"), vec!["SELECT 1", "INSERT t DEFAULT VALUES", "INSERT t DEFAULT VALUES", "INSERT t DEFAULT VALUES", "SELECT 2"]);
+        // Not a separator: inside a string, an identifier or a comment, or with more on the line.
+        assert_eq!(b("SELECT 'a\nGO\nb'").len(), 1);
+        assert_eq!(b("SELECT 1 AS [x\nGO\n]").len(), 1);
+        assert_eq!(b("/* uno\nGO\n/* anidado */\nGO\n*/ SELECT 1").len(), 1);
+        assert_eq!(b("SELECT 1 -- it's\nGO\nSELECT 2").len(), 2, "a quote in a line comment does not open a string");
+        assert_eq!(b("SELECT 1\nGO TO x\nGOTO fin").len(), 1);
+        // Without GO, or only GO: the text as it is.
+        assert_eq!(split_go("SELECT 1; SELECT 2"), vec!["SELECT 1; SELECT 2"]);
+        assert_eq!(split_go("GO\nGO\n").len(), 1);
+    }
+
+    #[test]
     fn dml_batches_of_one_statement() {
         assert!(single_statement("UPDATE dbo.t SET x = 1, y = 2 WHERE id IN (SELECT id FROM u)"));
         assert!(single_statement("INSERT INTO t (a) SELECT a FROM s UNION ALL SELECT a FROM r"));
@@ -2469,6 +2647,11 @@ mod tests {
         assert!(single_statement("DELETE t FROM t JOIN u ON u.id = t.id -- SELECT * FROM t"));
         assert!(single_statement("MERGE t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.a = s.a WHEN NOT MATCHED THEN INSERT (a) VALUES (s.a) WHEN NOT MATCHED BY SOURCE THEN DELETE"));
         assert!(single_statement("UPDATE t SET note = 'SELECT 1'"));
+        assert!(single_statement("WITH c AS (SELECT id FROM s) INSERT INTO t SELECT id FROM c"));
+        assert!(single_statement("WITH c AS (SELECT id FROM s) UPDATE c SET x = 1"));
+        assert!(single_statement("CREATE OR ALTER PROCEDURE p AS BEGIN SELECT 1; SELECT 2 END"));
+        assert!(single_statement("DECLARE c CURSOR FOR SELECT a FROM t FOR UPDATE OF a"));
+        assert!(!single_statement("SELECT * FROM big; DELETE FROM t WHERE id = 1"));
         // A second statement without ';' (the grid of the SELECT must not be lost).
         assert!(!single_statement("UPDATE dbo.t SET x = 1 WHERE id = 1\nSELECT * FROM dbo.t"));
         assert!(!single_statement("INSERT INTO t VALUES (1)\nINSERT INTO t VALUES (2)"));

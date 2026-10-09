@@ -335,6 +335,22 @@ fn mssql_engine() {
     // A DML batch with a later SELECT and no ';' keeps the SELECT's grid.
     let out = d.execute("UPDATE dbo.many SET n = n WHERE n = 1\nSELECT n FROM dbo.many WHERE n <= 5", 100).unwrap();
     assert!(out.results.iter().any(|r| r.columns.len() == 1 && r.rows.len() == 5), "{:?}", out.results);
+    // GO batches, as SSMS writes them: CREATE VIEW must start its own batch; GO n repeats one.
+    d.execute("IF OBJECT_ID('dbo.go_v') IS NOT NULL DROP VIEW dbo.go_v\nGO\nIF OBJECT_ID('dbo.go_a') IS NOT NULL DROP TABLE dbo.go_a\nCREATE TABLE dbo.go_a (id int IDENTITY)\nGO\nCREATE VIEW dbo.go_v AS SELECT id FROM dbo.go_a\nGO\nINSERT dbo.go_a DEFAULT VALUES\nGO 3\n", 10).unwrap();
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_v"), "3");
+    let err = d.execute("SELECT 1\nGO\nSELECT nope FROM dbo.go_a\nGO\nINSERT dbo.go_a DEFAULT VALUES", 10).unwrap_err().to_string();
+    assert!(err.starts_with("Lote 2 de 3:"), "{err}");
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "3", "the batches after an error are not sent");
+    // Batches behind a paged result: sent once it is read, or told as dropped.
+    let out = d.execute("SELECT n FROM dbo.many\nGO\nINSERT dbo.go_a DEFAULT VALUES\nGO\nSELECT 7", 100).unwrap();
+    assert!(out.messages.iter().any(|m| m.starts_with("Quedan 2 lotes")), "{:?}", out.messages);
+    let f = d.fetch(5000).unwrap();
+    assert!(!f.has_more && f.extra.iter().any(|r| r.rows.len() == 1 && txt(&r.rows[0][0]) == "7"), "{:?}", f.extra);
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "4");
+    d.execute("SELECT n FROM dbo.many\nGO\nINSERT dbo.go_a DEFAULT VALUES", 100).unwrap();
+    let out = d.execute("SELECT 1", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m.starts_with("No se ejecutó 1 lote")), "{:?}", out.messages);
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "4");
 
     // Cancel a running statement.
     assert_cancel(d, "WAITFOR DELAY '00:00:30'");
