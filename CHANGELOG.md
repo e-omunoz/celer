@@ -6,6 +6,11 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Informix over JDBC with DBeaver's Java** failed at once with "Java no arrancó el puente JDBC": that JRE has no base
+  class-data archive, Java warned about it on the bridge's output and Celer read the warning as the bridge's answer.
+  Java's own messages now go to its error output, and if anything else reaches the bridge's output the error shows it.
+
 ## [2.1.0] - 2026-10-09
 
 ### Added
