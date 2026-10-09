@@ -143,7 +143,7 @@ jobs:
             if (-not $v.CompanyName -or -not $v.FileDescription -or -not $v.ProductName) { Write-Error "$($_.Name): incomplete version information"; exit 1 }
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: celer-${{ matrix.label }}
           path: out/*
@@ -153,12 +153,12 @@ jobs:
   # Gathers the three platforms, checks the names, writes SHA256SUMS.txt and, for a tag, publishes the release.
   release:
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: celer-*
           path: dist
@@ -178,7 +178,7 @@ jobs:
           cat SHA256SUMS.txt
           ls -la
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: celer-release
           path: dist/*
