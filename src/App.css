@@ -25,6 +25,7 @@
   --danger: #ec6a5e;
   --info: #6aa9e9;
   --run: #5fb865;
+  --run-fg: #000;
   --syntax-keyword: #e48e6a;
   --syntax-function: #e9c27b;
   --syntax-type: #c6a4e6;
@@ -75,7 +76,8 @@
   --warning: #a8670a;
   --danger: #c8352b;
   --info: #2468b3;
-  --run: #2f8a3e;
+  --run: #27773a;
+  --run-fg: #fff;
   --syntax-keyword: #b34f22;
   --syntax-function: #8a5a00;
   --syntax-type: #7a46b0;
@@ -121,6 +123,7 @@
   --danger: #f75464;
   --info: #56a8f5;
   --run: #5fb865;
+  --run-fg: #000;
   --syntax-keyword: #cf8e6d;
   --syntax-function: #56a8f5;
   --syntax-type: #c77dbb;
@@ -155,6 +158,7 @@
   --danger: #bf616a;
   --info: #81a1c1;
   --run: #a3be8c;
+  --run-fg: #000;
   --syntax-keyword: #81a1c1;
   --syntax-function: #88c0d0;
   --syntax-type: #8fbcbb;
@@ -188,7 +192,8 @@
   --warning: #a77b00;
   --danger: #cf3a30;
   --info: #268bd2;
-  --run: #6f8500;
+  --run: #5f7200;
+  --run-fg: #fff;
   --syntax-keyword: #b5400f;
   --syntax-function: #1f78b5;
   --syntax-type: #6c71c4;
@@ -234,6 +239,7 @@
   --danger: #ff6b6b;
   --info: #6cc8ff;
   --run: #3ff36d;
+  --run-fg: #000;
   --syntax-keyword: #ffb070;
   --syntax-function: #ffe270;
   --syntax-string: #8aff8a;
@@ -265,6 +271,7 @@
   --danger: #a30000;
   --info: #00418a;
   --run: #005c1a;
+  --run-fg: #fff;
   --syntax-keyword: #8a2b00;
   --syntax-function: #5c3d00;
   --syntax-string: #005c1a;
@@ -654,7 +661,7 @@ kbd {
   font-weight: 600; font-size: 12.5px; flex: none; transition: filter var(--dur-fast), transform 60ms, background var(--dur-fast);
 }
 .tb-btn:active { transform: translateY(0.5px); }
-.tb-btn.run { background: var(--run); color: #fff; box-shadow: 0 1px 0 rgb(0 0 0 / 0.15); }
+.tb-btn.run { background: var(--run); color: var(--run-fg); box-shadow: 0 1px 0 rgb(0 0 0 / 0.15); }
 .tb-btn.run:hover { filter: brightness(1.07); }
 .tb-btn.stop { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); animation: morph-in var(--dur-med) var(--ease-spring); }
 .tb-btn.stop:hover { background: color-mix(in srgb, var(--danger) 24%, transparent); }

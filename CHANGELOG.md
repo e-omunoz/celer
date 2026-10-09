@@ -162,6 +162,7 @@ All notable changes to Celer are documented here. The format follows
 - **The AI assistants' log could hide the query that ran**: it kept the first 500 characters of the SQL, so a long leading comment left the real query out. The log now keeps the SQL without its comments, and a long one keeps its first and last 2,000 characters.
 - **Moving a tab with a big loaded result to another window was slow**: the result was copied twice through the app's internal store before being sent. It is now sent as it is, and a tab with more than 100,000 loaded rows says the move may take a few seconds.
 - **Faint syntax and object colours in "Alto contraste claro" and Sand**: type names, parameters, punctuation and the explorer/E-R object icons kept the dark theme's pale colours, about 2:1 on white. Both themes now have their own dark values (4.5:1 or better in Alto contraste claro, 3:1 or better for Sand's icons).
+- **Hard-to-read "Ejecutar" button**: its white label on the green button was 1.5:1 in "Alto contraste oscuro" and below 4.5:1 in every theme but "Alto contraste claro". The dark themes now use a black label, and Celer Claro and Sand a slightly darker green.
 
 ## [2.0.1] - 2026-10-08
 
