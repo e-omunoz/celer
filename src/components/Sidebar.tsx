@@ -34,6 +34,7 @@ import { emptyConn, ENGINES, type ConnSummary, type DbKind, type MetaNode } from
 import { startImport } from "../importer";
 import { openMigration } from "../migrate";
 import { withShortcut } from "../commands";
+import { unsupportedReason, type Feature } from "../engineCompat";
 import { compareWithMarked, isMarked, markForCompare, schemaCompare, schemaTitle } from "../schemaCompareRun";
 import { compareDataWithMarked, dataCompare, isTableMarked, markTableForCompare, tableTitle } from "../dataCompareRun";
 import { engineOf } from "../types";
@@ -128,6 +129,12 @@ type NodeRow = Extract<Row, { type: "node" }>;
  * Rows that can be selected together: favourite shortcuts; connections and folders; database objects. Section, status
  * and drop rows are only ever selected alone.
  */
+/** A menu entry for a feature: greyed out with «No disponible en <motor>» where the engine does not have it. */
+function feature(label: string, what: Feature, connId: string, item: Omit<MenuItem, "label">): MenuItem {
+  const reason = unsupportedReason(what, kindOf(connId), serverOf(connId));
+  return reason ? { ...item, label, disabled: true, hint: reason, title: reason, run: undefined } : { ...item, label };
+}
+
 function familyOf(row: Row | undefined): string | null {
   if (row?.type === "fav") return "fav";
   if (row?.type === "conn" || row?.type === "folder") return "conn";
@@ -738,7 +745,7 @@ export function Sidebar() {
       { separator: true },
       { label: "Copiar nombre", hint: "Ctrl+C", run: () => void copyText(conn.name) },
       { label: "Copiar esquema para IA", disabled: !connected, run: () => void copySchemaForAi(conn.id) },
-      ...(conn.kind === "sqlite" || conn.kind === "odbc" ? [] : [{ label: "Actividad del servidor…", icon: "activity", run: () => void openActivity(conn.id) }]),
+      feature("Actividad del servidor…", "activity", conn.id, { icon: "activity", run: () => void openActivity(conn.id) }),
       { label: "Exportar conexión (sin contraseña)…", run: () => void exportConnections([conn.id], conn.name) },
       { separator: true },
       { label: "Eliminar conexión", hint: "Supr", icon: "trash", danger: true, run: () => void deleteConnectionUndoable(conn.id) },
@@ -810,7 +817,7 @@ export function Sidebar() {
         { label: "Abrir estructura", run: () => void openTable(connId, obj, "columns") },
         { label: "Ver DDL", icon: "code", run: () => void openTable(connId, obj, "ddl") },
         // The table and the tables its foreign keys link it with, both ways.
-        ...(obj.kind === "table" ? [{ label: "Diagrama de relaciones", icon: "diagram", run: () => void openErDiagram(connId, erSchemaPath(connId, obj, node.path[0]), obj) }] : []),
+        ...(obj.kind === "table" ? [feature("Diagrama de relaciones", "er", connId, { icon: "diagram", run: () => void openErDiagram(connId, erSchemaPath(connId, obj, node.path[0]), obj) })] : []),
         { separator: true },
         { label: "Generar SELECT", run: () => void generateSql(connId, obj, "select") },
         { label: "Generar SELECT con JOIN de sus claves foráneas", run: () => void generateSql(connId, obj, "select-join") },
@@ -846,9 +853,9 @@ export function Sidebar() {
     if (schemaLevel) {
       const ref = { connId, path: node.path };
       const mark = schemaCompare.mark;
-      items.push({ label: "Diagrama entidad-relación", icon: "diagram", run: () => void openErDiagram(connId, node.path) });
-      if (mark && !isMarked(ref)) items.push({ label: `Comparar con «${schemaTitle(mark)}»`, icon: "compare", run: () => void compareWithMarked(ref) });
-      items.push({ label: isMarked(ref) ? "Marcado para comparar" : "Marcar para comparar", icon: "compare", run: () => markForCompare(ref) }, { separator: true });
+      items.push(feature("Diagrama entidad-relación", "er", connId, { icon: "diagram", run: () => void openErDiagram(connId, node.path) }));
+      if (mark && !isMarked(ref)) items.push(feature(`Comparar con «${schemaTitle(mark)}»`, "schemaCompare", connId, { icon: "compare", run: () => void compareWithMarked(ref) }));
+      items.push(feature(isMarked(ref) ? "Marcado para comparar" : "Marcar para comparar", "schemaCompare", connId, { icon: "compare", run: () => markForCompare(ref) }), { separator: true });
     }
     items.push(
       { label: "Nueva consola aquí", icon: "console", run: () => openQuery(connId) },

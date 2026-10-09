@@ -120,6 +120,7 @@ import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
+import { unsupportedReason } from "../engineCompat";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
 import { windowName } from "../windowModel";
@@ -345,6 +346,8 @@ function SqlPane(props: { tab: SqlTab }) {
   const current = () => (props.tab.activeResult >= 0 ? props.tab.results[props.tab.activeResult] : undefined);
   /** What the grid shows: a pinned result, or the current one. */
   const result = () => pinned()?.result ?? current();
+  /** The engine has no plan Celer reads (Informix, generic ODBC): the button says so instead of failing. */
+  const planMissing = () => (props.tab.connId ? unsupportedReason("plan", kindOf(props.tab.connId)) : null);
   // Quick filter over the rows already loaded (any column contains the text, case-insensitive).
   const [filterOpen, setFilterOpen] = createSignal(false);
   const [filterText, setFilterText] = createSignal("");
@@ -443,7 +446,13 @@ function SqlPane(props: { tab: SqlTab }) {
         <button type="button" class="tb-icon" title={withShortcut("Ejecutar script completo", "run-script")} disabled={props.tab.running} onClick={() => void runActive("script")}>
           <PlayCircle size={16} />
         </button>
-        <button type="button" class="tb-icon" title={withShortcut("Plan de ejecución", "explain")} disabled={props.tab.running} onClick={() => void runActive("explain")}>
+        <button
+          type="button"
+          class="tb-icon"
+          title={planMissing() ?? withShortcut("Plan de ejecución", "explain")}
+          disabled={props.tab.running || Boolean(planMissing())}
+          onClick={() => void runActive("explain")}
+        >
           <Gauge size={16} />
         </button>
         <span class="tb-sep" />

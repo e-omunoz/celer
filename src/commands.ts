@@ -24,16 +24,18 @@ import {
   runActive,
   saveScript,
   saveSettings,
+  serverOf,
   setState,
   startExport,
   state,
   toggleInspector,
 } from "./state";
 import type { ThemeName } from "./types";
+import { unsupportedReason, type Feature } from "./engineCompat";
 import { askAi } from "./ai";
 import { checkForUpdates } from "./update";
 import { openMigration } from "./migrate";
-import { createLibraryFolder, exportLibrary, importLibraryFiles, library, loadLibrary, openRunOn, saveToLibrary, selectedScript, setLibrary, setOnlyConn } from "./library";
+import { createLibraryFolder, exportLibrary, importLibraryFiles, library, loadLibrary, openRunOn, saveToLibrary, selectedScript, setLibrary, setOnlyCompat, setOnlyConn } from "./library";
 import { chordLabel, chordOf, chordsFor, EDITOR_COMMANDS } from "./keymap";
 import { resetGibTips } from "./gib/memory";
 import { isTauri } from "./api";
@@ -49,6 +51,8 @@ export interface Command {
   hint?: string;
   run: () => void;
   enabled?: () => boolean;
+  /** Why it does not work on the current engine («No disponible en Informix»): shown greyed instead of failing. */
+  unsupported?: () => string | null;
 }
 
 const THEMES: { id: ThemeName; label: string }[] = [
@@ -66,12 +70,19 @@ export const themeChoices = THEMES;
 
 const sqlOnly = () => activeTab()?.kind === "sql";
 
+/** A feature on the active tab's connection (or the explorer's, for connection commands). */
+const missing = (feature: Feature, connId: () => string | null | undefined = () => activeTab()?.connId) => () => {
+  const id = connId();
+  const conn = state.connections.find((c) => c.id === id);
+  return conn ? unsupportedReason(feature, conn.kind, serverOf(conn.id)) : null;
+};
+
 export function commands(): Command[] {
   const list: Command[] = [
     { id: "run", label: "Ejecutar sentencia o selección", group: "Consulta", run: () => void runActive("statement"), enabled: sqlOnly },
     { id: "run-script", label: "Ejecutar script completo", group: "Consulta", run: () => void runActive("script"), enabled: sqlOnly },
-    { id: "explain", label: "Plan de ejecución (EXPLAIN)", group: "Consulta", run: () => void runActive("explain"), enabled: sqlOnly },
-    { id: "explain-analyze", label: "Plan real: ejecuta y mide (EXPLAIN ANALYZE)", group: "Consulta", run: () => void runActive("analyze"), enabled: sqlOnly },
+    { id: "explain", label: "Plan de ejecución (EXPLAIN)", group: "Consulta", run: () => void runActive("explain"), enabled: sqlOnly, unsupported: missing("plan") },
+    { id: "explain-analyze", label: "Plan real: ejecuta y mide (EXPLAIN ANALYZE)", group: "Consulta", run: () => void runActive("analyze"), enabled: sqlOnly, unsupported: missing("analyze") },
     { id: "stop", label: "Detener ejecución", group: "Consulta", run: () => void cancelActive() },
     { id: "format", label: "Formatear SQL", group: "Consulta", run: formatActive, enabled: sqlOnly },
     { id: "commit", label: "Commit", group: "Transacción", run: () => void commitActive(false), enabled: () => Boolean(activeSql()?.inTransaction) },
@@ -80,7 +91,7 @@ export function commands(): Command[] {
     { id: "new-console", label: "Nueva consola", group: "Archivo", run: () => openQuery(contextConnId()) },
     { id: "new-conn", label: "Nueva conexión…", group: "Archivo", run: () => openConnDialog() },
     { id: "disconnect", label: "Desconectar", group: "Conexión", run: () => { const id = contextConnId(); if (id) void disconnect(id); }, enabled: () => Boolean(contextConnId() && state.sessions[contextConnId()!]) },
-    { id: "activity", label: "Actividad del servidor (sesiones y consultas en curso)", group: "Conexión", run: () => { const id = contextConnId(); if (id) void openActivity(id); }, enabled: () => { const k = state.connections.find((c) => c.id === contextConnId())?.kind; return Boolean(k && k !== "sqlite" && k !== "odbc"); } },
+    { id: "activity", label: "Actividad del servidor (sesiones y consultas en curso)", group: "Conexión", run: () => { const id = contextConnId(); if (id) void openActivity(id); }, enabled: () => Boolean(state.connections.some((c) => c.id === contextConnId())), unsupported: missing("activity", contextConnId) },
     { id: "disconnect-all", label: "Desconectar todas", group: "Conexión", run: () => void disconnectAll(), enabled: () => Object.keys(state.sessions).length > 0 },
     { id: "import-conns", label: "Importar conexiones de DBeaver o DbVisualizer…", group: "Archivo", run: () => void openMigration() },
     { id: "open", label: "Abrir script…", group: "Archivo", run: () => void openScript() },
@@ -101,6 +112,7 @@ export function commands(): Command[] {
     { id: "save-library", label: "Guardar la consola en la biblioteca (o sus cambios)", group: "Biblioteca", run: () => void saveToLibrary(), enabled: sqlOnly },
     { id: "library-save-new", label: "Guardar la consola en la biblioteca como script nuevo", group: "Biblioteca", run: () => void saveToLibrary(true), enabled: sqlOnly },
     { id: "library-search", label: "Buscar en la biblioteca de scripts", group: "Biblioteca", run: () => { openInspector("library"); void loadLibrary(); setLibrary("focusSearch", library.focusSearch + 1); } },
+    { id: "library-only-compat", label: "Biblioteca: solo los scripts compatibles con el motor de la conexión activa (activar o quitar)", group: "Biblioteca", run: () => { openInspector("library"); setOnlyCompat(!library.onlyCompat); } },
     { id: "library-run-on", label: "Ejecutar el script seleccionado de la biblioteca en… (otra conexión o base de datos, o varias)", group: "Biblioteca", run: () => { const script = selectedScript(); if (script) openRunOn(script.id); }, enabled: () => Boolean(selectedScript() && state.connections.length) },
     { id: "library-new-folder", label: "Nueva carpeta en la biblioteca", group: "Biblioteca", run: () => void createLibraryFolder("") },
     { id: "library-import", label: "Importar ficheros .sql a la biblioteca…", group: "Biblioteca", run: () => void importLibraryFiles() },
@@ -118,7 +130,7 @@ export function commands(): Command[] {
     { id: "palette", label: "Buscar en todo (tablas y acciones)", group: "Navegar", run: () => openPalette("all") },
     { id: "palette-actions", label: "Buscar una acción", group: "Navegar", run: () => openPalette("actions") },
     { id: "shortcuts", label: "Atajos de teclado…", group: "Preferencias", run: () => setState({ settingsOpen: true, settingsSection: "keys" }) },
-    { id: "er-table", label: "Diagrama de relaciones de la tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void openErDiagram(tab.connId, erSchemaPath(tab.connId, tab.obj, tab.database), tab.obj); }, enabled: () => { const tab = activeTab(); return tab?.kind === "table" && tab.obj.kind === "table"; } },
+    { id: "er-table", label: "Diagrama de relaciones de la tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void openErDiagram(tab.connId, erSchemaPath(tab.connId, tab.obj, tab.database), tab.obj); }, enabled: () => { const tab = activeTab(); return tab?.kind === "table" && tab.obj.kind === "table"; }, unsupported: missing("er") },
     { id: "reload-table", label: "Recargar tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void reloadTableSafe(tab.id); }, enabled: () => activeTab()?.kind === "table" },
     { id: "settings", label: "Ajustes…", group: "Preferencias", run: () => setState("settingsOpen", true) },
     { id: "zebra", label: "Filas alternas en la tabla de resultados", group: "Preferencias", run: () => void saveSettings({ zebra: !state.settings.zebra }) },
@@ -169,7 +181,9 @@ export function handleGlobalKey(event: KeyboardEvent): boolean {
   if (bound && !(EDITOR_SET.has(bound.id)) && !(typing && bound.id === "reload-table")) {
     if (!bound.enabled || bound.enabled()) {
       event.preventDefault();
-      bound.run();
+      const unsupported = bound.unsupported?.();
+      if (unsupported) notify(`${bound.label}: ${unsupported.charAt(0).toLowerCase()}${unsupported.slice(1)}`, "info");
+      else bound.run();
       return true;
     }
   }

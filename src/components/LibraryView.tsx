@@ -26,8 +26,10 @@ import {
   revertConsole,
   saveConsoleToScript,
   saveToLibrary,
+  scriptGuess,
   setLibrary,
   setLibrarySort,
+  setOnlyCompat,
   setOnlyConn,
   toggleFavorite,
   toggleFolder,
@@ -51,6 +53,8 @@ import {
   type ScriptParam,
 } from "../libraryModel";
 import { activeSql, activeTab, confirmDialog, connColor, connectionById, copyText, kindOf, openMenu, state, type MenuItem } from "../state";
+import { isCompatible, kindLabel } from "../engineCompat";
+import { EngineBadge } from "./EngineBadge";
 
 const SCRIPT_MIME = "application/x-celer-script";
 const FOLDER_MIME = "application/x-celer-folder";
@@ -91,6 +95,8 @@ export function LibraryView() {
 
   /** The connection of the active tab (for "only this connection" and "associate"). */
   const currentConn = () => activeTab()?.connId ?? null;
+  /** Its engine: badges warn against it and «solo compatibles» filters by it. */
+  const currentKind = () => connectionById(currentConn())?.kind;
 
   const rows = createMemo(() =>
     buildTree(
@@ -100,6 +106,7 @@ export function LibraryView() {
         sort: library.sort,
         collapsed: new Set(library.collapsed),
         connId: library.onlyConn && currentConn() ? currentConn() : undefined,
+        include: library.onlyCompat && currentKind() ? (script) => isCompatible(scriptGuess(script), currentKind()) : undefined,
         pinned: true,
       },
     ),
@@ -181,6 +188,7 @@ export function LibraryView() {
       { label: `${library.sort === "name" ? "✓ " : ""}Ordenar por nombre`, run: () => setLibrarySort("name") },
       { label: `${library.sort === "recent" ? "✓ " : ""}Ordenar por uso reciente`, run: () => setLibrarySort("recent") },
       { label: `${library.onlyConn ? "✓ " : ""}Solo los de la conexión activa`, run: () => setOnlyConn(!library.onlyConn) },
+      { label: `${library.onlyCompat ? "✓ " : ""}Solo los compatibles con esta conexión (su motor)`, run: () => setOnlyCompat(!library.onlyCompat) },
     ];
   }
 
@@ -373,6 +381,7 @@ export function LibraryView() {
     const conn = () => connectionById(script().connId);
     const isOpen = () => activeSql()?.libraryId === script().id;
     const dirty = () => libraryDirty(script().id);
+    const guess = createMemo(() => scriptGuess(script()));
     const runAllTitle = () => {
       const n = statementCount(script().sql, kindOf(script().connId ?? currentConn()));
       return n > 1 ? `Abrir y ejecutar todo: las ${n} sentencias (Ctrl+Intro). Para una sola, ábrelo y usa Ctrl+Intro en ella` : "Abrir y ejecutar (Ctrl+Intro)";
@@ -422,11 +431,9 @@ export function LibraryView() {
               <span class="lib-desc">{script().description}</span>
             </Show>
             <code class="lib-preview">{preview(script().sql)}</code>
-            <Show when={conn() || script().tags.length || script().engine}>
+            <Show when={conn() || script().tags.length || guess().engines.length || guess().generic}>
               <div class="lib-meta">
-                <Show when={script().engine}>
-                  <span class="lib-engine" title="Motor para el que está escrito">{engineLabel(script().engine!)}</span>
-                </Show>
+                <EngineBadge guess={guess()} kind={currentKind()} />
                 <Show when={conn()}>
                   <span class="lib-conn" title="Conexión asociada: se abre en ella"><i style={{ background: connColor(conn()) }} />{conn()!.name}</span>
                 </Show>
@@ -537,11 +544,16 @@ export function LibraryView() {
         <button type="button" class="icon-btn" title={withShortcut("Guardar la consola actual en la biblioteca", "save-library")} disabled={!activeSql()} onClick={() => void saveToLibrary()}><BookmarkPlus size={14} /></button>
         <button type="button" class="icon-btn" title="Importar, exportar y ordenar" onClick={(event) => openMenu(event, generalMenu())}><Ellipsis size={14} /></button>
       </div>
-      <Show when={tags().length || library.onlyConn}>
+      <Show when={tags().length || library.onlyConn || library.onlyCompat}>
         <div class="lib-filters">
           <Show when={library.onlyConn}>
             <button type="button" class="lib-tag on" title="Mostrar los de todas las conexiones" onClick={() => setOnlyConn(false)}>
               {connectionById(currentConn())?.name ?? "Sin conexión activa"} <X size={10} />
+            </button>
+          </Show>
+          <Show when={library.onlyCompat}>
+            <button type="button" class="lib-tag on" title="Mostrar los de todos los motores" onClick={() => setOnlyCompat(false)}>
+              {currentKind() ? `Compatibles con ${kindLabel(currentKind()!)}` : "Compatibles (sin conexión activa)"} <X size={10} />
             </button>
           </Show>
           <For each={tags().slice(0, 16)}>

@@ -2,8 +2,10 @@
 // them), then open the script in a console per target or run all of it in each. The actions live in library.ts.
 import { Plus, Trash2 } from "lucide-solid";
 import { createMemo, createSignal, For, Index, Show } from "solid-js";
-import { closeRunOn, defaultTargets, library, runLibraryOn, scriptById } from "../library";
-import { engineLabel, schemaSetupSql, statementCount, targetHasDatabase, type RunTarget } from "../libraryModel";
+import { closeRunOn, defaultTargets, library, runLibraryOn, scriptById, scriptGuess } from "../library";
+import { schemaSetupSql, statementCount, targetHasDatabase, type RunTarget } from "../libraryModel";
+import { compatibility, kindLabel } from "../engineCompat";
+import { EngineBadge } from "./EngineBadge";
 import { connect, connectionById, state } from "../state";
 import { Dialog } from "./Modals";
 
@@ -21,6 +23,7 @@ function RunOnForm(props: { scriptId: string }) {
   const [targets, setTargets] = createSignal<RunTarget[]>(defaultTargets(script()));
   const statements = createMemo(() => statementCount(script().sql, connectionById(targets()[0]?.connId)?.kind));
   const [action, setAction] = createSignal<"run" | "open">("run");
+  const guess = createMemo(() => scriptGuess(script()));
   const patch = (index: number, change: Partial<RunTarget>) => setTargets((list) => list.map((t, i) => (i === index ? { ...t, ...change } : t)));
   const add = () => {
     const used = new Set(targets().map((t) => t.connId));
@@ -46,7 +49,7 @@ function RunOnForm(props: { scriptId: string }) {
         </Show>
         <p class="muted small runon-facts">
           {statements() === 1 ? "1 sentencia" : `${statements()} sentencias`}
-          <Show when={script().engine}> · escrito para {engineLabel(script().engine!)}</Show>
+          <EngineBadge guess={guess()} showStandard />
           <Show when={script().params?.length}> · {script().params!.length === 1 ? "1 parámetro con valor por defecto" : `${script().params!.length} parámetros con valor por defecto`}</Show>
         </p>
         <div class="runon-targets">
@@ -91,6 +94,12 @@ function RunOnForm(props: { scriptId: string }) {
                       <span>Esquema</span>
                       <input value={target().schema ?? ""} spellcheck={false} placeholder="search_path actual" onInput={(event) => patch(index, { schema: event.currentTarget.value.trim() || undefined })} />
                     </label>
+                  </Show>
+                  <Show when={compatibility(guess(), kind()) === "warn"}>
+                    <p class="field-warn runon-engine-warn">
+                      El script es para {guess().engines.map(kindLabel).join(", ")} y esta conexión es {kindLabel(kind()!)}
+                      {guess().source === "connection" ? " (se guardó con otra conexión)" : ": se pedirá confirmación"}.
+                    </p>
                   </Show>
                   <div class="runon-row-actions">
                     <Show when={targetHasDatabase(kind()) && !session()}>

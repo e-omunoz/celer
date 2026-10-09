@@ -250,6 +250,8 @@ export interface Snippet {
   name: string;
   description: string;
   body: string;
+  /** The engine it is written for, as the user set it ("generic": standard SQL); else guessed from the body. */
+  engine?: DbKind | "generic";
 }
 
 export interface UpdateInfo {

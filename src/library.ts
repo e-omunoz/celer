@@ -34,8 +34,10 @@ import {
   type ScriptParam,
 } from "./libraryModel";
 import { findParams } from "./snippets";
+import { guessEngines, kindLabel, needsEngineConfirm, type EngineGuess } from "./engineCompat";
 import {
   activeSql,
+  confirmDialog,
   connectionById,
   isDefaultConsoleTitle,
   notify,
@@ -60,17 +62,20 @@ interface LibraryView {
   sort: LibrarySort;
   /** Only the scripts of the active console's connection (and those of none). */
   onlyConn: boolean;
+  /** Only the scripts that fit the active console's engine (engineCompat.ts). */
+  onlyCompat: boolean;
   collapsed: string[];
 }
 
 function loadView(): LibraryView {
-  const fallback: LibraryView = { sort: "name", onlyConn: false, collapsed: [] };
+  const fallback: LibraryView = { sort: "name", onlyConn: false, onlyCompat: false, collapsed: [] };
   try {
     const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null") as Partial<LibraryView> | null;
     if (!raw) return fallback;
     return {
       sort: raw.sort === "recent" ? "recent" : "name",
       onlyConn: raw.onlyConn === true,
+      onlyCompat: raw.onlyCompat === true,
       collapsed: Array.isArray(raw.collapsed) ? raw.collapsed.filter((f): f is string => typeof f === "string") : [],
     };
   } catch {
@@ -87,6 +92,7 @@ export const [library, setLibrary] = createStore({
   query: "",
   sort: view.sort,
   onlyConn: view.onlyConn,
+  onlyCompat: view.onlyCompat,
   collapsed: view.collapsed,
   /** The row with the keyboard focus: "s:<id>" or "f:<folder>". */
   selected: "",
@@ -155,7 +161,7 @@ async function persist() {
 
 function saveView() {
   try {
-    localStorage.setItem(VIEW_KEY, JSON.stringify({ sort: library.sort, onlyConn: library.onlyConn, collapsed: library.collapsed }));
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ sort: library.sort, onlyConn: library.onlyConn, onlyCompat: library.onlyCompat, collapsed: library.collapsed }));
   } catch {
     // Not kept: the panel opens with the defaults next time.
   }
@@ -169,6 +175,16 @@ export function setLibrarySort(sort: LibrarySort) {
 export function setOnlyConn(on: boolean) {
   setLibrary("onlyConn", on);
   saveView();
+}
+
+export function setOnlyCompat(on: boolean) {
+  setLibrary("onlyCompat", on);
+  saveView();
+}
+
+/** The engines a script is for: what the user set, else its SQL's dialect, else the connection it belongs to. */
+export function scriptGuess(script: LibraryScript): EngineGuess {
+  return guessEngines(script.sql, { override: script.engine, connKind: connectionById(script.connId)?.kind });
 }
 
 export function toggleFolder(folder: string, open?: boolean) {
@@ -373,6 +389,20 @@ export async function runLibraryOn(id: string, targets: RunTarget[], action: "ru
   if (!valid.length) {
     notify("Elige al menos una conexión", "warning");
     return;
+  }
+  // Written for another engine (marked by hand, or by its own SQL): say so before running anything.
+  const guess = scriptGuess(script);
+  const others = valid.filter((t) => needsEngineConfirm(guess, connectionById(t.connId)?.kind));
+  if (action === "run" && others.length) {
+    const engines = guess.engines.map(kindLabel).join(", ");
+    const where = others.map((t) => `«${targetLabel(t)}» (${kindLabel(connectionById(t.connId)!.kind)})`).join(", ");
+    const ok = await confirmDialog(
+      "El script es para otro motor",
+      `«${script.name}» está ${guess.source === "override" ? "marcado" : "escrito"} para ${engines}, y ${others.length === 1 ? "el destino" : "los destinos"} ${where} no ${others.length === 1 ? "lo es" : "lo son"}. Puede fallar o hacer otra cosa.`,
+      "Ejecutar de todos modos",
+      true,
+    );
+    if (!ok) return;
   }
   setLibrary("scripts", (s) => s.id === id, { targets: valid, usedAt: Date.now() });
   void persist();

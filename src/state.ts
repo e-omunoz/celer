@@ -229,6 +229,8 @@ export type SavedTab = SavedSqlTab | SavedTableTab;
 export interface MenuItem {
   label?: string;
   hint?: string;
+  /** A tooltip (why it is greyed out: «No disponible en SQLite»). */
+  title?: string;
   icon?: string;
   danger?: boolean;
   disabled?: boolean;

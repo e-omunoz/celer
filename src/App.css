@@ -944,6 +944,15 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .lib-engine { display: inline-flex; align-items: center; gap: 3px; height: 16px; padding: 0 5px; border-radius: 8px; font-size: 10.5px; color: var(--text-muted); border: 1px solid var(--border); background: var(--surface); }
 .lib-engine.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
 .lib-engine.guess { border-style: dashed; }
+.lib-engine .engine-icon { flex: none; }
+.lib-engine-warn { font-size: 10px; }
+.history-item small .lib-engine { margin-right: 2px; }
+.runon-engine-warn { grid-column: 1 / -1; order: 10; }
+.snippet-meta { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.snippet-filter { margin: 0 0 10px; }
+.snippet-engine { flex: 0 0 150px !important; }
+.pal-item.disabled { opacity: 0.5; cursor: default; }
+.menu-item:disabled kbd { font-family: var(--sans); }
 .dialog.runon-dialog { width: min(620px, calc(100vw - 32px)); }
 .runon-desc { white-space: pre-wrap; }
 .runon-facts { margin: -4px 0 12px; }

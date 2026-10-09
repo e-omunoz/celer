@@ -23,6 +23,17 @@ All notable changes to Celer are documented here. The format follows
     press Ctrl+Enter on it.
   - The library file moves to version 3; older files and `.sql` bundles load unchanged, and bundles now carry the
     description, engine and parameters (favourites and targets stay on each machine).
+- **Engine compatibility at a glance** (#113): library scripts, your templates and history entries show the icons of
+  the engines they are written for (or «SQL estándar»), guessed from the SQL's dialect (TOP, GETDATE(), brackets,
+  ILIKE, `::`, backticks, FIRST/SKIP, NVL, PRAGMA, LIMIT…) or from the connection they were saved or run with, and
+  settable by hand («Genérico / SQL estándar» included). A mismatch with the active console's engine shows in yellow;
+  generic ODBC is never flagged. «Solo los compatibles con esta conexión» filters the library, the history and the
+  template settings, and other-engine templates sink in the editor's suggestions. «Ejecutar en…» warns per target and
+  asks before running a script marked or written for another engine.
+- **Features an engine lacks are greyed out** with «No disponible en <motor>» instead of failing on click (one support
+  table): the execution plan (not on Informix or generic ODBC), the real plan (PostgreSQL and MariaDB), server
+  activity (not on SQLite or generic ODBC), and the E-R diagram and schema comparison (not on generic ODBC), in the
+  console's toolbar, the explorer's menus, the palette and the shortcuts.
 
 ## [2.2.0] - 2026-10-09
 

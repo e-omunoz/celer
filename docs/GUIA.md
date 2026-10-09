@@ -146,7 +146,8 @@ en una tabla o una exportación en curso, lo pregunta antes.
 - **Autocompletado**: tablas después de `FROM`/`JOIN`, columnas de las tablas de la sentencia en el resto, y
   `alias.` o `esquema.` acotan la lista.
 - **Plantillas**: escribe `sel`, `selw`, `ins`, `upd`, `cte`… y pulsa Tab; los campos enlazados se rellenan a la vez.
-  Las tuyas se crean en *Ajustes › Plantillas*.
+  Las tuyas se crean en *Ajustes › Plantillas*, donde puedes indicar su motor (o dejar que Celer lo detecte); las de
+  otro motor salen en las sugerencias marcadas *otro motor* y al final.
 - **Parámetros**: `:nombre`, `?` o `${nombre}` en una consulta abren un diálogo para darles valor antes de ejecutar.
 - **UPDATE / DELETE sin WHERE** se subrayan mientras escribes y piden confirmación al ejecutarlos.
 - **Transacciones**: *Auto* confirma cada sentencia; en *Manual* aparecen Commit y Rollback
@@ -262,6 +263,29 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
 
 La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas, y los
 `.sql` exportados antes se importan igual que siempre.
+
+### Motor de cada script, plantilla y consulta
+
+Los scripts de la biblioteca, tus plantillas y las consultas del historial llevan los iconos de los motores para los
+que están escritos, o *SQL estándar* si no tienen nada propio de uno:
+
+- Celer lo **detecta** por el dialecto: `TOP`, `GETDATE()`, `[corchetes]` o `@@` son de SQL Server; `ILIKE`, `::tipo`
+  o `$$` de PostgreSQL; las comillas invertidas (`` `nombre` ``), `AUTO_INCREMENT` o `SHOW TABLES` de MySQL y MariaDB; `FIRST`,
+  `SKIP`, `NVL` o `TODAY` de Informix; `PRAGMA` o `sqlite_master` de SQLite; `LIMIT` vale para PostgreSQL, MySQL y
+  SQLite. Si el SQL no tiene nada propio, cuenta la conexión con la que se guardó o se ejecutó (borde discontinuo).
+  Lo que hay en comentarios y cadenas no cuenta.
+- Puedes **fijarlo** a mano en los detalles del script o de la plantilla, también como *Genérico / SQL estándar*.
+- Si no coincide con el motor de la consola activa, la etiqueta se pone en amarillo con *otro motor*. Una conexión
+  ODBC genérica puede ser cualquier motor: con ella no se avisa nunca.
+- **Filtro** *Solo los compatibles con esta conexión*: en el menú **⋯** de la biblioteca (y en la paleta), con el
+  embudo del historial y con la casilla de *Ajustes › Plantillas*.
+- **Ejecutar en…** avisa en cada destino de otro motor y, si el script está marcado o escrito para otro, pide
+  confirmación antes de ejecutar.
+
+Las funciones que un motor no tiene salen en gris con *No disponible en …* en lugar de fallar al pulsarlas: el plan
+de ejecución (no en Informix ni en ODBC genérico), el plan real (solo PostgreSQL y MariaDB), la actividad del servidor
+(no en SQLite ni en ODBC genérico) y el diagrama E-R y la comparación de esquemas (no en ODBC genérico). La comparación
+de datos y las herramientas MCP funcionan en todos.
 
 ## Asistente de IA y servidor MCP
 

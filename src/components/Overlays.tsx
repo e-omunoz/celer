@@ -83,6 +83,7 @@ export function ContextMenu() {
                 class="menu-item"
                 classList={{ danger: item.danger, active: active() === index() }}
                 disabled={item.disabled}
+                title={item.title}
                 onMouseEnter={() => setActive(index())}
                 onClick={() => {
                   closeMenu();
@@ -144,6 +145,8 @@ interface PaletteItem {
   keys?: string;
   run: () => void;
   score: number;
+  /** Shown greyed, with `hint` saying why (a feature the engine does not have). */
+  disabled?: boolean;
 }
 
 function fuzzy(text: string, query: string): number {
@@ -263,7 +266,9 @@ export function Palette() {
         if (command.enabled && !command.enabled()) continue;
         const score = fuzzy(command.label, q) || fuzzy(`${command.group} ${command.label}`, q) * 0.7;
         if (!score) continue;
-        out.push({ key: `a:${command.id}`, label: command.label, detail: command.group, hint: command.hint, group: "Acciones", icon: "action", keys: command.keys, run: command.run, score });
+        // Not on this engine: listed greyed with the reason, below what can run.
+        const unsupported = command.unsupported?.() ?? null;
+        out.push({ key: `a:${command.id}`, label: command.label, detail: unsupported ?? command.group, hint: unsupported ?? command.hint, group: "Acciones", icon: "action", keys: command.keys, run: command.run, score: unsupported ? score * 0.5 : score, disabled: Boolean(unsupported) });
       }
     }
     out.sort((a, b) => b.score - a.score);
@@ -280,7 +285,7 @@ export function Palette() {
   }
 
   function choose(item: PaletteItem | undefined) {
-    if (!item) return;
+    if (!item || item.disabled) return;
     close();
     item.run();
   }
@@ -335,7 +340,7 @@ export function Palette() {
                   <Show when={index() === 0 || items()[index() - 1].group !== item.group}>
                     <div class="pal-group">{item.group}</div>
                   </Show>
-                  <button type="button" class="pal-item" classList={{ active: active() === index() }} title={item.hint} onMouseMove={() => setActive(index())} onClick={() => choose(item)}>
+                  <button type="button" class="pal-item" classList={{ active: active() === index(), disabled: item.disabled }} aria-disabled={item.disabled} title={item.hint} onMouseMove={() => setActive(index())} onClick={() => choose(item)}>
                     <Show when={item.icon !== "action"} fallback={<span class="pal-action-dot" />}>
                       <ObjIcon kind={item.icon} size={15} />
                     </Show>

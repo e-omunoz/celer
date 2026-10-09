@@ -34,6 +34,7 @@ import { createEffect, on, onCleanup, onMount, untrack } from "solid-js";
 import { chordsFor, codeMirrorKey } from "../keymap";
 import { splitSql } from "../sql";
 import { unfilteredWrites, type Snippet } from "../snippets";
+import { compatibility, guessEngines } from "../engineCompat";
 import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
 import type { CompletionTable, DbKind } from "../types";
 
@@ -162,7 +163,16 @@ function snippetSource(get: () => { snippets: Snippet[]; dialect: string }) {
     const typed = word.text.toLowerCase();
     const options = get()
       .snippets.filter((s) => s.name.toLowerCase().startsWith(typed))
-      .map((s) => snippetCompletion(s.body, { label: s.name, detail: `plantilla · ${s.description}`, type: "text", boost: s.name.toLowerCase() === typed ? 20 : 4 }));
+      .map((s) => {
+        // A template for another engine is still offered, marked and below the others.
+        const other = compatibility(guessEngines(s.body, { override: s.engine }), get().dialect as DbKind) === "warn";
+        return snippetCompletion(s.body, {
+          label: s.name,
+          detail: `plantilla · ${s.description}${other ? " · otro motor" : ""}`,
+          type: "text",
+          boost: (s.name.toLowerCase() === typed ? 20 : 4) - (other ? 10 : 0),
+        });
+      });
     return options.length ? { from: word.from, options, validFor: /^[\w]*$/ } : null;
   };
 }
