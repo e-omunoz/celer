@@ -4,9 +4,13 @@ type Block =
   | { type: "code"; lang: string; text: string }
   | { type: "heading"; level: number; text: string }
   | { type: "list"; ordered: boolean; items: string[] }
-  | { type: "para"; text: string };
+  | { type: "para"; text: string }
+  | { type: "rule" };
 
-/** Splits Markdown into blocks. Handles what assistant answers use: fences, headings, lists, paragraphs. */
+/** A horizontal rule: `---`, `***` or `___` (spaces between allowed). Before lists, so `- - -` is a rule. */
+const RULE = /^ {0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$/;
+
+/** Splits Markdown into blocks. Handles what assistant answers and release notes use: fences, headings, lists, rules, paragraphs. */
 export function parseBlocks(source: string): Block[] {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const blocks: Block[] = [];
@@ -28,10 +32,15 @@ export function parseBlocks(source: string): Block[] {
       i++;
       continue;
     }
+    if (RULE.test(line)) {
+      blocks.push({ type: "rule" });
+      i++;
+      continue;
+    }
     if (/^\s*([-*]|\d+[.)])\s+/.test(line)) {
       const ordered = /^\s*\d+[.)]\s+/.test(line);
       const items: string[] = [];
-      while (i < lines.length && /^\s*([-*]|\d+[.)])\s+/.test(lines[i])) {
+      while (i < lines.length && /^\s*([-*]|\d+[.)])\s+/.test(lines[i]) && !RULE.test(lines[i])) {
         let item = lines[i].replace(/^\s*([-*]|\d+[.)])\s+/, "");
         i++;
         // Indented lines that are not items themselves continue the item (wrapped changelog entries).
@@ -46,7 +55,7 @@ export function parseBlocks(source: string): Block[] {
       continue;
     }
     const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^```/.test(lines[i]) && !/^#{1,4}\s/.test(lines[i]) && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i])) para.push(lines[i++]);
+    while (i < lines.length && lines[i].trim() && !/^```/.test(lines[i]) && !/^#{1,4}\s/.test(lines[i]) && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i]) && !RULE.test(lines[i])) para.push(lines[i++]);
     blocks.push({ type: "para", text: para.join(" ") });
   }
   return blocks;
@@ -91,6 +100,9 @@ export function Markdown(props: { text: string; code?: (block: { lang: string; t
             </Match>
             <Match when={block.type === "para"}>
               <p><Inline text={(block as { text: string }).text} /></p>
+            </Match>
+            <Match when={block.type === "rule"}>
+              <hr />
             </Match>
           </Switch>
         )}

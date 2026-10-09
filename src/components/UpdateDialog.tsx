@@ -3,6 +3,7 @@ import { Match, Show, Switch } from "solid-js";
 import { Gib, type GibMood } from "../gib/Gib";
 import { saveSettings, state } from "../state";
 import { checkForUpdates, downloadUpdate, formatMb, installLater, installUpdate, openReleasePage, setUpdate, skipVersion, update } from "../update";
+import { updateNotes } from "../updateNotes";
 import { Dialog } from "./Modals";
 import { Markdown } from "./Markdown";
 
@@ -12,6 +13,8 @@ export function UpdateDialog() {
   const close = () => {
     if (!busy()) setUpdate({ dialogOpen: false });
   };
+  /** What is new, without the download table the release body ends with (this dialog downloads the package). */
+  const notes = () => updateNotes(info()?.notes ?? "");
   const pct = () => (update.total ? Math.min(100, (update.done / update.total) * 100) : 0);
   const mood = (): GibMood => {
     switch (update.status) {
@@ -66,9 +69,9 @@ export function UpdateDialog() {
         </div>
       </div>
 
-      <Show when={info()?.available && info()!.notes.trim()}>
+      <Show when={info()?.available && notes()}>
         <div class="upd-notes">
-          <Markdown text={info()!.notes} />
+          <Markdown text={notes()} />
         </div>
       </Show>
 
@@ -99,42 +102,55 @@ export function UpdateDialog() {
         </p>
       </Show>
 
+      {/* Secondary actions on the left, the main ones on the right; when both do not fit, the main ones wrap to a row
+          of their own instead of sticking out of the dialog. */}
       <footer>
         <Switch>
           <Match when={update.status === "available"}>
-            <button type="button" class="btn ghost-btn" onClick={() => void skipVersion()}>Omitir esta versión</button>
-            <button type="button" class="btn" onClick={() => void openReleasePage()}><ExternalLink size={13} /> Ver en GitHub</button>
-            <span class="spacer" />
-            <button type="button" class="btn" onClick={close}>Más tarde</button>
-            <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void downloadUpdate()}>
-              <ArrowDownToLine size={14} /> {info()?.assetUrl ? "Actualizar" : "Descargar desde GitHub"}
-            </button>
+            <div class="upd-aside">
+              <button type="button" class="btn ghost-btn" onClick={() => void skipVersion()}>Omitir esta versión</button>
+              <button type="button" class="btn" onClick={() => void openReleasePage()}><ExternalLink size={13} /> Ver en GitHub</button>
+            </div>
+            <div class="upd-actions">
+              <button type="button" class="btn" onClick={close}>Más tarde</button>
+              <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void downloadUpdate()}>
+                <ArrowDownToLine size={14} /> {info()?.assetUrl ? "Actualizar" : "Descargar desde GitHub"}
+              </button>
+            </div>
           </Match>
           <Match when={update.status === "downloading"}>
-            <span class="spacer" />
-            <button type="button" class="btn" disabled>Descargando…</button>
+            <div class="upd-actions">
+              <button type="button" class="btn" disabled>Descargando…</button>
+            </div>
           </Match>
           <Match when={update.status === "ready"}>
-            <span class="spacer" />
-            <button type="button" class="btn" onClick={installLater}>Al cerrar Celer</button>
-            <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void installUpdate()}>
-              <RotateCcw size={14} /> Instalar y reiniciar
-            </button>
+            <div class="upd-actions">
+              <button type="button" class="btn" onClick={installLater}>Al cerrar Celer</button>
+              <button type="button" class="btn primary" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => void installUpdate()}>
+                <RotateCcw size={14} /> Instalar y reiniciar
+              </button>
+            </div>
           </Match>
           <Match when={update.status === "error"}>
-            <button type="button" class="btn" onClick={() => void openReleasePage()}><ExternalLink size={13} /> Descargar desde GitHub</button>
-            <span class="spacer" />
-            <button type="button" class="btn" onClick={close}>Cerrar</button>
-            <button type="button" class="btn primary" onClick={() => void (info()?.available ? downloadUpdate() : checkForUpdates(true))}><RefreshCw size={14} /> Reintentar</button>
+            <div class="upd-aside">
+              <button type="button" class="btn" onClick={() => void openReleasePage()}><ExternalLink size={13} /> Descargar desde GitHub</button>
+            </div>
+            <div class="upd-actions">
+              <button type="button" class="btn" onClick={close}>Cerrar</button>
+              <button type="button" class="btn primary" onClick={() => void (info()?.available ? downloadUpdate() : checkForUpdates(true))}><RefreshCw size={14} /> Reintentar</button>
+            </div>
           </Match>
           <Match when={true}>
-            <label class="toggle-line">
-              <input type="checkbox" checked={state.settings.checkUpdates} onChange={(event) => void saveSettings({ checkUpdates: event.currentTarget.checked })} />
-              <span>Buscar actualizaciones al iniciar</span>
-            </label>
-            <span class="spacer" />
-            <button type="button" class="btn" disabled={update.status === "checking"} onClick={() => { setUpdate({ status: "idle" }); void checkForUpdates(true); }}><RefreshCw size={14} /> Comprobar de nuevo</button>
-            <button type="button" class="btn primary" onClick={close}>Cerrar</button>
+            <div class="upd-aside">
+              <label class="toggle-line">
+                <input type="checkbox" checked={state.settings.checkUpdates} onChange={(event) => void saveSettings({ checkUpdates: event.currentTarget.checked })} />
+                <span>Buscar actualizaciones al iniciar</span>
+              </label>
+            </div>
+            <div class="upd-actions">
+              <button type="button" class="btn" disabled={update.status === "checking"} onClick={() => { setUpdate({ status: "idle" }); void checkForUpdates(true); }}><RefreshCw size={14} /> Comprobar de nuevo</button>
+              <button type="button" class="btn primary" onClick={close}>Cerrar</button>
+            </div>
           </Match>
         </Switch>
       </footer>
