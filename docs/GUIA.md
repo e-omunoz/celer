@@ -211,7 +211,9 @@ UPSERT/MERGE, DELETE, DROP y su DDL.
   a ella). *Ampliar un nivel* añade las relacionadas con todas las que se ven; el **+N** de una tabla añade solo las
   suyas; el botón de mira que aparece al pasar el ratón por una tabla centra el diagrama en ella (también en el de un
   esquema entero), y *Todo el esquema* vuelve a verlas todas. Para saber qué tablas apuntan a la tuya, Celer lee las
-  claves de todas las del esquema (sin sus columnas), así que en esquemas muy grandes tarda un poco.
+  claves foráneas de todo el esquema en una sola consulta al catálogo, y las columnas solo de las tablas que se ven:
+  también en esquemas de miles de tablas se abre al momento. En una conexión ODBC genérica el diagrama abarca todas
+  las tablas de la fuente (su carpeta *Tablas*), y sus claves salen de `SQLForeignKeys`.
 - **Comparar esquemas**: en el menú de un esquema, *Marcar para comparar*; después, en el de otro (de la misma
   conexión o de otra), *Comparar con…*. Verás las tablas que solo están en un lado y las columnas con otro tipo o
   nulabilidad. *Script para igualar el destino* abre en una consola del destino el SQL que lo dejaría como el origen,

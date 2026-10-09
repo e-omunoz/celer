@@ -92,6 +92,15 @@ export interface ObjectRef {
   kind: string;
 }
 
+/** A foreign key of a schema, read with all the others in one catalog query (E-R diagram). Names unquoted. */
+export interface SchemaForeignKey {
+  name: string;
+  table: ObjectRef;
+  columns: string[];
+  target: ObjectRef;
+  targetColumns: string[];
+}
+
 export interface TableColumn {
   name: string;
   typeName: string;

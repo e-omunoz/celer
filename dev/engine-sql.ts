@@ -18,10 +18,23 @@ interface Table {
   rows: Cell[][];
 }
 
+/** A foreign key as the driver's schema_foreign_keys reads it (#98), its names quoted for the dialect. */
+interface ForeignKeyShape {
+  name: string;
+  qualified: string;
+  columns: string[];
+  targetQualified: string;
+  targetColumns: string[];
+  /** Rows of its table with every key column set: each must find its referenced row. */
+  rows: number;
+}
+
 interface Shape {
   kind: DbKind;
-  /** Seed table (see engine_tests.rs): id, nombre, activo, alta, importe, notas, parent_id. */
-  t: Table;
+  /** Seed table (see engine_tests.rs): id, nombre, activo, alta, importe, notas, parent_id. Absent: only `fks`. */
+  t?: Table;
+  /** The schema's foreign keys read in one catalog query: the E-R diagram draws one edge per key and column pair. */
+  fks?: ForeignKeyShape[];
   /** A table of date and time columns (first row: the values to find and write back). */
   dt?: Table;
   /** Schema comparison: source tables, target tables, the source's DDL, the target schema. */
@@ -38,8 +51,22 @@ interface Statement {
 }
 
 const shape = JSON.parse(readFileSync(0, "utf8").replace(/^﻿/, "")) as Shape;
-const { kind, t } = shape;
+const { kind } = shape;
 const out: Statement[] = [];
+
+// ---------------------------------------------------------------- the schema's foreign keys (E-R diagram, #98)
+// Each key joins its table to the referenced one column pair by column pair, in the order the catalog query gave:
+// a column out of order or of another table fails the join or finds fewer rows.
+for (const fk of shape.fks ?? []) {
+  if (!fk.columns.length || fk.columns.length !== fk.targetColumns.length) throw new Error(`foreign key ${fk.name}: ${JSON.stringify(fk)}`);
+  const on = fk.columns.map((c, i) => `c.${c} = p.${fk.targetColumns[i]}`).join(" AND ");
+  out.push({ name: `fk ${fk.name} joins its tables`, sql: `SELECT c.* FROM ${fk.qualified} c JOIN ${fk.targetQualified} p ON ${on}`, rows: fk.rows });
+}
+if (!shape.t) {
+  process.stdout.write(JSON.stringify(out, null, 1));
+  process.exit(0);
+}
+const t: Table = shape.t;
 // The table as the builders take it (a table tab's fields).
 const tab = { columnsMeta: t.columns, quoted: t.quoted, qualified: t.qualified };
 const col = (name: string) => t.columns.findIndex((c) => c.name.toLowerCase() === name);

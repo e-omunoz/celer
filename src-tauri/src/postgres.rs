@@ -33,7 +33,7 @@ use parking_lot::Mutex;
 use postgres_native_tls::MakeTlsConnector;
 
 use crate::model::*;
-use crate::session::{Canceller, Driver};
+use crate::session::{Canceller, Driver, FkColumn};
 
 const BINARY_PREVIEW: usize = 4096;
 const DEFAULT_PORT: u16 = 5432;
@@ -1100,6 +1100,21 @@ impl Driver for PostgresDriver {
         }
     }
 
+    /// One catalog query: pg_constraint's keys (contype 'f') of the schema's tables (the explorer's: no partitions),
+    /// one row per column pair in key order.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        let rows = self.meta(db, SCHEMA_FKS_SQL, &[schema])?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| FkColumn {
+            key: s(r, 0),
+            name: s(r, 1),
+            table: ObjectRef::new(db, schema, &s(r, 2), "table"),
+            column: s(r, 3),
+            target: ObjectRef::new(db, &s(r, 4), &s(r, 5), "table"),
+            target_column: s(r, 6),
+        })))
+    }
+
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {
         let rows = self.columns_rows(obj)?;
         Ok(rows
@@ -1453,6 +1468,20 @@ fn any_text(row: &::postgres::Row, i: usize) -> Option<String> {
     }
     None
 }
+
+/// Every foreign key of a schema ($1), one row per column pair: constraint oid, name, table, column, referenced schema,
+/// table and column.
+pub const SCHEMA_FKS_SQL: &str = "SELECT co.oid::text, co.conname::text, c.relname::text, a.attname::text, rn.nspname::text, rc.relname::text, ra.attname::text \
+     FROM pg_catalog.pg_constraint co \
+     JOIN pg_catalog.pg_class c ON c.oid = co.conrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     JOIN pg_catalog.pg_class rc ON rc.oid = co.confrelid \
+     JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace \
+     CROSS JOIN LATERAL unnest(co.conkey, co.confkey) WITH ORDINALITY k(attnum, refnum, ord) \
+     JOIN pg_catalog.pg_attribute a ON a.attrelid = co.conrelid AND a.attnum = k.attnum \
+     JOIN pg_catalog.pg_attribute ra ON ra.attrelid = co.confrelid AND ra.attnum = k.refnum \
+     WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relkind IN ('r','p','f') AND NOT c.relispartition \
+     ORDER BY c.relname, co.conname, co.oid, k.ord";
 
 fn s(r: &[Option<String>], i: usize) -> String {
     r.get(i).cloned().flatten().unwrap_or_default()

@@ -6,6 +6,17 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **The E-R diagram reads a schema's foreign keys in one catalog query** (#98) instead of asking table by table: the
+  diagram of one table no longer shows «Buscando las relaciones de … n/1557» on large schemas. On a 1,500-table
+  Informix schema it opens in about 0.1 s over JDBC and DRDA (about 6 s before on a local server, much more over a
+  slow link); the whole-schema diagram reads its keys the same way. Every engine has its own query (PostgreSQL,
+  MySQL/MariaDB, SQL Server, Informix, SQLite; `SQLForeignKeys` on generic ODBC), and the engine tests check it gives
+  exactly the keys read table by table.
+- **E-R diagram of a table on a generic ODBC connection**: it opens on the source's tables (it could not find a
+  table folder before), and the explorer shows each table's foreign keys under «Claves foráneas».
+- SQLite: a key declared as `REFERENCES t` without columns shows t's primary-key columns instead of nothing.
+
 ### Fixed
 - **SQL Server `PRINT` and low-severity `RAISERROR` messages are shown** (#67): `PRINT 'hola'; SELECT 1` shows «hola»
   in the Output area next to the result, as SSMS does, and so do `RAISERROR('…', 0, 1) WITH NOWAIT` from a procedure,

@@ -16,6 +16,7 @@ import type {
   MetaNode,
   ObjectRef,
   ResultSet,
+  SchemaForeignKey,
   SessionInfo,
   TableColumn,
 } from "./types";
@@ -312,6 +313,30 @@ function meta(db: Database, path: string[]): MetaNode[] {
   return [];
 }
 
+/** Every foreign key of a schema ([database, schema]) in one query, as the core's schema_foreign_keys answers. */
+function schemaForeignKeys(db: Database, path: string[]): SchemaForeignKey[] {
+  const [dbName = "main", schema = "main"] = path;
+  const sch = schemaName(dbName, schema);
+  const rows = query(
+    db,
+    `SELECT m.name, f.id, f."table", f."from", f."to" FROM ${quoteIdent(sch)}.sqlite_schema m, pragma_foreign_key_list(m.name) f ` +
+      `WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, f.id, f.seq`,
+  );
+  const keys = new Map<string, SchemaForeignKey>();
+  for (const row of rows) {
+    const [table, id, target] = [text(row[0]), text(row[1]), text(row[2])];
+    const mapKey = `${table}\u0000${id}`;
+    let key = keys.get(mapKey);
+    if (!key) {
+      key = { name: `fk_${table}_${target}_${id}`, table: { database: dbName, schema, name: table, kind: "table" }, columns: [], target: { database: dbName, schema: "main", name: target, kind: "table" }, targetColumns: [] };
+      keys.set(mapKey, key);
+    }
+    key.columns.push(text(row[3]));
+    key.targetColumns.push(text(row[4]));
+  }
+  return [...keys.values()];
+}
+
 function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
@@ -597,6 +622,9 @@ export function createDemoBackend(): Backend {
     },
     async metaChildren(sessionId, path) {
       return meta(requireSession(sessionId).db, path);
+    },
+    async schemaForeignKeys(sessionId, path) {
+      return schemaForeignKeys(requireSession(sessionId).db, path);
     },
     async tableColumns(sessionId, obj) {
       return tableColumns(requireSession(sessionId).db, obj);

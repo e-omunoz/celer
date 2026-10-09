@@ -32,7 +32,7 @@ use ::mysql::{Conn, Opts, OptsBuilder, SslOpts, Value};
 use anyhow::{anyhow, bail, Result};
 
 use crate::model::*;
-use crate::session::{first_keyword, Canceller, Driver};
+use crate::session::{first_keyword, Canceller, Driver, FkColumn};
 
 const BINARY_PREVIEW: usize = 4096;
 /// Filas leídas por adelantado como máximo (además de los búferes del socket).
@@ -190,6 +190,18 @@ impl ColMeta {
             _ => ColKind::Other,
         }
     }
+}
+
+/// Every foreign key of a schema (`db`, already a literal), one row per column pair in key order: constraint, table,
+/// column, referenced schema, table and column. Only the base tables the explorer lists (not views).
+fn schema_fks_sql(db: &str) -> String {
+    format!(
+        "SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME \
+         FROM information_schema.KEY_COLUMN_USAGE k \
+         JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = k.TABLE_SCHEMA AND t.TABLE_NAME = k.TABLE_NAME \
+         WHERE k.TABLE_SCHEMA = {db} AND k.REFERENCED_TABLE_NAME IS NOT NULL AND t.TABLE_TYPE IN ('BASE TABLE','SYSTEM VERSIONED') \
+         ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
+    )
 }
 
 fn column_info(c: &::mysql::Column, m: &ColMeta) -> ColumnInfo {
@@ -1424,6 +1436,26 @@ impl Driver for MysqlDriver {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// One catalog query: information_schema.KEY_COLUMN_USAGE of the schema's base tables (the explorer's), one row
+    /// per column pair in key order. The referenced table keeps its own database (a key may point to another one).
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        self.release_cursor();
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        let rows = self.query(&schema_fks_sql(&self.lit(db)))?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| {
+            let ref_db = cell_str(&r[3]);
+            let ref_db = if ref_db.is_empty() { db.to_string() } else { ref_db };
+            FkColumn {
+                key: format!("{}\u{0}{}", cell_str(&r[1]), cell_str(&r[0])),
+                name: cell_str(&r[0]),
+                table: ObjectRef::new(db, schema, &cell_str(&r[1]), "table"),
+                column: cell_str(&r[2]),
+                target: ObjectRef::new(&ref_db, &ref_db, &cell_str(&r[4]), "table"),
+                target_column: cell_str(&r[5]),
+            }
+        })))
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {

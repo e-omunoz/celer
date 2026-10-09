@@ -100,6 +100,26 @@ Each driver declares what it supports so the UI only shows what works:
 | Informix Client SDK, other ODBC drivers | Installed by the user | Vendor licences |
 | SQLite, DuckDB | Bundled (compiled in) | Public domain / MIT |
 
+## A schema's foreign keys in one query
+
+The E-R diagram reads every foreign key of a schema at once (`Driver::schema_foreign_keys`, command
+`schema_foreign_keys`): constraint, table and columns, referenced table and columns, in key order, names unquoted.
+One catalog query per engine, limited to the tables of the explorer's Tablas folder:
+
+| Engine | Catalog |
+|---|---|
+| PostgreSQL | `pg_constraint` (`contype = 'f'`) with `unnest(conkey, confkey) WITH ORDINALITY`; no partitions |
+| MySQL / MariaDB | `information_schema.KEY_COLUMN_USAGE` (base and system-versioned tables) |
+| SQL Server, Fabric Warehouse | `sys.foreign_keys` + `sys.foreign_key_columns`; Synapse dedicated has none (no folder either) |
+| Informix (DRDA and JDBC) | `sysconstraints` + `sysreferences` + `sysindexes` + `syscolumns`, both sides in one `UNION ALL`, columns ordered by the index parts |
+| SQLite | `pragma_foreign_key_list` joined to `sqlite_schema`; `REFERENCES t` without columns resolved to t's primary key |
+| Generic ODBC | `SQLForeignKeys` with no table where the driver allows it, otherwise table by table (the explorer gets a Claves foráneas folder) |
+
+`session::per_table_foreign_keys` reads the same through each table's "fks" folder (what the diagram did before,
+and the default for a driver without its own query); the engine tests compare both on every engine and run the join
+of each key's tables (`dev/engine-sql.ts`). On a 1,500-table Informix schema the diagram of one table goes from about
+6 s locally (one call per table, far more over a slow link) to about 0.1 s (`informix_large_schema_fks`).
+
 ## SQL Server: the patched `tiberius`
 
 Celer builds against its own copy of `tiberius` 0.13.0 in `src-tauri/vendor/tiberius` (MIT / Apache-2.0, licences

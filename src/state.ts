@@ -17,6 +17,7 @@ import type {
   MetaNode,
   ObjectRef,
   ResultSet,
+  SchemaForeignKey,
   Settings,
   TableColumn,
   ThemeName,
@@ -738,34 +739,74 @@ export interface ErState {
 }
 
 const ER_LIMIT = 250;
-/** Around one table only the keys of each table are read (one query, not two): many more tables fit. */
+/** Only when the schema's keys cannot be read in one query: around one table, the keys of up to this many tables. */
 const ER_SCAN_LIMIT = 2000;
 let erToken = 0;
 
 const erId = (obj: { schema: string; name: string }) => `${obj.schema}.${obj.name}`;
 
-/** The path openErDiagram takes for a table's schema: [database, schema], or [database] on Informix and ODBC. */
+/**
+ * The path openErDiagram takes for a table's schema: [database, schema], [database] on Informix, and the root on a
+ * generic ODBC source (its explorer lists every table of the source in one "Tablas" folder).
+ */
 export function erSchemaPath(connId: string, obj: ObjectRef, database = ""): string[] {
   const db = obj.database || database || "main";
   const kind = kindOf(connId);
-  return kind === "informix" || kind === "odbc" ? [db] : [db, obj.schema || "main"];
+  if (kind === "odbc") return [];
+  return kind === "informix" ? [db] : [db, obj.schema || "main"];
 }
 
 function erTable(obj: ObjectRef, columns: TableColumn[], fkCols: Set<string>): ErTable {
   return { id: erId(obj), name: obj.name, schema: obj.schema, columns: columns.map((c) => ({ name: c.name, type: c.typeName, pk: c.primaryKey, fk: fkCols.has(c.name), nullable: c.nullable })) };
 }
 
+/** The diagram's edge for a foreign key; its referenced table goes into `objects` (to open it or read its columns). */
+function erEdge(fk: SchemaForeignKey, objects: Record<string, ObjectRef>): ErEdge {
+  const target = { ...fk.target, database: fk.target.database || fk.table.database };
+  objects[erId(target)] ??= target;
+  return { name: fk.name, from: erId(fk.table), to: erId(target), fromCols: fk.columns, toCols: fk.targetColumns };
+}
+
+/**
+ * The foreign keys of the tables in `nodes` (of the schema at `path`): every key of the schema in one catalog query
+ * (#98). If the driver cannot (an old server, a catalog it does not know), the keys of each table in turn, as before,
+ * with progress, up to `limit` tables. `read`: how many of `nodes` had their keys read. Null when the diagram was
+ * closed or replaced meanwhile.
+ */
+async function erKeys(sessionId: string, path: string[], nodes: MetaNode[], limit: number, current: () => boolean): Promise<{ keys: SchemaForeignKey[]; read: number } | null> {
+  const ids = new Set(nodes.map((node) => erId(node.obj!)));
+  try {
+    const keys = await api().schemaForeignKeys(sessionId, path);
+    if (!current()) return null;
+    return { keys: keys.filter((fk) => fk.columns.length && ids.has(erId(fk.table))), read: nodes.length };
+  } catch {
+    if (!current()) return null;
+  }
+  const some = nodes.slice(0, limit);
+  setState("er", { total: some.length, done: 0, truncated: nodes.length - some.length });
+  const keys: SchemaForeignKey[] = [];
+  for (const [i, node] of some.entries()) {
+    const obj = node.obj!;
+    const fkNodes = await api().metaChildren(sessionId, [...node.path, "fks"]).catch(() => [] as MetaNode[]);
+    if (!current()) return null;
+    for (const fk of parseForeignKeys(fkNodes, obj).filter((fk) => fk.columns.length)) keys.push({ name: fk.name, table: obj, columns: fk.columns, target: fk.target, targetColumns: fk.targetColumns });
+    if (i % 16 === 15 || i === some.length - 1) setState("er", { done: i + 1 });
+  }
+  return { keys, read: some.length };
+}
+
 /**
  * Loads the tables of a schema (path [database, schema], or [database] on engines without schemas) with their
- * columns and foreign keys, on a side session, and shows the diagram as it arrives. With `focus`, the diagram of
- * that table and the tables its foreign keys link it with, both ways: what points to a table is only known from
- * the keys of every table of its schema (there is no per-table query for it), so those are read first, without
- * the columns, which are read only for the tables on show.
+ * columns and foreign keys, on a side session, and shows the diagram as it arrives. The keys of the whole schema come
+ * first, in one query. With `focus`, the diagram of that table and the tables its foreign keys link it with, both
+ * ways (what points to a table is only known from the keys of the whole schema), with the columns read only for the
+ * tables on show.
  */
 export async function openErDiagram(connId: string, path: string[], focus?: ObjectRef) {
   const token = ++erToken;
   // "main · main" (SQLite, MySQL: database and schema share the name) reads as just "main".
-  const title = path.filter((part, i) => part !== path[i - 1]).join(" · ");
+  // A generic ODBC source (the root path) is named after its connection.
+  const title = path.filter((part, i) => part !== path[i - 1]).join(" · ") || connectionById(connId)?.name || "Tablas";
   const centre = focus ? erId(focus) : "";
   setState("er", { connId, title, path, loading: true, done: 0, total: 0, error: "", truncated: 0, tables: [], edges: [], objects: {}, focus: centre, shown: centre ? [centre] : [], whole: false });
   const current = () => token === erToken && state.er !== null;
@@ -790,30 +831,31 @@ export async function openErDiagram(connId: string, path: string[], focus?: Obje
     const all = (await api().metaChildren(opened.sessionId, folder.path)).filter((node) => node.obj?.kind === "table");
     if (!current()) return;
     if (centre) {
-      await scanAround(opened.sessionId, all, centre, current);
+      await scanAround(opened.sessionId, path, all, centre, current);
       return;
     }
     const nodes = all.slice(0, ER_LIMIT);
-    setState("er", { total: nodes.length, truncated: all.length - nodes.length });
-    const tables: ErTable[] = [];
-    const edges: ErEdge[] = [];
+    setState("er", { total: nodes.length + 1, truncated: all.length - nodes.length });
+    const found = await erKeys(opened.sessionId, path, nodes, nodes.length, current);
+    if (!found) return;
     const objects: Record<string, ObjectRef> = {};
+    const edges = found.keys.map((fk) => erEdge(fk, objects));
+    const fkCols = new Map<string, Set<string>>();
+    for (const edge of edges) for (const col of edge.fromCols) fkCols.set(edge.from, (fkCols.get(edge.from) ?? new Set()).add(col));
+    setState("er", { edges, total: nodes.length + 1, done: 1, truncated: all.length - nodes.length });
+    // Then the columns of each table, shown as they come.
+    const tables: ErTable[] = [];
     for (const [i, node] of nodes.entries()) {
       const obj = node.obj!;
       const id = erId(obj);
-      const [columns, fkNodes] = await Promise.all([
-        api().tableColumns(opened.sessionId, obj).catch(() => [] as TableColumn[]),
-        api().metaChildren(opened.sessionId, [...node.path, "fks"]).catch(() => [] as MetaNode[]),
-      ]);
+      const columns = await api().tableColumns(opened.sessionId, obj).catch(() => [] as TableColumn[]);
       if (!current()) return;
-      const fks = parseForeignKeys(fkNodes, obj).filter((fk) => fk.columns.length);
-      tables.push(erTable(obj, columns, new Set(fks.flatMap((fk) => fk.columns))));
-      for (const fk of fks) edges.push({ name: fk.name, from: id, to: erId(fk.target), fromCols: fk.columns, toCols: fk.targetColumns });
+      tables.push(erTable(obj, columns, fkCols.get(id) ?? new Set()));
       objects[id] = obj;
       // Show progress (and the tables so far) every few tables.
-      if (i % 8 === 7 || i === nodes.length - 1) setState("er", { done: i + 1, tables: [...tables], edges: [...edges], objects: { ...objects } });
+      if (i % 8 === 7 || i === nodes.length - 1) setState("er", { done: i + 2, tables: [...tables], objects: { ...objects } });
     }
-    if (current()) setState("er", { loading: false, done: nodes.length, whole: true });
+    if (current()) setState("er", { loading: false, done: nodes.length + 1, whole: true, objects: { ...objects } });
   } catch (err) {
     if (current()) setState("er", { loading: false, error: errorText(err) });
   } finally {
@@ -821,30 +863,21 @@ export async function openErDiagram(connId: string, path: string[], focus?: Obje
   }
 }
 
-/** The diagram of one table: the keys of every table of the schema, then the columns of it and its neighbours. */
-async function scanAround(sessionId: string, all: MetaNode[], centre: string, current: () => boolean) {
+/** The diagram of one table: the keys of the whole schema (one query), then the columns of it and its neighbours. */
+async function scanAround(sessionId: string, path: string[], all: MetaNode[], centre: string, current: () => boolean) {
   const own = all.find((node) => erId(node.obj!) === centre);
   if (!own) throw new Error(`La tabla ${centre} no está en este esquema`);
-  // The table itself first: its own keys count even past the limit.
-  const nodes = [own, ...all.filter((node) => node !== own)].slice(0, ER_SCAN_LIMIT);
-  setState("er", { total: nodes.length, truncated: all.length - nodes.length });
-  const edges: ErEdge[] = [];
+  // The table itself first: its own keys count even past the limit of the per-table fallback.
+  const nodes = [own, ...all.filter((node) => node !== own)];
+  setState("er", { total: 1, done: 0 });
+  const found = await erKeys(sessionId, path, nodes, ER_SCAN_LIMIT, current);
+  if (!found) return;
   const objects: Record<string, ObjectRef> = {};
-  for (const [i, node] of nodes.entries()) {
-    const obj = node.obj!;
-    const id = erId(obj);
-    objects[id] = obj;
-    const fkNodes = await api().metaChildren(sessionId, [...node.path, "fks"]).catch(() => [] as MetaNode[]);
-    if (!current()) return;
-    for (const fk of parseForeignKeys(fkNodes, obj).filter((fk) => fk.columns.length)) {
-      edges.push({ name: fk.name, from: id, to: erId(fk.target), fromCols: fk.columns, toCols: fk.targetColumns });
-      // A table of another schema it points to is shown too (its own keys are not read).
-      objects[erId(fk.target)] ??= fk.target;
-    }
-    if (i % 16 === 15 || i === nodes.length - 1) setState("er", { done: i + 1 });
-  }
+  for (const node of nodes.slice(0, found.read)) objects[erId(node.obj!)] = node.obj!;
+  // A table of another schema it points to is shown too (its own keys are not read).
+  const edges = found.keys.map((fk) => erEdge(fk, objects));
   setState("er", { edges, objects, shown: erNeighbourhood(centre, edges, 1) });
-  if (await readErColumns(sessionId, state.er!.shown, current, nodes.length)) setState("er", { loading: false });
+  if (await readErColumns(sessionId, state.er!.shown, current, 1)) setState("er", { loading: false });
 }
 
 /**

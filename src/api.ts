@@ -10,6 +10,7 @@ import type {
   MetaNode,
   ObjectRef,
   OpenSessionOptions,
+  SchemaForeignKey,
   SessionHealth,
   SessionInfo,
   TableColumn,
@@ -48,6 +49,8 @@ export interface Backend {
   commit(sessionId: string): Promise<boolean>;
   rollback(sessionId: string): Promise<boolean>;
   metaChildren(sessionId: string, path: string[]): Promise<MetaNode[]>;
+  /** Every foreign key of a schema (its explorer path: [database, schema], or [database] on Informix). */
+  schemaForeignKeys(sessionId: string, path: string[]): Promise<SchemaForeignKey[]>;
   tableColumns(sessionId: string, obj: ObjectRef): Promise<TableColumn[]>;
   objectDdl(sessionId: string, obj: ObjectRef): Promise<string>;
   completion(sessionId: string, database: string): Promise<CompletionSchema>;
@@ -144,6 +147,7 @@ function tauriBackend(): Backend {
     commit: (sessionId) => invoke("commit", { sessionId: sessionId }),
     rollback: (sessionId) => invoke("rollback", { sessionId: sessionId }),
     metaChildren: (sessionId, path) => invoke("meta_children", { sessionId: sessionId, path }),
+    schemaForeignKeys: (sessionId, path) => invoke("schema_foreign_keys", { sessionId: sessionId, path }),
     tableColumns: (sessionId, obj) => invoke("table_columns", { sessionId: sessionId, obj }),
     objectDdl: (sessionId, obj) => invoke("object_ddl", { sessionId: sessionId, obj }),
     completion: (sessionId, database) => invoke("completion", { sessionId: sessionId, database }),

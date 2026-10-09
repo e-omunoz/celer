@@ -368,6 +368,19 @@ pub struct ObjectRef {
     pub kind: String,
 }
 
+/// A foreign key of a schema, as `Driver::schema_foreign_keys` reads them all at once (the E-R diagram): the table
+/// that has it and its columns, and the table and columns it references, in key order. Names are as the catalog
+/// has them (unquoted).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaForeignKey {
+    pub name: String,
+    pub table: ObjectRef,
+    pub columns: Vec<String>,
+    pub target: ObjectRef,
+    pub target_columns: Vec<String>,
+}
+
 /// Información para autocompletado: tablas y sus columnas.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct CompletionSchema {

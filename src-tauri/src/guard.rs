@@ -784,6 +784,10 @@ impl Driver for Guarded {
         self.read(|d| d.table_columns(obj))
     }
 
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        self.read(|d| d.schema_foreign_keys(path))
+    }
+
     fn ddl(&mut self, obj: &ObjectRef) -> Result<String> {
         self.read(|d| d.ddl(obj))
     }

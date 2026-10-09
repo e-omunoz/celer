@@ -34,7 +34,7 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::*;
-use crate::session::{first_keyword, Canceller, Driver, Progress};
+use crate::session::{first_keyword, Canceller, Driver, FkColumn, Progress};
 
 type Cli = Client<Compat<TcpStream>>;
 
@@ -1255,6 +1255,23 @@ impl MssqlDriver {
         }
         Ok(build_table_ddl(self.engine, &self.qualified_name(o), &parts))
     }
+}
+
+/// Every foreign key of the tables of schema `schema` (a literal) in database `db` (bracketed), one row per column
+/// pair in key order: key id, name, table, column, referenced schema, table and column.
+fn schema_fks_sql(db: &str, schema: &str) -> String {
+    format!(
+        "SELECT fk.object_id, fk.name, t.name, pc.name, rs.name, rt.name, rc.name \
+         FROM {db}.sys.foreign_keys fk \
+         JOIN {db}.sys.tables t ON t.object_id = fk.parent_object_id \
+         JOIN {db}.sys.schemas s ON s.schema_id = t.schema_id \
+         JOIN {db}.sys.foreign_key_columns k ON k.constraint_object_id = fk.object_id \
+         JOIN {db}.sys.columns pc ON pc.object_id = k.parent_object_id AND pc.column_id = k.parent_column_id \
+         JOIN {db}.sys.objects rt ON rt.object_id = fk.referenced_object_id \
+         JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id \
+         JOIN {db}.sys.columns rc ON rc.object_id = k.referenced_object_id AND rc.column_id = k.referenced_column_id \
+         WHERE s.name = {schema} ORDER BY t.name, fk.name, fk.object_id, k.constraint_column_id"
+    )
 }
 
 /// Junta en listas "a, b, c" las columnas que llegan como filas (grupo, columna) ya ordenadas. Sustituye a
@@ -2491,6 +2508,26 @@ impl Driver for MssqlDriver {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// One catalog query: sys.foreign_keys with their columns (sys.foreign_key_columns) of the schema's tables, one
+    /// row per column pair in key order. Synapse dedicated has no foreign keys (nor the folder for them); Fabric
+    /// Warehouse's (NOT ENFORCED) are in the same views.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        self.synapse_enter(db)?;
+        if !self.has_table_folder("fks") {
+            return Ok(vec![]);
+        }
+        let rows = self.query_rows(&schema_fks_sql(&qi(db), &ql(schema)))?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| FkColumn {
+            key: cell_i64(&r[0]).to_string(),
+            name: cell_str(&r[1]),
+            table: ObjectRef::new(db, schema, &cell_str(&r[2]), "table"),
+            column: cell_str(&r[3]),
+            target: ObjectRef::new(db, &cell_str(&r[4]), &cell_str(&r[5]), "table"),
+            target_column: cell_str(&r[6]),
+        })))
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {

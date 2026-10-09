@@ -615,6 +615,17 @@ async fn meta_children(
     h.run(move |d| d.children(&path)).await.map_err(err)
 }
 
+/// Every foreign key of a schema (its explorer path) in one go, for the E-R diagram.
+#[tauri::command]
+async fn schema_foreign_keys(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    path: Vec<String>,
+) -> CmdResult<Vec<SchemaForeignKey>> {
+    let h = state.sessions.get(&session_id).map_err(err)?;
+    h.run(move |d| d.schema_foreign_keys(&path)).await.map_err(err)
+}
+
 #[tauri::command]
 async fn table_columns(
     state: State<'_, Arc<AppState>>,
@@ -1415,6 +1426,7 @@ pub fn run() {
             commit,
             rollback,
             meta_children,
+            schema_foreign_keys,
             table_columns,
             object_ddl,
             completion,

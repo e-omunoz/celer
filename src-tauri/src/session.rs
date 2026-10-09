@@ -25,6 +25,12 @@ pub trait Driver: Send {
     /// Hijos de un nodo del árbol de objetos (ruta vacía = raíz).
     fn children(&mut self, path: &[String]) -> Result<Vec<MetaNode>>;
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>>;
+    /// Every foreign key of a schema: `path` is the schema's node in the explorer ([database, schema], or [database]
+    /// on engines without schemas), the keys of the tables in its tables folder. Drivers read them in one catalog
+    /// query; by default (and as the reference the engine tests compare with) the keys of each table in turn.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        per_table_foreign_keys(self, path)
+    }
     fn ddl(&mut self, obj: &ObjectRef) -> Result<String>;
     fn completion(&mut self, database: &str) -> Result<CompletionSchema>;
     fn databases(&mut self) -> Result<Vec<String>>;
@@ -64,6 +70,71 @@ pub trait Driver: Send {
             Err(e) => Health { error: e.to_string(), ..Health::default() },
         }
     }
+}
+
+/// The foreign keys of a schema read table by table, through the explorer's "fks" folder of each table of its
+/// tables folder (one query per table): the default of `Driver::schema_foreign_keys`.
+pub fn per_table_foreign_keys<D: Driver + ?Sized>(d: &mut D, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+    let folders = d.children(path)?;
+    let Some(folder) = folders.iter().find(|n| n.kind == "folder" && (n.path.last().map(String::as_str) == Some("tables") || n.name.eq_ignore_ascii_case("tablas") || n.name.eq_ignore_ascii_case("tables"))) else {
+        return Ok(vec![]);
+    };
+    let mut out = Vec::new();
+    for node in d.children(&folder.path.clone())? {
+        let Some(table) = node.obj.clone().filter(|o| o.kind == "table") else { continue };
+        if node.path.is_empty() {
+            continue;
+        }
+        let fks = d.children(&[node.path.clone(), vec!["fks".to_string()]].concat())?;
+        for fk in fks {
+            let Some(target) = fk.obj.as_ref().filter(|_| fk.kind == "key") else { continue };
+            let (columns, target_columns) = parse_fk_detail(fk.detail.as_deref().unwrap_or(""));
+            let target = ObjectRef { database: if target.database.is_empty() { table.database.clone() } else { target.database.clone() }, ..target.clone() };
+            out.push(SchemaForeignKey { name: fk.name, table: table.clone(), columns, target, target_columns });
+        }
+    }
+    Ok(out)
+}
+
+/// One column pair of a foreign key, as a catalog query lists them (one row per column, in key order): the key's
+/// identity (unique in the query), its name, the two tables and the column of each.
+pub struct FkColumn {
+    pub key: String,
+    pub name: String,
+    pub table: ObjectRef,
+    pub column: String,
+    pub target: ObjectRef,
+    pub target_column: String,
+}
+
+/// Joins the rows of a schema's foreign keys (`FkColumn`, each key's columns in order) into keys, in the order the
+/// keys first appear.
+pub fn group_foreign_keys(rows: impl IntoIterator<Item = FkColumn>) -> Vec<SchemaForeignKey> {
+    let mut out: Vec<SchemaForeignKey> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for r in rows {
+        let i = *at.entry(r.key).or_insert_with(|| {
+            out.push(SchemaForeignKey { name: r.name, table: r.table, columns: vec![], target: r.target, target_columns: vec![] });
+            out.len() - 1
+        });
+        out[i].columns.push(r.column);
+        out[i].target_columns.push(r.target_column);
+    }
+    out
+}
+
+/// The column lists of an explorer FK node's detail, "a, b → schema.table(x, y)", unquoted (as the interface reads it).
+pub fn parse_fk_detail(detail: &str) -> (Vec<String>, Vec<String>) {
+    let unquote = |s: &str| {
+        let s = s.trim();
+        let s = s.strip_prefix(['"', '`', '[']).unwrap_or(s);
+        s.strip_suffix(['"', '`', ']']).unwrap_or(s).to_string()
+    };
+    let list = |s: &str| s.split(',').map(unquote).filter(|c| !c.is_empty()).collect::<Vec<_>>();
+    let Some((left, right)) = detail.split_once('→') else { return (vec![], vec![]) };
+    let right = right.trim_end();
+    let inner = right.strip_suffix(')').and_then(|r| r.rfind('(').map(|i| &r[i + 1..])).unwrap_or("");
+    (list(left), list(inner))
 }
 
 pub type Canceller = Arc<dyn Fn() + Send + Sync>;
@@ -282,5 +353,14 @@ mod tests {
         assert_eq!(first_keyword("(select 1)"), "SELECT");
         assert!(is_mutating("delete from t"));
         assert!(!is_mutating("with x as (select 1) select * from x"));
+    }
+
+    #[test]
+    fn fk_details_as_the_interface_reads_them() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_fk_detail("parent_id → dbo.celer_p(id)"), (v(&["parent_id"]), v(&["id"])));
+        assert_eq!(parse_fk_detail("\"A b\", c → sales.\"T(1)\"(x, \"y\")"), (v(&["A b", "c"]), v(&["x", "y"])));
+        assert_eq!(parse_fk_detail("[a], [b] → [s].[t]([k1], [k2])"), (v(&["a", "b"]), v(&["k1", "k2"])));
+        assert_eq!(parse_fk_detail("sin flecha"), (vec![], vec![]));
     }
 }
