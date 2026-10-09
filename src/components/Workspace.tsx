@@ -372,6 +372,9 @@ function SqlPane(props: { tab: SqlTab }) {
     return rows.filter((_, i) => texts[i]?.includes(needle));
   });
   const filtering = () => Boolean(filterApplied());
+  // Pinned or filtered rows never page in more by themselves (a filter would keep asking for pages). One memo: the grid
+  // reads it while painting and in event handlers, where an inline condition would create a memo on every read.
+  const gridHasMore = createMemo(() => Boolean(result()?.hasMore) && !pinned() && !filtering());
   /** Export what is on show: a pinned result re-runs its own SQL; the quick filter is a view and is not applied. */
   const exportShown = () => {
     if (filtering()) notify("Se exportan todas las filas", "info", "El filtro rápido solo cambia lo que ves; la exportación vuelve a leer la consulta completa.");
@@ -595,8 +598,7 @@ function SqlPane(props: { tab: SqlTab }) {
               resetKey={`${props.tab.runId}:${props.tab.activeResult}:${props.tab.activePinned ?? ""}`}
               rowsKey={filterApplied()}
               busyKey={props.tab.id}
-              // Pinned or filtered rows never page in more by themselves (a filter would keep asking for pages).
-              hasMore={Boolean(result()?.hasMore) && !pinned() && !filtering()}
+              hasMore={gridHasMore()}
               loading={props.tab.running}
               dialect={kindOf(props.tab.connId)}
               onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
