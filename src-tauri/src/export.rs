@@ -344,12 +344,17 @@ fn write_row(
                 w.write_all(b"\r\n")?;
             }
             "json" => {
-                let mut m = serde_json::Map::new();
-                for (c, v) in cols.iter().zip(r) {
-                    m.insert(c.name.clone(), json_value(v));
+                // Written by hand so the keys keep the result's column order (a serde_json Map sorts them).
+                w.write_all(if *first { b"\n  {" } else { b",\n  {" })?;
+                for (i, (c, v)) in cols.iter().zip(r).enumerate() {
+                    if i > 0 {
+                        w.write_all(b",")?;
+                    }
+                    serde_json::to_writer(&mut *w, &c.name)?;
+                    w.write_all(b":")?;
+                    serde_json::to_writer(&mut *w, &json_value(v))?;
                 }
-                w.write_all(if *first { b"\n  " } else { b",\n  " })?;
-                serde_json::to_writer(&mut *w, &m)?;
+                w.write_all(b"}")?;
                 *first = false;
             }
             "sql" => {
@@ -596,6 +601,22 @@ mod tests {
         assert_eq!(res.unwrap_err().to_string(), CANCELLED);
         assert_eq!(rows.get(), 20_000);
         assert!(d.execute("SELECT 1", 10).is_ok());
+    }
+
+    #[test]
+    fn json_keeps_column_order() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-json-{}.json", std::process::id()));
+        let o = ExportOptions { format: "json".into(), path: path.to_string_lossy().into_owned(), ..ExportOptions::default() };
+        export(&mut d, "SELECT 1 AS zeta, 'x\"y' AS alfa, NULL AS id, 2.5 AS id", &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(text, "[\n  {\"zeta\":1,\"alfa\":\"x\\\"y\",\"id\":null,\"id_2\":2.5}\n]\n");
+        let back: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(back[0]["id_2"], 2.5);
     }
 
     #[test]
