@@ -1,6 +1,6 @@
 export const meta = {
   name: 'issue-sprint',
-  description: 'Celer: read every open GitHub issue, implement them in parallel branches, test each live on every database engine, integrate, then macro-review the latest work and fix it',
+  description: 'Celer: read every open GitHub issue, implement them in parallel branches, test each live on every database engine, integrate, macro-review the latest work and fix it, then merge and release if every release gate passes',
   whenToUse: 'To turn the open GitHub issues into a tested integration branch and PR, followed by a review focused on the latest implementations. Run through the /issue-sprint skill (it does the preflight).',
   phases: [
     { title: 'Triage', detail: 'read all open issues, acceptance criteria, independent packages' },
@@ -8,18 +8,22 @@ export const meta = {
     { title: 'Test', detail: 'independent tester per package, live app + every engine, fix loop' },
     { title: 'Integrate', detail: 'merge passing branches, full checks, PR' },
     { title: 'Review', detail: 'macro review focused on the latest implementations, fixes on the integration branch' },
-    { title: 'Close', detail: 'PR and issues updated with results' },
+    { title: 'Close', detail: 'PR and issues updated with results, CI and package builds on the head' },
+    { title: 'Gate', detail: 'docs/review/RELEASE_GATE.md checked on the head SHA by a skeptic' },
+    { title: 'Release', detail: 'merge, tag, publish and verify the release (only when every gate passed)' },
   ],
 }
 
 // args: { branch: 'feat/integration-x.y' (required), base?: 'origin/main', since?: '<ref of the previous release>',
-//         issues?: number[], review?: boolean (default true), reviewMode?: 'audit' | 'full', milestone?: string, tracking?: number }
+//         issues?: number[], review?: boolean (default true), reviewMode?: 'audit' | 'full', milestone?: string, tracking?: number,
+//         release?: boolean (default true: merge and publish when every gate in docs/review/RELEASE_GATE.md passes) }
 const A = args || {}
 if (!A.branch) throw new Error('args.branch (the integration branch name) is required')
 const BRANCH = A.branch
 const BASE = A.base || 'origin/main'
 const SINCE = A.since || BASE
 const REVIEW = A.review !== false
+const RELEASE = A.release !== false
 const ROLE = role => `Read and follow your role file \`.claude/agents/${role}.md\`, the project notes in \`CLAUDE.md\` and the engine rule in \`docs/review/ENGINE_MATRIX.md\` (every engine, always).`
 
 // The desktop app, the browser pane and the main checkout are single resources: testing and fixing take turns.
@@ -192,14 +196,69 @@ if (REVIEW && integration) {
 // ---------------------------------------------------------------- Close
 phase('Close')
 await agent(`${ROLE('celer-fixer')} Final step, in the main checkout on \`${BRANCH}\`.
-Push the branch. Update PR #${integration ? integration.pr : '?'}: append a "Review" section (issues found/fixed by the macro review, with links) and a final engine matrix table for the whole branch from the latest \`dev\\wsl.ps1 test\` run. Trigger CI on the branch (\`gh workflow run ci.yml --ref ${BRANCH}\`, and \`engines.yml\`). Leave the PR as draft if anything is red, otherwise mark it ready for review. Do not merge and do not release.
+Push the branch. Update PR #${integration ? integration.pr : '?'}: append a "Review" section (issues found/fixed by the macro review, with links) and a final engine matrix table for the whole branch from the latest \`dev\\wsl.ps1 test\` run. On the pushed head, trigger \`ci.yml\`, \`engines.yml\` and \`release-desktop.yml\` (a manual run only builds the Windows/macOS/Linux packages as the \`celer-release\` artifact; nothing is published): \`gh workflow run <file> --ref ${BRANCH}\`. Leave the PR as a draft. Do not merge and do not release in this step.
 
 Review summary: ${JSON.stringify(review ? { issues: review.issues, verify: review.verify, notChecked: review.notChecked } : 'not run')}`,
   { label: 'close', phase: 'Close' })
 
+// ---------------------------------------------------------------- Gate (docs/review/RELEASE_GATE.md)
+// The owner authorised merging and releasing without asking, but only when every gate passes on the exact head SHA.
+let gate = null
+let released = null
+if (RELEASE && integration && integration.pr) {
+  phase('Gate')
+  const GATE = {
+    type: 'object',
+    properties: {
+      sha: { type: 'string', description: 'The PR head SHA every gate was checked on' },
+      solid: { type: 'boolean', description: 'true only if every gate passed with evidence' },
+      bump: { type: 'string', enum: ['minor', 'patch'], description: 'minor if the PR holds any feature or enhancement, patch if only fixes' },
+      gates: {
+        type: 'array',
+        items: { type: 'object', properties: { gate: { type: 'integer' }, name: { type: 'string' }, pass: { type: 'boolean' }, evidence: { type: 'string' } }, required: ['gate', 'name', 'pass', 'evidence'] },
+      },
+    },
+    required: ['sha', 'solid', 'bump', 'gates'],
+  }
+  gate = await exclusive(() => agent(`${ROLE('celer-verifier')}
+
+You are the release gatekeeper for PR #${integration.pr} (branch \`${BRANCH}\`). Read \`docs/review/RELEASE_GATE.md\` and check every gate (1–8) on the PR's current head SHA (\`gh pr view ${integration.pr} --json headRefOid\`). Read-only on the code: you may build, test, download artifacts and run the app, but not commit.
+- Gates 1, 2, 8 from the data below; re-check anything that looks thin.
+- Gate 3: \`gh issue list --label review --state open -L 200\`.
+- Gate 4: run the checks yourself on that SHA (\`dev\\wsl.ps1 test -Ref <sha>\` for every engine, the fast checks, \`dev\\check-all.ps1\`).
+- Gate 5: wait for the CI, Engines and Release runs of that SHA to finish (\`gh run list --commit <sha>\`, \`gh run watch <id> --exit-status\`); all must be green.
+- Gate 6: \`gh run download <release run id> -n celer-release -D review-out/gate\`, verify SHA256SUMS.txt, start Celer-Portable-Windows.exe from there (its own data folder via CELER_DATA_DIR), connect to every engine of ENGINE_MATRIX.md and run a query; run the installer into a throw-away per-user folder and start the installed app. Screenshots to review-out/gate/.
+- Gate 7: \`gh pr view ${integration.pr} --json mergeable,mergeStateStatus\`, CHANGELOG [Unreleased] and docs against the diff.
+solid = every gate passed with evidence. When unsure, the gate fails. Comment the gate table on the PR ("Release gate: passed" or "Release gate: not passed" with what failed).
+
+Tester results: ${JSON.stringify(passing.map(p => ({ branch: p.branch, results: p.test.results })))}
+Review: ${JSON.stringify(review ? { verify: review.verify, issues: review.issues, notChecked: review.notChecked } : 'not run — gate 2 fails')}
+Open decisions: ${JSON.stringify(decisions.filter(i => passing.some(p => p.pkg.issues.includes(i.number))).map(i => ({ issue: i.number, decision: i.decision_needed })))}`,
+    { label: 'gate', phase: 'Gate', schema: GATE }))
+  const failed = gate ? gate.gates.filter(g => !g.pass) : []
+  log(gate && gate.solid && !failed.length ? `Release gate passed on ${gate.sha}` : `Release gate NOT passed: ${gate ? failed.map(g => g.gate + ' ' + g.name).join('; ') : 'gatekeeper failed'}`)
+
+  // ---------------------------------------------------------------- Release
+  if (gate && gate.solid && !failed.length) {
+    phase('Release')
+    released = await exclusive(() => agent(`${ROLE('celer-fixer')} You publish the release; the owner authorised it for when the gate passes, and it did on ${gate.sha}.
+Follow "Procedure when all gates pass" in \`docs/review/RELEASE_GATE.md\` exactly:
+1. Confirm the PR head is still ${gate.sha} (if it moved, stop and report: the gate must be re-run). \`gh pr ready ${integration.pr}\`, then \`gh pr merge ${integration.pr} --merge\`.
+2. \`git switch main && git pull --ff-only origin main\`, clean tree.
+3. Release with bump "${gate.bump}": in WSL \`bash dev/release.sh ${gate.bump}\` (from ~/celer on main) or on Windows \`dev\\release.ps1 -Bump ${gate.bump}\`.
+4. Follow the tag's Release run to the end (\`gh run watch <id> --exit-status\`) and verify the published release: title, notes, the seven files, SHA256SUMS.txt matching, releases/latest pointing to it.
+5. Comment the release link on the tracking issue${A.tracking ? ` #${A.tracking}` : ''} and on each closed issue; close the tracking issue and the milestone.
+If the Release run fails, do not touch the tag: report the cause (see "When something fails after the merge").`,
+      { label: 'release', phase: 'Release', schema: { type: 'object', properties: { merged: { type: 'boolean' }, version: { type: 'string' }, url: { type: 'string' }, verified: { type: 'boolean' }, notes: { type: 'string' } }, required: ['merged', 'version', 'url', 'verified', 'notes'] } }))
+    log(released ? `Release ${released.version}: ${released.verified ? 'published and verified' : 'needs attention'} — ${released.url}` : 'release step failed')
+  }
+}
+
 return {
   branch: BRANCH,
   pr: integration ? integration.pr : null,
+  gate: gate ? { solid: gate.solid, sha: gate.sha, failed: gate.gates.filter(g => !g.pass) } : null,
+  release: released,
   integrated: passing.map(p => ({ slug: p.pkg.slug, issues: p.impl.done.map(d => d.issue) })),
   leftOut: failing.map(p => ({ slug: p.pkg.slug, issues: p.pkg.issues, blocked: p.impl ? p.impl.blocked : [], failing: p.test ? p.test.results.filter(r => !r.pass).length : null })),
   decisions: decisions.map(i => ({ issue: i.number, decision: i.decision_needed })),
