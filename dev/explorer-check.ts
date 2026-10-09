@@ -10,6 +10,7 @@ import {
   exportConnectionsJson,
   filterActive,
   folderName,
+  inlinePassword,
   insertAt,
   isInside,
   joinFolder,
@@ -24,6 +25,7 @@ import {
   sortConns,
   toggleIn,
   uniqueName,
+  withoutInlinePassword,
 } from "../src/connTree.ts";
 import { emptyConn, type ConnConfig, type DbKind } from "../src/types.ts";
 
@@ -101,6 +103,14 @@ const secret = conn("id-1", "Producción", "Clientes/Egarsat", "mssql", { host: 
 const text = exportConnectionsJson([secret, ifx], ["Vacía"], new Date("2026-10-08T10:00:00Z"));
 assert.ok(!text.includes("S3creta") && !text.includes("\"password\""), "never a password");
 assert.ok(!text.includes("id-1") && !text.includes("\"id\""), "no ids: they are new on import");
+// Nor one typed into an ODBC string or "Parámetros extra".
+const inline = exportConnectionsJson([conn("id-2", "Odbc", "", "odbc", { odbcConnStr: "DSN=x;UID=u;PWD={a;b}}c};Trusted=no", extra: "password=p2\nssl=1" })], [], new Date());
+assert.ok(!inline.includes("a;b") && !inline.includes("p2"), inline);
+assert.equal(JSON.parse(inline).connections[0].odbcConnStr, "DSN=x;UID=u;Trusted=no");
+assert.equal(JSON.parse(inline).connections[0].extra, "ssl=1");
+assert.equal(inlinePassword("DSN=x;Pwd = {a;b}}c} ;UID=u"), "a;b}c");
+assert.equal(inlinePassword("DSN=x;PasswordFile=y"), null);
+assert.equal(withoutInlinePassword("PWD=s;DSN=x"), "DSN=x");
 const doc = JSON.parse(text);
 assert.equal(doc.format, "celer-connections");
 assert.equal(doc.version, 1);

@@ -236,6 +236,14 @@ assert.deepEqual(
 );
 shown = visibleFields(conn({ kind: "odbc", odbcConnStr: "DSN=x;UID=y" }));
 assert.ok(shown.odbc && !shown.user && shown.password && !shown.host);
+// A PWD= in the string: the password field stays, and a warning offers to move it there.
+shown = visibleFields(conn({ kind: "odbc", odbcConnStr: "DSN=x;UID=y;PWD=s" }));
+assert.ok(shown.password && shown.savePassword);
+issue = validateConn(conn({ kind: "odbc", odbcConnStr: "DSN=x;UID=y;PWD=s" }))[0];
+assert.equal(issue.field, "odbcConnStr");
+assert.equal(issue.level, "warning");
+assert.deepEqual(issue.fix, { odbcConnStr: "DSN=x;UID=y;", password: "s" });
+assert.deepEqual(fieldsWith(conn({ kind: "postgres", extra: "password=p;connect_timeout=5" }), "warning"), ["extra"]);
 assert.equal(defaultPort(conn({ kind: "informix", informixMode: "drda" })), 9089);
 assert.equal(defaultPort(conn({ kind: "sqlite" })), null);
 

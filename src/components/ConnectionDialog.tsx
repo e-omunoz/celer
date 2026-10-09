@@ -308,7 +308,7 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
           <Show when={show().odbc}>
             <label class="field">
               <span>Cadena de conexión</span>
-              <textarea rows="3" spellcheck={false} value={cfg().odbcConnStr} aria-invalid={invalid("odbcConnStr")} placeholder="DSN=mi_origen;UID=usuario;PWD=…  o  DRIVER={…};SERVER=…" onInput={(event) => set("odbcConnStr", event.currentTarget.value)} onBlur={() => touch("odbcConnStr")} />
+              <textarea rows="3" spellcheck={false} value={cfg().odbcConnStr} aria-invalid={invalid("odbcConnStr")} placeholder="DSN=mi_origen;UID=usuario  o  DRIVER={…};SERVER=…  (la contraseña, abajo)" onInput={(event) => set("odbcConnStr", event.currentTarget.value)} onBlur={() => touch("odbcConnStr")} />
               <FieldMessages issues={issuesOf("odbcConnStr")} onFix={fix} />
             </label>
           </Show>

@@ -285,6 +285,8 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     if cfg.id.is_empty() {
         cfg.id = uuid::Uuid::new_v4().to_string();
     }
+    // A PWD= typed into the ODBC string or "Parámetros extra" goes to the credential store like the field's.
+    cfg.take_inline_password();
     if cfg.save_password {
         if let Some(p) = cfg.password.as_ref().filter(|p| !p.is_empty()) {
             app.store.set_password(&cfg.id, p).map_err(err)?;
@@ -304,6 +306,26 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     }
     app.store.save_connections(&conns).map_err(err)?;
     Ok(cfg)
+}
+
+/// Connections saved by earlier versions with a `PWD=` in the ODBC string or "Parámetros extra": the password goes to
+/// the credential store and out of connections.json. One the store does not take is left as it was.
+fn move_inline_passwords(store: &Store, conns: &mut [ConnConfig]) {
+    let mut moved = false;
+    for c in conns.iter_mut().filter(|c| c.save_password) {
+        let mut copy = c.clone();
+        if copy.take_inline_password() {
+            if let Some(p) = copy.password.take() {
+                if store.set_password(&c.id, &p).is_ok() {
+                    *c = copy;
+                    moved = true;
+                }
+            }
+        }
+    }
+    if moved {
+        let _ = store.save_connections(conns);
+    }
 }
 
 /// «Deshacer» un borrado: la conexión vuelve con su id y con la contraseña que tenía guardada.
@@ -1340,7 +1362,8 @@ pub fn run() {
                     .unwrap_or_else(|_| std::env::temp_dir().join("celer"))
             });
             let store = Store::new(dir.clone());
-            let conns = store.load_connections();
+            let mut conns = store.load_connections();
+            move_inline_passwords(&store, &mut conns);
             let mcp = mcp::McpServer::new(dir, true);
             // The window starts hidden and the UI shows it after its first paint (no white flash).
             // Safety net: show it anyway if the UI has not done so shortly after start.

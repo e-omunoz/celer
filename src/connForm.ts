@@ -3,6 +3,7 @@
 // a JDBC URL.
 import { emptyConn, engineOf, type ConnConfig, type DbKind } from "./types.ts";
 import { parseJdbc, type JdbcInfo } from "./migrateParse.ts";
+import { inlinePassword, withoutInlinePassword } from "./connTree.ts";
 
 const NETWORK: DbKind[] = ["postgres", "mysql", "mssql", "informix"];
 
@@ -32,9 +33,10 @@ export function visibleFields(cfg: ConnConfig): VisibleFields {
   const kind = cfg.kind;
   const network = isNetwork(kind);
   const windows = kind === "mssql" && cfg.integratedAuth;
-  // Generic ODBC: user and password only when the connection string does not carry them.
+  // Generic ODBC: the user only when the connection string does not carry it. The password always has its field, so
+  // it is kept in the credential store (a PWD= in the string is moved there on save).
   const odbcUser = kind === "odbc" && !/(^|;)\s*UID\s*=/i.test(cfg.odbcConnStr);
-  const odbcPassword = kind === "odbc" && !/(^|;)\s*PWD\s*=/i.test(cfg.odbcConnStr);
+  const odbcPassword = kind === "odbc";
   const tls = kind === "postgres" || kind === "mysql" || kind === "mssql";
   const user = (network && !windows) || odbcUser;
   const password = (network && !windows) || odbcPassword;
@@ -128,6 +130,12 @@ export function validateConn(cfg: ConnConfig, others: { id: string; name: string
     const text = cfg.odbcConnStr.trim();
     if (!text) error("odbcConnStr", "Escribe la cadena de conexión: DSN=… o DRIVER={…};…");
     else if (!/(^|;)\s*(DSN|FILEDSN|DRIVER)\s*=/i.test(text)) error("odbcConnStr", "La cadena ODBC tiene que llevar DSN=, FILEDSN= o DRIVER=.");
+  }
+  // A password in the text would be kept in clear: on save it goes to the credential store (src-tauri model.rs).
+  for (const field of ["odbcConnStr", "extra"] as const) {
+    const found = inlinePassword(cfg[field]);
+    if (found === null || (field === "extra" ? !show.extra : !show.odbc)) continue;
+    warn(field, "Lleva la contraseña (PWD=): al guardar se pasa a «Contraseña» y se guarda en el almacén de credenciales de Windows.", { [field]: withoutInlinePassword(cfg[field]), password: found }, "Mover a «Contraseña»");
   }
 
   if (show.extra && cfg.extra.trim()) {

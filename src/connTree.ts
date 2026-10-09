@@ -234,13 +234,30 @@ export const EXPORT_VERSION = 1;
 /** Campos de una conexión que viajan en el fichero: todo menos el id y la contraseña. */
 const PORTABLE_KEYS = Object.keys(emptyConn("postgres")).filter((key) => key !== "id" && key !== "password") as (keyof ConnConfig)[];
 
+const INLINE_PASSWORD = /(?<=^|[;\n])[ \t]*(?:pwd|password)[ \t]*=[ \t]*(\{(?:[^}]|\}\})*\}|[^;\n]*)[ \t]*(?:[;\n]|$)/gi;
+
+/** A `key=value;…` list (ODBC string, "Parámetros extra") without its `PWD=` / `Password=` entries. */
+export function withoutInlinePassword(text: string): string {
+  return text.replace(INLINE_PASSWORD, "");
+}
+
+/** The last `PWD=` / `Password=` value of a `key=value;…` list ({…} unwrapped), or null. */
+export function inlinePassword(text: string): string | null {
+  let found: string | null = null;
+  for (const m of text.matchAll(INLINE_PASSWORD)) {
+    const raw = m[1].trim();
+    found = raw.startsWith("{") && raw.endsWith("}") ? raw.slice(1, -1).replace(/\}\}/g, "}") : raw;
+  }
+  return found;
+}
+
 /** Las conexiones (sin id ni contraseña) y las carpetas, como JSON legible. */
 export function exportConnectionsJson(conns: ConnConfig[], folders: string[], exportedAt: Date): string {
   const connections = conns.map((conn) => {
     const out: Record<string, unknown> = {};
     for (const key of PORTABLE_KEYS) {
       const value = conn[key];
-      if (value !== undefined) out[key] = value;
+      if (value !== undefined) out[key] = key === "odbcConnStr" || key === "extra" ? withoutInlinePassword(String(value)) : value;
     }
     if (conn.startupSql) out.startupSql = conn.startupSql;
     return out;

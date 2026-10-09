@@ -216,6 +216,74 @@ impl Default for ConnConfig {
     }
 }
 
+impl ConnConfig {
+    /// Moves a `PWD=` / `Password=` written into the ODBC connection string or "Parámetros extra" out of them, so it
+    /// is kept in the credential store and never in connections.json. A password typed in the field wins.
+    /// Returns true when something was moved.
+    pub fn take_inline_password(&mut self) -> bool {
+        let (conn_str, a) = take_password(&self.odbc_conn_str);
+        let (extra, b) = take_password(&self.extra);
+        let Some(found) = a.or(b) else { return false };
+        self.odbc_conn_str = conn_str;
+        self.extra = extra;
+        if self.password.as_deref().is_none_or(str::is_empty) {
+            self.password = Some(found);
+        }
+        true
+    }
+}
+
+/// Removes the `PWD=` / `Password=` entries of a `key=value;…` list (also split by new lines; ODBC `{…}` values may
+/// hold `;`) and returns the rest, as written, with the last value removed.
+pub fn take_password(s: &str) -> (String, Option<String>) {
+    let c: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut found = None;
+    let mut i = 0;
+    while i < c.len() {
+        // One entry: up to an unbraced ';' or a new line.
+        let start = i;
+        let mut value_at = None;
+        while i < c.len() && c[i] != ';' && c[i] != '\n' {
+            if c[i] == '=' && value_at.is_none() {
+                value_at = Some(i + 1);
+                let mut j = i + 1;
+                while j < c.len() && c[j] == ' ' {
+                    j += 1;
+                }
+                if c.get(j) == Some(&'{') {
+                    j += 1;
+                    while j < c.len() && !(c[j] == '}' && c.get(j + 1) != Some(&'}')) {
+                        j += if c[j] == '}' { 2 } else { 1 };
+                    }
+                    i = j;
+                }
+            }
+            i += 1;
+        }
+        // An unclosed '{' runs to the end.
+        let end = i.min(c.len());
+        i = end;
+        if i < c.len() {
+            i += 1; // the separator
+        }
+        let entry: String = c[start..end].iter().collect();
+        let key = entry.split('=').next().unwrap_or("").trim().to_ascii_lowercase();
+        match value_at {
+            Some(v) if key == "pwd" || key == "password" => {
+                let raw: String = c[v.min(end)..end].iter().collect();
+                let raw = raw.trim();
+                found = Some(match raw.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+                    Some(inner) => inner.replace("}}", "}"),
+                    None => raw.to_string(),
+                });
+            }
+            _ => out.extend(&c[start..i]),
+        }
+    }
+    (out, found)
+}
+
 /// Nodo del árbol de objetos de la base de datos.
 #[derive(Debug, Clone, Serialize)]
 pub struct MetaNode {
@@ -309,4 +377,27 @@ pub struct CompletionTable {
     pub schema: String,
     pub name: String,
     pub columns: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_passwords_are_taken_out() {
+        assert_eq!(take_password("DSN=x;UID=u;PWD=secret"), ("DSN=x;UID=u;".into(), Some("secret".into())));
+        assert_eq!(take_password("pwd = {a;b}}c} ;DSN=x;"), ("DSN=x;".into(), Some("a;b}c".into())));
+        assert_eq!(take_password("application_name=x\npassword=p\nconnect_timeout=5"), ("application_name=x\nconnect_timeout=5".into(), Some("p".into())));
+        assert_eq!(take_password("DSN=x;PWD={open"), ("DSN=x;".into(), Some("{open".into())));
+        assert_eq!(take_password("DSN=x;PasswordFile=y"), ("DSN=x;PasswordFile=y".into(), None));
+        let mut cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: "DSN=x;UID=u;Password=s;".into(), ..Default::default() };
+        assert!(cfg.take_inline_password());
+        assert_eq!((cfg.odbc_conn_str.as_str(), cfg.password.as_deref()), ("DSN=x;UID=u;", Some("s")));
+        assert!(!cfg.take_inline_password());
+        // A password typed in the field wins.
+        cfg.extra = "PWD=old".into();
+        cfg.password = Some("typed".into());
+        assert!(cfg.take_inline_password());
+        assert_eq!((cfg.extra.as_str(), cfg.password.as_deref()), ("", Some("typed")));
+    }
 }
