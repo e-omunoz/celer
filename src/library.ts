@@ -33,7 +33,6 @@ import {
   type RunTarget,
   type ScriptParam,
 } from "./libraryModel";
-import { findParams } from "./snippets";
 import { guessEngines, kindLabel, needsEngineConfirm, type EngineGuess } from "./engineCompat";
 import {
   activeSql,
@@ -407,8 +406,8 @@ export async function runLibraryOn(id: string, targets: RunTarget[], action: "ru
   setLibrary("scripts", (s) => s.id === id, { targets: valid, usedAt: Date.now() });
   void persist();
   const many = valid.length > 1;
-  const needsParams = state.settings.askParams && findParams(script.sql).length > 0;
   let params: ParamAnswer | undefined;
+  let cancelled = false;
   let done = 0;
   for (const target of valid) {
     const conn = connectionById(target.connId)!;
@@ -440,10 +439,16 @@ export async function runLibraryOn(id: string, targets: RunTarget[], action: "ru
     // The editor of the new console mounts first; the run happens in that console.
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     selectTab(tabId);
-    const ran = await runActive("script", undefined, { params, onParams: (answer) => (params = answer), database: target.database || undefined, declared: script.params });
+    const ran = await runActive("script", undefined, {
+      params,
+      onParams: (answer) => (params = answer),
+      onParamsCancelled: () => (cancelled = true),
+      database: target.database || undefined,
+      declared: script.params,
+    });
     if (ran) done++;
-    // The parameters were not given (the dialog was cancelled): the other targets are not run either.
-    if (!ran && needsParams && !params) break;
+    // The parameters dialog was cancelled: the other targets are not run either.
+    if (cancelled) break;
   }
   if (many && action === "run") notify(`«${script.name}» ejecutado en ${done} de ${valid.length} destinos`, done === valid.length ? "success" : "warning", "Cada destino tiene su consola con sus resultados.");
 }

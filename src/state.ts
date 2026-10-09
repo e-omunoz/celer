@@ -1034,12 +1034,13 @@ export function closeActivity() {
   if (sessionId) void api().closeSession(sessionId).catch(() => {});
 }
 
-/** What the parameters dialog edits; values are remembered per console. */
+/** The values typed for the parameters (raw: written in as SQL, not as a quoted literal). */
 export interface ParamAnswer {
   values: Record<string, string>;
   raw: Record<string, boolean>;
 }
 
+/** What the parameters dialog edits; values are remembered per console. */
 export interface ParamAsk {
   names: string[];
   values: Record<string, string>;
@@ -1720,6 +1721,8 @@ export interface RunOptions {
   params?: ParamAnswer;
   /** Gets the values typed for the parameters (so the next target can use them). */
   onParams?: (answer: ParamAnswer) => void;
+  /** The parameters dialog was cancelled (nothing ran). */
+  onParamsCancelled?: () => void;
   /** The database it must run in (a target of «Ejecutar en…»): if the session is in another one, nothing runs. */
   database?: string;
   /** The library script's declared parameters (defaults and descriptions for the prompt). */
@@ -1754,7 +1757,10 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
         return { name, default: given && name in given.values ? given.values[name] : (own?.default ?? ""), description: own?.description ?? "" };
       });
       let answer = given && names.every((name) => name in given.values) ? given : await askParamValues(current.id, names, sql, prefill);
-      if (!answer) return false;
+      if (!answer) {
+        options.onParamsCancelled?.();
+        return false;
+      }
       if (given && answer !== given) answer = { values: { ...given.values, ...answer.values }, raw: { ...given.raw, ...answer.raw } };
       options.onParams?.(answer);
       sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
