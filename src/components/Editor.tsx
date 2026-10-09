@@ -388,6 +388,7 @@ export function SqlEditor(props: {
           drawSelection(),
           dropCursor(),
           EditorState.allowMultipleSelections.of(true),
+          spanishPhrases,
           indentOnInput(),
           bracketMatching(),
           closeBrackets(),
@@ -517,6 +518,33 @@ export function SqlEditor(props: {
   return <div class="editor" ref={host} />;
 }
 
+/** CodeMirror's own texts (find/replace panel, folding, go to line) in Spanish, like the rest of the UI. */
+const spanishPhrases = EditorState.phrases.of({
+  Find: "Buscar",
+  Replace: "Reemplazar",
+  next: "siguiente",
+  previous: "anterior",
+  all: "todos",
+  "match case": "mayúsculas",
+  regexp: "regexp",
+  "by word": "palabra completa",
+  replace: "reemplazar",
+  "replace all": "reemplazar todo",
+  close: "cerrar",
+  "current match": "coincidencia actual",
+  "replaced $ matches": "$ coincidencias reemplazadas",
+  "replaced match on line $": "coincidencia reemplazada en la línea $",
+  "on line": "en la línea",
+  "Go to line": "Ir a la línea",
+  go: "ir",
+  "Folded lines": "Líneas plegadas",
+  "Unfold line": "Desplegar línea",
+  "Fold line": "Plegar línea",
+  unfold: "desplegar",
+  "Control character": "Carácter de control",
+  Completions: "Sugerencias",
+});
+
 /** Read-only, syntax-highlighted SQL (DDL, definitions). */
 export function CodeView(props: { doc: string; kind: DbKind }) {
   let host: HTMLDivElement | undefined;
@@ -534,6 +562,7 @@ export function CodeView(props: { doc: string; kind: DbKind }) {
           sql({ dialect: dialectOf(props.kind) }),
           EditorState.readOnly.of(true),
           EditorView.editable.of(false),
+          spanishPhrases,
           keymap.of([...searchKeymap, ...defaultKeymap]),
           EditorView.theme({
             "&": { height: "100%", fontSize: "13px", background: "var(--editor-bg)", color: "var(--text)" },
