@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use parking_lot::Mutex;
 
 use crate::model::*;
@@ -61,6 +61,11 @@ pub trait Driver: Send {
     /// transacción abierta, las tablas temporales, los SET.
     fn session_state(&self) -> String {
         String::new()
+    }
+    /// Mantener viva (#97): si la sesión lleva `idle` parada y no tiene un resultado abierto, la comprueba como
+    /// `health(true)` (y la reconecta si se había cortado); si no, nada (`None`). Solo las sesiones vigiladas.
+    fn keep_alive(&mut self, _idle: std::time::Duration) -> Option<Health> {
+        None
     }
     /// Comprueba la sesión para la interfaz (siempre con `force`; si no, solo si lleva un rato parada). Las sesiones
     /// vigiladas (`guard.rs`) además reconectan si se cortó.
@@ -146,6 +151,8 @@ pub struct SessionHandle {
     tx: mpsc::Sender<Job>,
     canceller: Canceller,
     progress: Progress,
+    /// Jobs sent and not answered yet (the session is at work, or has work waiting).
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
     pub conn_id: String,
 }
 
@@ -188,6 +195,7 @@ impl SessionHandle {
             tx,
             canceller,
             progress,
+            in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             conn_id,
         })
     }
@@ -199,12 +207,23 @@ impl SessionHandle {
         F: FnOnce(&mut dyn Driver) -> Result<T> + Send + 'static,
     {
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<T>>();
+        // Counted until the job is done or dropped (a panic in the driver, a closed session).
+        struct Pending(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        self.in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pending = Pending(self.in_flight.clone());
         let job: Job = Box::new(move |d| {
-            let _ = tx.send(f(d));
+            let r = f(d);
+            drop(pending);
+            let _ = tx.send(r);
         });
-        self.tx
-            .send(job)
-            .map_err(|_| anyhow!("La sesión está cerrada"))?;
+        if self.tx.send(job).is_err() {
+            bail!("La sesión está cerrada");
+        }
         match rx.await {
             Ok(r) => r,
             Err(_) => Err(anyhow!(
@@ -215,6 +234,11 @@ impl SessionHandle {
 
     pub fn cancel(&self) {
         (self.canceller)();
+    }
+
+    /// The session has work running or waiting.
+    pub fn busy(&self) -> bool {
+        self.in_flight.load(std::sync::atomic::Ordering::SeqCst) > 0
     }
 
     pub fn progress(&self) -> Option<String> {

@@ -4,8 +4,8 @@ import type { Tab } from "../state";
 
 /**
  * Indicador del estado de una conexión: el punto de color en el explorador (sobre el icono del motor) y en las
- * pestañas. Conectada: el color de la conexión; conectando: ámbar que late; reconectada: ámbar fijo; estado de
- * sesión perdido o sin conexión: rojo. Nunca solo color: el tooltip lo dice con palabras.
+ * pestañas. Conectada: el color de la conexión; conectando o reconectando: ámbar que late; reconectada: ámbar fijo;
+ * estado de sesión perdido o sin conexión: rojo. Nunca solo color: el tooltip lo dice con palabras.
  */
 export function LinkDot(props: { info: LinkInfo; color?: string; class?: string }) {
   return (

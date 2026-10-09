@@ -70,6 +70,8 @@ export interface ConnConfig {
   filePath: string;
   /** Statements run on every new session right after connecting (SET search_path…, SET LOCK_TIMEOUT…). */
   startupSql?: string;
+  /** Keepalive: the server ends sessions idle this many minutes, and Celer checks idle ones a bit before (0: off). */
+  keepaliveMin?: number;
 }
 
 export interface ConnSummary extends ConnConfig {

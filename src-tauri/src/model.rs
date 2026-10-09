@@ -187,6 +187,10 @@ pub struct ConnConfig {
     /// Sentencias que se ejecutan en cada sesión nueva nada más conectar (SET search_path…, SET LOCK_TIMEOUT…).
     #[serde(default)]
     pub startup_sql: String,
+    /// Keepalive (#97): the server ends sessions idle for this many minutes; Celer checks idle sessions a bit before
+    /// (src/connWatch.ts → `keep_alive_session`). 0: off.
+    #[serde(default)]
+    pub keepalive_min: u32,
 }
 
 impl Default for ConnConfig {
@@ -214,6 +218,7 @@ impl Default for ConnConfig {
             folder: String::new(),
             file_path: String::new(),
             startup_sql: String::new(),
+            keepalive_min: 0,
         }
     }
 }

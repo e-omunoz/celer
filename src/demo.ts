@@ -490,6 +490,10 @@ export function createDemoBackend(): Backend {
       requireSession(sessionId);
       return { ok: true, reconnected: false, lost: "", ms: 0, error: "" };
     },
+    async keepAliveSession(sessionId) {
+      requireSession(sessionId);
+      return null;
+    },
     async openSession(connId, password, options) {
       const cfg = loadConns().find((item) => item.id === connId);
       if (!cfg) throw new Error("Conexión no encontrada");

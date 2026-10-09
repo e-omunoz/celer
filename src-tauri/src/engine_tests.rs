@@ -1484,3 +1484,306 @@ fn informix_large_schema_fks() {
         assert!(read_keys < Duration::from_secs(5), "{via}: leer las claves tardó {read_keys:?}");
     }
 }
+
+/// #97, measured: where the time goes when Informix ends an idle session (onmode -z, as a server's idle timeout
+/// does): noticing the dead connection, opening another and the guard's replay, and the whole next query.
+fn informix_recovery_breakdown(via: &str, connect: &Connector, admin: &mut dyn Driver) {
+    const SID: &str = "SELECT DBINFO('sessionid') FROM systables WHERE tabid = 1";
+    // Raw driver: how long a ping on the dead connection takes to fail.
+    let mut raw = connect().unwrap();
+    let sid = scalar(raw.as_mut(), SID);
+    if !informix_kill(admin, &sid) {
+        return;
+    }
+    let t = Instant::now();
+    let ping = raw.ping();
+    let detect = t.elapsed();
+    let t = Instant::now();
+    let q = raw.execute(SID, 10).map(|_| ());
+    let query_fail = t.elapsed();
+    drop(raw);
+    let t = Instant::now();
+    let fresh = connect().unwrap();
+    let reconnect = t.elapsed();
+    drop(fresh);
+    // Through the guard, as the app: idle for 5 minutes (checked before use), and in use (the query finds it).
+    let mut g = guarded(DbKind::Informix, connect, "", "celer");
+    let sid = scalar(&mut g, SID);
+    informix_kill(admin, &sid);
+    g.pretend_idle(Duration::from_secs(300));
+    let t = Instant::now();
+    let out = g.execute(SID, 10).unwrap();
+    let idle_total = t.elapsed();
+    let sid = scalar(&mut g, SID);
+    informix_kill(admin, &sid);
+    let t = Instant::now();
+    let out2 = g.execute(SID, 10).unwrap();
+    let busy_total = t.elapsed();
+    eprintln!(
+        "{via} #97: ping en la conexión muerta {detect:?} ({}); consulta en ella {query_fail:?} ({}); conexión nueva {reconnect:?}; \
+         con la sesión parada 5 min, la consulta siguiente {idle_total:?} {:?}; sin pausa {busy_total:?} {:?}",
+        ping.err().map(|e| e.to_string()).unwrap_or("¡respondió!".into()).replace('\n', " · "),
+        q.err().map(|e| e.to_string()).unwrap_or("¡respondió!".into()).replace('\n', " · "),
+        out.messages,
+        out2.messages
+    );
+}
+
+#[test]
+fn informix_recovery_measured() {
+    if let Some((cfg, lib)) = informix_cfg() {
+        let mut admin_cfg = cfg.clone();
+        admin_cfg.database = "sysadmin".into();
+        let mut admin = crate::odbc_driver::OdbcDriver::connect(admin_cfg, lib.clone()).expect("sysadmin");
+        let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+        informix_recovery_breakdown("DRDA", &connect, &mut admin);
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        let mut admin_cfg = cfg.clone();
+        admin_cfg.database = "sysadmin".into();
+        let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("sysadmin por JDBC");
+        let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
+        informix_recovery_breakdown("JDBC", &connect, &mut admin);
+    }
+}
+
+// ───────────────────────────────────────────────────────────────── a connection cut without a word (#97)
+
+/// A TCP proxy for the tests, in front of a real server: `silence` makes every connection it carries so far go quiet
+/// (what arrives is swallowed both ways, the sockets stay open), as a firewall, a NAT or a server's idle timeout whose
+/// close never reaches the client. New connections go through as usual.
+struct Blackhole {
+    port: u16,
+    next: Arc<AtomicUsize>,
+    quiet_below: Arc<AtomicUsize>,
+    /// Both ends of every connection, closed when the proxy goes: a driver still waiting on a silenced one (the
+    /// guard left it on its own thread) then gets its error and ends, instead of keeping the process from exiting.
+    sockets: Arc<parking_lot::Mutex<Vec<std::net::TcpStream>>>,
+}
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+impl Blackhole {
+    fn to(target: String) -> Blackhole {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let next = Arc::new(AtomicUsize::new(0));
+        let quiet_below = Arc::new(AtomicUsize::new(0));
+        let sockets: Arc<parking_lot::Mutex<Vec<std::net::TcpStream>>> = Arc::default();
+        let (n, q, all) = (next.clone(), quiet_below.clone(), sockets.clone());
+        std::thread::spawn(move || {
+            for client in listener.incoming().flatten() {
+                let seq = n.fetch_add(1, Ordering::SeqCst);
+                let Ok(server) = std::net::TcpStream::connect(&target) else { continue };
+                all.lock().extend([client.try_clone().unwrap(), server.try_clone().unwrap()]);
+                for (mut from, mut to) in [(client.try_clone().unwrap(), server.try_clone().unwrap()), (server, client)] {
+                    let q = q.clone();
+                    std::thread::spawn(move || {
+                        use std::io::Read;
+                        let mut buf = [0u8; 16384];
+                        while let Ok(n) = from.read(&mut buf) {
+                            if n == 0 {
+                                let _ = to.shutdown(std::net::Shutdown::Write);
+                                break;
+                            }
+                            if seq < q.load(Ordering::SeqCst) {
+                                continue; // gone quiet: nothing passes, nothing is closed
+                            }
+                            if to.write_all(&buf[..n]).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+            }
+        });
+        Blackhole { port, next, quiet_below, sockets }
+    }
+
+    /// Every connection open now stops answering.
+    fn silence(&self) {
+        self.quiet_below.store(self.next.load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+}
+
+impl Drop for Blackhole {
+    fn drop(&mut self) {
+        for s in self.sockets.lock().drain(..) {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+/// What the silent-cut test needs of an engine: how to ask the session's database, and (optionally) a query that
+/// tells manual mode, with its answer there.
+struct SilentCase<'a> {
+    engine: &'a str,
+    kind: DbKind,
+    database: &'a str,
+    current_db: &'a str,
+    manual: Option<(&'a str, &'a str)>,
+}
+
+/// #97 on a real engine: a watched session idle for a while whose connection went quiet answers the next query in
+/// about PING_LIMIT plus a login (not after the system's TCP timeout), on a new connection in the same database and
+/// the same transaction mode.
+fn silent_cut_suite(case: SilentCase, connect: &Connector, proxy: &Blackhole) {
+    let SilentCase { engine, kind, database, current_db, manual } = case;
+    let mut g = guarded(kind, connect, "", database);
+    assert_eq!(scalar(&mut g, current_db).trim(), database, "{engine}: la base pedida");
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute(current_db, 10).unwrap_or_else(|e| panic!("{engine}: tras el corte silencioso → {e}"));
+    let took = t0.elapsed();
+    eprintln!("{engine} #97: conexión muda tras 5 min parada → resultado en {took:?}; {:?}", out.messages);
+    assert_eq!(txt(&out.results[0].rows[0][0]).trim(), database, "{engine}: en la misma base");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{engine}: {:?}", out.messages);
+    assert!(took < Duration::from_millis(2500), "{engine}: {took:?}");
+
+    // Manual mode is kept on the new connection.
+    g.set_autocommit(false).unwrap();
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute(current_db, 10).unwrap_or_else(|e| panic!("{engine}, modo manual: {e}"));
+    eprintln!("{engine} #97, modo manual: {:?}; {:?}", t0.elapsed(), out.messages);
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{engine}: {:?}", out.messages);
+    if let Some((sql, want)) = manual {
+        assert_eq!(scalar(&mut g, sql).trim(), want, "{engine}: sigue en modo manual");
+    }
+    g.rollback().unwrap();
+    g.set_autocommit(true).unwrap();
+    // «Mantener viva»: the check of a session idle long enough, as connWatch.ts asks for it.
+    g.pretend_idle(Duration::from_secs(250));
+    let h = g.keep_alive(Duration::from_secs(240)).expect("comprobada");
+    assert!(h.ok && !h.reconnected, "{engine}: {h:?}");
+}
+
+/// The same server reached through a Blackhole: `host`/`port` of the config point to the proxy.
+fn through(cfg: &ConnConfig, default_port: u16) -> (ConnConfig, Blackhole) {
+    let proxy = Blackhole::to(format!("{}:{}", if cfg.host == "localhost" { "127.0.0.1" } else { cfg.host.as_str() }, cfg.port.unwrap_or(default_port)));
+    let mut via = cfg.clone();
+    via.host = "127.0.0.1".into();
+    via.port = Some(proxy.port);
+    (via, proxy)
+}
+
+#[test]
+fn pg_silent_cut() {
+    let Some(cfg) = pg_cfg() else { return };
+    let (cfg, proxy) = through(&cfg, 5432);
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let case = SilentCase { engine: "PostgreSQL", kind: DbKind::Postgres, database: "celer", current_db: "SELECT current_database()", manual: Some(("SELECT (now() <> statement_timestamp())::text", "true")) };
+    silent_cut_suite(case, &connect, &proxy);
+}
+
+#[test]
+fn mysql_silent_cut() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let (cfg, proxy) = through(&cfg, 3306);
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mysql::MysqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let case = SilentCase { engine: "MySQL/MariaDB", kind: DbKind::Mysql, database: "shop", current_db: "SELECT DATABASE()", manual: Some(("SELECT @@autocommit", "0")) };
+    silent_cut_suite(case, &connect, &proxy);
+}
+
+#[test]
+fn mssql_silent_cut() {
+    let Some(cfg) = mssql_cfg("master") else { return };
+    let (cfg, proxy) = through(&cfg, 1433);
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mssql::MssqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let case = SilentCase { engine: "SQL Server", kind: DbKind::Mssql, database: "celer_test", current_db: "SELECT DB_NAME()", manual: Some(("SELECT @@OPTIONS & 2", "2")) };
+    silent_cut_suite(case, &connect, &proxy);
+}
+
+#[test]
+fn informix_silent_cut() {
+    const DB: &str = "SELECT TRIM(DBINFO('dbname')) FROM systables WHERE tabid = 1";
+    if let Some((cfg, lib)) = informix_cfg() {
+        let (mut cfg, proxy) = through(&cfg, 9089);
+        cfg.database = "celerdemo".into();
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+        silent_cut_suite(SilentCase { engine: "Informix DRDA", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None }, &connect, &proxy);
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        let (mut cfg, proxy) = through(&cfg, 9088);
+        cfg.database = "celerdemo".into();
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
+        silent_cut_suite(SilentCase { engine: "Informix JDBC", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None }, &connect, &proxy);
+    }
+}
+
+/// Generic ODBC (psqlODBC, CELER_ODBC_TEST with Server= and Port=): its check is a catalog call.
+#[test]
+fn odbc_silent_cut() {
+    let (Ok(conn), Ok(lib)) = (std::env::var("CELER_ODBC_TEST"), std::env::var("CELER_ODBC_LIB")) else { return };
+    let value = |key: &str| conn.split(';').find_map(|p| p.split_once('=').filter(|(k, _)| k.trim().eq_ignore_ascii_case(key)).map(|(_, v)| v.trim().to_string()));
+    let (Some(server), Some(port)) = (value("Server"), value("Port")) else { return };
+    let proxy = Blackhole::to(format!("{}:{port}", if server == "localhost" { "127.0.0.1" } else { server.as_str() }));
+    let via: String = conn.split(';').filter(|p| !p.trim().is_empty()).map(|p| match p.split_once('=') {
+        Some((k, _)) if k.trim().eq_ignore_ascii_case("Server") => "Server=127.0.0.1".to_string(),
+        Some((k, _)) if k.trim().eq_ignore_ascii_case("Port") => format!("Port={}", proxy.port),
+        _ => p.to_string(),
+    }).collect::<Vec<_>>().join(";");
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Odbc;
+    cfg.odbc_conn_str = via;
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+    let mut g = guarded(DbKind::Odbc, &connect, "", "");
+    assert_eq!(scalar(&mut g, "SELECT 1").trim(), "1");
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute("SELECT 1", 10).unwrap_or_else(|e| panic!("ODBC: {e}"));
+    eprintln!("ODBC #97: conexión muda → resultado en {:?}; {:?}", t0.elapsed(), out.messages);
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{:?}", out.messages);
+    assert!(t0.elapsed() < Duration::from_millis(2500));
+}
+
+/// Kill and requery on PostgreSQL and MySQL/MariaDB (SQL Server and Informix: mssql_reconnects,
+/// informix_reconnects): a session the server ended while idle answers its next query on a new connection, in the
+/// same database; ended mid-use (no check before), the read is not repeated (an administrator stopped it on purpose)
+/// and the one after works.
+fn kill_and_requery(engine: &str, kind: DbKind, connect: &Connector, database: &str, id_sql: &str, current_db: &str, kill: &mut dyn FnMut(&str)) {
+    let mut g = guarded(kind, connect, "", database);
+    let id = scalar(&mut g, id_sql);
+    kill(&id);
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute(id_sql, 10).unwrap_or_else(|e| panic!("{engine}: {e}"));
+    eprintln!("{engine} #97: sesión terminada en el servidor y parada → {:?}; {:?}", t0.elapsed(), out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), id, "{engine}: otra conexión");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{engine}: {:?}", out.messages);
+    assert!(t0.elapsed() < Duration::from_secs(2), "{engine}");
+    assert_eq!(scalar(&mut g, current_db).trim(), database, "{engine}: misma base");
+    let id = scalar(&mut g, id_sql);
+    kill(&id);
+    let e = g.execute(id_sql, 10).unwrap_err().to_string();
+    assert!(e.starts_with("CONN_RESET:"), "{engine}: {e}");
+    assert_ne!(scalar(&mut g, id_sql), id, "{engine}: la siguiente, en otra conexión");
+}
+
+#[test]
+fn pg_kill_and_requery() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut admin = crate::postgres::PostgresDriver::connect(cfg.clone()).unwrap();
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let mut kill = |pid: &str| {
+        admin.execute(&format!("SELECT pg_terminate_backend({pid})"), 10).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    kill_and_requery("PostgreSQL", DbKind::Postgres, &connect, "celer", "SELECT pg_backend_pid()::text", "SELECT current_database()", &mut kill);
+}
+
+#[test]
+fn mysql_kill_and_requery() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let mut admin = crate::mysql::MysqlDriver::connect(cfg.clone()).unwrap();
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mysql::MysqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let mut kill = |id: &str| {
+        admin.execute(&format!("KILL {id}"), 10).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    kill_and_requery("MySQL/MariaDB", DbKind::Mysql, &connect, "shop", "SELECT CONNECTION_ID()", "SELECT DATABASE()", &mut kill);
+}

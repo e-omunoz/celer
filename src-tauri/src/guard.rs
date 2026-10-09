@@ -2,7 +2,11 @@
 //!
 //! - **Comprobación antes de usar**: una sesión que lleva un rato parada (suspensión del equipo, VPN, cortafuegos que
 //!   cierra conexiones ociosas) hace una ida y vuelta barata (`Driver::ping`) antes de la operación; si no hace falta,
-//!   ninguna.
+//!   ninguna. Sin estado que perder, la respuesta se espera como mucho `PING_LIMIT`: una conexión que el servidor o un
+//!   cortafuegos cortó sin avisar no contesta (ni da error hasta que el sistema se rinde, 10-20 s o más), y se da por
+//!   muerta sin esperar a eso (#97). Mientras se abre la conexión nueva, `progress` dice «Reconectando…».
+//! - **Mantener viva** (opcional, por conexión): `keep_alive` hace esa comprobación en las sesiones paradas un poco
+//!   antes de que el servidor las corte por inactividad.
 //! - **Reconexión**: si la conexión se cortó (al comprobarla o en mitad de una operación), se abre otra con la misma
 //!   configuración, en la misma base y con el mismo modo de transacción.
 //!   - Sin estado de sesión, la operación sigue sola: las lecturas se repiten y la salida lo dice («Conexión
@@ -30,6 +34,11 @@ pub type Connector = Arc<dyn Fn() -> Result<Box<dyn Driver>> + Send + Sync>;
 
 /// Tras cuánto tiempo parada se comprueba una sesión antes de usarla.
 pub const CHECK_AFTER: Duration = Duration::from_secs(60);
+/// Lo que se espera la respuesta de esa comprobación, si la sesión no tiene nada que perder, antes de dar la conexión
+/// por muerta (#97): una ida y vuelta normal tarda milisegundos.
+pub const PING_LIMIT: Duration = Duration::from_millis(1500);
+/// Lo que dice `progress` mientras se abre la conexión que sustituye a la que se cortó.
+pub const RECONNECTING: &str = "Reconectando…";
 /// Esperas entre intentos cuando conectar falla por algo pasajero.
 const BACKOFF: [Duration; 3] = [Duration::from_millis(400), Duration::from_millis(1200), Duration::from_millis(2500)];
 /// Pool genérico: cuánto se guarda una conexión libre, a partir de cuándo se comprueba antes de darla y cuántas por
@@ -266,6 +275,23 @@ pub fn connect_retrying(connect: &Connector, patient: bool) -> Result<Box<dyn Dr
     }
 }
 
+/// `Driver::ping` on its own thread, waiting at most `PING_LIMIT`: the driver comes back if it answered in time
+/// (well or not); if not, it stays on that thread, which drops it when its socket finally gives up.
+fn ping_bounded(mut d: Box<dyn Driver>) -> (Option<Box<dyn Driver>>, Result<()>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("celer-ping".into()).spawn(move || {
+        let r = d.ping();
+        let _ = tx.send((d, r));
+    });
+    if let Err(e) = spawned {
+        return (None, Err(anyhow!("No se pudo comprobar la conexión: {e}")));
+    }
+    match rx.recv_timeout(PING_LIMIT) {
+        Ok((d, r)) => (Some(d), r),
+        Err(_) => (None, Err(anyhow!("el servidor no contesta en {:.1} s", PING_LIMIT.as_secs_f64()))),
+    }
+}
+
 // ───────────────────────────────────────────────────────────────── pool genérico
 
 /// Una conexión libre: sin cursor, en autocommit, sin transacción ni estado de sesión.
@@ -317,13 +343,17 @@ fn take_expired(pool: &mut Vec<(String, Idle)>) -> Vec<Idle> {
 /// haberse cortado mientras esperaba.
 fn pool_take(key: &str, wanted: &str) -> Option<Box<dyn Driver>> {
     loop {
-        let mut idle = {
+        let idle = {
             let mut pool = pool().lock();
             let at = pool.iter().rposition(|(k, i)| k == key && i.serves(wanted) && i.since.elapsed() < IDLE_TTL)?;
             pool.remove(at).1
         };
-        if idle.since.elapsed() < IDLE_PING || idle.driver.ping().is_ok() {
+        if idle.since.elapsed() < IDLE_PING {
             return Some(idle.driver);
+        }
+        // A free connection has no state of its own: one that does not answer in time is left behind.
+        if let (Some(d), Ok(())) = ping_bounded(idle.driver) {
+            return Some(d);
         }
     }
 }
@@ -397,6 +427,8 @@ pub struct Guarded {
     pending_loss: Option<String>,
     cancel_slot: Arc<Mutex<Canceller>>,
     progress_slot: Arc<Mutex<Progress>>,
+    /// Se está abriendo la conexión que sustituye a la que se cortó (para `progress`, desde otro hilo).
+    reconnecting: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
     pub connect_ms: u64,
     pub reused: bool,
@@ -441,6 +473,7 @@ impl Guarded {
         Ok(Guarded {
             cancel_slot: Arc::new(Mutex::new(inner.canceller())),
             progress_slot: Arc::new(Mutex::new(inner.progress())),
+            reconnecting: Arc::new(AtomicBool::new(false)),
             inner: Some(inner),
             connect,
             kind: o.kind,
@@ -531,6 +564,7 @@ impl Guarded {
         self.temp = false;
         self.settings = false;
         self.cursor = false;
+        self.reconnecting.store(true, Ordering::SeqCst);
         let opened = (|| -> Result<Box<dyn Driver>> {
             let mut d = connect_retrying(&self.connect, true)?;
             let here = d.current_database().unwrap_or_default();
@@ -542,6 +576,7 @@ impl Guarded {
             }
             Ok(d)
         })();
+        self.reconnecting.store(false, Ordering::SeqCst);
         let d = match opened {
             Ok(d) => d,
             Err(e) => {
@@ -585,7 +620,7 @@ impl Guarded {
         if self.cursor || (!force && idle < CHECK_AFTER) {
             return Ok(None);
         }
-        let ping = self.d().and_then(|d| d.ping());
+        let ping = self.ping_within();
         let Err(e) = ping else {
             self.touch();
             return Ok(None);
@@ -598,6 +633,19 @@ impl Guarded {
             bail!("SESSION_LOST: Al volver a usar la sesión, {why}. Celer ha vuelto a conectar en {ms} ms, pero se han perdido {lost}. La operación no se ha hecho: revisa y vuelve a lanzarla.");
         }
         Ok(Some(format!("{RECOVERED}: {why}; reconectada en {ms} ms.")))
+    }
+
+    /// La comprobación de `check`. Sin estado que perder, en otro hilo y con `PING_LIMIT`: si no contesta a tiempo, la
+    /// conexión se da por muerta y se deja en ese hilo, que la cierra cuando el sistema se rinda (cerrarla aquí podría
+    /// esperar lo mismo). Con estado (transacción, temporales, SET) se espera la respuesta: reconectar lo perdería.
+    fn ping_within(&mut self) -> Result<()> {
+        if !self.lost_state().is_empty() {
+            return self.d().and_then(|d| d.ping());
+        }
+        let d = self.inner.take().ok_or_else(|| anyhow!("Sin conexión con el servidor"))?;
+        let (back, r) = ping_bounded(d);
+        self.inner = back;
+        r
     }
 
     /// Una operación de solo lectura (explorador, columnas, DDL, autocompletado…): si la conexión se cortó, se repite
@@ -842,7 +890,11 @@ impl Driver for Guarded {
 
     fn progress(&self) -> Progress {
         let slot = self.progress_slot.clone();
+        let reconnecting = self.reconnecting.clone();
         Arc::new(move || {
+            if reconnecting.load(Ordering::SeqCst) {
+                return Some(RECONNECTING.to_string());
+            }
             let progress = slot.lock().clone();
             progress()
         })
@@ -872,6 +924,13 @@ impl Driver for Guarded {
             Err(e) if is_code(&e, "SESSION_LOST") => Health { ok: true, reconnected: true, lost: e.to_string(), ms: ms(t0), error: String::new() },
             Err(e) => Health { ok: false, error: e.to_string(), ms: ms(t0), ..Health::default() },
         }
+    }
+
+    fn keep_alive(&mut self, idle: Duration) -> Option<Health> {
+        if self.cursor || self.pending_loss.is_some() || self.last_used.elapsed() < idle {
+            return None;
+        }
+        Some(self.health(true))
     }
 }
 
@@ -949,6 +1008,12 @@ mod tests {
         killed: AtomicBool,
         /// Conectar falla con este error tantas veces.
         refuse: Mutex<(usize, String)>,
+        /// Las conexiones hasta esta (por número) ya no contestan: se cortaron sin avisar y cada operación espera
+        /// `hang` antes de fallar, como un socket muerto hasta que el sistema se rinde.
+        silent_upto: AtomicUsize,
+        hang: Mutex<Duration>,
+        /// Lo que tarda en abrirse una conexión.
+        connect_delay: Mutex<Duration>,
     }
 
     struct Fake {
@@ -962,6 +1027,11 @@ mod tests {
 
     impl Fake {
         fn alive(&mut self) -> Result<()> {
+            if self.id <= self.server.silent_upto.load(Ordering::SeqCst) {
+                std::thread::sleep(*self.server.hang.lock());
+                self.dead = true;
+                bail!("Connection timed out (os error 110)");
+            }
             if !self.dead && self.server.killed.swap(false, Ordering::SeqCst) {
                 self.dead = true;
                 bail!("ERROR 1927 (70100): Connection was killed");
@@ -1072,6 +1142,7 @@ mod tests {
                     bail!("{}", refuse.1);
                 }
             }
+            std::thread::sleep(*server.connect_delay.lock());
             let id = server.connects.fetch_add(1, Ordering::SeqCst) + 1;
             Ok(Box::new(Fake { server: server.clone(), id, dead: false, database: "app".into(), autocommit: true, in_tx: false }) as Box<dyn Driver>)
         })
@@ -1086,6 +1157,79 @@ mod tests {
             Cell::Int(i) => i,
             _ => -1,
         }
+    }
+
+    /// #97: a connection cut without a word (a firewall, a server's idle timeout whose close never arrives) does not
+    /// answer the check before use; without session state it is given up after PING_LIMIT, not after the system's
+    /// own timeout, and the statement runs on a new one. With state, the answer is waited for: reconnecting loses it.
+    #[test]
+    fn a_silent_cut_is_given_up_quickly() {
+        let server = Arc::new(Server::default());
+        *server.hang.lock() = Duration::from_secs(4);
+        let mut g = Guarded::open(connector(&server), opts(DbKind::Informix, "")).unwrap();
+        g.execute("SELECT 1", 10).unwrap();
+        server.silent_upto.store(1, Ordering::SeqCst);
+        g.pretend_idle(Duration::from_secs(300));
+        let t0 = Instant::now();
+        let out = g.execute("SELECT 1", 10).unwrap();
+        let took = t0.elapsed();
+        assert!(took < PING_LIMIT + Duration::from_millis(700), "{took:?}");
+        assert_eq!(first_cell(&out), 2, "on a new connection");
+        assert!(out.messages[0].starts_with(RECOVERED) && out.messages[0].contains("no contesta"), "{:?}", out.messages);
+
+        // In manual mode with work done there is a transaction to lose: the check waits for the real answer.
+        g.set_autocommit(false).unwrap();
+        g.execute("UPDATE t SET a = 1", 10).unwrap();
+        server.silent_upto.store(2, Ordering::SeqCst);
+        g.pretend_idle(Duration::from_secs(300));
+        let t0 = Instant::now();
+        let e = g.execute("SELECT 1", 10).unwrap_err().to_string();
+        assert!(t0.elapsed() >= Duration::from_secs(4), "{:?}", t0.elapsed());
+        assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción"), "{e}");
+    }
+
+    /// While the new connection opens, `progress` says so (the tab's dot and the running timer show it).
+    #[test]
+    fn progress_says_reconnecting() {
+        let server = Arc::new(Server::default());
+        let mut g = Guarded::open(connector(&server), opts(DbKind::Postgres, "")).unwrap();
+        let progress = g.progress();
+        assert_eq!(progress(), None);
+        *server.connect_delay.lock() = Duration::from_millis(600);
+        server.cut.store(true, Ordering::SeqCst);
+        let worker = std::thread::spawn(move || g.execute("SELECT 1", 10).map(|o| o.messages));
+        let mut seen = false;
+        let t0 = Instant::now();
+        while !worker.is_finished() && t0.elapsed() < Duration::from_secs(5) {
+            seen |= progress().as_deref() == Some(RECONNECTING);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let messages = worker.join().unwrap().unwrap();
+        assert!(seen, "«{RECONNECTING}» mientras se abría la conexión nueva");
+        assert!(messages.iter().any(|m| m.starts_with(RECOVERED)), "{messages:?}");
+        assert_eq!(progress(), None, "and nothing once it is back");
+    }
+
+    /// «Mantener viva»: a session idle for the given time gets its check (and a new connection if it was cut);
+    /// one used more recently, or with a result open, is left alone.
+    #[test]
+    fn keep_alive_checks_idle_sessions_only() {
+        let server = Arc::new(Server::default());
+        let mut g = Guarded::open(connector(&server), opts(DbKind::Mysql, "")).unwrap();
+        g.execute("SELECT 1", 10).unwrap();
+        assert!(g.keep_alive(Duration::from_secs(240)).is_none(), "used just now");
+        g.pretend_idle(Duration::from_secs(250));
+        let h = g.keep_alive(Duration::from_secs(240)).expect("checked");
+        assert!(h.ok && !h.reconnected, "{h:?}");
+        assert!(g.keep_alive(Duration::from_secs(240)).is_none(), "the check counts as use");
+        g.pretend_idle(Duration::from_secs(250));
+        server.cut.store(true, Ordering::SeqCst);
+        let h = g.keep_alive(Duration::from_secs(240)).expect("checked");
+        assert!(h.ok && h.reconnected && h.lost.is_empty(), "{h:?}");
+        assert_eq!(first_cell(&g.execute("SELECT 1", 10).unwrap()), 2);
+        g.execute("SELECT BIG", 10).unwrap();
+        g.pretend_idle(Duration::from_secs(250));
+        assert!(g.keep_alive(Duration::from_secs(240)).is_none(), "a result open is not touched");
     }
 
     #[test]

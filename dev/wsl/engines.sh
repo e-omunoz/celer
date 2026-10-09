@@ -37,6 +37,16 @@ engine_env() {
   export CELER_INFORMIX_TEST="host=localhost port=9089 user=informix password=in4mix database=celer"
   export CELER_INFORMIX_JDBC_TEST="host=$ifx_ip port=9088 user=informix password=in4mix database=celer server=informix proxied=localhost"
   export CELER_IBM_LIB="$D/clidriver/lib/libdb2.so" LD_LIBRARY_PATH="$D/clidriver/lib"
+  # IBM's CLI driver links libxml2.so.2; distros with libxml2 2.14+ ship only libxml2.so.16 (same API it uses).
+  if ! ldconfig -p | grep -q 'libxml2.so.2 ' && [ -e /usr/lib/x86_64-linux-gnu/libxml2.so.16 ]; then
+    mkdir -p "$D/compat" && ln -sf /usr/lib/x86_64-linux-gnu/libxml2.so.16 "$D/compat/libxml2.so.2"
+    LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$D/compat"
+  fi
+  # Generic ODBC: PostgreSQL's ODBC driver (odbc-postgresql, installed by setup.sh) against the PostgreSQL container.
+  if odbcinst -q -d 2>/dev/null | grep -q 'PostgreSQL Unicode'; then
+    export CELER_ODBC_LIB=/usr/lib/x86_64-linux-gnu/libodbc.so.2
+    export CELER_ODBC_TEST="DRIVER={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer"
+  fi
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"
   export CELER_JDBC_JARS="$D/jdbc/jdbc-15.0.1.4.jar:$D/jdbc/bson-3.8.0.jar"
   export CELER_REQUIRE_BRIDGE=1 CELER_NODE=node CELER_INFORMIX_CONTAINER=celer-ifx

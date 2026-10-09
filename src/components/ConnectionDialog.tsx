@@ -480,6 +480,26 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
                   onInput={(event) => set("startupSql", event.currentTarget.value)}
                 />
               </label>
+              <Show when={kind() !== "sqlite"}>
+                <label class="field">
+                  <span>
+                    Mantener viva la conexión <small class="muted">(si el servidor corta las sesiones paradas: Celer las comprueba un poco antes)</small>
+                  </span>
+                  <div class="form-row keepalive-row">
+                    <span>El servidor las corta a los</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="1440"
+                      step="1"
+                      value={cfg().keepaliveMin ?? 0}
+                      aria-label="Minutos sin actividad tras los que el servidor corta una sesión (0: no mantener viva)"
+                      onInput={(event) => set("keepaliveMin", Math.max(0, Math.min(1440, Math.round(Number(event.currentTarget.value) || 0))))}
+                    />
+                    <span>min sin actividad (0: no)</span>
+                  </div>
+                </label>
+              </Show>
             </div>
           </Show>
 

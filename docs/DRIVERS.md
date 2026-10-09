@@ -163,6 +163,21 @@ that database to its own `drivers/db2dsdriver.cfg` in its data folder (no passwo
 `DB2DSDRIVER_CFG_PATH` to it (`drivers.rs`, `cli_acr_off`). A `db2dsdriver.cfg` of the user's (that variable already
 set, or the file in the driver's `cfg/` folder) is left as it is and wins. SQLI (Client SDK) and JDBC are not affected.
 
+**After the server drops an idle connection (#97).** Measured with the engine tests (`informix_recovery_measured`,
+Informix 15 in Docker): when the server ends the session and its close reaches Celer (`onmode -z`), the dead socket
+fails at once (DRDA 0.5 ms, JDBC 5 ms), a new login takes 14 ms (DRDA) / 18 ms (JDBC), and the guard's check, new
+connection and replay of the database and transaction mode bring the next query back in 15-20 ms. The 10-12 s seen
+come from a connection cut without a word (a firewall or NAT, or a server whose close never arrives): the first
+round trip gets no answer and no error until the operating system gives up on the socket (about 10-20 s on Windows,
+minutes on Linux). So `guard.rs` checks a session idle for a minute with a bounded round trip: without state to lose
+it waits at most 1.5 s, then leaves that connection on its own thread and opens another, so the query answers in
+about 1.5 s plus a login (`*_silent_cut` tests, every engine, through a proxy that goes quiet: 1.51-1.60 s). With a
+transaction, temporary tables or `SET` of its own the real answer is waited for (reconnecting would lose them).
+JDBC logins time out after `LOGINTIMEOUT` (8 s unless set in Parámetros extra); `IFX_SOC_TIMEOUT` is not set, as it
+would bound every read of the socket and cut long queries too. «Mantener viva» in a connection's advanced options
+(off by default) takes the minutes after which the server ends idle sessions, and Celer checks idle sessions at 80 %
+of that, so they are never cut.
+
 ### The JDBC bridge
 
 `src-tauri/bridge/CelerBridge.java` is a small program with no dependencies, compiled with `javac --release 11` by

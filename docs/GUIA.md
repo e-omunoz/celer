@@ -113,8 +113,14 @@ el resto de propiedades de la URL (van a *Parámetros extra*).
 Una conexión puede caerse con el equipo suspendido, un corte de VPN o un servidor que cierra las sesiones paradas.
 Celer lo detecta y vuelve a conectar solo:
 
-- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse; además, el sistema
-  mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con keepalive de TCP.
+- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse (y también al volver a
+  la ventana de Celer); además, el sistema mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con
+  keepalive de TCP. Si la conexión no contesta en segundo y medio (un cortafuegos o un servidor que la cortó sin
+  avisar), Celer no espera más: abre otra y la consulta sigue, salvo que la sesión tenga algo que perder.
+- **Mantener viva la conexión** (*Opciones avanzadas* del formulario): si el servidor corta las sesiones paradas
+  (Informix con un tiempo de inactividad, un cortafuegos), pon a los cuántos minutos lo hace y Celer comprobará las
+  sesiones paradas un poco antes, para que no lleguen a cortarse. Desactivado (0) por defecto.
+- Mientras abre la conexión nueva, la pestaña lo dice («Ejecutando… · Reconectando…») y su punto late en ámbar.
 - Al volver de una suspensión o de un corte de red, Celer comprueba todas las sesiones abiertas.
 - Si se cortó y no había nada que perder, la consulta sigue en la conexión nueva y la salida lo dice («Conexión
   recuperada…»). Una sentencia que modifica datos no se repite nunca, porque no se sabe si llegó a ejecutarse: Celer

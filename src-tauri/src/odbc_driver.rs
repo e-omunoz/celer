@@ -1564,11 +1564,15 @@ impl<L: Link> Driver for LinkDriver<L> {
         self.conn.canceller()
     }
 
-    /// Informix: la consulta más barata del catálogo. Otros orígenes ODBC: no hay una consulta que valga para todos;
-    /// sus cortes se reconocen por el SQLSTATE (08S01…).
+    /// Informix: la consulta más barata del catálogo. Otros orígenes ODBC: no hay una consulta que valga para todos,
+    /// pero sí una función de catálogo (SQLTables de una tabla que no existe), que los drivers de servidor resuelven con
+    /// una ida y vuelta; sus cortes se reconocen además por el SQLSTATE (08S01…).
     fn ping(&mut self) -> Result<()> {
-        if self.dialect != Dialect::Informix || self.stmt.is_some() {
+        if self.stmt.is_some() {
             return Ok(());
+        }
+        if self.dialect != Dialect::Informix {
+            return self.odbc()?.catalog_tables(None, None, Some("celer_ping_no_table"), Some("TABLE")).map(|_| ());
         }
         self.q("SELECT 1 FROM systables WHERE tabid = 1").map(|_| ())
     }

@@ -16,6 +16,18 @@ All notable changes to Celer are documented here. The format follows
 - **E-R diagram of a table on a generic ODBC connection**: it opens on the source's tables (it could not find a
   table folder before), and the explorer shows each table's foreign keys under «Claves foráneas».
 - SQLite: a key declared as `REFERENCES t` without columns shows t's primary-key columns instead of nothing.
+- **Recovering from a connection the server or a firewall dropped while idle takes about 1.5 s, not 10-12 s** (#97):
+  a session idle for a minute is checked before use with a bounded round trip; if the connection does not answer in
+  1.5 s and the session has nothing to lose, Celer opens another one at once instead of waiting for the system's TCP
+  timeout (with a transaction, temporary tables or `SET` it still waits and says what was lost). Idle sessions are
+  also checked when Celer's window gets focus. While the new connection opens, the tab's dot pulses amber and the
+  running timer says «Reconectando…». Informix over JDBC logs in with `LOGINTIMEOUT` (8 s unless set). Measured on
+  every engine (`*_silent_cut` and `*_kill_and_requery` engine tests); generic ODBC sources are checked with a
+  catalog call now (before, a cut was only noticed by its error).
+
+### Added
+- **«Mantener viva la conexión»** (advanced options of a connection, off by default): the minutes after which the
+  server ends idle sessions; Celer checks idle sessions a bit before (80 %), so they are not cut (#97).
 
 ### Fixed
 - **SQL Server `PRINT` and low-severity `RAISERROR` messages are shown** (#67): `PRINT 'hola'; SELECT 1` shows «hola»

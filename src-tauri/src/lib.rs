@@ -576,6 +576,18 @@ fn cancel(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<()> 
     Ok(())
 }
 
+/// Keepalive of a session (#97): checked (and reconnected if it was cut) when it has been idle for `idle_secs`;
+/// `None` when it was not idle that long, has a result open, or is busy (the check waits for nothing: a session at
+/// work answers when its statement ends).
+#[tauri::command]
+async fn keep_alive_session(state: State<'_, Arc<AppState>>, session_id: String, idle_secs: u64) -> CmdResult<Option<Health>> {
+    let h = state.sessions.get(&session_id).map_err(err)?;
+    if h.busy() {
+        return Ok(None);
+    }
+    h.run(move |d| Ok(d.keep_alive(std::time::Duration::from_secs(idle_secs)))).await.map_err(err)
+}
+
 /// What a session is doing besides the statement itself (reading the rest of a result to keep the session), while
 /// it runs.
 #[tauri::command]
@@ -1414,6 +1426,7 @@ pub fn run() {
             test_connection,
             open_session,
             check_session,
+            keep_alive_session,
             close_session,
             close_connection_sessions,
             read_spreadsheet,
