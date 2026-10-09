@@ -65,6 +65,8 @@ export function nextRegion(regions: HTMLElement[], active: Element | null, dir: 
 
 /** F6 / Mayús+F6: the focus moves to the next or previous panel, which lights up for a moment. */
 export function focusPanel(dir: 1 | -1) {
+  // A dialog, the palette or a menu on top keeps the focus: the panels behind it wait.
+  if (document.querySelector(":is(.dialog, .palette, .menu, .onboarding):not([data-leave])")) return;
   const region = nextRegion(focusRegions(), document.activeElement, dir);
   if (!region) return;
   regionTarget(region).focus({ preventScroll: true });
