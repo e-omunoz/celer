@@ -71,14 +71,20 @@ pub fn export(
 ) -> Result<u64> {
     // Whole binary values, not the grid's 4 KB preview.
     crate::model::set_full_binary(true);
-    let written = export_rows(d, sql, o, engine, progress, cancelled);
+    // Written next to the destination and moved over it at the end: a failed or cancelled export leaves the old
+    // file as it was and no half file.
+    let partial = format!("{}.partial", o.path);
+    let written = export_rows(d, sql, o, engine, progress, cancelled, &partial)
+        .and_then(|n| Ok(std::fs::rename(&partial, &o.path).map(|_| n)?));
     crate::model::set_full_binary(false);
     if written.is_err() {
         let _ = d.close_cursor();
+        let _ = std::fs::remove_file(&partial);
     }
     written
 }
 
+#[allow(clippy::too_many_arguments)]
 fn export_rows(
     d: &mut dyn Driver,
     sql: &str,
@@ -86,6 +92,7 @@ fn export_rows(
     engine: DbKind,
     progress: &dyn Fn(u64),
     cancelled: &dyn Fn() -> bool,
+    out_path: &str,
 ) -> Result<u64> {
     let out = d.execute(sql, PAGE)?;
     let Some(first) = out.results.into_iter().find(|r| !r.columns.is_empty()) else {
@@ -106,7 +113,7 @@ fn export_rows(
             row: 0,
         },
         _ => {
-            let mut w = BufWriter::with_capacity(1 << 20, File::create(&o.path)?);
+            let mut w = BufWriter::with_capacity(1 << 20, File::create(out_path)?);
             if o.bom && matches!(o.format.as_str(), "csv" | "tsv") {
                 w.write_all("\u{feff}".as_bytes())?;
             }
@@ -161,7 +168,7 @@ fn export_rows(
             if let Ok(ws) = wb.worksheet_from_index(0) {
                 ws.autofit();
             }
-            wb.save(&o.path)?;
+            wb.save(out_path)?;
         }
     }
     Ok(total)
@@ -565,14 +572,35 @@ mod tests {
         let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
         let path = std::env::temp_dir().join(format!("celer-export-cancel-{}.csv", std::process::id()));
         let o = ExportOptions { path: path.to_string_lossy().into_owned(), header: false, bom: false, ..ExportOptions::default() };
+        std::fs::write(&path, "old report").unwrap();
         let pages = std::cell::Cell::new(0u64);
         let sql = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) SELECT i FROM n";
         let res = export(&mut d, sql, &o, DbKind::Sqlite, &|rows| pages.set(rows), &|| pages.get() > 0);
-        let _ = std::fs::remove_file(&path);
         assert_eq!(res.unwrap_err().to_string(), CANCELLED);
         assert_eq!(pages.get(), PAGE as u64, "stopped after the first page");
-        // The session is usable afterwards.
-        assert!(d.execute("SELECT 1", 10).is_ok());
+        // The file that was there is untouched and no partial file is left.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old report");
+        assert!(!std::path::Path::new(&format!("{}.partial", o.path)).exists());
+        // The session is usable afterwards, and a finished export replaces the file.
+        export(&mut d, "SELECT 7", &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "7\r\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn xlsx_export_writes_the_workbook() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-{}.xlsx", std::process::id()));
+        let o = ExportOptions { format: "xlsx".into(), path: path.to_string_lossy().into_owned(), ..ExportOptions::default() };
+        let n = export(&mut d, "SELECT 1 AS a, 'x' AS b UNION ALL SELECT 2, NULL", &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(n, 2);
+        assert!(bytes.starts_with(b"PK"), "a zip file");
+        assert!(!std::path::Path::new(&format!("{}.partial", o.path)).exists());
     }
 
     /// The same against PostgreSQL (CELER_PG_TEST), where the export reads a server cursor page by page.
