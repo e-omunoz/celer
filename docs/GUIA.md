@@ -74,6 +74,20 @@ En el explorador:
 - **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
 - **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON sin contraseñas, para compartirlas o
   llevarlas a otro equipo; al importar no se repiten las que ya existen.
+- **Varias a la vez**: Ctrl+clic (⌘+clic en macOS) añade o quita una fila, Mayús+clic selecciona un rango tal como se
+  ve en el árbol y Ctrl+Mayús+clic lo añade a lo que ya había; con el teclado, Mayús+flechas (y Mayús+Inicio/Fin)
+  amplían la selección y Ctrl+A selecciona todas las filas visibles del mismo tipo que la que tiene el foco (todas las
+  conexiones, todas las carpetas, todas las tablas…). Esc deja solo la fila con el foco. El menú contextual, Supr,
+  Ctrl+C y Ctrl+Mayús+F actúan entonces sobre toda la selección y dicen cuántas son («Eliminar 3 conexiones»).
+  - Conexiones y carpetas se seleccionan juntas: conectar, desconectar, favoritas, exportar, copiar nombres, moverlas
+    (arrastrando la selección o con «Mover a…» del menú), crear una carpeta con ellas y eliminarlas con una sola
+    confirmación y un solo *Deshacer*. Conectar, desconectar y exportar incluyen lo que hay dentro de las carpetas
+    seleccionadas.
+  - Los accesos de **Favoritas** van aparte: Supr los quita de favoritas, nunca borra las conexiones.
+  - Los objetos de la base (tablas, vistas…) también van aparte: copiar sus nombres y generar un SELECT o un
+    SELECT COUNT(*) de cada tabla; arrastrarlos al editor escribe sus nombres.
+  - Si haces Ctrl+clic en una fila de otro grupo (un objeto con conexiones seleccionadas, por ejemplo), la selección
+    empieza de nuevo en ella.
 - Todo está en el menú contextual (también con la tecla Menú o Mayús+F10), con su atajo al lado.
 
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas

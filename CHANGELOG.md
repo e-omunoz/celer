@@ -6,6 +6,22 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Several rows at once in the explorer** (#92): Ctrl+click (Cmd+click on macOS) adds or removes a row, Shift+click
+  selects a range in the order shown and Ctrl+Shift+click adds one; Shift+arrows and Shift+Home/End extend it from the
+  keyboard, Ctrl+A selects every visible row of the focused one's kind (connections, folders, favourites, or objects
+  of one kind such as tables) and Esc leaves the focused row alone. Selected rows get a tint and a bar on the left,
+  the focused one also a ring, in every theme.
+  - Connections and folders are selected together: connect, disconnect, favourite, export, copy names, move (dragging
+    the selection, or "Mover a «carpeta»" in its menu), a new folder holding them, and delete with one confirmation
+    («Eliminar 3 conexiones y 1 carpeta») and one undo. Connecting, disconnecting and exporting take what is inside the
+    selected folders too.
+  - Favourite shortcuts form their own selection: connect, disconnect, export, copy names, and Supr takes them out of
+    the favourites (it never deletes the connections).
+  - Database objects form theirs: copy names or full names, and generate a SELECT or SELECT COUNT(*) for each table
+    or view (one console per connection); dragging them drops their names in the editor.
+  - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
+
 ## [2.1.1] - 2026-10-09
 
 ### Fixed
