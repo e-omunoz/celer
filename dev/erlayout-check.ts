@@ -1,6 +1,6 @@
 // Quick checks for src/erLayout.ts: node --experimental-strip-types dev/erlayout-check.ts
 import assert from "node:assert/strict";
-import { boxSize, columnY, edgePath, ER, layoutEr, type ErEdge, type ErTable } from "../src/erLayout.ts";
+import { boxSize, columnY, edgePath, ER, erHidden, erNeighbourhood, erNeighbours, layoutEr, type ErEdge, type ErTable } from "../src/erLayout.ts";
 
 const col = (name: string, pk = false, fk = false) => ({ name, type: "int", pk, fk, nullable: !pk });
 const table = (name: string, columns = [col("id", true)]): ErTable => ({ id: `public.${name}`, name, schema: "public", columns });
@@ -60,4 +60,28 @@ const spokeXs = new Set(spokes.map((s) => hub.boxes[s.id].x));
 assert.ok(spokeXs.size > 1, "the layer wraps");
 assert.ok(hub.height < 60 * (ER.header + ER.row + ER.pad + ER.gapY) / 2, "and is not 60 boxes tall");
 assert.ok(spokes.every((s) => hub.boxes[s.id].x > hub.boxes["public.hub"].x), "still to the right of what they reference");
+
+// The diagram of one table: its neighbours both ways (what it points to and what points to it).
+const id = (name: string) => `public.${name}`;
+assert.deepEqual(erNeighbours([id("orders")], edges), [id("customers"), id("order_lines")]);
+assert.deepEqual(erNeighbours([id("logs")], edges), [], "a table without relations has no neighbours");
+assert.deepEqual(erNeighbours([id("orders"), id("customers")], edges), [id("countries"), id("order_lines")], "not the ones already in");
+assert.deepEqual(erNeighbours([id("a")], [edge("a", "a")]), [], "a self reference adds nothing");
+// Level by level, the start first; it stops when there is nothing more.
+assert.deepEqual(erNeighbourhood(id("orders"), edges, 0), [id("orders")]);
+assert.deepEqual(erNeighbourhood(id("orders"), edges, 1), [id("orders"), id("customers"), id("order_lines")]);
+assert.deepEqual(erNeighbourhood(id("orders"), edges, 2), [id("orders"), id("customers"), id("order_lines"), id("countries"), id("products")]);
+assert.deepEqual(erNeighbourhood(id("orders"), edges, 9), erNeighbourhood(id("orders"), edges, 2), "past the last level, the same");
+assert.deepEqual(erNeighbourhood(id("logs"), edges, 3), [id("logs")]);
+// Cycles end.
+assert.deepEqual(erNeighbourhood(id("a"), [edge("a", "b"), edge("b", "c"), edge("c", "a")], 5).sort(), [id("a"), id("b"), id("c")]);
+// What each table on show still has to add.
+const hidden = erHidden(erNeighbourhood(id("orders"), edges, 1), edges);
+assert.deepEqual(hidden.get(id("customers")), [id("countries")]);
+assert.deepEqual(hidden.get(id("order_lines")), [id("products")]);
+assert.equal(hidden.has(id("orders")), false, "the centre has all of its own on show");
+assert.equal(erHidden(tables.map((t) => t.id), edges).size, 0, "the whole schema hides nothing");
+// A long name leaves room for the header's buttons.
+const named = table("customer_addresses");
+assert.ok(boxSize(named).w >= 12 + named.name.length * 7.6 + 56, "name and buttons fit");
 console.log("erlayout-check: all good");
