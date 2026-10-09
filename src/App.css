@@ -838,6 +838,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .cell-icon { display: inline-flex; align-items: center; gap: 7px; }
 .cell-icon b { font-weight: 500; }
 .meta-empty { color: var(--text-faint); padding: 20px 12px; margin: 0; }
+.keys-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 8px; }
 .ddl-view { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .ddl-actions { position: absolute; top: 10px; right: 18px; z-index: 2; display: flex; gap: 6px; }
 
@@ -1825,6 +1826,18 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .er-key.pk { fill: #D4A72C; }
 .er-key.fk { fill: var(--accent); }
 .er-more { fill: var(--text-faint); font: italic 11px var(--sans); }
+.er-table.focus .er-card { stroke: var(--accent); stroke-width: 2; }
+.er-table.focus .er-card-head { fill: color-mix(in srgb, var(--accent) 30%, var(--popover)); }
+.er-act { cursor: pointer; }
+.er-act.busy { cursor: progress; }
+.er-add.busy { opacity: 0.5; }
+.er-act rect { fill: var(--popover); stroke: var(--border-strong); stroke-width: 1; transition: fill 120ms, stroke 120ms; }
+.er-act:hover rect { fill: color-mix(in srgb, var(--accent) 14%, var(--popover)); stroke: var(--accent); }
+.er-add text { fill: var(--accent); font: 600 11px var(--sans); }
+.er-centre circle, .er-centre path { fill: none; stroke: var(--text-muted); stroke-width: 1.4; }
+.er-centre:hover circle, .er-centre:hover path { stroke: var(--accent); }
+.er-centre { opacity: 0; transition: opacity 120ms; }
+.er-table:hover .er-centre:not(.busy) { opacity: 1; }
 .er-edge { fill: none; stroke: color-mix(in srgb, var(--text-muted) 60%, transparent); stroke-width: 1.4; transition: stroke 140ms, opacity 140ms; }
 .er-edge.lit { stroke: var(--accent); stroke-width: 2.2; }
 .er-edge.dim { opacity: 0.18; }

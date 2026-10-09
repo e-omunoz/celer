@@ -6,6 +6,14 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **E-R diagram of one table and its relations**: "Diagrama de relaciones" in a table's menu, in its "Claves" tab and
+  in the palette shows the table and the tables its foreign keys link it with, both ways (what it points to and what
+  points to it), with the table's name in the title. "Ampliar un nivel" adds the tables related to all those on show,
+  "+N" on a table adds only its own, a button on each card centres the diagram on that table (in the whole-schema
+  diagram too, without reading it again), and "Todo el esquema" goes back to every table. To find what points to a
+  table the keys of every table of its schema are read, but the columns only of the tables on show.
+
 ### Fixed
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
   closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
@@ -17,6 +25,10 @@ All notable changes to Celer are documented here. The format follows
 - **Result grid as one flat colour with reduced animations** (Settings › Animaciones "Reducidas", or "Como el sistema"
   on a Windows set for best performance): the grid read the theme's colours while they were in a transition and got
   each one shifted, so background, text and headers came out wrong. It now reads them without a transition.
+- **E-R diagram: double click on a table** did nothing, although the hint said it opens it: the press already
+  started panning and took the pointer, so the double click went to the canvas instead of the table. Panning now
+  starts when the mouse moves, and a double click opens the table (the diagram closes; in a window of its own it
+  stays, and the table opens in its Celer window, brought to the front).
 
 ## [2.1.1] - 2026-10-09
 

@@ -178,7 +178,14 @@ UPSERT/MERGE, DELETE, DROP y su DDL.
   ejecuta la consulta y mide filas y tiempos reales (PostgreSQL y MariaDB). Los avisos señalan recorridos completos
   de tablas grandes, estimaciones muy desviadas, ordenaciones que van a disco o índices que sugiere SQL Server.
 - **Diagrama entidad-relación** (menú de un esquema): las tablas ordenadas por dependencias y sus relaciones. Pasa
-  el ratón por una tabla para ver las suyas, busca por nombre, doble clic para abrirla, y exporta a SVG.
+  el ratón por una tabla para ver las suyas, busca por nombre, doble clic para abrirla (el diagrama se cierra; si
+  está en su propia ventana, la tabla se abre en su ventana de Celer, que pasa al frente), y exporta a SVG.
+- **Diagrama de relaciones de una tabla** (menú de la tabla, botón *Diagrama de relaciones* en su pestaña *Claves*, o
+  la paleta): la tabla y las que enlazan sus claves foráneas, en los dos sentidos (a las que apunta y las que apuntan
+  a ella). *Ampliar un nivel* añade las relacionadas con todas las que se ven; el **+N** de una tabla añade solo las
+  suyas; el botón de mira que aparece al pasar el ratón por una tabla centra el diagrama en ella (también en el de un
+  esquema entero), y *Todo el esquema* vuelve a verlas todas. Para saber qué tablas apuntan a la tuya, Celer lee las
+  claves de todas las del esquema (sin sus columnas), así que en esquemas muy grandes tarda un poco.
 - **Comparar esquemas**: en el menú de un esquema, *Marcar para comparar*; después, en el de otro (de la misma
   conexión o de otra), *Comparar con…*. Verás las tablas que solo están en un lado y las columnas con otro tipo o
   nulabilidad. *Script para igualar el destino* abre en una consola del destino el SQL que lo dejaría como el origen,
