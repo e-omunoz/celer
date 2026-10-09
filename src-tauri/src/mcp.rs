@@ -39,9 +39,13 @@ const REDACTED: &str = "[oculto]";
 const CONFIG_FILE: &str = "mcp.json";
 const AUDIT_FILE: &str = "mcp-audit.jsonl";
 const AUDIT_KEEP: usize = 2000;
-/// Se compacta al superar este tamaño. Las 2.000 entradas que se conservan (detalle y error
-/// truncados a 500 caracteres) ocupan bastante menos, así que no se compacta en cada escritura.
-const AUDIT_COMPACT_BYTES: u64 = 4 * 1024 * 1024;
+/// Se compacta al superar este tamaño. Las 2.000 entradas que se conservan (el SQL sin comentarios y
+/// recortado por el medio a unos 4.000 caracteres, el error a 500) suelen ocupar bastante menos, así que no se
+/// compacta en cada escritura.
+const AUDIT_COMPACT_BYTES: u64 = 16 * 1024 * 1024;
+/// SQL kept in the audit: its start and its end, this many characters each.
+const AUDIT_SQL_ENDS: usize = 2000;
+const AUDIT_DETAIL_CHARS: usize = 2 * AUDIT_SQL_ENDS + 40;
 const MAX_CELL_CHARS: usize = 2000;
 const MAX_DDL_CHARS: usize = 20000;
 const MAX_TABLES: usize = 2000;
@@ -209,6 +213,41 @@ fn truncate_chars(s: &str, max: usize) -> String {
         t.push_str("…[truncado]");
         t
     }
+}
+
+/// The SQL as the audit keeps it: what runs, without comments (a long leading comment must not push the statement
+/// out); a long one keeps its start and its end.
+fn audit_sql(sql: &str, kind: DbKind) -> String {
+    let c: Vec<char> = sql.chars().collect();
+    // Only what is a comment under every quoting variant of the dialect is left out: text that one of them reads
+    // as code stays.
+    let mut comment = vec![true; c.len()];
+    for d in dialects(kind) {
+        let mut marks = vec![false; c.len()];
+        if lex_marking(sql, *d, Some(&mut marks)).is_err() {
+            comment.fill(false);
+            break;
+        }
+        comment.iter_mut().zip(marks).for_each(|(a, b)| *a &= b);
+    }
+    let mut out = String::new();
+    for (ch, skip) in c.into_iter().zip(comment) {
+        if skip {
+            if !out.is_empty() && !out.ends_with(char::is_whitespace) {
+                out.push(' ');
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    let out = out.trim();
+    let n = out.chars().count();
+    if n <= 2 * AUDIT_SQL_ENDS {
+        return out.to_string();
+    }
+    let head: String = out.chars().take(AUDIT_SQL_ENDS).collect();
+    let tail: String = out.chars().skip(n - AUDIT_SQL_ENDS).collect();
+    format!("{head} …[{} caracteres omitidos]… {tail}", n - 2 * AUDIT_SQL_ENDS)
 }
 
 fn cell_json(c: &Cell) -> Value {
@@ -430,6 +469,11 @@ fn dollar_tag(c: &[char], i: usize) -> Option<usize> {
 
 /// Divide en sentencias (sin las vacías) y tokeniza, respetando cadenas y comentarios.
 fn lex(sql: &str, o: Lex) -> Result<Vec<Vec<Tok>>, String> {
+    lex_marking(sql, o, None)
+}
+
+/// `lex`, also marking in `comments` (one flag per char) the chars that are comments.
+fn lex_marking(sql: &str, o: Lex, mut comments: Option<&mut Vec<bool>>) -> Result<Vec<Vec<Tok>>, String> {
     let c: Vec<char> = sql.chars().collect();
     let n = c.len();
     let mut stmts = Vec::new();
@@ -438,20 +482,21 @@ fn lex(sql: &str, o: Lex) -> Result<Vec<Vec<Tok>>, String> {
     while i < n {
         let ch = c[i];
         let next = c.get(i + 1).copied();
+        let at = i;
         if ch.is_whitespace() {
             i += 1;
-        } else if ch == '-'
+        } else if (ch == '-'
             && next == Some('-')
             && (!o.dash_space
                 || c.get(i + 2)
-                    .map_or(true, |x| x.is_whitespace() || x.is_control()))
+                    .map_or(true, |x| x.is_whitespace() || x.is_control())))
+            || (ch == '#' && o.hash)
         {
             while i < n && c[i] != '\n' {
                 i += 1;
             }
-        } else if ch == '#' && o.hash {
-            while i < n && c[i] != '\n' {
-                i += 1;
+            if let Some(m) = comments.as_deref_mut() {
+                m[at..i].iter_mut().for_each(|f| *f = true);
             }
         } else if ch == '/' && next == Some('*') {
             if o.mysql_exec
@@ -478,6 +523,9 @@ fn lex(sql: &str, o: Lex) -> Result<Vec<Vec<Tok>>, String> {
                 } else {
                     i += 1;
                 }
+            }
+            if let Some(m) = comments.as_deref_mut() {
+                m[at..i].iter_mut().for_each(|f| *f = true);
             }
         } else if ch == '\'' {
             i = read_quoted(&c, i, '\'', o.backslash)?;
@@ -1313,7 +1361,10 @@ impl McpServer {
                 .as_ref()
                 .filter(|c| effective_level(&cfg, c) != Level::None);
             let detail = match name {
-                "run_query" | "execute_statement" => arg_str(args, "sql"),
+                "run_query" | "execute_statement" => audit_sql(
+                    &arg_str(args, "sql"),
+                    conn.as_ref().map_or(DbKind::Odbc, |c| c.kind),
+                ),
                 "describe_table" | "sample_rows" => {
                     let s = arg_str(args, "schema");
                     let t = arg_str(args, "table");
@@ -1331,7 +1382,7 @@ impl McpServer {
                 tool: name.to_string(),
                 conn_id: conn_id.clone(),
                 conn_name: visible.map(|c| c.name.clone()).unwrap_or_default(),
-                detail: truncate_chars(&detail, 500),
+                detail: truncate_chars(&detail, AUDIT_DETAIL_CHARS),
                 ok: res.is_ok(),
                 rows: res.as_ref().ok().and_then(|r| r.1),
                 ms: t0.elapsed().as_millis() as u64,
@@ -2522,6 +2573,23 @@ mod tests {
     }
 
     #[test]
+    fn audit_keeps_the_executed_sql() {
+        let pad = "x".repeat(6000);
+        assert_eq!(audit_sql(&format!("/* {pad} */ SELECT password FROM users -- {pad}"), DbKind::Postgres), "SELECT password FROM users");
+        assert_eq!(audit_sql(&format!("# {pad}\nSELECT 1"), DbKind::Mysql), "SELECT 1");
+        // '#' is not a comment on PostgreSQL; a string keeps its "comment".
+        assert_eq!(audit_sql("SELECT 1 # 2, '-- a' -- b", DbKind::Postgres), "SELECT 1 # 2, '-- a'");
+        // Text that one quoting variant reads as code is kept: MySQL with and without backslash escapes.
+        let tricky = "SELECT 'a\\' -- ', password FROM users";
+        assert!(audit_sql(tricky, DbKind::Mysql).contains("password FROM users"));
+        // A long statement keeps its start and its end.
+        let long = format!("SELECT '{pad}' AS a, secret FROM t");
+        let kept = audit_sql(&long, DbKind::Postgres);
+        assert!(kept.starts_with("SELECT '") && kept.ends_with("AS a, secret FROM t") && kept.contains("omitidos"));
+        assert!(kept.chars().count() <= AUDIT_DETAIL_CHARS);
+    }
+
+    #[test]
     fn audit_is_capped() {
         let dir = temp_dir();
         let store = Store::new(dir.clone());
@@ -2530,7 +2598,7 @@ mod tests {
             tool: "run_query".into(),
             conn_id: "c".into(),
             conn_name: "C".into(),
-            detail: "x".repeat(500),
+            detail: "x".repeat(AUDIT_DETAIL_CHARS),
             ok: false,
             rows: Some(1),
             ms: 1,
