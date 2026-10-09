@@ -55,18 +55,27 @@ enum Sink {
     },
 }
 
+/// Error text of an export stopped with `cancel(export_id)`; the UI recognises it by "cancelada".
+pub const CANCELLED: &str = "Exportación cancelada";
+
 /// Ejecuta `sql` y escribe todas las filas del primer resultado en el fichero.
+/// `cancelled` is polled before each page and every few hundred rows: a driver's own cancel only reaches a
+/// statement that is running, not the pauses between fetches.
 pub fn export(
     d: &mut dyn Driver,
     sql: &str,
     o: &ExportOptions,
     engine: DbKind,
     progress: &dyn Fn(u64),
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<u64> {
     // Whole binary values, not the grid's 4 KB preview.
     crate::model::set_full_binary(true);
-    let written = export_rows(d, sql, o, engine, progress);
+    let written = export_rows(d, sql, o, engine, progress, cancelled);
     crate::model::set_full_binary(false);
+    if written.is_err() {
+        let _ = d.close_cursor();
+    }
     written
 }
 
@@ -76,6 +85,7 @@ fn export_rows(
     o: &ExportOptions,
     engine: DbKind,
     progress: &dyn Fn(u64),
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<u64> {
     let out = d.execute(sql, PAGE)?;
     let Some(first) = out.results.into_iter().find(|r| !r.columns.is_empty()) else {
@@ -114,13 +124,19 @@ fn export_rows(
     let mut total = 0u64;
     let mut rows = first.rows;
     loop {
-        for r in &rows {
+        for (i, r) in rows.iter().enumerate() {
+            if i % 500 == 0 && cancelled() {
+                bail!(CANCELLED);
+            }
             write_row(&mut sink, &cols, r, o, &sql_cols, &xml_tags, engine)?;
         }
         total += rows.len() as u64;
         progress(total);
         if !has_more {
             break;
+        }
+        if cancelled() {
+            bail!(CANCELLED);
         }
         let f = d.fetch(PAGE)?;
         rows = f.rows;
@@ -527,13 +543,59 @@ mod tests {
         d.execute("CREATE TABLE b (v BLOB); INSERT INTO b VALUES (zeroblob(5000))", 10).unwrap();
         let path = std::env::temp_dir().join(format!("celer-export-bin-{}.csv", std::process::id()));
         let o = ExportOptions { path: path.to_string_lossy().into_owned(), header: false, bom: false, ..ExportOptions::default() };
-        export(&mut d, "SELECT v FROM b", &o, DbKind::Sqlite, &|_| {}).unwrap();
+        export(&mut d, "SELECT v FROM b", &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(text.trim_end().len(), 2 + 10_000, "{}…", &text[..40]);
         // The grid still gets the preview afterwards.
         let out = d.execute("SELECT v FROM b", 10).unwrap();
         assert!(matches!(&out.results[0].rows[0][0], Cell::Text(s) if s.ends_with('…')));
+    }
+
+    #[test]
+    fn cancel_stops_between_pages() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-cancel-{}.csv", std::process::id()));
+        let o = ExportOptions { path: path.to_string_lossy().into_owned(), header: false, bom: false, ..ExportOptions::default() };
+        let pages = std::cell::Cell::new(0u64);
+        let sql = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) SELECT i FROM n";
+        let res = export(&mut d, sql, &o, DbKind::Sqlite, &|rows| pages.set(rows), &|| pages.get() > 0);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(res.unwrap_err().to_string(), CANCELLED);
+        assert_eq!(pages.get(), PAGE as u64, "stopped after the first page");
+        // The session is usable afterwards.
+        assert!(d.execute("SELECT 1", 10).is_ok());
+    }
+
+    /// The same against PostgreSQL (CELER_PG_TEST), where the export reads a server cursor page by page.
+    #[test]
+    fn pg_cancel_stops_between_pages() {
+        let Ok(spec) = std::env::var("CELER_PG_TEST") else { return };
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Postgres;
+        cfg.encryption = "off".into();
+        for (k, v) in spec.split_whitespace().filter_map(|p| p.split_once('=')) {
+            match k {
+                "host" => cfg.host = v.into(),
+                "port" => cfg.port = v.parse().ok(),
+                "user" => cfg.user = v.into(),
+                "password" => cfg.password = Some(v.into()),
+                "dbname" => cfg.database = v.into(),
+                _ => {}
+            }
+        }
+        let mut d = crate::postgres::PostgresDriver::connect(cfg).unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-pgcancel-{}.csv", std::process::id()));
+        let o = ExportOptions { path: path.to_string_lossy().into_owned(), ..ExportOptions::default() };
+        let rows = std::cell::Cell::new(0u64);
+        let res = export(&mut d, "SELECT * FROM generate_series(1, 5000000)", &o, DbKind::Postgres, &|n| rows.set(n), &|| rows.get() >= 20_000);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(res.unwrap_err().to_string(), CANCELLED);
+        assert_eq!(rows.get(), 20_000);
+        assert!(d.execute("SELECT 1", 10).is_ok());
     }
 
     #[test]

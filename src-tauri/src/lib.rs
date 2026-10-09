@@ -23,6 +23,7 @@ mod windows;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -49,6 +50,8 @@ struct AppState {
     mcp: mcp::McpServer,
     /// Un solo escritor a la vez de los ficheros que comparten las ventanas (ajustes, biblioteca).
     files: Mutex<()>,
+    /// Running exports by export id: `cancel(export_id)` sets the flag, which the export polls between pages.
+    exports: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -534,7 +537,16 @@ async fn close_cursor(state: State<'_, Arc<AppState>>, session_id: String) -> Cm
 
 #[tauri::command]
 fn cancel(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<()> {
-    state.sessions.get(&session_id).map_err(err)?.cancel();
+    let export = state.exports.lock().get(&session_id).cloned();
+    if let Some(flag) = &export {
+        flag.store(true, Ordering::Relaxed);
+    }
+    match state.sessions.get(&session_id) {
+        Ok(h) => h.cancel(),
+        // An export still connecting has no session yet: the flag stops it once it starts.
+        Err(_) if export.is_some() => {}
+        Err(e) => return Err(err(e)),
+    }
     Ok(())
 }
 
@@ -689,33 +701,60 @@ async fn export_query(
     check_read_only(&cfg, &sql)?;
     let engine = cfg.kind;
     let connector = state.make_connector(cfg)?;
-    let h = SessionHandle::open(conn_id, connector).await.map_err(err)?;
-    let h = Arc::new(h);
-    // Se registra para poder cancelarla con `cancel(export_id)`.
-    state.sessions.insert(export_id.clone(), h.clone());
-    let eid = export_id.clone();
-    let res = h
-        .run(move |d| {
-            if !database.is_empty() {
-                let _ = d.use_database(&database);
-            }
-            let last = std::cell::Cell::new(std::time::Instant::now());
-            export::export(d, &sql, &options, engine, &|rows| {
-                if last.get().elapsed().as_millis() > 250 {
-                    last.set(std::time::Instant::now());
-                    let _ = app.emit(
-                        "export-progress",
-                        ExportProgress {
-                            export_id: eid.clone(),
-                            rows,
-                        },
-                    );
-                }
-            })
-        })
-        .await;
+    // Se registra para poder cancelarla con `cancel(export_id)`, también mientras conecta.
+    let stop = Arc::new(AtomicBool::new(false));
+    state.exports.lock().insert(export_id.clone(), stop.clone());
+    let res = run_export(&app, &state, conn_id, database, sql, &export_id, options, engine, connector, stop).await;
     state.sessions.remove(&export_id);
+    state.exports.lock().remove(&export_id);
     res.map_err(err)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_export(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    conn_id: String,
+    database: String,
+    sql: String,
+    export_id: &str,
+    options: export::ExportOptions,
+    engine: DbKind,
+    connector: impl FnOnce() -> anyhow::Result<Box<dyn Driver>> + Send + 'static,
+    stop: Arc<AtomicBool>,
+) -> anyhow::Result<u64> {
+    let h = Arc::new(SessionHandle::open(conn_id, connector).await?);
+    if stop.load(Ordering::Relaxed) {
+        anyhow::bail!(export::CANCELLED);
+    }
+    state.sessions.insert(export_id.to_string(), h.clone());
+    let eid = export_id.to_string();
+    let app = app.clone();
+    h.run(move |d| {
+        if !database.is_empty() {
+            let _ = d.use_database(&database);
+        }
+        let last = std::cell::Cell::new(std::time::Instant::now());
+        let progress = |rows| {
+            if last.get().elapsed().as_millis() > 250 {
+                last.set(std::time::Instant::now());
+                let _ = app.emit(
+                    "export-progress",
+                    ExportProgress {
+                        export_id: eid.clone(),
+                        rows,
+                    },
+                );
+            }
+        };
+        let res = export::export(d, &sql, &options, engine, &progress, &|| stop.load(Ordering::Relaxed));
+        // A cancel that interrupted the statement itself reads as the driver's error: say it was cancelled.
+        match res {
+            Err(_) if stop.load(Ordering::Relaxed) => anyhow::bail!(export::CANCELLED),
+            r => r,
+        }
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1308,6 +1347,7 @@ pub fn run() {
                 trash: Mutex::new(HashMap::new()),
                 mcp,
                 files: Mutex::new(()),
+                exports: Mutex::new(HashMap::new()),
             }));
             app.manage(windows::Windows::default());
             Ok(())

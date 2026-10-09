@@ -2856,17 +2856,18 @@ export async function runExport() {
     notify(`Exportadas ${rows.toLocaleString()} filas en ${formatMs(performance.now() - started)}`, "success", target || undefined, target && isTauri() ? { label: "Mostrar en la carpeta", run: () => void revealPath(target) } : undefined);
     gib("saved");
   } catch (err) {
-    const cancelled = !state.exportRunning;
+    const cancelled = !state.exportRunning || /cancelada/i.test(errorText(err));
     setState({ exportRunning: false, exportId: "" });
-    if (!cancelled) notify("La exportación falló", "error", errorText(err));
+    if (cancelled) notify("Exportación cancelada", "warning");
+    else notify("La exportación falló", "error", errorText(err));
   }
 }
 
+/** Asks the export to stop; runExport reports the outcome (an export already on its last page still completes). */
 export async function cancelExport() {
   const id = state.exportId;
   setState("exportRunning", false);
   if (id) await api().cancel(id).catch(() => {});
-  notify("Exportación cancelada", "warning");
 }
 
 /**
