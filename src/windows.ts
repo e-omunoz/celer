@@ -1094,9 +1094,16 @@ function mirrorEffects() {
     untrack(() => pushSoon(d.label, () => ({ kind: "panel-data", store: clone(dataCompare) })));
   });
   // The library and the assistant work with the active console of the last focused window: that window sends it.
+  // Focused again after another window: the panels have that one's completion now, so everything goes again.
+  let wasFocused = false;
   createEffect(() => {
     contextWanted();
-    if (focusedWindow() !== windowLabel) return;
+    if (focusedWindow() !== windowLabel) {
+      wasFocused = false;
+      return;
+    }
+    if (!wasFocused) contextSent.clear();
+    wasFocused = true;
     const targets: string[] = openWindows()
       .map((w) => w.label)
       .filter((label) => label === "panel-ai" || label === "panel-library");

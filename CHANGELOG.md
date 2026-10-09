@@ -152,6 +152,7 @@ All notable changes to Celer are documented here. The format follows
 - **Changing a console's connection rolled back its transaction without asking**: picking another connection with a transaction open (or a statement running) closed the session silently. It now asks first, as closing the console does.
 - **Autocompletion could describe the previous database**: choosing a big database and then right away a small one could leave the console's completion, warnings and assistant context on the big one. An answer for a database no longer on show is now dropped.
 - **The status bar kept the previous tab's figures**: the selection's sum, average and counts, and the editor's Ln/Col, stayed from the tab you left. They now describe the active tab.
+- **The assistant's or library's window lost a console's tables** after you went to another window and back: the window you came back to did not send its completion again. It now sends everything again when it gets the focus back.
 
 ## [2.0.1] - 2026-10-08
 
