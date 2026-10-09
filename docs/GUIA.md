@@ -16,6 +16,11 @@ La ventana tiene tres zonas:
 - **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
   (Alt+8) y el asistente de IA.
 
+**F6** lleva el foco al panel siguiente (explorador, editor, resultados, panel derecho) y **Mayús+F6** al anterior;
+el panel se ilumina un momento y el foco vuelve a donde estaba en él. Si cierras un panel con el foco dentro, pasa
+al editor o a los resultados de la pestaña activa. Los menús contextuales muestran a la derecha el atajo de cada
+acción, el que tengas puesto en *Ajustes › Atajos de teclado*.
+
 ## Conexiones
 
 **Nuevo › Conexión** (Ctrl+Alt+N) abre el formulario. PostgreSQL, MySQL/MariaDB, SQL Server y SQLite son nativos;
@@ -332,7 +337,9 @@ le persigues con el ratón mientras espera, aparta el cursor como a una mosca.
 - *Gib: volver a contar los consejos desde el principio* (paleta) hace que vuelvan a salir todos.
 
 En *Ajustes › Apariencia* se puede poner en silencio (solo avisos, sin consejos por su cuenta) o apagar. Con
-*Animaciones: reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de
+*Animaciones: reducidas*, o si el sistema lo pide, se queda quieto (como el resto de animaciones de Celer: paneles,
+pestañas, diálogos, menús y avisos aparecen y se van con un movimiento corto, que el editor de tema puede hacer más
+rápido o más pausado). Cuando la ventana no está en primer plano deja de
 animarse.
 
 ## Drivers de Informix

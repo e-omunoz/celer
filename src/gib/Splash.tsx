@@ -2,6 +2,7 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Mark } from "../brand/Mark";
 import { reducedMotion, setSplashDone, setState, state } from "../state";
 import { Gib, type GibMood } from "./Gib";
+import { gibMs, motionMs } from "../motion";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -64,7 +65,7 @@ export function Splash() {
       const dx = to.left + to.width / 2 - (from.left + from.width / 2);
       const dy = to.top + to.height / 2 - (from.top + from.height / 2);
       const scale = to.width / from.width;
-      overlay?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 520, delay: 120, easing: "ease-out", fill: "forwards" });
+      overlay?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: gibMs(520), delay: gibMs(120), easing: "ease-out", fill: "forwards" });
       const flight = mover.animate(
         [
           { transform: "translate(0, 0) scale(1) rotate(0deg)" },
@@ -73,12 +74,12 @@ export function Splash() {
           { transform: `translate(${dx}px, ${dy + 6}px) scale(${scale * 1.08}, ${scale * 0.9}) rotate(0deg)`, offset: 0.88 },
           { transform: `translate(${dx}px, ${dy}px) scale(${scale}) rotate(0deg)` },
         ],
-        { duration: skip ? 420 : 950, easing: "cubic-bezier(.45,.05,.3,1)", fill: "forwards" },
+        { duration: gibMs(skip ? 420 : 950), easing: "cubic-bezier(.45,.05,.3,1)", fill: "forwards" },
       );
       // Animations pause while the window is hidden or minimised: never wait for them indefinitely.
-      await Promise.race([flight.finished.catch(() => {}), sleep((skip ? 420 : 950) + 400)]);
+      await Promise.race([flight.finished.catch(() => {}), sleep(gibMs(skip ? 420 : 950) + 400)]);
     } else {
-      const fade = overlay?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, fill: "forwards" });
+      const fade = overlay?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: motionMs(220), fill: "forwards" });
       await Promise.race([fade?.finished.catch(() => {}), sleep(600)]);
     }
     setSplashDone(true);

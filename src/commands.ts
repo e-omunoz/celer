@@ -39,6 +39,7 @@ import { resetGibTips } from "./gib/memory";
 import { isTauri } from "./api";
 import { detachablePanel, detachPanel, openNewWindow, otherFullWindows, quitCeler, raiseWindow, sendTab } from "./windows";
 import { windowName } from "./windowModel";
+import { focusPanel } from "./focus";
 
 export interface Command {
   id: string;
@@ -91,6 +92,8 @@ export function commands(): Command[] {
     { id: "prev-tab", label: "Pestaña anterior", group: "Ventana", run: () => cycleTab(-1) },
     { id: "toggle-explorer", label: "Mostrar u ocultar el explorador", group: "Ventana", run: () => setState("explorerOpen", !state.explorerOpen) },
     { id: "toggle-inspector", label: "Mostrar u ocultar el panel de valor", group: "Ventana", run: () => toggleInspector("value") },
+    { id: "next-panel", label: "Ir al panel siguiente", hint: "Explorador, editor, resultados y panel derecho, por orden", group: "Ventana", run: () => focusPanel(1) },
+    { id: "prev-panel", label: "Ir al panel anterior", group: "Ventana", run: () => focusPanel(-1) },
     { id: "ai", label: "Asistente IA: preguntar o generar SQL", group: "IA", run: () => openInspector("ai") },
     { id: "ai-explain", label: "IA: explicar la consulta", group: "IA", run: () => void askAi("explain"), enabled: sqlOnly },
     { id: "ai-fix", label: "IA: corregir el último error", group: "IA", run: () => void askAi("fix"), enabled: () => Boolean(activeSql()?.error) },

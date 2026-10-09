@@ -1,5 +1,8 @@
 import { ChevronRight, ChevronsDownUp, FolderPlus, History, Plus, RefreshCw, Search, Settings2, Star, X } from "lucide-solid";
+import { countLabel, setDragGhost } from "../dnd";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js";
+import { rescueFocus } from "../focus";
+import { leaveAnimation } from "../motion";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
 import {
@@ -346,6 +349,7 @@ export function Sidebar() {
     if (!pickedKeys().has(row.key) || !event.dataTransfer) return false;
     pendingSingle = null;
     event.dataTransfer.setData("text/plain", selectedRows().map(rowName).join(row.type === "node" ? ", " : "\n"));
+    setDragGhost(event, { title: countLabel(selectedRows().length, "elemento", "elementos"), detail: selectedRows().slice(0, 3).map(rowName).join(", ") + (selectedRows().length > 3 ? "…" : "") });
     if (row.type === "node") return true;
     const { ids, folders } = selectionItems();
     event.dataTransfer.setData(SELECTION_MIME, JSON.stringify({ conns: ids, folders }));
@@ -486,10 +490,10 @@ export function Sidebar() {
       { label: `Desconectar ${conns(on.length)}`, icon: "unplug", disabled: !on.length, run: () => void disconnectAll(on) },
       { separator: true },
     ];
-    if (favs) items.push({ label: `Quitar ${conns(ids.length)} de favoritas`, hint: "Supr", run: () => setFavorites(ids, false) });
+    if (favs) items.push({ label: `Quitar ${conns(ids.length)} de favoritas`, keys: "Supr", run: () => setFavorites(ids, false) });
     else if (ids.length) {
       const allFav = ids.every(isFavorite);
-      items.push({ label: allFav ? "Quitar de favoritas" : "Añadir a favoritas", hint: "Ctrl+Mayús+F", run: () => setFavorites(ids, !allFav) });
+      items.push({ label: allFav ? "Quitar de favoritas" : "Añadir a favoritas", keys: "Ctrl+Mayús+F", run: () => setFavorites(ids, !allFav) });
     }
     if (!favs) {
       const first = list[0];
@@ -498,11 +502,11 @@ export function Sidebar() {
     }
     items.push(
       { separator: true },
-      { label: "Copiar nombres", hint: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
+      { label: "Copiar nombres", keys: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
       { label: `Exportar ${conns(all.length)} (sin contraseñas)…`, disabled: !all.length, run: () => void exportConnections(all, `${all.length} conexiones`) },
     );
     if (!favs) {
-      items.push({ separator: true }, { label: `Eliminar ${selectionLabel(ids.length, folders.length)}`, hint: "Supr", icon: "trash", danger: true, run: () => void deleteItems(ids, folders) });
+      items.push({ separator: true }, { label: `Eliminar ${selectionLabel(ids.length, folders.length)}`, keys: "Supr", icon: "trash", danger: true, run: () => void deleteItems(ids, folders) });
       // Every folder the selection can go to (not into one of its own folders): the menu scrolls when there are many.
       const targets = knownFolders().filter((path) => !folders.some((folder) => isInside(path, folder)));
       items.push(
@@ -527,7 +531,7 @@ export function Sidebar() {
       { label: `Generar SELECT de ${what}`, disabled: !tables.length, run: () => void generate("select") },
       { label: `Generar SELECT COUNT(*) de ${what}`, disabled: !tables.length, run: () => void generate("count") },
       { separator: true },
-      { label: `Copiar ${countOf(list.length, "nombre", "nombres")}`, hint: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
+      { label: `Copiar ${countOf(list.length, "nombre", "nombres")}`, keys: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
       { label: "Copiar nombres completos", disabled: !objs.length, run: () => void copyText(objs.map((obj) => [obj.schema, obj.name].filter(Boolean).join(".")).join("\n")) },
     ]);
   }
@@ -725,23 +729,23 @@ export function Sidebar() {
   function connMenu(event: MouseEvent, conn: ConnSummary) {
     const connected = Boolean(state.sessions[conn.id]);
     openMenu(event, [
-      connected ? { label: "Desconectar", icon: "unplug", run: () => void disconnect(conn.id) } : { label: "Conectar", hint: "Intro", icon: "plug", run: () => void connect(conn.id) },
-      { label: "Nueva consola", hint: "Ctrl+Mayús+L", icon: "console", run: () => openQuery(conn.id) },
-      { label: "Actualizar", hint: "Ctrl+F5", icon: "refresh", disabled: !connected, run: () => void refreshNode(conn.id, []) },
+      connected ? { label: "Desconectar", icon: "unplug", run: () => void disconnect(conn.id) } : { label: "Conectar", keys: "Intro", icon: "plug", run: () => void connect(conn.id) },
+      { label: "Nueva consola", command: "new-console", icon: "console", run: () => openQuery(conn.id) },
+      { label: "Actualizar", keys: "Ctrl+F5", icon: "refresh", disabled: !connected, run: () => void refreshNode(conn.id, []) },
       { separator: true },
-      { label: "Propiedades…", hint: "F4", icon: "settings", run: () => openConnDialog(conn) },
-      { label: "Renombrar", hint: "F2", run: () => { revealConn(conn.id); setEditing(`c:${conn.id}`); } },
-      { label: "Duplicar", hint: "Ctrl+D", run: () => void duplicateConnectionNow(conn.id).then((id) => id && reveal(`c:${id}`)) },
-      { label: isFavorite(conn.id) ? "Quitar de favoritas" : "Añadir a favoritas", hint: "Ctrl+Mayús+F", run: () => toggleFavorite(conn.id) },
+      { label: "Propiedades…", keys: "F4", icon: "settings", run: () => openConnDialog(conn) },
+      { label: "Renombrar", keys: "F2", run: () => { revealConn(conn.id); setEditing(`c:${conn.id}`); } },
+      { label: "Duplicar", keys: "Ctrl+D", run: () => void duplicateConnectionNow(conn.id).then((id) => id && reveal(`c:${id}`)) },
+      { label: isFavorite(conn.id) ? "Quitar de favoritas" : "Añadir a favoritas", keys: "Ctrl+Mayús+F", run: () => toggleFavorite(conn.id) },
       { label: "Nueva carpeta con esta conexión", run: () => void folderWith(conn) },
       ...(conn.folder ? [{ label: "Sacar de la carpeta", run: () => void moveConnectionsTo([conn.id], parentFolder(conn.folder)) }] : []),
       { separator: true },
-      { label: "Copiar nombre", hint: "Ctrl+C", run: () => void copyText(conn.name) },
+      { label: "Copiar nombre", keys: "Ctrl+C", run: () => void copyText(conn.name) },
       { label: "Copiar esquema para IA", disabled: !connected, run: () => void copySchemaForAi(conn.id) },
       ...(conn.kind === "sqlite" || conn.kind === "odbc" ? [] : [{ label: "Actividad del servidor…", icon: "activity", run: () => void openActivity(conn.id) }]),
       { label: "Exportar conexión (sin contraseña)…", run: () => void exportConnections([conn.id], conn.name) },
       { separator: true },
-      { label: "Eliminar conexión", hint: "Supr", icon: "trash", danger: true, run: () => void deleteConnectionUndoable(conn.id) },
+      { label: "Eliminar conexión", keys: "Supr", icon: "trash", danger: true, run: () => void deleteConnectionUndoable(conn.id) },
     ]);
   }
 
@@ -749,17 +753,17 @@ export function Sidebar() {
     const ids = state.connections.filter((conn) => (conn.folder || "") === path || (conn.folder || "").startsWith(`${path}/`)).map((conn) => conn.id);
     const open = !folderCollapsed(path);
     openMenu(event, [
-      { label: open ? "Plegar" : "Desplegar", hint: "Intro", run: () => toggleFolder(path) },
+      { label: open ? "Plegar" : "Desplegar", keys: "Intro", run: () => toggleFolder(path) },
       { label: "Nueva conexión aquí…", run: () => openConnDialog({ ...emptyConn(isTauri() ? "postgres" : "sqlite"), folder: path }) },
-      { label: "Nueva subcarpeta", hint: "Ctrl+Mayús+N", run: () => void newFolder(path) },
+      { label: "Nueva subcarpeta", keys: "Ctrl+Mayús+N", run: () => void newFolder(path) },
       { separator: true },
-      { label: "Renombrar", hint: "F2", run: () => { reveal(`g:${path}`); setEditing(`g:${path}`); } },
+      { label: "Renombrar", keys: "F2", run: () => { reveal(`g:${path}`); setEditing(`g:${path}`); } },
       ...(parentFolder(path) ? [{ label: "Mover a la carpeta de arriba", run: () => void moveFolder(path, parentFolder(parentFolder(path))) }] : []),
       { label: "Conectar todas", disabled: !ids.length, run: () => ids.forEach((id) => void connect(id)) },
-      { label: "Copiar nombre", hint: "Ctrl+C", run: () => void copyText(folderName(path)) },
+      { label: "Copiar nombre", keys: "Ctrl+C", run: () => void copyText(folderName(path)) },
       { label: "Exportar la carpeta (sin contraseñas)…", disabled: !ids.length, run: () => void exportConnections(ids, folderName(path)) },
       { separator: true },
-      { label: "Eliminar carpeta", hint: "Supr", icon: "trash", danger: true, run: () => void deleteFolder(path) },
+      { label: "Eliminar carpeta", keys: "Supr", icon: "trash", danger: true, run: () => void deleteFolder(path) },
     ]);
   }
 
@@ -777,9 +781,9 @@ export function Sidebar() {
 
   function backgroundMenu(event: MouseEvent) {
     openMenu(event, [
-      { label: "Nueva conexión…", hint: "Ctrl+Alt+N", run: () => openConnDialog() },
-      { label: "Nueva carpeta", hint: "Ctrl+Mayús+N", run: () => void newFolder("") },
-      { label: "Buscar conexiones", hint: "Ctrl+F", run: () => { setFilterOpen(true); queueMicrotask(() => filterInput?.focus()); } },
+      { label: "Nueva conexión…", command: "new-conn", run: () => openConnDialog() },
+      { label: "Nueva carpeta", keys: "Ctrl+Mayús+N", run: () => void newFolder("") },
+      { label: "Buscar conexiones", keys: "Ctrl+F", run: () => { setFilterOpen(true); queueMicrotask(() => filterInput?.focus()); } },
       { separator: true },
       ...optionsItems(),
       { separator: true },
@@ -806,7 +810,7 @@ export function Sidebar() {
     const items = [] as Parameters<typeof openMenu>[1];
     if (obj && (obj.kind === "table" || obj.kind === "view")) {
       items.push(
-        { label: "Abrir datos", hint: "F4", icon: "table", run: () => void openTable(connId, obj) },
+        { label: "Abrir datos", keys: "F4", icon: "table", run: () => void openTable(connId, obj) },
         { label: "Abrir estructura", run: () => void openTable(connId, obj, "columns") },
         { label: "Ver DDL", icon: "code", run: () => void openTable(connId, obj, "ddl") },
         // The table and the tables its foreign keys link it with, both ways.
@@ -852,10 +856,10 @@ export function Sidebar() {
     }
     items.push(
       { label: "Nueva consola aquí", icon: "console", run: () => openQuery(connId) },
-      { label: "Copiar nombre", hint: "Ctrl+C", icon: "copy", run: () => void copyText(node.name) },
+      { label: "Copiar nombre", keys: "Ctrl+C", icon: "copy", run: () => void copyText(node.name) },
     );
     if (obj) items.push({ label: "Copiar nombre completo", run: () => void copyText([obj.schema, obj.name].filter(Boolean).join(".")) });
-    if (!node.leaf) items.push({ separator: true }, { label: "Actualizar", hint: "Ctrl+F5", icon: "refresh", run: () => void refreshNode(connId, node.path) });
+    if (!node.leaf) items.push({ separator: true }, { label: "Actualizar", keys: "Ctrl+F5", icon: "refresh", run: () => void refreshNode(connId, node.path) });
     openMenu(event, items);
   }
 
@@ -874,7 +878,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside class="explorer" style={{ width: `${state.settings.sidebarWidth}px` }}>
+    <aside class="explorer" data-focus-region="explorer" ref={(el) => onCleanup(() => { rescueFocus(el); leaveAnimation(el, "panel-left"); })} style={{ width: `${state.settings.sidebarWidth}px` }}>
       <div class="toolwin-head">
         <span class="toolwin-title">Explorador</span>
         <span class="spacer" />
@@ -927,6 +931,7 @@ export function Sidebar() {
       </Show>
       <div
         class="tree"
+        data-focus-default
         ref={scroller}
         tabIndex={0}
         onKeyDown={onKey}
@@ -1087,6 +1092,7 @@ function TreeRow(props: {
           event.dataTransfer?.setData(FOLDER_MIME, row.path);
           event.dataTransfer?.setData("text/plain", row.name);
           if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          setDragGhost(event, { title: row.name, detail: "Carpeta" });
           setDragging(key);
         }}
         onDragEnd={() => {
@@ -1149,6 +1155,7 @@ function TreeRow(props: {
           event.dataTransfer?.setData(CONN_MIME, conn.id);
           event.dataTransfer?.setData("text/plain", conn.name);
           if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          setDragGhost(event, { title: conn.name, detail: engineOf(conn.kind).label, color: connColor(conn) });
           setDragging(conn.id);
         }}
         onDragEnd={() => {
@@ -1225,7 +1232,9 @@ function TreeRow(props: {
       onDragStart={(event) => {
         const obj = node.obj;
         if (!obj || props.onDragMany(event)) return;
-        event.dataTransfer?.setData("text/plain", obj.schema && obj.schema !== "main" ? `${obj.schema}.${obj.name}` : obj.name);
+        const name = obj.schema && obj.schema !== "main" ? `${obj.schema}.${obj.name}` : obj.name;
+        event.dataTransfer?.setData("text/plain", name);
+        setDragGhost(event, { title: name, detail: "Suéltalo en el editor para escribir su nombre" });
       }}
       onMouseDown={props.onSelect}
       onClick={(event) => event.detail === 1 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !node.leaf && !node.obj && void toggleNode(row.connId, node)}

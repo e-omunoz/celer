@@ -4,6 +4,7 @@ import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
 import { handleGlobalKey, withShortcut } from "./commands";
 import { trackAltGr } from "./keymap";
+import { trackRegionFocus } from "./focus";
 import { Inspector } from "./components/Inspector";
 import { Modals } from "./components/Modals";
 import { ContextMenu, Palette, Toasts } from "./components/Overlays";
@@ -99,6 +100,8 @@ export default function App() {
     };
     window.addEventListener("contextmenu", blockMenu);
     const stopAltGr = trackAltGr(window);
+    // F6 / Mayús+F6 come back to where the focus was in each panel (focus.ts).
+    trackRegionFocus();
     onCleanup(() => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("contextmenu", blockMenu);

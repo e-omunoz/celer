@@ -45,6 +45,7 @@ Step "connection form" { & $node --experimental-strip-types --no-warnings dev\co
 Step "explorer" { & $node --experimental-strip-types --no-warnings dev\explorer-check.ts }
 Step "theme contrast" { & $node --experimental-strip-types --no-warnings dev\contrast-check.ts }
 Step "custom themes" { & $node --experimental-strip-types --no-warnings dev\themes-check.ts }
+Step "motion, focus and drag and drop" { & $node --experimental-strip-types --no-warnings dev\motion-check.ts }
 Step "update notes" { & $node --experimental-strip-types --no-warnings dev\update-check.ts }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }

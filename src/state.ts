@@ -228,7 +228,12 @@ export type SavedTab = SavedSqlTab | SavedTableTab;
 
 export interface MenuItem {
   label?: string;
+  /** A note in small muted text (an engine, "actual"…), not a shortcut. */
   hint?: string;
+  /** A shortcut that only works here ("Ctrl+C", "F2", "Intro"): shown in the menus' shortcut style. */
+  keys?: string;
+  /** The command it runs (commands.ts): its shortcut is shown as the user set it. */
+  command?: string;
   icon?: string;
   danger?: boolean;
   disabled?: boolean;

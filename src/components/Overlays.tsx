@@ -1,12 +1,23 @@
 import { CircleAlert, CircleCheck, Info, Search, TriangleAlert, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { commands } from "../commands";
+import { commands, shortcutLabel } from "../commands";
+import { chordLabel, normalizeChord } from "../keymap";
 import { library, loadLibrary, openLibraryScript } from "../library";
 import { returnFocus } from "../focus";
+import { flipList, leaveOnCleanup } from "../motion";
 import { ObjIcon } from "../icons";
-import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty } from "../state";
+import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty, type MenuItem } from "../state";
 
 // ---------------------------------------------------------------- context menu
+
+/**
+ * The shortcut a menu row shows, always in the same notation (the keymap's: "Ctrl+Mayús+F", ⌘ on macOS): a
+ * command's as the user set it, or a key that only works where the menu was opened.
+ */
+export function menuKeys(item: MenuItem): string {
+  if (item.command) return shortcutLabel(item.command);
+  return item.keys ? chordLabel(normalizeChord(item.keys)) : "";
+}
 
 export function ContextMenu() {
   let el: HTMLDivElement | undefined;
@@ -71,7 +82,7 @@ export function ContextMenu() {
 
   return (
     <Show when={state.menu}>
-      <div class="menu" ref={el} tabIndex={-1} role="menu" style={{ left: `${pos().x}px`, top: `${pos().y}px` }} onKeyDown={onKey} onContextMenu={(event) => event.preventDefault()}>
+      <div class="menu" ref={(node) => { el = node; leaveOnCleanup("menu")(node); }} tabIndex={-1} role="menu" style={{ left: `${pos().x}px`, top: `${pos().y}px` }} onKeyDown={onKey} onContextMenu={(event) => event.preventDefault()}>
         <For each={items()}>
           {(item, index) =>
             item.separator ? (
@@ -90,7 +101,8 @@ export function ContextMenu() {
                 }}
               >
                 <span class="menu-label">{item.label}</span>
-                <Show when={item.hint}><kbd>{item.hint}</kbd></Show>
+                <Show when={item.hint}><small class="menu-hint">{item.hint}</small></Show>
+                <Show when={menuKeys(item)}><kbd>{menuKeys(item)}</kbd></Show>
               </button>
             )
           }
@@ -108,11 +120,14 @@ export function Toasts() {
     const tab = state.tabs.find((item) => item.id === state.activeTabId);
     return tab?.kind === "table" && tab.section === "data" && tableDirty(tab);
   };
+  let box: HTMLDivElement | undefined;
+  // A toast that goes fades out where it was and the others glide into place.
+  flipList(() => (box ? [...box.querySelectorAll<HTMLElement>(":scope > .toast")] : []), () => state.toasts.map((toast) => toast.id).join());
   return (
-    <div class="toasts" classList={{ raised: raised() }} aria-live="polite">
+    <div class="toasts" ref={box} classList={{ raised: raised() }} aria-live="polite">
       <For each={state.toasts}>
         {(toast) => (
-          <div class={`toast ${toast.kind}`} role="status">
+          <div class={`toast ${toast.kind}`} role="status" data-flip={toast.id} ref={leaveOnCleanup("toast")}>
             <span class="toast-icon">
               {toast.kind === "success" ? <CircleCheck size={16} /> : toast.kind === "error" ? <CircleAlert size={16} /> : toast.kind === "warning" ? <TriangleAlert size={16} /> : <Info size={16} />}
             </span>
@@ -305,8 +320,8 @@ export function Palette() {
 
   return (
     <Show when={state.paletteOpen}>
-      <div class="scrim light" onMouseDown={close} />
-      <div class="palette" role="dialog" aria-label="Buscar en todo">
+      <div class="scrim light" ref={leaveOnCleanup("scrim")} onMouseDown={close} />
+      <div class="palette" ref={leaveOnCleanup("palette")} role="dialog" aria-label="Buscar en todo">
         <div class="pal-search">
           <Search size={16} />
           <input ref={input} placeholder={placeholder()} value={query()} onInput={(event) => setQuery(event.currentTarget.value)} onKeyDown={onKey} spellcheck={false} />

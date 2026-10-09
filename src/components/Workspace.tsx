@@ -122,6 +122,7 @@ import { startImport } from "../importer";
 import { withShortcut } from "../commands";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
+import { flipList, leaveOnCleanup } from "../motion";
 import { windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
@@ -155,6 +156,9 @@ function TabBar() {
   const [renaming, setRenaming] = createSignal("");
   /** The tab was dropped on this tab bar (a reorder): it does not go to another window. */
   let droppedHere = false;
+  let bar: HTMLDivElement | undefined;
+  // Tabs glide to their new place when one closes, opens or moves (motion.ts).
+  flipList(() => (bar ? [...bar.querySelectorAll<HTMLElement>(":scope > .tab")] : []), () => state.tabs.map((tab) => tab.id).join());
 
   function menu(event: MouseEvent, tab: Tab) {
     // Another window, or a new one: the tab goes on there with its session as it is.
@@ -166,7 +170,7 @@ function TabBar() {
         ]
       : [];
     openMenu(event, [
-      { label: "Cerrar", hint: "Ctrl+W", run: () => void closeTab(tab.id) },
+      { label: "Cerrar", command: "close-tab", run: () => void closeTab(tab.id) },
       { label: "Cerrar las demás", run: () => void closeOtherTabs(tab.id) },
       { separator: true },
       { label: "Renombrar", disabled: tab.kind !== "sql", run: () => setRenaming(tab.id) },
@@ -178,6 +182,7 @@ function TabBar() {
   return (
     <div
       class="tabbar"
+      ref={bar}
       role="tablist"
       classList={{ "drop-in": Boolean(incomingDrag()) }}
       onDblClick={(event) => event.target === event.currentTarget && openQuery(activeSql()?.connId ?? null)}
@@ -197,6 +202,8 @@ function TabBar() {
           return (
             <div
               class="tab"
+              ref={leaveOnCleanup("tab")}
+              data-flip={tab.id}
               role="tab"
               aria-selected={tab.id === state.activeTabId}
               classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index() }}
@@ -480,7 +487,7 @@ function SqlPane(props: { tab: SqlTab }) {
         <span class="spacer" />
         <ConnectionPicker tab={props.tab} />
       </div>
-      <div class="editor-wrap" style={{ height: `${state.settings.editorRatio * 100}%` }}>
+      <div class="editor-wrap" data-focus-region="editor" style={{ height: `${state.settings.editorRatio * 100}%` }}>
         <SqlEditor
           doc={props.tab.sql}
           revision={props.tab.revision}
@@ -510,7 +517,7 @@ function SqlPane(props: { tab: SqlTab }) {
         </Show>
       </div>
       <div class="hsplit" onMouseDown={resize} />
-      <div class="results">
+      <div class="results" data-focus-region="results">
         <div class="results-head">
           <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1 && !props.tab.activePinned && !props.tab.activePlan && !props.tab.compare, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
             <Show when={props.tab.error} fallback={<FileCode2 size={13} />}><CircleAlert size={13} /></Show>
@@ -710,7 +717,7 @@ function TablePane(props: { tab: TableTab }) {
   };
 
   return (
-    <div class="pane">
+    <div class="pane" data-focus-region="results">
       <div class="pane-toolbar">
         <ObjIcon kind={props.tab.obj.kind === "view" ? "view" : "table"} size={16} />
         <strong class="obj-title">{props.tab.qualified}</strong>

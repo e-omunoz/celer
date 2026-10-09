@@ -1,6 +1,7 @@
 // The script library panel (Inspector › Biblioteca): a tree of folders and scripts with search, tags, drag and drop,
 // a context menu and keyboard shortcuts. The actions live in library.ts.
 import { BookmarkPlus, ChevronRight, Ellipsis, FileCode2, Folder, FolderOpen, FolderPlus, Pencil, Play, Search, X } from "lucide-solid";
+import { setDragGhost } from "../dnd";
 import { createEffect, createMemo, createSignal, For, on, onMount, Show } from "solid-js";
 import { shortcutLabel, withShortcut } from "../commands";
 import {
@@ -107,30 +108,30 @@ export function LibraryView() {
     const conn = currentConn();
     const connName = connectionById(conn)?.name;
     return [
-      { label: "Abrir", hint: "Intro", run: () => void openLibraryScript(script.id) },
-      { label: "Abrir y ejecutar", hint: "Ctrl+Intro", run: () => void openLibraryScript(script.id, true) },
+      { label: "Abrir", keys: "Intro", run: () => void openLibraryScript(script.id) },
+      { label: "Abrir y ejecutar", keys: "Ctrl+Intro", run: () => void openLibraryScript(script.id, true) },
       { label: "Insertar en la consola", disabled: !activeSql(), run: () => insertLibraryScript(script.id) },
       { separator: true },
       ...(dirty
         ? [
-            { label: "Guardar los cambios de la consola", hint: shortcutLabel("save-library"), run: () => void saveConsoleToScript(script.id) },
+            { label: "Guardar los cambios de la consola", command: "save-library", run: () => void saveConsoleToScript(script.id) },
             { label: "Descartar los cambios de la consola", run: () => revertConsole(script.id) },
             { separator: true },
           ]
         : []),
-      { label: "Renombrar", hint: "F2", run: () => setLibrary("renaming", `s:${script.id}`) },
-      { label: "Carpeta, etiquetas y conexión…", hint: "Alt+Intro", run: () => setLibrary("editing", script.id) },
-      { label: "Duplicar", hint: "Ctrl+D", run: () => void duplicateLibraryScript(script.id) },
+      { label: "Renombrar", keys: "F2", run: () => setLibrary("renaming", `s:${script.id}`) },
+      { label: "Carpeta, etiquetas y conexión…", keys: "Alt+Intro", run: () => setLibrary("editing", script.id) },
+      { label: "Duplicar", keys: "Ctrl+D", run: () => void duplicateLibraryScript(script.id) },
       ...(script.folder ? [{ label: "Sacar de la carpeta", run: () => void moveScriptsToFolder([script.id], "") }] : []),
       conn && conn !== script.connId
         ? { label: `Asociar a «${connName ?? "la conexión activa"}»`, run: () => void updateLibraryScript(script.id, { connId: conn }) }
         : { label: "Asociar a la conexión activa", disabled: true },
       ...(script.connId ? [{ label: "Quitar la conexión asociada", run: () => void updateLibraryScript(script.id, { connId: null }) }] : []),
       { separator: true },
-      { label: "Copiar el SQL", hint: "Ctrl+C", run: () => void copyText(script.sql, "SQL copiado") },
+      { label: "Copiar el SQL", keys: "Ctrl+C", run: () => void copyText(script.sql, "SQL copiado") },
       { label: "Exportar a .sql…", run: () => void exportLibrary({ scriptId: script.id }) },
       { separator: true },
-      { label: "Borrar", hint: "Supr", danger: true, run: () => void deleteLibraryScript(script.id) },
+      { label: "Borrar", keys: "Supr", danger: true, run: () => void deleteLibraryScript(script.id) },
     ];
   }
 
@@ -140,12 +141,12 @@ export function LibraryView() {
       { label: "Nueva subcarpeta", run: () => void createLibraryFolder(folder) },
       { label: "Importar .sql aquí…", run: () => { select(`f:${folder}`); void importLibraryFiles(); } },
       { separator: true },
-      { label: "Renombrar", hint: "F2", run: () => setLibrary("renaming", `f:${folder}`) },
-      { label: open ? "Contraer" : "Expandir", hint: open ? "←" : "→", run: () => toggleFolder(folder) },
+      { label: "Renombrar", keys: "F2", run: () => setLibrary("renaming", `f:${folder}`) },
+      { label: open ? "Contraer" : "Expandir", keys: open ? "ArrowLeft" : "ArrowRight", run: () => toggleFolder(folder) },
       ...(parentFolder(folder) ? [{ label: "Mover al nivel superior", run: () => void moveLibraryFolder(folder, "") }] : []),
       { label: "Exportar la carpeta a .sql…", run: () => void exportLibrary({ folder }) },
       { separator: true },
-      { label: "Borrar la carpeta…", hint: "Supr", danger: true, run: () => void removeFolderAsked(folder) },
+      { label: "Borrar la carpeta…", keys: "Supr", danger: true, run: () => void removeFolderAsked(folder) },
     ];
   }
 
@@ -320,6 +321,7 @@ export function LibraryView() {
         onDragStart={(event) => {
           event.dataTransfer?.setData(FOLDER_MIME, row().path);
           if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          setDragGhost(event, { title: row().name, detail: "Carpeta de la biblioteca" });
           setDragging(row().key);
         }}
         onDragEnd={endDrag}
@@ -365,6 +367,7 @@ export function LibraryView() {
             // Dropped on the editor, it pastes the SQL there.
             event.dataTransfer?.setData("text/plain", script().sql);
             if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
+            setDragGhost(event, { title: script().name, detail: "Script · suéltalo en una carpeta o en el editor", preview: script().sql });
             setDragging(key());
           }}
           onDragEnd={endDrag}

@@ -16,6 +16,22 @@ All notable changes to Celer are documented here. The format follows
   accent, so it looks the same on another machine), show next to the built-in ones and in the palette, and tear-off
   windows follow them. *Seguir al sistema* now lets you pick the theme for the system's light mode and for its dark
   mode, custom themes included.
+- **F6 / Shift+F6 move the focus between panels** (#110): explorer, editor, results and right panel in screen
+  order, back to where the focus was in each, with a brief highlight. Closing a panel that has the focus hands it to
+  the active tab's editor or results instead of losing it.
+
+### Changed
+- **Motion and component styles are consistent** (#110): every transition and animation uses the motion tokens
+  (`--motion-fast/normal/slow` and easings), follows the theme's animation speed and *Animaciones* / the system's
+  reduced motion (`dev/motion-check.ts` fails on a hard-coded duration). Panels slide in and out, tabs glide when one
+  opens, closes or moves, toasts stack and leave smoothly, dialogs, menus and the palette animate on the way out too,
+  and buttons share one hover and press feel. Text fields share one focus ring, menus and popovers one surface,
+  badges and empty states one style, and the high-contrast themes get stronger focus rings and scrollbars.
+- **Drag and drop looks the same everywhere** (#110): tabs, result columns, explorer rows and library scripts dim
+  what is dragged, light up where it can be dropped, draw the same insertion line and show the same ghost card under
+  the pointer.
+- **Context menus show shortcuts consistently** (#110): the user's own shortcut for actions that are commands (it
+  follows *Atajos de teclado*), every key in the same notation, and notes (an engine, "actual") apart from shortcuts.
 
 ## [2.2.0] - 2026-10-09
 

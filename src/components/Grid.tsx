@@ -83,6 +83,8 @@ interface Palette {
   muted: string;
   faint: string;
   line: string;
+  /** Drag and drop: the insertion line and the dragged header's border (--dnd-line, shared with tabs and the explorer). */
+  dnd: string;
   head: string;
   headFg: string;
   sel: string;
@@ -151,6 +153,7 @@ function readPalette(): Palette {
     sel: v("--grid-sel"),
     selStrong: v("--grid-sel-strong", v("--grid-sel")),
     accent: v("--accent"),
+    dnd: v("--dnd-line", v("--accent")),
     alt: v("--grid-alt"),
     bg: v("--surface"),
     modified: v("--grid-modified"),
@@ -573,7 +576,7 @@ export function DataGrid(props: GridProps) {
       if (moving.gap !== moving.col && moving.gap !== moving.col + 1) {
         const lx = Math.round(xs[moving.gap] - view.x);
         if (lx >= G - 1 && lx <= width + 1) {
-          ctx.fillStyle = p.accent;
+          ctx.fillStyle = p.dnd;
           ctx.fillRect(lx - 1, 0, 2, height);
         }
       }
@@ -584,7 +587,7 @@ export function DataGrid(props: GridProps) {
       ctx.fillStyle = p.head;
       ctx.fillRect(gx, 0, w, HEAD_H);
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = p.accent;
+      ctx.strokeStyle = p.dnd;
       ctx.lineWidth = 1;
       ctx.strokeRect(gx + 0.5, 0.5, w - 1, HEAD_H - 1);
       ctx.beginPath();
@@ -1221,8 +1224,8 @@ export function DataGrid(props: GridProps) {
     if (target.type !== "cell" && target.type !== "gutter") return;
     const many = selectedRows().length;
     const items: MenuItem[] = [
-      { label: "Copiar", hint: "Ctrl+C", icon: "copy", run: () => copy("tsv") },
-      { label: "Copiar con cabeceras", hint: "Ctrl+Shift+C", run: () => copy("tsv-head") },
+      { label: "Copiar", keys: "Ctrl+C", icon: "copy", run: () => copy("tsv") },
+      { label: "Copiar con cabeceras", keys: "Ctrl+Shift+C", run: () => copy("tsv-head") },
       { label: "Copiar como CSV", run: () => copy("csv") },
       { label: "Copiar como JSON", run: () => copy("json") },
       { label: "Copiar como Markdown", run: () => copy("markdown") },
@@ -1231,14 +1234,14 @@ export function DataGrid(props: GridProps) {
       { label: "Copiar como lista IN (…)", run: () => copy("in") },
       { label: "Copiar como WHERE", run: () => copy("where") },
       { separator: true },
-      { label: "Ver valor", hint: "Mayús+Intro", icon: "eye", run: () => activate() },
+      { label: "Ver valor", keys: "Mayús+Intro", icon: "eye", run: () => activate() },
     ];
     const f = focus();
     const fc = f ? src(f.col) : -1;
     if (f && props.onFollow && props.linkCols?.includes(fc)) {
       const source = ordered()[f.row];
       items.unshift(
-        { label: `Ir a la fila referenciada${props.linkLabel ? ` (${props.linkLabel(fc)})` : ""}`, hint: "Ctrl+clic", icon: "link", run: () => source !== undefined && props.onFollow?.(source, fc) },
+        { label: `Ir a la fila referenciada${props.linkLabel ? ` (${props.linkLabel(fc)})` : ""}`, keys: "Ctrl+Clic", icon: "link", run: () => source !== undefined && props.onFollow?.(source, fc) },
         { separator: true },
       );
     }
@@ -1255,11 +1258,11 @@ export function DataGrid(props: GridProps) {
     if (props.editable) {
       items.push(
         { separator: true },
-        { label: "Editar celda", hint: "F2", run: () => focus() && beginEdit(focus()!) },
-        { label: "Poner a NULL", hint: "Ctrl+Mayús+N", run: setNull },
-        { label: "Añadir fila", hint: "Alt+Insert", icon: "plus", run: () => props.onInsert?.() },
-        { label: "Clonar fila", hint: "Ctrl+D", run: () => focus() && props.onClone?.(ordered()[focus()!.row]) },
-        { label: many > 1 ? `Eliminar ${many} filas` : "Eliminar fila", hint: "Supr", icon: "trash", danger: true, run: () => props.onDelete?.(selectedRows()) },
+        { label: "Editar celda", keys: "F2", run: () => focus() && beginEdit(focus()!) },
+        { label: "Poner a NULL", keys: "Ctrl+Mayús+N", run: setNull },
+        { label: "Añadir fila", keys: "Alt+Insert", icon: "plus", run: () => props.onInsert?.() },
+        { label: "Clonar fila", keys: "Ctrl+D", run: () => focus() && props.onClone?.(ordered()[focus()!.row]) },
+        { label: many > 1 ? `Eliminar ${many} filas` : "Eliminar fila", keys: "Supr", icon: "trash", danger: true, run: () => props.onDelete?.(selectedRows()) },
       );
       // Undo pending changes: the cell under the cursor, or its whole row (edits, deletion or a new row).
       const at = focus();
@@ -1620,7 +1623,7 @@ export function DataGrid(props: GridProps) {
   };
 
   return (
-    <div class="grid" ref={root} tabIndex={0} onKeyDown={onKey} onContextMenu={contextMenu}>
+    <div class="grid" ref={root} tabIndex={0} data-focus-default onKeyDown={onKey} onContextMenu={contextMenu}>
       <canvas ref={canvas} class="grid-canvas" />
       <div
         class="grid-scroll"

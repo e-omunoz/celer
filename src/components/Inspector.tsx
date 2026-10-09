@@ -1,7 +1,9 @@
 import { BookMarked, Braces, Code2, Copy, ExternalLink, History, Rows3, Search, Sparkles, Trash2, WrapText, X } from "lucide-solid";
 import { AiPanel } from "./AiPanel";
 import { LibraryView, relative } from "./LibraryView";
-import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
+import { rescueFocus } from "../focus";
+import { leaveAnimation } from "../motion";
 import { withShortcut } from "../commands";
 import { prettyXml } from "../prettyXml";
 import { cellText, isNullCell, prettyJson } from "../sql";
@@ -11,7 +13,7 @@ import { detachPanel } from "../windows";
 
 export function Inspector() {
   return (
-    <aside class="inspector" style={{ width: `${state.settings.inspectorWidth}px` }}>
+    <aside class="inspector" data-focus-region="inspector" ref={(el) => onCleanup(() => { rescueFocus(el); leaveAnimation(el, "panel-right"); })} style={{ width: `${state.settings.inspectorWidth}px` }}>
       <div class="toolwin-head">
         <div class="seg small">
           <button type="button" classList={{ on: state.inspectorMode === "value" }} title="Valor de la celda" onClick={() => openInspector("value")}><Braces size={13} /><span class="seg-label">Valor</span></button>

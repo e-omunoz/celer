@@ -25,6 +25,8 @@ export const DEFAULT_KEYS: Record<string, string[]> = {
   "prev-tab": ["Ctrl+Shift+Tab"],
   "toggle-explorer": ["Alt+1"],
   "toggle-inspector": ["Alt+7"],
+  "next-panel": ["F6"],
+  "prev-panel": ["Shift+F6"],
   palette: ["Ctrl+K"],
   "palette-actions": ["Ctrl+Shift+A"],
   "go-table": ["Ctrl+N"],
