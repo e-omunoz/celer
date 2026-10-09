@@ -22,6 +22,11 @@ assert.equal(normalizeType("tinyint(4)"), "tinyint");
 // MySQL MODIFY warns about what it would drop.
 const modify = syncScript(compareSchemas([{ name: "t", columns: [{ ...col("id", "bigint", false), identity: true }] }], [{ name: "t", columns: [{ ...col("id", "int", false), identity: true, default: null }] }]), { dialect: "mysql", schema: "", sourceDialect: "mysql", sourceDdl: {} });
 assert.match(modify, /-- id tiene AUTO_INCREMENT: MODIFY lo quita si no se repite/);
+// Informix MODIFY keeps the target's DEFAULT (before NOT NULL) and warns about its constraints.
+const ifx = syncScript(compareSchemas([{ name: "t", columns: [col("estado", "CHAR(10)", false)] }], [{ name: "t", columns: [{ ...col("estado", "CHAR(5)", false), default: "'A'", primaryKey: true }] }]), { dialect: "informix", schema: "", sourceDialect: "informix", sourceDdl: {} });
+assert.match(ifx, /ALTER TABLE t MODIFY \(estado CHAR\(10\) DEFAULT 'A' NOT NULL\);/);
+assert.match(ifx, /-- MODIFY quita las restricciones de una sola columna de estado \(la PRIMARY KEY/);
+assert.match(syncScript(compareSchemas([{ name: "t", columns: [col("n", "INTEGER")] }], [{ name: "t", columns: [col("n", "SMALLINT")] }]), { dialect: "informix", schema: "", sourceDialect: "informix", sourceDdl: {} }), /MODIFY \(n INTEGER\);/);
 
 const source: SchemaTable[] = [
   { name: "customers", columns: [col("id", "integer", false, true), col("name", "varchar(120)", false), col("email", "text"), col("vip", "boolean")] },

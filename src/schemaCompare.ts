@@ -186,7 +186,14 @@ export function syncScript(diffs: TableDiff[], options: SyncOptions): string {
           lines.push(`ALTER TABLE ${t} MODIFY COLUMN ${col} ${s.typeName} ${nullSql(s)};`);
         }
         else if (dialect === "mssql") lines.push(`ALTER TABLE ${t} ALTER COLUMN ${col} ${s.typeName} ${nullSql(s)};`);
-        else if (dialect === "informix") lines.push(`ALTER TABLE ${t} MODIFY (${col} ${s.typeName}${s.nullable ? "" : " NOT NULL"});`);
+        else if (dialect === "informix") {
+          // MODIFY redefines the whole column and drops what it had: its DEFAULT is written again, its constraints
+          // cannot be (they are not read), so a comment says so.
+          const def = c.target.default != null && c.target.default !== "" ? ` DEFAULT ${c.target.default}` : "";
+          const constraints = c.target.primaryKey ? "la PRIMARY KEY si es solo de esta columna, y UNIQUE, REFERENCES o CHECK" : "UNIQUE, REFERENCES o CHECK";
+          lines.push(`-- MODIFY quita las restricciones de una sola columna de ${c.target.name} (${constraints}): añádelas detrás si las tenía`);
+          lines.push(`ALTER TABLE ${t} MODIFY (${col} ${s.typeName}${def}${s.nullable ? "" : " NOT NULL"});`);
+        }
         else lines.push(`-- ${engineLabel(dialect)} no cambia el tipo de una columna con ALTER: ${c.target.name} ${c.target.typeName} → ${s.typeName}${s.nullable === c.target.nullable ? "" : `, ${nullSql(s)}`} (hay que recrear la tabla)`);
       }
     }
