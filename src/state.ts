@@ -563,7 +563,15 @@ export function restoreTabs(saved: SavedTab[], activeTabId: string, known: (conn
   setState("activeTabId", state.tabs.some((tab) => tab.id === activeTabId) ? activeTabId : (state.tabs[0]?.id ?? ""));
 }
 
-export function blankSql(id: string, connId: string | null = null, sql = "", title = "console"): SqlTab {
+/** The title of a console with no connection yet; it takes the connection's name when one is picked. */
+export const CONSOLE_TITLE = "consola";
+
+/** Still the placeholder title ("console" is what tabs saved by earlier versions have). */
+export function isDefaultConsoleTitle(title: string) {
+  return title === CONSOLE_TITLE || title === "console";
+}
+
+export function blankSql(id: string, connId: string | null = null, sql = "", title = CONSOLE_TITLE): SqlTab {
   return {
     id,
     kind: "sql",
@@ -1120,7 +1128,7 @@ export async function connect(connId: string, password?: string) {
       // A panel window has no consoles of its own.
       if (!isPanelWindow()) openQuery(connId, "");
     } else if (current.kind === "sql" && !current.connId) {
-      setState("tabs", tabIndex(current.id), { connId, database: opened.database, serverInfo: opened.serverInfo, title: current.title === "console" ? conn.name : current.title });
+      setState("tabs", tabIndex(current.id), { connId, database: opened.database, serverInfo: opened.serverInfo, title: isDefaultConsoleTitle(current.title) ? conn.name : current.title });
       warmSqlSession(current.id);
     } else if (current.kind === "sql" && current.connId === connId) {
       warmSqlSession(current.id);
@@ -1301,7 +1309,7 @@ export async function refreshNode(connId: string, path: string[]) {
 
 export function openQuery(connId: string | null, sql = "", title?: string) {
   const conn = connectionById(connId);
-  const tab = blankSql(uid(), connId, sql, title ?? conn?.name ?? "console");
+  const tab = blankSql(uid(), connId, sql, title ?? conn?.name ?? CONSOLE_TITLE);
   const session = connId ? state.sessions[connId] : undefined;
   if (session) {
     tab.database = session.database;
@@ -1349,7 +1357,7 @@ export async function setTabConnection(tabId: string, connId: string) {
     inTransaction: false,
     database: session?.database ?? "",
     serverInfo: session?.serverInfo ?? "",
-    title: tab.title === "console" || connectionById(tab.connId)?.name === tab.title ? conn?.name ?? tab.title : tab.title,
+    title: isDefaultConsoleTitle(tab.title) || connectionById(tab.connId)?.name === tab.title ? conn?.name ?? tab.title : tab.title,
   } as Partial<SqlTab>);
   // A session still opening on the old connection is closed when it arrives (openSqlSession): this one gets its own.
   openingSql.delete(tabId);

@@ -25,7 +25,7 @@ import {
   type LibraryScript,
   type LibrarySort,
 } from "./libraryModel";
-import { activeSql, connectionById, notify, openInspector, openQuery, patchTab, persistSoon, runActive, selectTab, state, uid } from "./state";
+import { activeSql, connectionById, isDefaultConsoleTitle, notify, openInspector, openQuery, patchTab, persistSoon, runActive, selectTab, state, uid } from "./state";
 import type { SqlTab } from "./state";
 import { forwardFromPanel } from "./windows";
 
@@ -186,7 +186,7 @@ export function currentFolder(): string {
 
 /** A name for a console that has none yet: its title, unless it is the default one, or its first words. */
 function suggestedName(title: string, sql: string, connName?: string): string {
-  if (title && title !== "console" && title !== connName) return title.replace(/\.sql$/i, "");
+  if (title && !isDefaultConsoleTitle(title) && title !== connName) return title.replace(/\.sql$/i, "");
   const words = sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, " ").trim().split(/\s+/).slice(0, 6).join(" ");
   return words.length > 48 ? `${words.slice(0, 47)}…` : words || "Script";
 }
