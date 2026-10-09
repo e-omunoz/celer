@@ -762,7 +762,19 @@ pub fn batch_writes(sql: &str, kind: DbKind) -> bool {
         "DROP", "RENAME", "GRANT", "REVOKE", "DENY", "EXEC", "EXECUTE", "CALL", "COPY", "LOAD",
         "UNLOAD", "BULK", "ATTACH", "DETACH", "VACUUM", "REINDEX", "COMMENT", "LOCK", "IMPORT",
         // A PostgreSQL DO block runs any PL/pgSQL; MySQL's DO evaluates functions that may write.
-        "DO",
+        "DO", "REFRESH", "CLUSTER", "REASSIGN",
+    ];
+    // SQL Server runs a bare procedure name at the start of a batch (`sp_executesql N'DELETE …'`) and needs no ';'
+    // between statements, and nothing at session level makes it read-only: only these words may start a batch or
+    // statement, and a write keyword anywhere in it counts.
+    const MSSQL_READ_START: &[&str] = &[
+        "SELECT", "WITH", "SET", "USE", "DECLARE", "PRINT", "IF", "ELSE", "BEGIN", "END", "WHILE", "BREAK",
+        "CONTINUE", "RETURN", "COMMIT", "ROLLBACK", "SAVE", "RAISERROR", "THROW", "WAITFOR", "OPEN", "FETCH",
+        "CLOSE", "DEALLOCATE", "EXPLAIN", "GO",
+    ];
+    const MSSQL_WRITE_WORDS: &[&str] = &[
+        "INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE", "CREATE", "ALTER", "DROP", "INTO", "EXEC",
+        "EXECUTE", "GRANT", "REVOKE", "DENY", "BULK",
     ];
     // Session settings that would turn the server's read-only mode off (PostgreSQL, MySQL).
     const READ_ONLY_VARS: &[&str] = &["DEFAULT_TRANSACTION_READ_ONLY", "TRANSACTION_READ_ONLY", "TX_READ_ONLY"];
@@ -775,6 +787,28 @@ pub fn batch_writes(sql: &str, kind: DbKind) -> bool {
             let first = first_word(t).unwrap_or("");
             if WRITE_START.contains(&first) {
                 return true;
+            }
+            if kind == DbKind::Mssql {
+                if !MSSQL_READ_START.contains(&first) {
+                    return true;
+                }
+                for (k, tok) in t.iter().enumerate() {
+                    let Tok::Word(w) = tok else { continue };
+                    let next = t.get(k + 1);
+                    // UPDATE(col) is a trigger function; pass-through queries run anything on the linked
+                    // server; a word after GO starts a new batch.
+                    let batch_start = match next {
+                        Some(Tok::Word(n)) => !MSSQL_READ_START.contains(&n.as_str()),
+                        Some(Tok::Ident(_)) => true,
+                        _ => false,
+                    };
+                    if (MSSQL_WRITE_WORDS.contains(&w.as_str()) && next != Some(&Tok::P('(')))
+                        || matches!(w.as_str(), "OPENQUERY" | "OPENROWSET" | "OPENDATASOURCE")
+                        || (w == "GO" && batch_start)
+                    {
+                        return true;
+                    }
+                }
             }
             let words: Vec<&str> = t
                 .iter()
@@ -1970,6 +2004,16 @@ mod batch_tests {
         assert!(batch_writes("select 1;\n-- x\nupdate t set a = 1", DbKind::Mysql));
         assert!(!batch_writes("SET search_path TO public; SELECT * FROM t", DbKind::Postgres));
         assert!(batch_writes("SELECT * INTO copy FROM t", DbKind::Mssql));
+        assert!(batch_writes("REFRESH MATERIALIZED VIEW v", DbKind::Postgres));
+        assert!(batch_writes("CLUSTER t USING t_pkey", DbKind::Postgres));
+        // SQL Server: a bare procedure call starts a batch, and statements need no ';'.
+        assert!(batch_writes("sp_executesql N'DELETE FROM t'", DbKind::Mssql));
+        assert!(batch_writes("[dbo].[purge_all] 1", DbKind::Mssql));
+        assert!(batch_writes("SELECT 1\nGO\nsp_executesql N'DELETE FROM t'", DbKind::Mssql));
+        assert!(batch_writes("DECLARE @n int = 1 IF @n = 1 DELETE FROM t", DbKind::Mssql));
+        assert!(batch_writes("SELECT * FROM OPENQUERY(srv, 'SELECT 1')", DbKind::Mssql));
+        assert!(!batch_writes("SET NOCOUNT ON; DECLARE @n int = 1; SELECT @n\nGO\nSELECT 2", DbKind::Mssql));
+        assert!(!batch_writes("USE db; SELECT [update] FROM t WHERE x IN (SELECT 1)", DbKind::Mssql));
     }
 }
 

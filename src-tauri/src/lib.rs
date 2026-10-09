@@ -968,6 +968,9 @@ mod read_only_tests {
         assert!(check_read_only(&cfg, "ANALYZE DELETE FROM t").is_err());
         assert!(check_read_only(&cfg, "SET SESSION TRANSACTION READ WRITE").is_err());
         assert!(check_read_only(&cfg, "ANALYZE TABLE t").is_ok());
+        cfg.kind = DbKind::Mssql;
+        assert!(check_read_only(&cfg, "sp_executesql N'DELETE FROM t'").is_err());
+        assert!(check_read_only(&cfg, "SELECT TOP 10 * FROM t").is_ok());
     }
 }
 
