@@ -60,6 +60,19 @@ jobs:
         if: hashFiles('installer/tsconfig.json') != ''
         run: npx tsc --noEmit -p installer
 
+      # Celer Setup is otherwise first built by the tag-triggered release. Its payload here is a 2 MB stub
+      # (MZ header, enough for embedded_payload_is_sane), compressed fast; the release embeds the real celer.exe.
+      - name: Build and test Celer Setup
+        run: |
+          npx vite build --config installer/vite.config.ts
+          $stub = Join-Path $env:RUNNER_TEMP "celer-stub.exe"
+          $bytes = New-Object byte[] 2097152; $bytes[0] = 0x4D; $bytes[1] = 0x5A
+          [IO.File]::WriteAllBytes($stub, $bytes)
+          $env:CELER_PAYLOAD = $stub
+          $env:CELER_ZSTD_LEVEL = "1"
+          cargo test --manifest-path installer/src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Connection import checks
         run: node --experimental-strip-types --no-warnings dev/migrate-check.ts
 
