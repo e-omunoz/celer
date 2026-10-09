@@ -6,6 +6,33 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **E-R diagram of one table and its relations**: "Diagrama de relaciones" in a table's menu, in its "Claves" tab and
+  in the palette shows the table and the tables its foreign keys link it with, both ways (what it points to and what
+  points to it), with the table's name in the title. "Ampliar un nivel" adds the tables related to all those on show,
+  "+N" on a table adds only its own, a button on each card centres the diagram on that table (in the whole-schema
+  diagram too, without reading it again), and "Todo el esquema" goes back to every table. To find what points to a
+  table the keys of every table of its schema are read, but the columns only of the tables on show.
+- **Reorder result columns by dragging their headers** (query results and table viewer): a line shows where the column
+  will land and the grid scrolls by itself near its edges; Esc cancels the move. A click still selects the column and
+  Shift+click selects several (dragging across headers to select them now needs Shift). Everything follows the order on
+  screen: selection, keyboard, copy (all formats), search, the record view, cell editing and the export. «Restablecer
+  orden de columnas» in the header menu goes back to the query's order, and a new result or a re-run starts with it.
+- **Several rows at once in the explorer** (#92): Ctrl+click (Cmd+click on macOS) adds or removes a row, Shift+click
+  selects a range in the order shown and Ctrl+Shift+click adds one; Shift+arrows and Shift+Home/End extend it from the
+  keyboard, Ctrl+A selects every visible row of the focused one's kind (connections, folders, favourites, or objects
+  of one kind such as tables) and Esc leaves the focused row alone. Selected rows get a tint and a bar on the left,
+  the focused one also a ring, in every theme.
+  - Connections and folders are selected together: connect, disconnect, favourite, export, copy names, move (dragging
+    the selection, or "Mover a «carpeta»" in its menu), a new folder holding them, and delete with one confirmation
+    («Eliminar 3 conexiones y 1 carpeta») and one undo. Connecting, disconnecting and exporting take what is inside the
+    selected folders too.
+  - Favourite shortcuts form their own selection: connect, disconnect, export, copy names, and Supr takes them out of
+    the favourites (it never deletes the connections).
+  - Database objects form theirs: copy names or full names, and generate a SELECT or SELECT COUNT(*) for each table
+    or view (one console per connection); dragging them drops their names in the editor.
+  - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
+
 ### Fixed
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
   closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
@@ -17,6 +44,10 @@ All notable changes to Celer are documented here. The format follows
 - **Result grid as one flat colour with reduced animations** (Settings › Animaciones "Reducidas", or "Como el sistema"
   on a Windows set for best performance): the grid read the theme's colours while they were in a transition and got
   each one shifted, so background, text and headers came out wrong. It now reads them without a transition.
+- **E-R diagram: double click on a table** did nothing, although the hint said it opens it: the press already
+  started panning and took the pointer, so the double click went to the canvas instead of the table. Panning now
+  starts when the mouse moves, and a double click opens the table (the diagram closes; in a window of its own it
+  stays, and the table opens in its Celer window, brought to the front).
 
 ## [2.1.1] - 2026-10-09
 

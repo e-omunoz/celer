@@ -181,6 +181,8 @@ export interface ExportOptions {
   bom: boolean;
   tableName: string;
   nullText: string;
+  /** The grid's column order (src/columnOrder.ts); the core applies it only to the columns it was made for. */
+  columnOrder?: { names: string[]; order: number[] } | null;
 }
 
 export type ThemeName = "system" | "light" | "dark" | "darcula" | "contrast" | "contrast-light" | "fjord" | "sand";

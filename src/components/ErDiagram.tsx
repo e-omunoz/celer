@@ -1,20 +1,42 @@
 import { Download, ExternalLink, Maximize2, Minus, Plus, Search, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { api, isTauri } from "../api";
-import { columnY, edgePath, ER, layoutEr, type ErBox, type ErTable } from "../erLayout";
+import { columnY, edgePath, ER, erHidden, erNeighbours, layoutEr, type ErBox, type ErTable } from "../erLayout";
 import { Gib } from "../gib/Gib";
-import { closeErDiagram, notify, openTable, state } from "../state";
+import { closeErDiagram, focusErTable, notify, openTable, showWholeEr, state, widenErDiagram } from "../state";
 import { detachPanel, isPanelWindow } from "../windows";
 
 /**
  * Entity-relationship diagram of a schema: one card per table (columns, keys), a line per foreign key from its
  * column to the referenced one. Drag to pan, wheel to zoom, hover a table to see its relations, double-click
- * to open it. Exports to SVG.
+ * to open it. Exports to SVG. Or the diagram of one table: it and the tables linked to it, widened a level at a
+ * time or from one table ("+N" on its card).
  */
 export function ErDiagram() {
   const er = () => state.er!;
-  const layout = createMemo(() => layoutEr(er().tables, er().edges));
-  const byId = createMemo(() => new Map(er().tables.map((t) => [t.id, t])));
+  /** The diagram of one table: the tables on show around it (null for the whole schema). */
+  const shown = createMemo(() => (er().focus ? new Set(er().shown) : null));
+  const tables = createMemo(() => {
+    const only = shown();
+    return only ? er().tables.filter((t) => only.has(t.id)) : er().tables;
+  });
+  const edges = createMemo(() => {
+    const only = shown();
+    return only ? er().edges.filter((e) => only.has(e.from) && only.has(e.to)) : er().edges;
+  });
+  const focusName = () => (er().focus ? (er().objects[er().focus]?.name ?? er().focus) : "");
+  /** Tables linked to those on show that are not on show yet: in all ("Ampliar un nivel") and per table ("+N"). */
+  const more = createMemo(() => {
+    const only = shown();
+    return only ? erNeighbours(only, er().edges).filter((id) => er().objects[id]).length : 0;
+  });
+  const hidden = createMemo(() => {
+    const only = shown();
+    return only ? erHidden(only, er().edges) : new Map<string, string[]>();
+  });
+  const hiddenOf = (id: string) => (hidden().get(id) ?? []).filter((other) => er().objects[other]).length;
+  const layout = createMemo(() => layoutEr(tables(), edges()));
+  const byId = createMemo(() => new Map(tables().map((t) => [t.id, t])));
   const [view, setView] = createSignal({ x: 0, y: 0, k: 1 });
   const [hover, setHover] = createSignal<string | null>(null);
   const [query, setQuery] = createSignal("");
@@ -23,14 +45,14 @@ export function ErDiagram() {
 
   const matches = createMemo(() => {
     const q = query().trim().toLowerCase();
-    return q ? new Set(er().tables.filter((t) => t.name.toLowerCase().includes(q) || t.columns.some((c) => c.name.toLowerCase() === q)).map((t) => t.id)) : null;
+    return q ? new Set(tables().filter((t) => t.name.toLowerCase().includes(q) || t.columns.some((c) => c.name.toLowerCase() === q)).map((t) => t.id)) : null;
   });
   /** The hovered table and everything it relates to. */
   const related = createMemo(() => {
     const id = hover();
     if (!id) return null;
     const set = new Set([id]);
-    for (const e of er().edges) {
+    for (const e of edges()) {
       if (e.from === id) set.add(e.to);
       if (e.to === id) set.add(e.from);
     }
@@ -62,11 +84,11 @@ export function ErDiagram() {
     setView({ k, x: r.width / 2 - (box.x + box.w / 2) * k, y: r.height / 2 - (box.y + box.h / 2) * k });
   }
 
-  // Fit once the first tables are in, and again when loading ends.
+  // Fit once the first tables are in, and again when loading ends (or the tables on show change).
   let fitted = false;
   createEffect(
     on(
-      () => [er().tables.length, er().loading] as const,
+      () => [tables().length, er().loading, er().focus] as const,
       ([count, loading]) => {
         if (count && (!fitted || !loading)) {
           fitted = true;
@@ -87,18 +109,53 @@ export function ErDiagram() {
     onCleanup(() => window.removeEventListener("keydown", key, true));
   });
 
-  // Pan with the mouse; wheel zooms around the cursor.
-  let drag: { x: number; y: number; vx: number; vy: number } | null = null;
+  // Pan with the mouse; wheel zooms around the cursor. The pointer is captured once it moves, not on the press: a
+  // capture from the press sends the click and the double click to the canvas instead of the table under it.
+  let drag: { x: number; y: number; vx: number; vy: number; pointer: number; moved: boolean } | null = null;
   const onDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
-    drag = { x: event.clientX, y: event.clientY, vx: view().x, vy: view().y };
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    drag = { x: event.clientX, y: event.clientY, vx: view().x, vy: view().y, pointer: event.pointerId, moved: false };
   };
   const onMove = (event: PointerEvent) => {
     if (!drag) return;
-    setView({ ...view(), x: drag.vx + event.clientX - drag.x, y: drag.vy + event.clientY - drag.y });
+    // Released outside the canvas before it moved (nothing captured it): no pan left hanging.
+    if (!event.buttons) {
+      drag = null;
+      return;
+    }
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.moved) {
+      if (Math.abs(dx) + Math.abs(dy) < 4) return;
+      drag.moved = true;
+      (event.currentTarget as HTMLElement).setPointerCapture(drag.pointer);
+    }
+    setView({ ...view(), x: drag.vx + dx, y: drag.vy + dy });
   };
   const onUp = () => (drag = null);
+  // A card's button was just clicked: a quick second click on what took its place is not a double click on the card.
+  let actedAt = 0;
+  const act = (run: () => void) => {
+    actedAt = Date.now();
+    run();
+  };
+  // Double click on a table opens it: the card under the pointer, also if the event reaches only the canvas.
+  const onDblClick = (event: MouseEvent) => {
+    if (Date.now() - actedAt < 600) return;
+    const target = event.target instanceof Element && event.target.closest(".er-table") ? event.target : document.elementFromPoint(event.clientX, event.clientY);
+    if (!target || target.closest("[data-er-act]")) return;
+    const id = target.closest(".er-table")?.getAttribute("data-er-id");
+    if (id) openFromDiagram(id);
+  };
+
+  function openFromDiagram(id: string) {
+    const obj = er().objects[id];
+    if (!obj) return;
+    const connId = er().connId;
+    // In a window of its own the diagram stays: the table opens in its Celer window, which comes to the front.
+    if (!isPanelWindow()) closeErDiagram();
+    void openTable(connId, obj);
+  }
   const onWheel = (event: WheelEvent) => {
     event.preventDefault();
     const r = host!.getBoundingClientRect();
@@ -115,7 +172,7 @@ export function ErDiagram() {
     await new Promise((done) => setTimeout(done, 220));
     const markup = standaloneSvg(svg, layout().width, layout().height);
     setQuery(searched);
-    const name = `${er().title.replace(/[^\w.-]+/g, "_") || "diagrama"}.svg`;
+    const name = `${(focusName() ? `${focusName()}_relaciones` : er().title).replace(/[^\w.-]+/g, "_") || "diagrama"}.svg`;
     if (isTauri()) {
       const path = await api().pickSavePath([{ name: "SVG", extensions: ["svg"] }]);
       if (!path) return;
@@ -130,14 +187,20 @@ export function ErDiagram() {
   }
 
   return (
-    <div class="er-view" role="dialog" aria-label={`Diagrama ${er().title}`}>
+    <div class="er-view" role="dialog" aria-label={focusName() ? `Diagrama de ${focusName()} y sus relaciones` : `Diagrama ${er().title}`}>
       <header class="er-head">
         <b>Diagrama</b>
-        <span class="er-title">{er().title}</span>
+        <span class="er-title" title={er().title}>{focusName() ? `${focusName()} y sus relaciones` : er().title}</span>
         <span class="muted small">
-          {er().tables.length} {er().tables.length === 1 ? "tabla" : "tablas"} · {er().edges.length} {er().edges.length === 1 ? "relación" : "relaciones"}
-          {er().truncated ? ` · ${er().truncated} más sin mostrar` : ""}
+          {tables().length} {tables().length === 1 ? "tabla" : "tablas"} · {edges().length} {edges().length === 1 ? "relación" : "relaciones"}
+          {er().truncated ? (er().focus ? ` · ${er().truncated} tablas sin revisar` : ` · ${er().truncated} más sin mostrar`) : ""}
         </span>
+        <Show when={er().focus}>
+          <button type="button" class="btn tiny" disabled={er().loading || !more()} title={more() ? `Añadir ${more() === 1 ? "la tabla relacionada" : `las ${more()} tablas relacionadas`} con las que se ven` : "No hay más tablas relacionadas"} onClick={() => widenErDiagram()}>
+            <Plus size={13} /> Ampliar un nivel
+          </button>
+          <button type="button" class="btn tiny" disabled={er().loading} title={`Todas las tablas de ${er().title}`} onClick={showWholeEr}>Todo el esquema</button>
+        </Show>
         <span class="spacer" />
         <label class="er-search">
           <Search size={13} />
@@ -164,7 +227,7 @@ export function ErDiagram() {
       <Show when={er().loading}>
         <div class="er-progress"><i style={{ width: `${er().total ? (er().done / er().total) * 100 : 8}%` }} /></div>
       </Show>
-      <div class="er-canvas" ref={host} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel}>
+      <div class="er-canvas" ref={host} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel} onDblClick={onDblClick}>
         <Show when={er().error}>
           <div class="er-empty"><Gib size={84} mood="error" /><p>{er().error}</p></div>
         </Show>
@@ -172,7 +235,7 @@ export function ErDiagram() {
           <div class="er-empty"><Gib size={84} mood="think" /><p>Este esquema no tiene tablas.</p></div>
         </Show>
         <Show when={er().loading && !er().tables.length && !er().error}>
-          <div class="er-empty"><Gib size={84} mood="busy" pose="laptop" /><p>Leyendo tablas y claves… {er().done}/{er().total || "?"}</p></div>
+          <div class="er-empty"><Gib size={84} mood="busy" pose="laptop" /><p>{focusName() ? `Buscando las relaciones de ${focusName()}…` : "Leyendo tablas y claves…"} {er().done}/{er().total || "?"}</p></div>
         </Show>
         <svg ref={svg} class="er-svg" width="100%" height="100%">
           <defs>
@@ -185,7 +248,7 @@ export function ErDiagram() {
             </marker>
           </defs>
           <g transform={`translate(${view().x} ${view().y}) scale(${view().k})`}>
-            <For each={er().edges}>
+            <For each={edges()}>
               {(edge) => {
                 const d = () => {
                   const from = layout().boxes[edge.from];
@@ -205,44 +268,80 @@ export function ErDiagram() {
                 );
               }}
             </For>
-            <For each={er().tables}>
-              {(table) => <TableCard table={table} box={layout().boxes[table.id]} dim={dim(table.id)} hit={Boolean(matches()?.has(table.id))} onHover={setHover} onOpen={() => {
-                const obj = er().objects[table.id];
-                if (!obj) return;
-                const connId = er().connId;
-                // In a window of its own the diagram stays: the table opens in its Celer window.
-                if (!isPanelWindow()) closeErDiagram();
-                void openTable(connId, obj);
-              }} />}
+            <For each={tables()}>
+              {(table) => (
+                <TableCard
+                  table={table}
+                  box={layout().boxes[table.id]}
+                  dim={dim(table.id)}
+                  hit={Boolean(matches()?.has(table.id))}
+                  focus={er().focus === table.id}
+                  hidden={hiddenOf(table.id)}
+                  busy={er().loading}
+                  onHover={setHover}
+                  onAdd={() => act(() => widenErDiagram([table.id]))}
+                  onCentre={() => act(() => focusErTable(table.id))}
+                />
+              )}
             </For>
           </g>
         </svg>
-        <p class="er-hint">Arrastra para moverte · rueda para acercar · pasa el ratón por una tabla para ver sus relaciones · doble clic para abrirla</p>
+        <p class="er-hint">
+          Arrastra para moverte · rueda para acercar · pasa el ratón por una tabla para ver sus relaciones{er().focus ? " · «+» añade las suyas" : ""} · doble clic para abrirla
+        </p>
       </div>
     </div>
   );
 }
 
-function TableCard(props: { table: ErTable; box: ErBox | undefined; dim: boolean; hit: boolean; onHover: (id: string | null) => void; onOpen: () => void }) {
+function TableCard(props: {
+  table: ErTable;
+  box: ErBox | undefined;
+  dim: boolean;
+  hit: boolean;
+  /** The table the diagram is centred on. */
+  focus: boolean;
+  /** Tables linked to it that are not on show (diagram of one table). */
+  hidden: number;
+  busy: boolean;
+  onHover: (id: string | null) => void;
+  onAdd: () => void;
+  onCentre: () => void;
+}) {
   const shown = () => props.table.columns.slice(0, ER.maxRows);
   const hidden = () => props.table.columns.length - shown().length;
+  const addWidth = () => 16 + String(props.hidden).length * 7;
+  // The header's buttons: a press on them is not the start of a pan.
+  const press = (event: PointerEvent) => event.stopPropagation();
   return (
     <Show when={props.box}>
       {(box) => (
         <g
           class="er-table"
-          classList={{ dim: props.dim, hit: props.hit }}
+          classList={{ dim: props.dim, hit: props.hit, focus: props.focus }}
+          data-er-id={props.table.id}
           transform={`translate(${box().x} ${box().y})`}
           onPointerEnter={() => props.onHover(props.table.id)}
           onPointerLeave={() => props.onHover(null)}
-          onDblClick={(event) => {
-            event.stopPropagation();
-            props.onOpen();
-          }}
         >
           <rect class="er-card" width={box().w} height={box().h} rx="8" />
           <path class="er-card-head" d={`M 0 8 A 8 8 0 0 1 8 0 H ${box().w - 8} A 8 8 0 0 1 ${box().w} 8 V ${ER.header} H 0 Z`} />
           <text class="er-name" x="12" y="20">{props.table.name}</text>
+          <Show when={props.hidden > 0}>
+            <g class="er-act er-add" classList={{ busy: props.busy }} data-er-act="" transform={`translate(${box().w - 32 - addWidth()} 7)`} onPointerDown={press} onClick={() => !props.busy && props.onAdd()}>
+              <title>{props.hidden === 1 ? "Añadir su tabla relacionada" : `Añadir sus ${props.hidden} tablas relacionadas`}</title>
+              <rect width={addWidth()} height="18" rx="9" />
+              <text x={addWidth() / 2} y="13" text-anchor="middle">+{props.hidden}</text>
+            </g>
+          </Show>
+          <Show when={!props.focus}>
+            <g class="er-act er-centre" classList={{ busy: props.busy }} data-er-act="" transform={`translate(${box().w - 26} 7)`} onPointerDown={press} onClick={() => !props.busy && props.onCentre()}>
+              <title>Ver solo esta tabla y sus relaciones</title>
+              <rect width="18" height="18" rx="5" />
+              <circle cx="9" cy="9" r="3.5" />
+              <path d="M 9 2.5 V 5.5 M 9 12.5 V 15.5 M 2.5 9 H 5.5 M 12.5 9 H 15.5" />
+            </g>
+          </Show>
           <For each={shown()}>
             {(col, i) => (
               <g transform={`translate(0 ${ER.header + i() * ER.row})`}>
@@ -279,6 +378,8 @@ function standaloneSvg(live: SVGSVGElement, width: number, height: number): stri
     }
     out.removeAttribute("class");
   });
+  // The cards' buttons are for the screen only.
+  copy.querySelectorAll("[data-er-act]").forEach((el) => el.remove());
   copy.querySelector("g")?.setAttribute("transform", "");
   copy.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   copy.setAttribute("width", String(Math.ceil(width)));

@@ -2,6 +2,7 @@ import initSqlJs, { type Database, type QueryExecResult } from "sql.js";
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import type { Backend } from "./api";
 import { quoteIdent, resultToText } from "./sql";
+import { inOrder, isPermutation } from "./columnOrder";
 import type {
   Cell,
   ColKind,
@@ -641,7 +642,13 @@ export function createDemoBackend(): Backend {
       const db = await databaseFor(cfg);
       const sets = db.exec(sql);
       if (!sets[0]) throw new Error("La consulta no devuelve filas para exportar");
-      const { result } = toResult(sets[0]);
+      let { result } = toResult(sets[0]);
+      // The grid's column order, as the core applies it: only to the columns it was made for.
+      const shown = options.columnOrder;
+      const names = result.columns.map((col) => col.name);
+      if (shown && isPermutation(shown.order, names.length) && shown.names.length === names.length && shown.names.every((name, i) => name === names[i])) {
+        result = { ...result, columns: inOrder(result.columns, shown.order), rows: result.rows.map((row) => inOrder(row, shown.order)) };
+      }
       const format = options.format === "xlsx" ? "csv" : options.format;
       const body = resultToText(result, format, options.tableName || "tabla", options.delimiter);
       const filename = options.path || `export.${format === "markdown" ? "md" : format}`;

@@ -1,5 +1,6 @@
 // Checks for src/connTree.ts (explorer: nested folders, order, search and filters, export and import without
-// passwords): node --experimental-strip-types dev/explorer-check.ts
+// passwords, moving and deleting several items) and src/treeSelect.ts (multi-selection):
+// node --experimental-strip-types dev/explorer-check.ts
 import assert from "node:assert/strict";
 import {
   allFolders,
@@ -14,12 +15,16 @@ import {
   insertAt,
   isInside,
   joinFolder,
+  liftDeleted,
+  movedFolderPath,
   NO_FILTER,
   normalizeFolder,
   parentFolder,
   parseConnectionsJson,
   passesFilter,
+  placeBefore,
   planImport,
+  planMove,
   pushRecent,
   renameFolderPath,
   sortConns,
@@ -28,6 +33,19 @@ import {
   withoutInlinePassword,
 } from "../src/connTree.ts";
 import { emptyConn, type ConnConfig, type DbKind } from "../src/types.ts";
+import {
+  clickSelection,
+  countOf,
+  effectiveKeys,
+  extendSelection,
+  inOrder,
+  isToggleClick,
+  rangeKeys,
+  selectAllLike,
+  selectionLabel,
+  singleSelection,
+  stepKey,
+} from "../src/treeSelect.ts";
 
 function conn(id: string, name: string, folder = "", kind: DbKind = "postgres", extra: Partial<ConnConfig> = {}): ConnConfig {
   return { ...emptyConn(kind), id, name, folder, ...extra };
@@ -138,5 +156,105 @@ assert.equal(connIdentity({ ...secret, host: "SQL01" }), connIdentity(secret));
 const plan = planImport([secret], [...back.connections, { ...back.connections[1] }]);
 assert.deepEqual(plan.fresh.map((c) => c.name), ["Almacén"]);
 assert.equal(plan.duplicates.length, 2);
+
+// ---------------------------------------------------------------- moving and deleting several items
+const where = [
+  { id: "1", folder: "" },
+  { id: "2", folder: "A" },
+  { id: "3", folder: "A/B" },
+  { id: "4", folder: "C" },
+  { id: "5", folder: "T" },
+];
+// Folder A (with A/B inside, selected too) and connection 4 go into T; connection 3 travels with A, not alone.
+const move = planMove(where, ["3", "4"], ["A", "A/B"], "T");
+assert.deepEqual(move.moves, [["A", "T/A"]]);
+assert.deepEqual(Object.fromEntries(move.folderOf), { "2": "T/A", "3": "T/A/B", "4": "T" });
+assert.deepEqual(move.blocked, []);
+// A folder cannot go into itself or into one of its subfolders; the rest of the selection still moves.
+const intoSelf = planMove(where, ["1"], ["A", "C"], "A/B");
+assert.deepEqual(intoSelf.blocked, ["A"]);
+assert.deepEqual(intoSelf.moves, [["C", "A/B/C"]]);
+assert.deepEqual(Object.fromEntries(intoSelf.folderOf), { "1": "A/B", "4": "A/B/C" });
+// To the root; what is already there does not change.
+const toRoot = planMove(where, ["1", "2"], ["A/B"], "");
+assert.deepEqual(toRoot.moves, [["A/B", "B"]]);
+assert.deepEqual(Object.fromEntries(toRoot.folderOf), { "2": "", "3": "B" });
+assert.equal(movedFolderPath("A/B/x", [["A/B", "B"]]), "B/x");
+assert.equal(movedFolderPath("AB", [["A", "Z"]]), "AB");
+// Dropped on a connection: the moved ones go right above it, in their order.
+assert.deepEqual(placeBefore(["a", "b", "c", "d", "e"], ["d", "a"], "c"), ["b", "a", "d", "c", "e"]);
+assert.deepEqual(placeBefore(["a", "b", "c"], ["b", "c"], "c"), ["a", "b", "c"], "onto one of the moved ones: unchanged");
+// Deleting several folders: the contents go up past every deleted level.
+assert.equal(liftDeleted("A/B/C", ["A", "A/B"]), "C");
+assert.equal(liftDeleted("A/B", ["A/B"]), "A");
+assert.equal(liftDeleted("A/B", ["A", "A/B"]), "");
+assert.equal(liftDeleted("X/Y", ["A"]), "X/Y");
+
+// ---------------------------------------------------------------- multi-selection
+// Rows as the explorer shows them: favourites section and shortcuts, folders, connections, objects, status rows.
+const rows = ["s:fav", "f:1", "f:2", "g:A", "c:1", "c:2", "n:x", "n:y", "c:3:s", "g:B", "c:3", "n:z"];
+const familyOf = (key: string) => (key.endsWith(":s") || key.startsWith("s:") ? null : key.startsWith("f:") ? "fav" : key.startsWith("n:") ? "node" : "conn");
+const click = (sel: ReturnType<typeof singleSelection>, key: string, toggle = false, range = false) => clickSelection(sel, rows, key, { toggle, range }, familyOf);
+let sel = click(singleSelection(""), "c:1");
+assert.deepEqual(sel, { keys: ["c:1"], anchor: "c:1", focus: "c:1" }, "a click selects one");
+// Ctrl+click adds and removes; the keys stay in visible order.
+sel = click(sel, "g:A", true);
+assert.deepEqual(sel.keys, ["g:A", "c:1"]);
+sel = click(sel, "c:3", true);
+assert.deepEqual(sel.keys, ["g:A", "c:1", "c:3"]);
+sel = click(sel, "c:3", true);
+assert.deepEqual(sel.keys, ["g:A", "c:1"]);
+assert.equal(sel.focus, "c:1", "the focus goes to the nearest row still selected");
+assert.equal(sel.anchor, "c:3", "the anchor is the row clicked");
+assert.deepEqual(click(singleSelection("c:1"), "c:1", true).keys, ["c:1"], "the last row is not taken out");
+// Shift+click: the anchor's family between the anchor and the row (objects and status rows are skipped).
+sel = click(singleSelection("g:A"), "c:3", false, true);
+assert.deepEqual(sel.keys, ["g:A", "c:1", "c:2", "g:B", "c:3"]);
+assert.equal(sel.anchor, "g:A");
+assert.deepEqual(click(sel, "c:1", false, true).keys, ["g:A", "c:1"], "a new range replaces the old one");
+assert.deepEqual(click(singleSelection("c:3"), "c:1", false, true).keys, ["c:1", "c:2", "g:B", "c:3"], "upwards too");
+// Ctrl+Shift+click adds the range to what was selected.
+sel = click(click(singleSelection("c:1"), "c:1"), "c:3", true);
+sel = click(sel, "g:B", true, true);
+assert.deepEqual(sel.keys, ["c:1", "g:B", "c:3"]);
+// Another family starts again: an object after connections, a favourite shortcut after its connection.
+assert.deepEqual(click(sel, "n:x", true).keys, ["n:x"]);
+assert.deepEqual(click(sel, "n:z", false, true).keys, ["n:z"]);
+assert.deepEqual(click(sel, "f:2", true).keys, ["f:2"]);
+assert.deepEqual(click(click(singleSelection("n:x"), "n:x"), "n:z", false, true).keys, ["n:x", "n:y", "n:z"]);
+// Rows that are never multi-selected.
+assert.deepEqual(click(sel, "s:fav", true).keys, ["s:fav"]);
+assert.deepEqual(rangeKeys(rows, "c:1", "c:3:s", familyOf), ["c:3:s"]);
+assert.deepEqual(rangeKeys(rows, "gone", "c:2", familyOf), ["c:2"]);
+// Shift+arrows: step over rows of other families, then the range from the anchor.
+assert.equal(stepKey(rows, "c:2", 1, "conn", familyOf), "g:B");
+assert.equal(stepKey(rows, "g:A", -1, "conn", familyOf), null);
+assert.equal(stepKey(rows, "c:1", Infinity, "conn", familyOf), "c:3");
+assert.equal(stepKey(rows, "c:3", -Infinity, "conn", familyOf), "g:A");
+sel = extendSelection(singleSelection("c:1"), rows, "c:2", familyOf);
+sel = extendSelection(sel, rows, "g:B", familyOf);
+assert.deepEqual(sel, { keys: ["c:1", "c:2", "g:B"], anchor: "c:1", focus: "g:B" });
+assert.deepEqual(extendSelection(sel, rows, "g:A", familyOf).keys, ["g:A", "c:1"], "back past the anchor");
+// Ctrl+A: every visible row of the focused one's kind.
+const kindOf = (key: string) => (familyOf(key) === "conn" ? (key.startsWith("g:") ? "folder" : "conn") : familyOf(key));
+assert.deepEqual(selectAllLike(rows, "c:2", kindOf), { keys: ["c:1", "c:2", "c:3"], anchor: "c:1", focus: "c:2" });
+assert.deepEqual(selectAllLike(rows, "g:B", kindOf)?.keys, ["g:A", "g:B"]);
+assert.deepEqual(selectAllLike(rows, "n:y", kindOf)?.keys, ["n:x", "n:y", "n:z"]);
+assert.equal(selectAllLike(rows, "s:fav", kindOf), null);
+// What the selection is now: rows that went out of sight drop out; a focus moved elsewhere leaves that row alone.
+sel = { keys: ["c:1", "c:2", "c:3"], anchor: "c:1", focus: "c:2" };
+assert.deepEqual(effectiveKeys(sel, rows, "c:2"), ["c:1", "c:2", "c:3"]);
+assert.deepEqual(effectiveKeys(sel, rows.filter((key) => key !== "c:3"), "c:2"), ["c:1", "c:2"]);
+assert.deepEqual(effectiveKeys(sel, rows, "g:B"), ["g:B"]);
+assert.deepEqual(effectiveKeys(sel, rows, ""), []);
+assert.deepEqual(inOrder(rows, ["c:3", "f:1", "nope"]), ["f:1", "c:3"]);
+// Cmd adds on macOS (Ctrl+click is the right click there); Ctrl elsewhere.
+assert.ok(isToggleClick({ ctrlKey: true, metaKey: false }, false));
+assert.ok(!isToggleClick({ ctrlKey: true, metaKey: false }, true));
+assert.ok(isToggleClick({ ctrlKey: false, metaKey: true }, true));
+assert.equal(countOf(1, "conexión", "conexiones"), "1 conexión");
+assert.equal(selectionLabel(3, 0), "3 conexiones");
+assert.equal(selectionLabel(3, 1), "3 conexiones y 1 carpeta");
+assert.equal(selectionLabel(0, 2), "2 carpetas");
 
 console.log("explorer: ok");

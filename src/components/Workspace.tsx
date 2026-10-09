@@ -83,11 +83,14 @@ import {
   completionTables,
   openTableFromSql,
   followForeignKey,
+  erSchemaPath,
+  openErDiagram,
   foreignKeyOf,
   foreignKeys,
   selectTab,
   serverOf,
   setActiveResult,
+  setGridColumnOrder,
   setState,
   setTabConnection,
   setTableFilter,
@@ -614,14 +617,8 @@ function SqlPane(props: { tab: SqlTab }) {
               dialect={kindOf(props.tab.connId)}
               onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
               onExport={exportShown}
-              onActivate={(row, col) => {
-                const r = result();
-                if (!r) return;
-                const values = shownRows()[row] ?? [];
-                setState("inspect", { column: r.columns[col].name, typeName: r.columns[col].typeName, value: values[col] ?? null });
-                setState("record", { columns: r.columns, row: values, index: row });
-                openInspector("value");
-              }}
+              onActivate={() => openInspector("value")}
+              onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
             />
           </Match>
         </Switch>
@@ -871,12 +868,8 @@ function TablePane(props: { tab: TableTab }) {
             onExport={() => startTableExport(props.tab.id)}
             onSave={() => void saveTable(props.tab.id)}
             onColumnFilter={(col) => openFilter(newFilter(props.tab, props.tab.gridCols[col]?.name, "in"))}
-            onActivate={(row, col) => {
-              const r = rows();
-              setState("inspect", { column: props.tab.gridCols[col].name, typeName: props.tab.gridCols[col].typeName, value: r[row]?.[col] ?? null });
-              setState("record", { columns: props.tab.gridCols, row: r[row] ?? [], index: row });
-              openInspector("value");
-            }}
+            onActivate={() => openInspector("value")}
+            onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
           />
           <Show when={changes()}>
             <div class="changes-bar">
@@ -913,6 +906,14 @@ function TablePane(props: { tab: TableTab }) {
         </Match>
         <Match when={props.tab.section === "indexes" || props.tab.section === "keys"}>
           <div class="meta-scroll">
+            {/* What points to the table is not in its keys: the diagram shows both ways. */}
+            <Show when={props.tab.section === "keys" && props.tab.obj.kind === "table"}>
+              <div class="keys-actions">
+                <button type="button" class="btn tiny" title="La tabla y las tablas que enlazan sus claves foráneas, en los dos sentidos" onClick={() => void openErDiagram(props.tab.connId, erSchemaPath(props.tab.connId, props.tab.obj, props.tab.database), props.tab.obj)}>
+                  Diagrama de relaciones
+                </button>
+              </div>
+            </Show>
             <Show when={(props.tab.section === "indexes" ? props.tab.indexes : props.tab.keys).length} fallback={<p class="meta-empty">{props.tab.section === "indexes" ? "Sin índices" : "Sin claves foráneas"}</p>}>
               <table class="meta">
                 <thead><tr><th>Nombre</th><th>Definición</th><Show when={props.tab.section === "keys"}><th /></Show></tr></thead>

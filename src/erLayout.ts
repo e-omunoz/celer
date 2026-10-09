@@ -1,6 +1,7 @@
 // Layout of an entity-relationship diagram: tables in columns by dependency (a table sits to the right of the
 // tables its foreign keys point to), ordered to keep relations short; tables without relations go in a grid
-// below. Pure and deterministic, so dev/erlayout-check.ts can test it.
+// below. Also which tables surround a given one (the diagram of one table). Pure and deterministic, so
+// dev/erlayout-check.ts can test it.
 
 export interface ErColumn {
   name: string;
@@ -51,7 +52,8 @@ export function visibleRows(table: ErTable): number {
 }
 
 export function boxSize(table: ErTable): { w: number; h: number } {
-  const longest = Math.max(table.name.length * 7.6 + 40, ...table.columns.slice(0, ER.maxRows).map((c) => c.name.length * 7 + Math.min(c.type.length, 18) * 6.2 + 56));
+  // The name leaves room for the header's buttons (centre on it, add its related tables).
+  const longest = Math.max(table.name.length * 7.6 + 92, ...table.columns.slice(0, ER.maxRows).map((c) => c.name.length * 7 + Math.min(c.type.length, 18) * 6.2 + 56));
   return { w: Math.round(Math.min(340, Math.max(190, longest))), h: ER.header + visibleRows(table) * ER.row + ER.pad };
 }
 
@@ -175,4 +177,41 @@ export function edgePath(from: ErBox, fromY: number, to: ErBox, toY: number): st
   const c1 = rightward ? x1 + bend : x1 - bend;
   const c2 = rightward ? x2 - bend : x2 + bend;
   return `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
+}
+
+/** The tables linked by a foreign key (either way) to any of `ids` and not among them, sorted. */
+export function erNeighbours(ids: Iterable<string>, edges: ErEdge[]): string[] {
+  const inside = new Set(ids);
+  const out = new Set<string>();
+  for (const e of edges) {
+    if (inside.has(e.from) && !inside.has(e.to)) out.add(e.to);
+    if (inside.has(e.to) && !inside.has(e.from)) out.add(e.from);
+  }
+  return [...out].sort();
+}
+
+/** `start` and the tables up to `depth` foreign keys away from it, either way: `start` first, then level by level. */
+export function erNeighbourhood(start: string, edges: ErEdge[], depth: number): string[] {
+  let shown = [start];
+  for (let level = 0; level < depth; level++) {
+    const next = erNeighbours(shown, edges);
+    if (!next.length) break;
+    shown = [...shown, ...next];
+  }
+  return shown;
+}
+
+/** For each table in `shown`, the tables linked to it that are not in `shown` (only those with some). */
+export function erHidden(shown: Iterable<string>, edges: ErEdge[]): Map<string, string[]> {
+  const inside = new Set(shown);
+  const out = new Map<string, Set<string>>();
+  const add = (id: string, other: string) => {
+    if (!out.has(id)) out.set(id, new Set());
+    out.get(id)!.add(other);
+  };
+  for (const e of edges) {
+    if (inside.has(e.from) && !inside.has(e.to)) add(e.from, e.to);
+    if (inside.has(e.to) && !inside.has(e.from)) add(e.to, e.from);
+  }
+  return new Map([...out].map(([id, set]) => [id, [...set].sort()]));
 }

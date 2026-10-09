@@ -74,6 +74,20 @@ En el explorador:
 - **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
 - **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON sin contraseñas, para compartirlas o
   llevarlas a otro equipo; al importar no se repiten las que ya existen.
+- **Varias a la vez**: Ctrl+clic (⌘+clic en macOS) añade o quita una fila, Mayús+clic selecciona un rango tal como se
+  ve en el árbol y Ctrl+Mayús+clic lo añade a lo que ya había; con el teclado, Mayús+flechas (y Mayús+Inicio/Fin)
+  amplían la selección y Ctrl+A selecciona todas las filas visibles del mismo tipo que la que tiene el foco (todas las
+  conexiones, todas las carpetas, todas las tablas…). Esc deja solo la fila con el foco. El menú contextual, Supr,
+  Ctrl+C y Ctrl+Mayús+F actúan entonces sobre toda la selección y dicen cuántas son («Eliminar 3 conexiones»).
+  - Conexiones y carpetas se seleccionan juntas: conectar, desconectar, favoritas, exportar, copiar nombres, moverlas
+    (arrastrando la selección o con «Mover a…» del menú), crear una carpeta con ellas y eliminarlas con una sola
+    confirmación y un solo *Deshacer*. Conectar, desconectar y exportar incluyen lo que hay dentro de las carpetas
+    seleccionadas.
+  - Los accesos de **Favoritas** van aparte: Supr los quita de favoritas, nunca borra las conexiones.
+  - Los objetos de la base (tablas, vistas…) también van aparte: copiar sus nombres y generar un SELECT o un
+    SELECT COUNT(*) de cada tabla; arrastrarlos al editor escribe sus nombres.
+  - Si haces Ctrl+clic en una fila de otro grupo (un objeto con conexiones seleccionadas, por ejemplo), la selección
+    empieza de nuevo en ella.
 - Todo está en el menú contextual (también con la tecla Menú o Mayús+F10), con su atajo al lado.
 
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas
@@ -149,6 +163,14 @@ las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
 - **Fijar un resultado** lo conserva al volver a ejecutar; **Comparar** lo enfrenta al resultado actual y marca las
   celdas cambiadas, las filas nuevas y las que desaparecen.
 - **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
+- **Mover columnas**: arrastra la cabecera de una columna y suéltala donde quieras; una línea marca dónde caerá y, cerca
+  del borde, la rejilla se desplaza sola. Esc durante el arrastre la deja donde estaba. Un clic en la cabecera sigue
+  seleccionando la columna y Mayús+clic (o Mayús y arrastrar) selecciona varias.
+  - Todo sigue el orden de la pantalla: la selección, las flechas y Tab, **Copiar** (con cabeceras y en todos los
+    formatos), la búsqueda, el panel de registro y **Exportar**, que escribe las columnas en ese orden aunque vuelva a
+    leer la consulta del servidor.
+  - *Restablecer orden de columnas*, en el menú de la cabecera, vuelve al orden de la consulta. Un resultado nuevo, o
+    volver a ejecutar, empieza también con el orden de la consulta (igual que los anchos).
 - El panel derecho muestra el valor completo de una celda (JSON y XML se ven indentados) o la fila como formulario.
 
 ## Tablas
@@ -166,6 +188,8 @@ Doble clic en una tabla del explorador la abre.
 - **Guardar** (Ctrl+Intro) enseña el SQL antes de ejecutarlo todo en una transacción; si algo falla, no se guarda
   nada. Cada cambio pendiente se puede deshacer por celda o por fila.
 - **Claves foráneas**: las columnas FK llevan ↗ en la cabecera. Ctrl+clic en un valor abre la fila referenciada.
+- **Columnas**: se mueven arrastrando la cabecera, como en los resultados; la edición, la copia y la exportación siguen
+  ese orden.
 - **Importar datos** (menú de la tabla): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con mapeo de columnas y
   todo en una transacción.
 
@@ -178,7 +202,14 @@ UPSERT/MERGE, DELETE, DROP y su DDL.
   ejecuta la consulta y mide filas y tiempos reales (PostgreSQL y MariaDB). Los avisos señalan recorridos completos
   de tablas grandes, estimaciones muy desviadas, ordenaciones que van a disco o índices que sugiere SQL Server.
 - **Diagrama entidad-relación** (menú de un esquema): las tablas ordenadas por dependencias y sus relaciones. Pasa
-  el ratón por una tabla para ver las suyas, busca por nombre, doble clic para abrirla, y exporta a SVG.
+  el ratón por una tabla para ver las suyas, busca por nombre, doble clic para abrirla (el diagrama se cierra; si
+  está en su propia ventana, la tabla se abre en su ventana de Celer, que pasa al frente), y exporta a SVG.
+- **Diagrama de relaciones de una tabla** (menú de la tabla, botón *Diagrama de relaciones* en su pestaña *Claves*, o
+  la paleta): la tabla y las que enlazan sus claves foráneas, en los dos sentidos (a las que apunta y las que apuntan
+  a ella). *Ampliar un nivel* añade las relacionadas con todas las que se ven; el **+N** de una tabla añade solo las
+  suyas; el botón de mira que aparece al pasar el ratón por una tabla centra el diagrama en ella (también en el de un
+  esquema entero), y *Todo el esquema* vuelve a verlas todas. Para saber qué tablas apuntan a la tuya, Celer lee las
+  claves de todas las del esquema (sin sus columnas), así que en esquemas muy grandes tarda un poco.
 - **Comparar esquemas**: en el menú de un esquema, *Marcar para comparar*; después, en el de otro (de la misma
   conexión o de otra), *Comparar con…*. Verás las tablas que solo están en un lado y las columnas con otro tipo o
   nulabilidad. *Script para igualar el destino* abre en una consola del destino el SQL que lo dejaría como el origen,
