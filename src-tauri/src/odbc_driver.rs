@@ -148,6 +148,8 @@ pub struct LinkDriver<L: Link> {
     stmt: Option<L::Stmt>,
     /// Statements of a batch still to run (Informix runs one statement per call: the batch is split).
     pending: VecDeque<String>,
+    /// Statements of a script dropped with its open result, told in the next execute's messages.
+    discarded: usize,
     autocommit: bool,
     in_tx: bool,
     database: String,
@@ -192,6 +194,7 @@ impl<L: Link> LinkDriver<L> {
             conn,
             stmt: None,
             pending: VecDeque::new(),
+            discarded: 0,
             autocommit: true,
             in_tx: false,
             quote,
@@ -230,17 +233,28 @@ impl<L: Link> LinkDriver<L> {
         }
     }
 
+    /// Closes the open result; the statements of its script still waiting are dropped (and told on the next run).
+    fn drop_pending(&mut self) {
+        self.stmt = None;
+        self.discarded += self.pending.len();
+        self.pending.clear();
+    }
+
     fn execute_batch(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
-        self.stmt = None;
+        self.drop_pending();
+        let mut out = ExecOutput::default();
+        out.messages.extend(crate::session::discarded_note(std::mem::take(&mut self.discarded)));
         self.pending = split_batch(sql, self.dialect).into();
         if self.pending.iter().any(|st| matches!(first_keyword(st).as_str(), "DATABASE" | "CLOSE" | "CONNECT" | "DISCONNECT")) {
             self.db_known = false;
         }
-        let mut out = ExecOutput::default();
         let r = self.run_pending(fetch.max(1), &mut out.results, &mut out.messages);
         out.in_transaction = self.in_tx;
         r?;
+        if self.stmt.is_some() {
+            out.messages.extend(crate::session::pending_note(self.pending.len()));
+        }
         out.elapsed_ms = t0.elapsed().as_millis() as u64;
         Ok(out)
     }
@@ -809,15 +823,13 @@ impl<L: Link> Driver for LinkDriver<L> {
     }
 
     fn close_cursor(&mut self) -> Result<()> {
-        self.stmt = None;
-        self.pending.clear();
+        self.drop_pending();
         Ok(())
     }
 
     fn set_autocommit(&mut self, on: bool) -> Result<bool> {
         self.recover();
-        self.stmt = None;
-        self.pending.clear();
+        self.drop_pending();
         if on && self.in_tx {
             self.conn.end_tran(true)?;
         }
@@ -829,8 +841,7 @@ impl<L: Link> Driver for LinkDriver<L> {
 
     fn commit(&mut self) -> Result<bool> {
         self.recover();
-        self.stmt = None;
-        self.pending.clear();
+        self.drop_pending();
         self.conn.end_tran(true)?;
         self.in_tx = false;
         Ok(false)
@@ -838,8 +849,7 @@ impl<L: Link> Driver for LinkDriver<L> {
 
     fn rollback(&mut self) -> Result<bool> {
         self.recover();
-        self.stmt = None;
-        self.pending.clear();
+        self.drop_pending();
         self.conn.end_tran(false)?;
         self.in_tx = false;
         Ok(false)

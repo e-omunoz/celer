@@ -555,6 +555,9 @@ pub struct MssqlDriver {
     batch_total: usize,
     /// Lotes del script anterior que no se enviaron porque su resultado se cerró antes de acabar, para avisar.
     discarded: usize,
+    /// El resultado abierto es de un lote con más sentencias detrás, y dejarlo cortaría el lote; `cut`: se cortó.
+    open_multi: bool,
+    cut: bool,
 }
 
 impl MssqlDriver {
@@ -582,6 +585,8 @@ impl MssqlDriver {
             batches: VecDeque::new(),
             batch_total: 0,
             discarded: 0,
+            open_multi: false,
+            cut: false,
         };
         let home = d.cfg.database.clone();
         d.attach(&home)?;
@@ -1865,6 +1870,11 @@ impl MssqlDriver {
         if self.cursor.is_some() && !self.keeps_session() {
             self.ensure_reserve();
         }
+        // Sin estado de sesión, dejar el resultado corta el lote con ATTENTION: lo que viniera detrás no se ejecuta.
+        self.open_multi = self.cursor.is_some() && !self.keeps_session() && !single_statement(sql);
+        if self.open_multi {
+            out.messages.push("Lo que quede del lote tras este resultado se ejecuta al leerlo hasta el final; si ejecutas otra cosa antes, se cancela.".into());
+        }
         out.messages.extend(self.timing_line(first_ms));
         out.elapsed_ms = t0.elapsed().as_millis() as u64;
         Ok(out)
@@ -1932,6 +1942,9 @@ impl Driver for MssqlDriver {
         let t0 = Instant::now();
         self.close_cursor()?;
         let mut notes = Vec::new();
+        if std::mem::take(&mut self.cut) {
+            notes.push("Lo que quedaba del lote anterior no se ejecutó: su resultado se cerró antes de leerlo hasta el final.".into());
+        }
         notes.extend(batches_note("No se ejecutó", "No se ejecutaron", std::mem::take(&mut self.discarded), "del script anterior: su resultado se cerró antes de leerlo hasta el final."));
         self.batches = split_go(sql).into();
         self.batch_total = self.batches.len();
@@ -1970,6 +1983,7 @@ impl Driver for MssqlDriver {
         let t0 = Instant::now();
         self.discarded += self.batches.len();
         self.batches.clear();
+        let multi = std::mem::take(&mut self.open_multi);
         if let Ok(finished) = cur.done.try_recv() {
             *self.cancel.lock() = None;
             self.after_cut(Some(finished), t0);
@@ -1989,6 +2003,7 @@ impl Driver for MssqlDriver {
             return Ok(());
         }
         cur.abandon.cancel();
+        self.cut = multi;
         *self.cancel.lock() = None;
         let late = self.late.clone();
         let done = cur.done;

@@ -228,7 +228,7 @@ pub fn first_keyword(sql: &str) -> String {
 pub const CURSOR_CLOSED: &str =
     "El resultado ya no está abierto (otra operación usó la sesión): vuelve a ejecutar la consulta para leer el resto.";
 
-/// Message for a script whose statements wait behind a result left open (PostgreSQL, MySQL, SQLite): they run
+/// Message for a script whose statements wait behind a result left open (PostgreSQL, MySQL, SQLite, Informix): they run
 /// only when that result is read to the end.
 pub fn pending_note(n: usize) -> Option<String> {
     match n {

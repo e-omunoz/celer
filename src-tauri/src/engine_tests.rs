@@ -454,6 +454,11 @@ fn mssql_abandoned_cursor() {
     // "Pedir más" still works after a cut: a new cursor pages on.
     page(d);
     assert_eq!(d.fetch(500).unwrap().rows.len(), 500);
+    // The rest of a batch cut with its result is told, before and after.
+    let out = d.execute("SELECT n, relleno FROM dbo.celer_big\nSELECT 1", 500).unwrap();
+    assert!(out.messages.iter().any(|m| m.starts_with("Lo que quede del lote")), "{:?}", out.messages);
+    let out = d.execute("SELECT 2", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m.starts_with("Lo que quedaba del lote anterior no se ejecutó")), "{:?}", out.messages);
 
     // A #temp table and an open transaction (autocommit mode, BEGIN TRAN) across an abandoned cursor.
     let spid = scalar(d, "SELECT @@SPID");
@@ -732,6 +737,12 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     let f = d.fetch(1500).unwrap();
     assert_eq!(f.rows.len(), 1500);
     d.close_cursor().unwrap();
+    // Statements behind a paged result: told when it opens, and when they are dropped.
+    let out = d.execute("SELECT n FROM many; DELETE FROM many WHERE n = 1", 500).unwrap();
+    assert!(out.messages.iter().any(|m| m.starts_with("Queda 1 sentencia")), "{:?}", out.messages);
+    let out = d.execute("SELECT COUNT(*) FROM many", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m.starts_with("No se ejecutó 1 sentencia")), "{:?}", out.messages);
+    assert_eq!(txt(&out.results[0].rows[0][0]), "3000");
 
     // Transactions.
     d.set_autocommit(false).unwrap();
