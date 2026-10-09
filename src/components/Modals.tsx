@@ -3,6 +3,7 @@ import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js"
 import { Mark } from "../brand/Mark";
 import { returnFocus } from "../focus";
 import { isTauri } from "../api";
+import { leaveOnCleanup } from "../motion";
 import {
   answerParams,
   answerPassword,
@@ -292,8 +293,8 @@ export function Dialog(props: { title: string; onClose: () => void; children: JS
   });
   return (
     <>
-      <div class="scrim" onMouseDown={props.onClose} />
-      <div class={`dialog ${props.class ?? ""}`} classList={{ wide: props.wide, small: props.small }} role="dialog" aria-label={props.title}>
+      <div class="scrim" ref={leaveOnCleanup("scrim")} onMouseDown={props.onClose} />
+      <div class={`dialog ${props.class ?? ""}`} ref={leaveOnCleanup("dialog")} classList={{ wide: props.wide, small: props.small }} role="dialog" aria-label={props.title}>
         <header>
           <h2>{props.title}</h2>
           <button type="button" class="icon-btn" title="Cerrar (Esc)" onClick={props.onClose}><X size={15} /></button>
