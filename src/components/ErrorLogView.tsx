@@ -1,6 +1,7 @@
 import { Copy, FolderOpen, RefreshCw, Trash2 } from "lucide-solid";
 import { createSignal, For, Show } from "solid-js";
 import { clearErrorLog, copyErrorLog, errorLog, refreshErrorLog, revealErrorLog, setErrorLog } from "../errorLog";
+import { openReport } from "../reportStore";
 import { entryTime } from "../errorLogText";
 import { confirmDialog } from "../state";
 import { Dialog } from "./Modals";
@@ -32,6 +33,7 @@ export function ErrorLogView() {
         <button type="button" class="btn tiny" onClick={() => void copyErrorLog()} disabled={!errorLog.entries.length}><Copy size={12} /> Copiar</button>
         <button type="button" class="btn tiny" onClick={() => void revealErrorLog()}><FolderOpen size={12} /> Abrir carpeta</button>
         <span class="spacer" />
+        <button type="button" class="btn tiny" title="Prepara un reporte con los últimos errores; ves lo que se envía antes" onClick={() => { close(); void openReport("bug", { attachErrors: true }); }} disabled={!errorLog.entries.length}>Reportar…</button>
         <button type="button" class="btn tiny" onClick={() => void clear()} disabled={!errorLog.entries.length}><Trash2 size={12} /> Vaciar</button>
       </div>
       <div class="errorlog-list" role="list">

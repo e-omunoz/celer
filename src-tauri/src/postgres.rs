@@ -2139,6 +2139,8 @@ mod tests {
         let Some(mut d) = driver() else { return };
         let e = d.execute("SELECT 'celer-secret-42'::int", 10).expect_err("valor no numérico").to_string();
         crate::errlog::assert_scrubbed("PostgreSQL", &e, "celer-secret-42");
+        let cfg = test_cfg().unwrap();
+        crate::assert_report_banner("PostgreSQL", &d.server_info().unwrap(), &[&cfg.host, &cfg.user, &cfg.database]);
     }
 
     #[test]

@@ -129,6 +129,8 @@ export interface SessionInfo {
   connectMs: number;
   /** A free connection of the same settings was taken instead of logging in again. */
   reused: boolean;
+  /** The driver and protocol in a few words ("nativo", "IBM CLI (DRDA)", "ODBC · PostgreSQL Unicode"), for reports. */
+  driver?: string;
 }
 
 /** How a session should start: right in a database and transaction mode (no extra round trips afterwards). */

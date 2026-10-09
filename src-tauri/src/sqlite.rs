@@ -951,6 +951,7 @@ mod tests {
         d.execute("CREATE TABLE c (x TEXT CHECK (x <> 'celer-secret-42'))", 10).unwrap();
         let e = d.execute("INSERT INTO c VALUES ('celer-secret-42')", 10).expect_err("CHECK").to_string();
         crate::errlog::assert_scrubbed("SQLite", &e, "celer-secret-42");
+        crate::assert_report_banner("SQLite", &d.server_info().unwrap(), &[":memory:", "memory"]);
     }
 
     #[test]

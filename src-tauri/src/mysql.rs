@@ -1881,6 +1881,8 @@ mod tests {
         let Some(mut d) = connect() else { return };
         let e = d.execute("SELECT nombre FROMM clientes WHERE pwd = 'celer-secret-42'", 10).expect_err("error de sintaxis").to_string();
         crate::errlog::assert_scrubbed("MySQL/MariaDB", &e, "celer-secret-42");
+        let cfg = test_cfg().unwrap();
+        crate::assert_report_banner("MySQL/MariaDB", &d.server_info().unwrap(), &[&cfg.host, "127.0.0.1", &cfg.user, &cfg.database]);
     }
 
     #[test]

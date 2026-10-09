@@ -495,6 +495,7 @@ export function createDemoBackend(): Backend {
         serverInfo: `SQLite ${version} — ${cfg.filePath || "memoria"} (demo navegador)`,
         connectMs: 0,
         reused: false,
+        driver: "sql.js (demo navegador)",
       };
       if (options?.autocommit === false) await self.setAutocommit(sessionId, false);
       return info;
@@ -691,6 +692,16 @@ export function createDemoBackend(): Backend {
     async errorLogClear() {
       localStorage.removeItem("celer.errors");
     },
+    // The browser cannot write to a folder: each image is downloaded instead.
+    async reportSaveImages(_id, images) {
+      for (const [name, dataUrl] of images) {
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = `${name || "imagen"}.png`;
+        link.click();
+      }
+      return images.map(([name]) => `${name || "imagen"}.png`);
+    },
     async errorLogPath() {
       throw new Error("En el navegador el registro está en el almacenamiento de la página");
     },
@@ -775,7 +786,7 @@ export function createDemoBackend(): Backend {
       return sessionStorage.getItem("celer.ai-key");
     },
     async appInfo() {
-      return { version: "dev", dataDir: "navegador (localStorage)" };
+      return { version: "dev", dataDir: "navegador (localStorage)", os: "" };
     },
     async migrationSources() {
       return [];

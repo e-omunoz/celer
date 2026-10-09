@@ -452,6 +452,47 @@ struct SessionInfo {
     /// Lo que tardó en estar lista (iniciar sesión, o tomar una conexión libre de la misma configuración).
     connect_ms: u64,
     reused: bool,
+    /// The driver and protocol it uses, for «Reportar un fallo» (no host, user or database).
+    driver: String,
+}
+
+/// Tests of every engine: the part of the server banner a report keeps (before " — ", src/report.ts engineLine) names
+/// the product and version, never the server, the user or the database.
+#[cfg(test)]
+pub(crate) fn assert_report_banner(engine: &str, banner: &str, secrets: &[&str]) {
+    let kept = banner.lines().next().unwrap_or("").split(" — ").next().unwrap_or("").trim();
+    println!("reporte ({engine}): «{kept}»");
+    assert!(kept.chars().any(|c| c.is_ascii_digit()), "{engine}: sin versión en «{kept}»");
+    for s in secrets.iter().filter(|s| s.len() >= 3) {
+        assert!(!kept.to_lowercase().contains(&s.to_lowercase()), "{engine}: «{s}» está en lo que se reportaría: {kept}");
+    }
+}
+
+/// The driver a connection uses, in a few words: what a bug report says about it (nothing that names the server).
+fn driver_label(cfg: &ConnConfig) -> String {
+    match cfg.kind {
+        DbKind::Postgres | DbKind::Mysql => "nativo".into(),
+        DbKind::Mssql => "TDS nativo".into(),
+        DbKind::Sqlite => "embebido".into(),
+        DbKind::Informix => match informix_mode(cfg) {
+            "jdbc" => "JDBC (puente de Celer)".into(),
+            "sqli" => "Client SDK (ODBC, SQLI)".into(),
+            _ => "IBM CLI (DRDA)".into(),
+        },
+        DbKind::Odbc => odbc_driver_name(&cfg.odbc_conn_str),
+    }
+}
+
+/// "ODBC · <driver>" from a connection string's Driver={…}, or "ODBC · DSN" (a DSN's name may say whose it is).
+fn odbc_driver_name(conn_str: &str) -> String {
+    let driver = conn_str.split(';').find_map(|part| {
+        let (k, v) = part.split_once('=')?;
+        k.trim().eq_ignore_ascii_case("driver").then(|| v.trim().trim_start_matches('{').trim_end_matches('}').trim().to_string())
+    });
+    match driver.filter(|d| !d.is_empty()) {
+        Some(d) => format!("ODBC · {}", d.chars().take(60).collect::<String>()),
+        None => "ODBC · DSN".into(),
+    }
 }
 
 /// Abre una sesión vigilada (guard.rs): ya en la base y con el modo de transacción que pide la pestaña, sin idas y
@@ -486,6 +527,7 @@ async fn open_session(
     let timing = Arc::new(Mutex::new((0u64, false)));
     let seen = timing.clone();
     let area = driver_area(&state.conn(&conn_id)?);
+    let driver = driver_label(&state.conn(&conn_id)?);
     let h = SessionHandle::open(conn_id, move || {
         let g = guard::Guarded::open(connector, opts)?;
         *seen.lock() = (g.connect_ms, g.reused);
@@ -514,6 +556,7 @@ async fn open_session(
         server_info,
         connect_ms,
         reused,
+        driver,
     })
 }
 
@@ -843,7 +886,7 @@ fn set_history_retention(state: State<'_, Arc<AppState>>, max: usize, days: u64)
 // Off the main thread: a locked file is retried for a moment.
 #[tauri::command(async)]
 fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_json::Value> {
-    if !matches!(name.as_str(), "settings" | "workspace" | "library") {
+    if !matches!(name.as_str(), "settings" | "workspace" | "library" | "reports") {
         return Err("Nombre no permitido".into());
     }
     state.store.load_json(&format!("{name}.json")).map_err(err)
@@ -860,7 +903,7 @@ fn save_json(
     value: serde_json::Value,
     merge: Option<bool>,
 ) -> CmdResult<()> {
-    if !matches!(name.as_str(), "settings" | "library") {
+    if !matches!(name.as_str(), "settings" | "library" | "reports") {
         return Err("Nombre no permitido".into());
     }
     let file = format!("{name}.json");
@@ -1043,7 +1086,30 @@ mod read_only_tests {
 
 #[cfg(test)]
 mod text_tests {
-    use super::decode_text;
+    use super::{decode_base64, decode_text, driver_label, ConnConfig, DbKind};
+
+    #[test]
+    fn decodes_base64_images() {
+        assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(decode_base64("aGVsbG8").unwrap(), b"hello");
+        assert_eq!(decode_base64("AAEC/w==").unwrap(), vec![0, 1, 2, 255]);
+        assert!(decode_base64("a$==").is_none());
+        assert!(decode_base64("a").is_none());
+    }
+
+    #[test]
+    fn report_driver_labels_name_no_server() {
+        let cfg = |kind: DbKind, mode: &str, odbc: &str| ConnConfig { kind, informix_mode: mode.into(), odbc_conn_str: odbc.into(), host: "db.example".into(), ..Default::default() };
+        assert_eq!(driver_label(&cfg(DbKind::Postgres, "", "")), "nativo");
+        assert_eq!(driver_label(&cfg(DbKind::Mysql, "", "")), "nativo");
+        assert_eq!(driver_label(&cfg(DbKind::Mssql, "", "")), "TDS nativo");
+        assert_eq!(driver_label(&cfg(DbKind::Sqlite, "", "")), "embebido");
+        assert_eq!(driver_label(&cfg(DbKind::Informix, "drda", "")), "IBM CLI (DRDA)");
+        assert_eq!(driver_label(&cfg(DbKind::Informix, "jdbc", "")), "JDBC (puente de Celer)");
+        assert_eq!(driver_label(&cfg(DbKind::Informix, "sqli", "")), "Client SDK (ODBC, SQLI)");
+        assert_eq!(driver_label(&cfg(DbKind::Odbc, "", "Driver={PostgreSQL Unicode};Server=db.example;Uid=ana;Pwd=x;")), "ODBC · PostgreSQL Unicode");
+        assert_eq!(driver_label(&cfg(DbKind::Odbc, "", "DSN=Ventas-Ana;Uid=ana")), "ODBC · DSN");
+    }
 
     #[test]
     fn decodes_common_encodings() {
@@ -1227,6 +1293,59 @@ fn desktop_notify(window: tauri::WebviewWindow, title: String, body: String) {
     let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
 }
 
+// ───────────── Reportar / Sugerir ─────────────
+
+/// The images of a report (PNG, base64) as files in `<data>/reports/<id>/`, to attach them on GitHub by hand. Returns
+/// the paths written; the folder holds only this report's images.
+#[tauri::command(async)]
+fn report_save_images(state: State<'_, Arc<AppState>>, id: String, images: Vec<(String, String)>) -> CmdResult<Vec<String>> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("Identificador de reporte no válido".into());
+    }
+    let dir = state.store.dir.join("reports").join(&id);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let mut paths = Vec::new();
+    for (i, (name, data)) in images.iter().enumerate() {
+        let stem: String = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_')).take(40).collect();
+        let file = dir.join(format!("{:02}-{}.png", i + 1, if stem.is_empty() { "imagen".into() } else { stem }));
+        let b64 = data.split_once(',').map(|(_, b)| b).unwrap_or(data);
+        std::fs::write(&file, decode_base64(b64).ok_or("Imagen no válida")?).map_err(err)?;
+        paths.push(file.to_string_lossy().into_owned());
+    }
+    Ok(paths)
+}
+
+/// Standard base64 (with or without padding); None if it is not.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let bytes: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= value(c)? << (18 - 6 * i);
+        }
+        let len = match chunk.len() {
+            4 => 3,
+            3 => 2,
+            2 => 1,
+            _ => return None,
+        };
+        out.extend_from_slice(&n.to_be_bytes()[1..1 + len]);
+    }
+    Some(out)
+}
+
 // ───────────── Registro de errores (errlog.rs) ─────────────
 
 /// An unhandled error of the interface, or a call to the core that failed, for the local error log.
@@ -1263,6 +1382,7 @@ fn app_info(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "dataDir": state.store.dir.to_string_lossy(),
+        "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
     })
 }
 
@@ -1538,6 +1658,7 @@ pub fn run() {
             error_log_list,
             error_log_clear,
             error_log_path,
+            report_save_images,
             migration_sources,
             migration_dbeaver_credentials,
             update_check,

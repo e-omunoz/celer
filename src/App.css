@@ -1052,6 +1052,41 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .dialog h2 { margin: 0; flex: 1; font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
 .dialog footer { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 18px; }
 .dialog-lead { margin: 0 0 12px; color: var(--text-muted); line-height: 1.55; }
+/* Reportar / Sugerir */
+.report { height: min(700px, calc(100vh - 48px)); }
+.report-hidden .scrim, .report-hidden .dialog { visibility: hidden; }
+.report-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 2px; }
+.report-body.dragging { outline: 2px dashed var(--accent); outline-offset: -4px; border-radius: var(--radius-md); }
+.report-body footer { margin-top: auto; padding-top: 6px; }
+.report-top { display: flex; align-items: center; gap: 8px; }
+.report-kind button { display: inline-flex; align-items: center; gap: 6px; }
+.report-images { display: flex; flex-direction: column; gap: 8px; }
+.report-images-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.report-images-bar .btn { display: inline-flex; align-items: center; gap: 5px; }
+.field-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.report-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.report-thumb { position: relative; margin: 0; width: 150px; height: 96px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--panel); }
+.report-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+.report-thumb figcaption { position: absolute; top: 4px; right: 4px; display: flex; gap: 2px; background: var(--popover); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm, 0 1px 3px rgba(0,0,0,.2)); }
+.report-preview { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.report-preview-title { font-size: 15px; font-weight: 600; }
+.report-labels { display: flex; gap: 6px; }
+.report-preview h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.report-preview pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.report-h { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.report-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel); }
+.report-row .btn { display: inline-flex; align-items: center; gap: 4px; }
+.report-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-kind-icon { display: inline-flex; color: var(--text-muted); }
+.report-link-input { width: 260px; height: 24px; padding: 0 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font-size: 12px; }
+.annotator { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; }
+.annotator-tools { display: flex; align-items: center; gap: 8px; }
+.annotator-tools .seg button, .annotator-tools .btn { display: inline-flex; align-items: center; gap: 5px; }
+.annotator-canvas { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
+.annotator-canvas canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; touch-action: none; }
+.st-report { display: inline-flex; align-items: center; padding: 0 6px; height: 18px; border-radius: 4px; color: var(--text-faint); }
+.st-report:hover { background: var(--hover); color: var(--text); }
+
 /* Ayuda › Registro de errores */
 .errorlog { height: min(620px, calc(100vh - 48px)); }
 .errorlog-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }

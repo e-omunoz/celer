@@ -1,9 +1,10 @@
-import { ArrowDownToLine, BookMarked, CircleHelp, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
+import { ArrowDownToLine, BookMarked, CircleHelp, Database, History, MessageSquareWarning, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
 import { createEffect, onCleanup, onMount, Show, untrack } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
 import { handleGlobalKey, shortcutLabel, withShortcut } from "./commands";
 import { openErrorLog } from "./errorLog";
+import { openMyReports, openReport } from "./reportStore";
 import { trackAltGr } from "./keymap";
 import { Inspector } from "./components/Inspector";
 import { Modals } from "./components/Modals";
@@ -157,12 +158,15 @@ export default function App() {
   );
 }
 
-/** Ayuda: the guide, shortcuts, the error log, updates and «Acerca de». */
+/** Ayuda: the guide, shortcuts, reports, the error log, updates and «Acerca de». */
 export function helpMenu(): MenuItem[] {
   return [
     { label: "Guía de inicio", run: () => setState("onboardingOpen", true) },
     { label: "Atajos de teclado…", hint: shortcutLabel("shortcuts"), run: () => setState({ settingsOpen: true, settingsSection: "keys" }) },
     { separator: true },
+    { label: "Reportar un fallo…", hint: shortcutLabel("report-bug"), run: () => void openReport("bug") },
+    { label: "Sugerir una mejora…", hint: shortcutLabel("report-idea"), run: () => void openReport("idea") },
+    { label: "Mis reportes", run: () => void openMyReports() },
     { label: "Registro de errores", hint: shortcutLabel("error-log"), run: () => void openErrorLog() },
     { separator: true },
     { label: "Buscar actualizaciones", run: () => void checkForUpdates(true) },
@@ -261,6 +265,20 @@ function StatusBar() {
       </Show>
       <Show when={conn()}><span class="st-item muted">{engineOf(conn()!.kind).label}</span></Show>
       <span class="st-item muted">{isTauri() ? "" : "demo navegador · "}UTF-8</span>
+      <button
+        type="button"
+        class="st-report"
+        title="Reportar un fallo o sugerir una mejora"
+        onClick={(event) =>
+          openMenu(event, [
+            { label: "Reportar un fallo…", run: () => void openReport("bug") },
+            { label: "Sugerir una mejora…", run: () => void openReport("idea") },
+            { label: "Mis reportes", run: () => void openMyReports() },
+          ])
+        }
+      >
+        <MessageSquareWarning size={12} />
+      </button>
       <Show when={updateChipVisible()}>
         <button
           type="button"

@@ -1501,6 +1501,7 @@ mod tests {
         let bad = std::env::var("CELER_ODBC_BAD").unwrap_or_else(|_| "SELECT 'celer-secret-42'::int".into());
         let e = d.execute(&bad, 10).expect_err("valor no numérico").to_string();
         crate::errlog::assert_scrubbed("ODBC", &e, "celer-secret-42");
+        crate::assert_report_banner("ODBC", &d.server_info().unwrap(), &["localhost", "15432", "Uid", "Pwd"]);
     }
 
     #[test]

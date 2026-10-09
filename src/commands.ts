@@ -40,6 +40,7 @@ import { isTauri } from "./api";
 import { detachablePanel, detachPanel, openNewWindow, otherFullWindows, quitCeler, raiseWindow, sendTab } from "./windows";
 import { windowName } from "./windowModel";
 import { openErrorLog } from "./errorLog";
+import { openMyReports, openReport } from "./reportStore";
 
 export interface Command {
   id: string;
@@ -130,6 +131,9 @@ export function commands(): Command[] {
     { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
     { id: "gib-reset", label: "Gib: volver a contar los consejos desde el principio", group: "Ayuda", run: () => { resetGibTips(); notify("Gib volverá a darte sus consejos", "success", "Los que ya viste cuentan como nuevos."); } },
     { id: "error-log", label: "Registro de errores", hint: "Lo que ha fallado en este equipo, sin datos ni contraseñas. No se envía a ningún sitio.", group: "Ayuda", run: () => void openErrorLog() },
+    { id: "report-bug", label: "Reportar un fallo…", hint: "Prepara un issue para GitHub; ves exactamente lo que se envía antes de abrirlo.", group: "Ayuda", run: () => void openReport("bug") },
+    { id: "report-idea", label: "Sugerir una mejora…", group: "Ayuda", run: () => void openReport("idea") },
+    { id: "my-reports", label: "Mis reportes (borradores y enviados)", group: "Ayuda", run: () => void openMyReports() },
     { id: "about", label: "Acerca de Celer", group: "Ayuda", run: () => setState("aboutOpen", true) },
     { id: "update", label: "Buscar actualizaciones", group: "Ayuda", run: () => void checkForUpdates(true) },
   ];

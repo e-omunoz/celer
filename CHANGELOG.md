@@ -31,6 +31,16 @@ All notable changes to Celer are documented here. The format follows
   they are written (SQL text, quoted values, passwords, connection strings, hosts and IPs, paths with the user name);
   the file (`<data>/logs/errors.log`) rotates at 256 KB. Nothing is sent anywhere. An unexpected interface error now
   shows a notice that points to the log.
+- **Reportar / Sugerir** (#112): a window to report a bug or suggest an improvement on Celer's GitHub, from Ayuda, the
+  palette, the status bar and the notice after an unexpected error. A bug carries what happened, what was expected and
+  the steps, plus the version, system, theme and the active connection's engine and driver (never host, user, database
+  or data) and, if ticked, the last entries of the error log; an idea carries what, why and the area. Screenshot of the
+  window in one click, paste or drag images, and mark them with a rectangle or an arrow or pixelate what must not be
+  seen. A preview shows exactly what will be sent; «Abrir en GitHub» opens a prefilled issue form (labels `bug` or
+  `enhancement` plus `status:triage`) that the user submits, with the images saved in the data folder and the first one
+  copied. Drafts are kept offline and «Mis reportes» lists the reports sent, with their links. The issue forms in
+  `.github/ISSUE_TEMPLATE` match the window's fields, and CONTRIBUTING.md describes the triage flow
+  (`status:triage` → `status:ready`).
 
 ### Changed
 - The settings dialog is split into one component per section (`src/components/settings/`), registered in

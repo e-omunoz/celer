@@ -71,12 +71,14 @@ export interface Backend {
   errorLogClear(): Promise<void>;
   /** The log file, to show it in its folder. */
   errorLogPath(): Promise<string>;
-  loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
+  loadJson(name: "settings" | "workspace" | "library" | "reports"): Promise<unknown>;
   /**
    * Writes a shared file through the core, which tells the other windows. `merge`: `value` holds only some top-level
    * keys, merged into what the file has. In the desktop app the workspace is written by windows.ts instead.
    */
-  saveJson(name: "settings" | "workspace" | "library", value: unknown, merge?: boolean): Promise<void>;
+  saveJson(name: "settings" | "workspace" | "library" | "reports", value: unknown, merge?: boolean): Promise<void>;
+  /** A report's images (data URLs) as PNG files in the data folder, to attach by hand; returns their paths. */
+  reportSaveImages(id: string, images: [name: string, dataUrl: string][]): Promise<string[]>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */
@@ -96,7 +98,8 @@ export interface Backend {
   /** Starts Java ahead of an Informix JDBC connection (while the password is asked). */
   jdbcPrewarm(connId: string): Promise<void>;
   driverDownloadCancel(): Promise<void>;
-  appInfo(): Promise<{ version: string; dataDir: string }>;
+  /** `os`: the system and architecture ("windows x86_64"). */
+  appInfo(): Promise<{ version: string; dataDir: string; os?: string }>;
   migrationSources(): Promise<MigrationSource[]>;
   /** DBeaver's encrypted credentials next to a listed data-sources.json (hex), only when the user asks for passwords. */
   migrationDbeaverCredentials(path: string): Promise<string | null>;
@@ -208,6 +211,7 @@ function tauriBackend(): Backend {
     errorLogList: (limit) => invoke("error_log_list", { limit }),
     errorLogClear: () => invoke("error_log_clear"),
     errorLogPath: () => invoke("error_log_path"),
+    reportSaveImages: (id, images) => invoke("report_save_images", { id, images }),
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),

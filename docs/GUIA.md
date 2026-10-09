@@ -320,11 +320,33 @@ importar, lo que Celer no entiende se ignora y se dice cuál.
 *Ayuda › Registro de errores* (el botón **?** de la barra de la izquierda, o la paleta) muestra lo que ha fallado en
 este equipo: errores de los drivers de cada motor, errores de la interfaz, llamadas al núcleo que fallaron y cierres
 inesperados del núcleo, con la hora, la versión, dónde pasó y, si la hay, la pila. **Copiar** lo pone en el
-portapapeles, **Abrir carpeta** muestra el fichero y **Vaciar** lo borra.
+portapapeles, **Abrir carpeta** muestra el fichero, **Reportar…** prepara un reporte con los últimos y **Vaciar** lo
+borra.
 
 Antes de guardar cada entrada Celer le quita el texto SQL, los valores entre comillas, las contraseñas, las cadenas de
 conexión, los servidores y las IP, y las rutas con tu nombre de usuario. El registro ocupa como mucho medio megabyte
 (al llenarse, se aparta el anterior y se empieza otro) y **no se envía a ningún sitio**.
+
+### Reportar un fallo o sugerir una mejora
+
+*Ayuda › Reportar un fallo…* o *Sugerir una mejora…* (también en la paleta, en el icono de la derecha de la barra de
+estado y en el aviso que aparece tras un error inesperado) prepara un issue para el GitHub de Celer:
+
+- **Reportar un fallo**: título, qué ha pasado, qué esperabas y los pasos. Celer añade la versión, el sistema, el tema y
+  el motor y el driver de la conexión activa (por ejemplo «PostgreSQL · nativo · PostgreSQL 17.2» o «Informix · JDBC»),
+  nunca el servidor, el usuario, la base de datos ni tus datos. Puedes adjuntar los últimos errores del registro.
+- **Sugerir una mejora**: título, qué te gustaría, para qué y el área.
+- **Imágenes**: **Capturar la ventana** hace una captura de Celer en un clic; también puedes pegar (Ctrl+V), arrastrar o
+  añadir imágenes. El lápiz de cada una permite rodear con un **rectángulo**, señalar con una **flecha** u **ocultar**
+  una zona (la pixela en la propia imagen: lo de debajo no se puede recuperar).
+
+**Revisar y enviar** muestra exactamente lo que se enviará, campo por campo. Nada sale de Celer hasta que pulsas **Abrir
+en GitHub**: se abre la página de un issue nuevo con todo relleno y lo creas tú con tu cuenta de GitHub. Las imágenes no
+caben en la dirección: Celer las guarda en la carpeta de datos (`reports`), abre esa carpeta y copia la primera al
+portapapeles para que la pegues en «Capturas». Las rutas con tu nombre de usuario se quitan de lo que escribes.
+
+Lo que no terminas queda como **borrador** en este equipo. *Mis reportes* lista los borradores y los reportes abiertos
+en GitHub; pega el enlace del issue creado para tenerlo a mano.
 
 ## Gib
 
@@ -448,6 +470,7 @@ mientras se ejecuta; lo quita la siguiente instalación, o puedes borrarlo a man
 | Contraseñas | Administrador de credenciales | Llavero | Secret Service (GNOME Keyring, KWallet) |
 | Drivers descargados (IBM CLI, JDBC, Java) y el puente JDBC | `…\es.celer.app\drivers` | `…/es.celer.app/drivers` | `…/es.celer.app/drivers` |
 | Registro de errores | `…\es.celer.app\logs` | `…/es.celer.app/logs` | `…/es.celer.app/logs` |
+| Reportes: borradores (`reports.json`) e imágenes (`reports`) | `…\es.celer.app` | `…/es.celer.app` | `…/es.celer.app` |
 | Actualización descargada (Celer Setup) | `%LOCALAPPDATA%\es.celer.app\updates` | — | — |
 
 Si uno de esos ficheros se daña, Celer lo aparta con el sufijo `.unreadable-…` y avisa, en lugar de sobrescribirlo.

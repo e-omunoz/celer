@@ -187,6 +187,8 @@ interface ConnSession {
   metaId: string;
   database: string;
   serverInfo: string;
+  /** The driver and protocol the connection uses (SessionInfo.driver). */
+  driver?: string;
   databases: string[];
   connecting?: boolean;
 }
@@ -279,7 +281,7 @@ export const [state, setState] = createStore({
   // ---- shared by every window (mirrored from the core)
   connections: [] as ConnSummary[],
   settings: { ...defaultSettings } as Settings,
-  appInfo: { version: "", dataDir: "" },
+  appInfo: { version: "", dataDir: "", os: "" } as { version: string; dataDir: string; os?: string },
   driverPath: null as string | null,
   // ---- this window's own
   sessions: {} as Record<string, ConnSession>,
@@ -1255,7 +1257,7 @@ export async function connect(connId: string, password?: string) {
       return;
     }
     markConn(connId, "on", { connectMs: opened.connectMs, reused: opened.reused, note: "" });
-    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases: [] });
+    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, driver: opened.driver ?? "", databases: [] });
     try {
       localStorage.setItem(`celer.server.${connId}`, opened.serverInfo.slice(0, 120));
     } catch {

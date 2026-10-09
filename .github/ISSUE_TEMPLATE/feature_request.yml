@@ -1,24 +1,39 @@
 name: Feature request
 description: An idea to make Celer better
-labels: [enhancement]
+# status:triage: every request waits for triage (CONTRIBUTING.md, "Triage"). Celer's «Sugerir una mejora» window opens
+# this form with the fields below already filled (by their ids: keep them in step with src/report.ts).
+labels: [enhancement, "status:triage"]
 body:
-  - type: textarea
-    id: problem
+  - type: markdown
     attributes:
-      label: What are you trying to do?
-      description: Describe the task or the problem, not only the solution. "When I … I have to …"
+      value: In Celer, *Ayuda › Sugerir una mejora* fills this form for you.
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like Celer to do? · Qué te gustaría
+      description: How it could look or work. Screenshots or examples from other tools are welcome.
     validations:
       required: true
   - type: textarea
-    id: idea
+    id: why
     attributes:
-      label: What would you like Celer to do?
-      description: How it could look or work. Screenshots or examples from other tools are welcome.
-  - type: dropdown
+      label: What are you trying to do, and why? · Para qué / por qué
+      description: Describe the task or the problem, not only the solution. "When I … I have to …"
+  - type: input
     id: area
     attributes:
-      label: Area
-      options: [Editor, Results grid, Table viewer, Explorer, Connections and drivers, Export and import, AI and MCP, Installer and updates, Themes and interface, Other]
+      label: Area · Área
+      placeholder: Consola SQL, Resultados y rejilla, Conexiones, Exportar e importar, IA y MCP…
+  - type: input
+    id: version
+    attributes:
+      label: Celer version · Versión de Celer
+      placeholder: 2.3.0
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots · Capturas
+      description: Paste or drag images here.
   - type: checkboxes
     id: help
     attributes:

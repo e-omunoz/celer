@@ -401,6 +401,7 @@ fn mssql_engine() {
     // Cancel a running statement.
     let e = d.execute("SELECT * FROM celer_secret_42 WHERE x = 'celer-secret-42'", 10).expect_err("tabla inexistente").to_string();
     crate::errlog::assert_scrubbed("SQL Server", &e, "celer_secret_42");
+    crate::assert_report_banner("SQL Server", &d.server_info().unwrap(), &["localhost", "1433", "celerdemo"]);
     assert_cancel(d, "WAITFOR DELAY '00:00:30'");
     assert_timeout(d, "WAITFOR DELAY '00:00:30'");
 
@@ -839,6 +840,8 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     // Cancel a long statement.
     let e = d.execute("SELECT * FROM celer_secret_42", 10).expect_err("tabla inexistente").to_string();
     crate::errlog::assert_scrubbed(&format!("Informix {via}"), &e, "celer_secret_42");
+    // (The user is "informix", which the product name holds too: not a check here.)
+    crate::assert_report_banner(&format!("Informix {via}"), &d.server_info().unwrap(), &[&cfg.host, &cfg.password.clone().unwrap_or_default()]);
     assert_cancel(d, "SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e");
     assert_timeout(d, "SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e");
 
