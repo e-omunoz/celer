@@ -392,6 +392,15 @@ pub fn window_raise(app: AppHandle, label: String) -> bool {
     }
 }
 
+/// Celer was launched again while running (single-instance guard): the window used last comes to the front instead
+/// of a second process that would write connections and workspace from its own stale copy.
+pub fn raise_last(app: &AppHandle) {
+    let last = app.try_state::<Windows>().map(|w| w.focused.lock().clone()).unwrap_or_default();
+    if !window_raise(app.clone(), last) {
+        window_raise(app.clone(), "main".into());
+    }
+}
+
 /// "Salir de Celer": cada ventana ya ha guardado su parte de la disposición.
 #[tauri::command]
 pub fn window_quit(app: AppHandle) {

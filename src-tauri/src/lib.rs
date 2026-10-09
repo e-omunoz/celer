@@ -1318,7 +1318,15 @@ pub(crate) fn dev_data_dir() -> Option<std::path::PathBuf> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // One Celer per data folder: a second launch raises the running one and exits, since it would write
+    // connections.json and workspace.json over the first one's changes. The guard is keyed on the app identifier,
+    // so a debug build on its own data folder (CELER_DATA_DIR) skips it to run next to an installed Celer, unless
+    // CELER_SINGLE_INSTANCE asks for it (to test the guard).
+    if dev_data_dir().is_none() || std::env::var_os("CELER_SINGLE_INSTANCE").is_some() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| windows::raise_last(app)));
+    }
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
