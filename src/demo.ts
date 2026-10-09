@@ -338,6 +338,7 @@ function tableColumns(db: Database, obj: ObjectRef): TableColumn[] {
 function demoAudit(): McpAuditEntry[] {
   const at = Date.now();
   return [
+    { at: at - 60_000, tool: "open_console", connId: "demo", connName: "Demo SQLite", detail: "[ejecutar] SELECT city, count(*) FROM customers GROUP BY city", ok: true, ms: 41, client: "WSL (Ubuntu)", clientApp: "claude-code" },
     { at: at - 2 * 60_000, tool: "run_query", connId: "demo", connName: "Demo SQLite", detail: "SELECT count(*) FROM customers", ok: true, rows: 1, ms: 3, client: "WSL (Ubuntu)", clientApp: "claude-code" },
     { at: at - 3 * 60_000, tool: "describe_table", connId: "demo", connName: "Demo SQLite", detail: "main.customers", ok: true, rows: 6, ms: 4, client: "WSL (Ubuntu)", clientApp: "claude-code" },
     { at: at - 9 * 60_000, tool: "execute_statement", connId: "demo", connName: "Demo SQLite", detail: "DELETE FROM customers", ok: false, ms: 1, error: "La conexión «Demo SQLite» tiene nivel «read» para asistentes y execute_statement requiere «write».", client: "Windows", clientApp: "claude-code" },
@@ -726,7 +727,7 @@ export function createDemoBackend(): Backend {
     async jdbcPrewarm() {},
     async driverDownloadCancel() {},
     async mcpConfigGet() {
-      return { enabled: false, maxRows: 200, timeoutSecs: 30, redactPattern: "", connections: {} };
+      return { enabled: false, maxRows: 200, timeoutSecs: 30, redactPattern: "", connections: {}, appControl: { enabled: false, openTabs: true, writeLibrary: true, runOpened: false } };
     },
     async mcpConfigSet() {
       throw new Error("El servidor MCP solo está disponible en la aplicación de escritorio");
@@ -753,6 +754,7 @@ export function createDemoBackend(): Backend {
     async mcpStatus() {
       return {
         enabled: true,
+        appControl: true,
         clients: [
           { name: "Claude Code", place: "Windows", state: "yes" },
           { name: "Claude Code", place: "WSL (Ubuntu)", state: "yes" },
@@ -776,6 +778,9 @@ export function createDemoBackend(): Backend {
     },
     async mcpWslRegister() {
       throw new Error("Registrar en WSL solo es posible en la aplicación de escritorio");
+    },
+    async mcpAppReply() {
+      return false;
     },
     async mcpTestTool() {
       throw new Error("Solo en la aplicación de escritorio");

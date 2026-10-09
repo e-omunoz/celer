@@ -1228,6 +1228,39 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .st-mcp.idle svg { color: var(--text-faint); }
 .st-mcp:hover, .st-mcp.open { background: var(--surface-alt); color: var(--text); }
 .st-mcp.stale svg { color: var(--warning); }
+.st-mcp-wrap { position: relative; display: inline-flex; }
+
+/* MCP: «Actividad de la IA», above the indicator */
+.mcp-pop {
+  position: absolute; right: 0; bottom: calc(100% + 6px); width: min(400px, calc(100vw - 24px)); max-height: min(460px, 70vh);
+  display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 10px;
+  background: var(--panel); box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.3)); white-space: normal; z-index: 60;
+  animation: pop-in var(--dur-med) var(--ease-spring);
+}
+.mcp-pop header { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.mcp-pop header svg { color: var(--accent); }
+.mcp-pop footer { display: flex; justify-content: flex-end; padding-top: 4px; border-top: 1px solid var(--border); }
+.mcp-pop-note { margin: 0; font-size: 11.5px; color: var(--text-muted); }
+.mcp-pop-list { display: flex; flex-direction: column; overflow-y: auto; min-height: 0; border: 1px solid var(--border); border-radius: 8px; }
+.mcp-act { display: flex; flex-direction: column; gap: 2px; padding: 6px 9px; border-bottom: 1px solid var(--border); font-size: 11.5px; }
+.mcp-act:last-child { border-bottom: 0; }
+.mcp-act-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mcp-act-head b { font-weight: 600; }
+.mcp-act-head span:not(.spacer) { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-act time { color: var(--text-faint); font-variant-numeric: tabular-nums; flex: none; }
+.mcp-act code { color: var(--text-muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-act small { color: var(--text-faint); font-size: 10.5px; }
+.mcp-act.app b { color: var(--accent); }
+.mcp-act.bad b, .mcp-act.bad code { color: var(--danger); }
+
+/* An assistant opened it (MCP «Controlar la aplicación»): a badge, and a short highlight when it appears */
+.ai-badge { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; flex: none; border-radius: 50%; color: var(--accent); background: var(--accent-soft); }
+.tab.ai-opened { animation: ai-opened 1.2s ease-out 2; }
+@keyframes ai-opened {
+  0% { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+  100% { box-shadow: inset 0 0 0 1px transparent; }
+}
+:root[data-motion="reduce"] .tab.ai-opened { animation: none; }
 .update-dialog { width: min(560px, calc(100vw - 48px)); }
 .upd-head { display: flex; align-items: center; gap: 16px; padding: 22px 0 14px; }
 .upd-head .gib { flex: none; }
@@ -1640,6 +1673,11 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .mcp-distro-head small { color: var(--text-muted); font-size: 11.5px; }
 .mcp-distro code { font-size: 10.5px; color: var(--text-muted); word-break: break-all; }
 .mcp-distro-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.mcp-app { display: flex; flex-direction: column; gap: 6px; transition: opacity var(--dur-fast); }
+.mcp-app.disabled, .mcp-app-subs.disabled { opacity: 0.5; pointer-events: none; }
+.mcp-app-subs { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 8px 30px; border-left: 2px solid var(--border); margin-left: 8px; }
+.mcp-app-subs .check span { display: flex; flex-direction: column; }
+.mcp-app-subs small { color: var(--text-muted); font-size: 11.5px; }
 
 /* CSV import */
 .import-dialog { height: min(640px, calc(100vh - 48px)); }

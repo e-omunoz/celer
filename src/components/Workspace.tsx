@@ -27,6 +27,7 @@ import {
   RefreshCw,
   Rows3,
   Save,
+  Sparkles,
   Square,
   Undo2,
   Upload,
@@ -122,6 +123,7 @@ import { startImport } from "../importer";
 import { withShortcut } from "../commands";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
+import { aiBadgeTitle } from "../mcpApp";
 import { windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
@@ -199,7 +201,7 @@ function TabBar() {
               class="tab"
               role="tab"
               aria-selected={tab.id === state.activeTabId}
-              classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index() }}
+              classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index(), "ai-opened": Boolean(tab.aiOpenedAt) }}
               draggable={renaming() !== tab.id}
               onDragStart={(event) => {
                 setDragFrom(index());
@@ -254,6 +256,7 @@ function TabBar() {
                   }}
                 />
               </Show>
+              <Show when={tab.aiOpenedAt}><span class="ai-badge" title={aiBadgeTitle(tab)}><Sparkles size={10} /></span></Show>
               <Show when={busy()}><span class="tab-spinner" /></Show>
               <Show when={dirty() && !busy()}><span class="tab-dirty" title={tab.kind === "table" ? "Cambios sin guardar" : "Transacción abierta"} /></Show>
               <button

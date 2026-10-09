@@ -5,6 +5,7 @@ mod export;
 mod guard;
 mod jdbc;
 mod mcp;
+mod mcp_app;
 mod mcp_wsl;
 mod migrate;
 mod model;
@@ -1390,7 +1391,7 @@ pub fn run() {
             let store = Store::new(dir.clone());
             let mut conns = store.load_connections();
             move_inline_passwords(&store, &mut conns);
-            let mcp = mcp::McpServer::new(dir, true);
+            let mcp = mcp::McpServer::new(dir.clone(), true);
             // The window starts hidden and the UI shows it after its first paint (no white flash).
             // Safety net: show it anyway if the UI has not done so shortly after start.
             if let Some(window) = app.get_webview_window("main") {
@@ -1411,6 +1412,13 @@ pub fn run() {
                 exports: Mutex::new(HashMap::new()),
             }));
             app.manage(windows::Windows::default());
+            // The channel `celer --mcp` uses for the tools that act in the app (they check the permissions first).
+            let pending = Arc::new(mcp_app::Pending::default());
+            app.manage(pending.clone());
+            let handler = Arc::new(windows::McpAppHandler { app: app.handle().clone(), pending });
+            if let Err(e) = mcp_app::start(&dir, handler) {
+                eprintln!("celer: no se pudo abrir el canal local para MCP: {e}");
+            }
             Ok(())
         })
         .on_window_event(windows::on_event)
@@ -1494,7 +1502,15 @@ pub fn run() {
             windows::tab_drag_start,
             windows::tab_drag_claim,
             windows::tab_drag_end,
+            windows::mcp_app_reply,
         ])
-        .run(tauri::generate_context!())
-        .expect("error al iniciar Celer");
+        .build(tauri::generate_context!())
+        .expect("error al iniciar Celer")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    mcp_app::stop(&state.store.dir);
+                }
+            }
+        });
 }

@@ -85,7 +85,9 @@ without administrator rights, and keeps itself up to date.
   joins, INSERT, UPDATE, UPSERT/MERGE and DDL from the explorer.
 - **AI with permissions.** An assistant that writes, explains, fixes and optimises SQL with Claude using your schema,
   never your rows. An **MCP server** (`celer.exe --mcp`) lets Claude Desktop, Claude Code and other clients use your
-  connections with a permission level per connection, row and time limits, masked columns and an audit log.
+  connections with a permission level per connection, row and time limits, masked columns and an audit log, also from
+  Claude Code inside WSL. If you allow it, the AI can also open consoles, tables and diagrams in Celer and add library
+  scripts, always marked as the AI's and within the same permissions.
 - **Bring your connections.** Import them from **DBeaver** (saved passwords included, if you want) and
   **DbVisualizer**, with folders and production flags. Drag connections between folders in the explorer.
 - **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift),
@@ -231,6 +233,8 @@ Every shortcut can be changed in *Ajustes › Atajos de teclado*. On macOS, `Ctr
   nothing about you and can be turned off), the IBM driver download when you ask for it, and the AI assistant if you
   configure your own key (it receives the schema, never row data).
 - The MCP server runs locally over stdio, is off by default and only sees what each connection's permission allows.
+  Letting it act in the app is a separate switch, off by default; it talks to the running Celer over loopback with a
+  random token.
 - Read-only connections refuse writes, even hidden in a batch; production connections ask before risky statements.
 
 Details and how to report a vulnerability: [SECURITY.md](SECURITY.md).

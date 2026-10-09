@@ -1,6 +1,6 @@
 // Checks for src/mcpModel.ts: node --experimental-strip-types dev/mcp-check.ts
 import assert from "node:assert/strict";
-import { callText, mcpLabel, mcpPlaces, mcpTooltip, staleClients, timeAgo } from "../src/mcpModel.ts";
+import { actsInApp, aiTabTitle, callText, clientText, isTyping, mcpLabel, mcpPlaces, mcpTooltip, staleClients, timeAgo, toolLabel, TYPING_MS } from "../src/mcpModel.ts";
 import type { McpStatus } from "../src/types.ts";
 
 const now = 1_760_000_000_000;
@@ -15,6 +15,7 @@ assert.equal(timeAgo(now + 5_000, now), "ahora", "a clock a little ahead is not 
 
 // ---------------------------------------------------------------- where the clients run
 const both: McpStatus = {
+  appControl: false,
   enabled: true,
   clients: [
     { name: "Claude Code", place: "WSL (Ubuntu)", state: "yes" },
@@ -38,8 +39,24 @@ assert.equal(tip[1], "Clientes: Claude Code en WSL (Ubuntu), Claude Desktop en W
 assert.equal(tip[2], "⚠ Claude Code en WSL (Debian) usa otra ruta de Celer: vuelve a registrarlo");
 assert.equal(tip[3], "Última llamada: hace 2 min · run_query · Ventas · WSL (Ubuntu)");
 assert.equal(tip[4], "Clic: Ajustes › IA y MCP");
-const quiet = mcpTooltip({ enabled: true, clients: [], wslChecked: false, lastCall: { at: now, tool: "execute_statement", ok: false } }, now, "x").split("\n");
+const quiet = mcpTooltip({ enabled: true, appControl: false, clients: [], wslChecked: false, lastCall: { at: now, tool: "execute_statement", ok: false } }, now, "x").split("\n");
 assert.equal(quiet[1], "Buscando clientes…", "WSL not read yet");
 assert.equal(quiet[2], "Última llamada: ahora · execute_statement (rechazada)");
+
+// ---------------------------------------------------------------- the AI acting in the app (#100)
+assert.equal(clientText({ client: "WSL (Ubuntu)", clientApp: "claude-code" }), "claude-code · WSL (Ubuntu)");
+assert.equal(clientText({ client: "Windows" }), "Windows");
+assert.equal(clientText({}), "", "entries written before the client was kept");
+assert.equal(toolLabel({ tool: "open_console", detail: "[ejecutar] SELECT 1" }), "Abrió y ejecutó una consola");
+assert.equal(toolLabel({ tool: "open_console", detail: "SELECT 1" }), "Abrió una consola");
+assert.equal(toolLabel({ tool: "run_query" }), "Consulta de lectura");
+assert.equal(toolLabel({ tool: "some_future_tool" }), "some_future_tool");
+assert.ok(actsInApp("open_table") && actsInApp("add_library_script") && !actsInApp("list_library") && !actsInApp("run_query"));
+assert.equal(isTyping(now - 1000, now, true), true);
+assert.equal(isTyping(now - 1000, now, false), false, "a window without the focus is not being typed in");
+assert.equal(isTyping(now - TYPING_MS - 1, now, true), false);
+assert.equal(isTyping(0, now, true), false, "nothing typed yet");
+assert.equal(aiTabTitle(now - 3 * 60_000, now, "claude-code · Windows"), "Abierto por la IA · hace 3 min (claude-code · Windows)");
+assert.equal(aiTabTitle(now - 5_000, now), "Abierto por la IA · ahora");
 
 console.log("mcp-check: all good");

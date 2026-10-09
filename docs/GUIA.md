@@ -264,8 +264,22 @@ aplican los mismos permisos, la misma ocultación de columnas y el mismo registr
 desde dónde llegó cada llamada (Windows o WSL y la distribución).
 
 Mientras el servidor MCP está activo, la barra de estado muestra **MCP · Windows + WSL (Ubuntu)**: dónde están los
-clientes que tienen Celer registrado. Al pasar el ratón ves los clientes y la última llamada; con un clic vas a
-*Ajustes › IA y MCP*. Con MCP desactivado no aparece.
+clientes que tienen Celer registrado. Al pasar el ratón ves los clientes y la última llamada; con un clic se abre
+**Actividad de la IA** (las últimas llamadas: qué hizo, en qué conexión, cuándo y desde dónde; las rechazadas en rojo)
+con un botón a *Ajustes › IA y MCP*. Con MCP desactivado no aparece.
+
+**Controlar la aplicación** (*Ajustes › IA y MCP*, desactivado de serie): la IA puede además ver qué tienes abierto en
+Celer, abrirte consolas con SQL escrito por ella, tablas (con filtro y orden), definiciones y diagramas E-R, leer la
+biblioteca de scripts y, si lo permites, añadir scripts y ejecutar lo que abre. Cada cosa tiene su interruptor:
+*Abrir pestañas*, *Escribir en la biblioteca* y *Ejecutar lo que abre*. Nada se salta el nivel de cada conexión:
+para ejecutar una consulta hace falta *Lectura* y para una sentencia que modifica, *Lectura y escritura*; la ocultación
+de columnas y el registro se aplican igual, y Celer te sigue pidiendo confirmación en producción o sin WHERE.
+
+Lo que abre la IA se ve: la pestaña lleva la marca ✦ (*Abierto por la IA · hace N min*) y destella un momento, y un
+aviso dice *La IA ha abierto «X» en la ventana principal* con el botón **Ir**. La IA nunca te quita el foco: si estás
+escribiendo, la pestaña se abre en segundo plano (y un diagrama se te ofrece en el aviso en vez de abrirse); si Celer
+está detrás de otra ventana, parpadea su botón en la barra de tareas. Los scripts que añade la IA llevan la misma
+marca en la biblioteca. Hace falta tener Celer abierto; si no lo está, la IA recibe un aviso claro.
 
 ## Varias ventanas
 

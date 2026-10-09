@@ -369,6 +369,8 @@ export interface McpConfig {
   timeoutSecs: number;
   redactPattern: string;
   connections: Record<string, { level: McpLevel; maxRows?: number | null }>;
+  /** «Controlar la aplicación» (#100): what an assistant may do in the running Celer. */
+  appControl: { enabled: boolean; openTabs: boolean; writeLibrary: boolean; runOpened: boolean };
 }
 
 export interface McpAuditEntry {
@@ -429,6 +431,8 @@ export interface WslInfo {
 /** The status bar's MCP indicator. */
 export interface McpStatus {
   enabled: boolean;
+  /** «Controlar la aplicación» is on. */
+  appControl: boolean;
   clients: { name: string; place: string; state: "yes" | "stale" }[];
   /** The WSL distros have been read (it takes a moment after start). */
   wslChecked: boolean;

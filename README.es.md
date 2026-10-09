@@ -83,7 +83,8 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
 - **IA con permisos.** Un asistente que escribe, explica, corrige y optimiza SQL con Claude usando tu esquema, nunca
   tus filas. Un **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y otros clientes usen tus
   conexiones con un nivel de permiso por conexión, límites de filas y tiempo, columnas enmascaradas y registro de
-  auditoría.
+  auditoría, también desde Claude Code dentro de WSL. Si lo permites, la IA puede además abrirte consolas, tablas y
+  diagramas en Celer y añadir scripts a la biblioteca, siempre marcados como suyos y con los mismos permisos.
 - **Trae tus conexiones.** Impórtalas desde **DBeaver** (con las contraseñas guardadas, si quieres) y
   **DbVisualizer**, con carpetas y marcas de producción. Arrastra conexiones entre carpetas en el explorador.
 - **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
@@ -230,6 +231,8 @@ Todos los atajos se pueden cambiar en *Ajustes › Atajos de teclado*. En macOS,
   (no envía nada sobre ti y se puede desactivar), descargar el driver de IBM cuando lo pides y el asistente de IA si
   configuras tu propia clave (recibe el esquema, nunca filas).
 - El servidor MCP funciona en local por stdio, está desactivado por defecto y solo ve lo que permite cada conexión.
+  Dejar que actúe en la aplicación es otro interruptor, también desactivado de serie; habla con el Celer abierto por
+  loopback con un token aleatorio.
 - Las conexiones de solo lectura rechazan escrituras, aunque vayan escondidas en un lote; las de producción piden
   confirmación antes de sentencias arriesgadas.
 

@@ -107,6 +107,8 @@ export interface Backend {
   mcpWslInfo(check?: string): Promise<WslInfo>;
   /** Runs `claude mcp add` inside a WSL distro; returns what it said. */
   mcpWslRegister(distro: string): Promise<string>;
+  /** This window's answer to an assistant's request (MCP «Controlar la aplicación», see mcpApp.ts). */
+  mcpAppReply(id: string, ok: boolean, result: unknown, error?: string): Promise<boolean>;
   mcpTestTool(name: string, args: Record<string, unknown>): Promise<unknown>;
   /** `defaultName`: the file name the dialog proposes. */
   pickSavePath(filters: { name: string; extensions: string[] }[], defaultName?: string): Promise<string | null>;
@@ -198,6 +200,7 @@ function tauriBackend(): Backend {
     mcpStatus: () => invoke("mcp_status"),
     mcpWslInfo: (check) => invoke("mcp_wsl_info", { check: check ?? null }),
     mcpWslRegister: (distro) => invoke("mcp_wsl_register", { distro }),
+    mcpAppReply: (id, ok, result, error) => invoke("mcp_app_reply", { id, ok, result: result ?? null, error: error ?? null }),
     mcpTestTool: (name, args) => invoke("mcp_test_tool", { name, args }),
     pickSavePath: async (filters, defaultName) => {
       const { save } = await import("@tauri-apps/plugin-dialog");

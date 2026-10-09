@@ -63,6 +63,7 @@ import {
   type TableTab,
 } from "./state";
 import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, openLibraryScript, revertConsole, saveToLibrary, scriptById } from "./library";
+import { handleMcpRequest } from "./mcpApp";
 import { closeSchemaCompare, openSyncScript, schemaCompare, setSchemaCompare, swapCompare } from "./schemaCompareRun";
 import { closeDataCompare, dataCompare, openDataSyncScript, setDataCompare, swapDataCompare } from "./dataCompareRun";
 import { installOnClose } from "./update";
@@ -451,6 +452,9 @@ async function focusSelf() {
   if (isTauri()) await thisWindow().then((win) => win.setFocus()).catch(() => {});
 }
 
+/** Brings this window to the front (the user asked: «Ir» on a notice). */
+export const focusThisWindow = focusSelf;
+
 // ---- dragging a tab out of the tab bar
 
 let dragging = "";
@@ -539,6 +543,10 @@ async function handle(message: Message, known: (id: string | null) => boolean = 
       waiting?.(message.answer);
       break;
     }
+    case "mcp":
+      // An assistant's request (MCP «Controlar la aplicación»): not awaited, a run may take a while.
+      void handleMcpRequest(message);
+      break;
   }
 }
 

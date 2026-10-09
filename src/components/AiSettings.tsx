@@ -3,6 +3,7 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import { AI_MODELS, refreshAiKeyStatus, saveAiKey } from "../ai";
 import { api, errorText, isTauri } from "../api";
 import { EngineIcon } from "../icons";
+import { clientText } from "../mcpModel";
 import { refreshMcpStatus } from "../mcpStatus";
 import { confirmDialog, copyText, notify, openInspector, saveSettings, serverOf, setState, state } from "../state";
 import type { McpConfig, McpLevel, WslDistro, WslInfo } from "../types";
@@ -94,6 +95,7 @@ export function AiSettings() {
                 <input type="checkbox" checked={cfg().enabled} onChange={(event) => void save({ ...cfg(), enabled: event.currentTarget.checked })} />
                 <span><b>Permitir acceso por MCP</b><small>Si está desactivado, el servidor rechaza todas las peticiones.</small></span>
               </label>
+              <AppControlSettings config={cfg()} save={(appControl) => void save({ ...cfg(), appControl })} />
               <div class="mcp-conns" classList={{ disabled: !cfg().enabled }}>
                 <For each={state.connections} fallback={<p class="settings-note">No hay conexiones.</p>}>
                   {(conn) => {
@@ -182,9 +184,38 @@ export function AiSettings() {
   );
 }
 
-/** "claude-code · WSL (Ubuntu)": who called, as the audit log has it. */
-export function clientText(entry: { client?: string | null; clientApp?: string | null }): string {
-  return [entry.clientApp, entry.client].filter(Boolean).join(" · ");
+/**
+ * «Controlar la aplicación» (#100): the assistant may open consoles, tables and diagrams in Celer, read what is open,
+ * use the library and run what it opens. Off by default; with it off none of those tools is offered.
+ */
+function AppControlSettings(props: { config: McpConfig; save: (next: McpConfig["appControl"]) => void }) {
+  const app = () => props.config.appControl;
+  const set = (patch: Partial<McpConfig["appControl"]>) => props.save({ ...app(), ...patch });
+  return (
+    <div class="mcp-app" classList={{ disabled: !props.config.enabled }}>
+      <label class="check big">
+        <input type="checkbox" checked={app().enabled} onChange={(event) => set({ enabled: event.currentTarget.checked })} />
+        <span>
+          <b>Controlar la aplicación</b>
+          <small>La IA puede ver qué tienes abierto en Celer, abrirte consolas, tablas y diagramas y usar la biblioteca de scripts. Lo que abre lleva la marca de la IA y te avisa; nada se salta el nivel de cada conexión, la ocultación ni el registro. Necesita Celer abierto.</small>
+        </span>
+      </label>
+      <div class="mcp-app-subs" classList={{ disabled: !app().enabled }}>
+        <label class="check">
+          <input type="checkbox" checked={app().openTabs} onChange={(event) => set({ openTabs: event.currentTarget.checked })} />
+          <span>Abrir pestañas<small>Consolas con SQL escrito por la IA, tablas (con filtro y orden), definiciones y diagramas E-R.</small></span>
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={app().writeLibrary} onChange={(event) => set({ writeLibrary: event.currentTarget.checked })} />
+          <span>Escribir en la biblioteca<small>Añadir scripts (leerla siempre puede, salvo los de conexiones sin acceso).</small></span>
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={app().runOpened} onChange={(event) => set({ runOpened: event.currentTarget.checked })} />
+          <span>Ejecutar lo que abre<small>Solo una sentencia, y solo si el nivel de la conexión la permite: con «Lectura», consultas de lectura; con «Lectura y escritura», también cambios.</small></span>
+        </label>
+      </div>
+    </div>
+  );
 }
 
 const REGISTERED: Record<WslDistro["registered"], string> = {

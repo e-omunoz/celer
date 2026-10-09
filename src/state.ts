@@ -93,6 +93,9 @@ export interface SqlTab {
   activePinned: string | null;
   /** A pinned result compared with the current one (key: columns that match rows; null: guessed). */
   compare: { pinId: string; key: string[] | null } | null;
+  /** Opened by an assistant through MCP (#100): when, and who ("claude-code · WSL (Ubuntu)"). Not saved. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 export interface PinnedResult {
@@ -138,6 +141,9 @@ export interface TableTab {
   inserts: (string | null)[][];
   /** Restored from the last session and not loaded yet: it loads (and connects) when it is first shown. */
   restored?: boolean;
+  /** Opened by an assistant through MCP (#100): when, and who. Not saved. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 export type Tab = SqlTab | TableTab;
@@ -1447,7 +1453,11 @@ export async function refreshNode(connId: string, path: string[]) {
 
 // ---------------------------------------------------------------- consoles
 
-export function openQuery(connId: string | null, sql = "", title?: string) {
+/**
+ * A new console. `background`: added without becoming the active tab (an assistant opened it while the user was
+ * typing); `database`: the one it starts in, instead of the connection's.
+ */
+export function openQuery(connId: string | null, sql = "", title?: string, options: { background?: boolean; database?: string } = {}) {
   const conn = connectionById(connId);
   const tab = blankSql(uid(), connId, sql, title ?? conn?.name ?? CONSOLE_TITLE);
   const session = connId ? state.sessions[connId] : undefined;
@@ -1455,8 +1465,9 @@ export function openQuery(connId: string | null, sql = "", title?: string) {
     tab.database = session.database;
     tab.serverInfo = session.serverInfo;
   }
+  if (connId && options.database) tab.database = options.database;
   setState("tabs", [...state.tabs, tab]);
-  setState("activeTabId", tab.id);
+  if (!options.background) setState("activeTabId", tab.id);
   persistSoon();
   warmSqlSession(tab.id);
   return tab.id;
@@ -1676,8 +1687,10 @@ export function formatMs(ms: number | null | undefined) {
 }
 
 /** Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive). */
-export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string) {
-  const current = activeSql();
+/** Runs in the active console, or in the console `tabId` (an assistant's, which may be in the background). */
+export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string, tabId?: string) {
+  const byId = tabId ? state.tabs[tabIndex(tabId)] : undefined;
+  const current = tabId ? (byId?.kind === "sql" ? byId : undefined) : activeSql();
   if (!current || current.running) return;
   const conn = connectionById(current.connId);
   let sql = text?.trim() || current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
@@ -2187,22 +2200,36 @@ export async function followForeignKey(tab: TableTab, fk: ForeignKey, row?: Reco
   await openTable(tab.connId, fk.target, "data", filters);
 }
 
-export async function openTable(connId: string, obj: ObjectRef, section: TableTab["section"] = "data", filters: ColumnFilter[] = []) {
+/**
+ * Opens a table (or brings its tab forward). `options` are an assistant's (#100): `background` adds the tab without
+ * making it active, `where` / `orderBy` start it filtered and ordered. Returns the tab's id.
+ */
+export async function openTable(
+  connId: string,
+  obj: ObjectRef,
+  section: TableTab["section"] = "data",
+  filters: ColumnFilter[] = [],
+  options: { background?: boolean; where?: string; orderBy?: string } = {},
+): Promise<string | undefined> {
   if (forwardFromPanel("open-table", { connId, obj, section, filters })) return;
+  const query = options.where !== undefined || options.orderBy !== undefined ? { where: options.where ?? "", orderBy: options.orderBy ?? "", filters: [] as ColumnFilter[], sort: null } : null;
   const existing = state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
   if (existing) {
     // A restored tab not loaded yet loads once here (with the filters, if any), not again when it is shown.
     const restored = existing.kind === "table" && existing.restored;
-    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}) });
-    selectTab(existing.id);
+    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}), ...(query ?? {}) });
+    if (!options.background) selectTab(existing.id);
     if (section !== "data") patchTab(existing.id, { section });
     if (restored) {
       void reloadTable(existing.id, true);
     } else if (filters.length && (await guardDirty(existing.id))) {
       patchTab(existing.id, { filters, where: "", section: "data" });
       void reloadTable(existing.id);
+    } else if (query && (await guardDirty(existing.id))) {
+      patchTab(existing.id, query);
+      void reloadTable(existing.id);
     }
-    return;
+    return existing.id;
   }
   const opened = await openSessionFor(connId, obj.database).catch((err) => {
     notify(errorText(err), "error");
@@ -2211,10 +2238,12 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
   if (!opened) return;
   const id = uid();
   const tab = blankTable(id, connId, obj, opened.sessionId, obj.database || opened.database, section, filters);
+  if (query) Object.assign(tab, query);
   setState("tabs", [...state.tabs, tab]);
   persistSoon();
-  setState("activeTabId", id);
+  if (!options.background) setState("activeTabId", id);
   await reloadTable(id, true);
+  return id;
 }
 
 export async function reloadTable(tabId: string, full = false) {

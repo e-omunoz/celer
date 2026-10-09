@@ -52,3 +52,50 @@ export function mcpTooltip(status: McpStatus, now: number, click: string): strin
   lines.push(click);
   return lines.join("\n");
 }
+
+/** "claude-code · WSL (Ubuntu)": who called, as the audit log has it. */
+export function clientText(entry: { client?: string | null; clientApp?: string | null }): string {
+  return [entry.clientApp, entry.client].filter(Boolean).join(" · ");
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  list_connections: "Listó las conexiones",
+  list_databases: "Listó las bases de datos",
+  list_tables: "Listó las tablas",
+  describe_table: "Describió una tabla",
+  search_objects: "Buscó tablas y columnas",
+  sample_rows: "Leyó filas de ejemplo",
+  run_query: "Consulta de lectura",
+  execute_statement: "Sentencia que modifica",
+  get_app_state: "Miró qué tienes abierto",
+  list_library: "Listó la biblioteca",
+  get_library_script: "Leyó un script de la biblioteca",
+  add_library_script: "Añadió un script a la biblioteca",
+  open_console: "Abrió una consola",
+  open_table: "Abrió una tabla",
+  open_er_diagram: "Mostró un diagrama E-R",
+  open_object: "Mostró una definición",
+};
+
+/** What an audit entry did, in Spanish, for «Actividad de la IA». */
+export function toolLabel(entry: Pick<McpAuditEntry, "tool" | "detail">): string {
+  if (entry.tool === "open_console" && entry.detail?.startsWith("[ejecutar]")) return "Abrió y ejecutó una consola";
+  return TOOL_LABELS[entry.tool] ?? entry.tool;
+}
+
+/** The tool acted in the app (opened something, wrote to the library) rather than only reading. */
+export function actsInApp(tool: string): boolean {
+  return tool.startsWith("open_") || tool === "add_library_script";
+}
+
+/** How long after the last key the user still counts as typing: an assistant's tab then opens in the background. */
+export const TYPING_MS = 4000;
+
+export function isTyping(lastKey: number, now: number, focused: boolean): boolean {
+  return focused && lastKey > 0 && now - lastKey < TYPING_MS;
+}
+
+/** The tooltip of a tab an assistant opened: «Abierto por la IA · hace 3 min (claude-code · WSL (Ubuntu))». */
+export function aiTabTitle(at: number, now: number, client?: string): string {
+  return `Abierto por la IA · ${timeAgo(at, now)}${client ? ` (${client})` : ""}`;
+}

@@ -17,8 +17,18 @@ All notable changes to Celer are documented here. The format follows
 - **The MCP audit log records the client** (#124): Windows or WSL and the distro, and the client program
   (`claude-code`…), shown in Settings › IA y MCP.
 - **MCP indicator in the status bar** (#124): «MCP · Windows + WSL (Ubuntu)» while MCP is on, with the registered
-  clients, the last call and a warning for an old registration in its tooltip; a click opens Settings › IA y MCP.
-  Hidden while MCP is off.
+  clients, the last call and a warning for an old registration in its tooltip. Hidden while MCP is off. A click shows
+  «Actividad de la IA» (#100): the last calls of the audit log, and the way to Settings › IA y MCP.
+- **The AI can act in the app** (#100): Settings › IA y MCP › "Controlar la aplicación" (off by default; sub-switches
+  "Abrir pestañas", "Escribir en la biblioteca", "Ejecutar lo que abre") adds MCP tools that work with the running
+  Celer through a local channel: `get_app_state` (windows and tabs, limited by each connection's level),
+  `list_library` / `get_library_script` / `add_library_script`, `open_console` (SQL written; run only when allowed and
+  within the connection's level, through the same read filter and masking as `run_query`), `open_table` (with filter
+  and order), `open_object` and `open_er_diagram`. With it off none of them is listed; with Celer closed they say so.
+  Every action is in the audit log. Tabs the AI opens carry a ✦ badge («Abierto por la IA · hace N min») and a short
+  highlight, a notice says what was opened and where with «Ir», and the focus is never taken: while the user types
+  the tab opens in the background, and a Celer window in the background flashes its taskbar button. Scripts the AI
+  adds to the library show the badge and their notes.
 
 ## [2.2.0] - 2026-10-09
 
