@@ -1039,13 +1039,47 @@ fn write_text_file(path: String, content: String, encoding: Option<String>) -> C
     Ok(used.to_string())
 }
 
-/// Una hoja de un libro Excel u OpenDocument, para importarla.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SheetProgress {
+    open_id: String,
+    rows: u32,
+    total: u32,
+}
+
+/// Abre una hoja de un libro Excel u OpenDocument para importarla: la deja en memoria y devuelve sus primeras filas
+/// con su tipo. Mientras lee un .xlsx avisa del progreso («sheet-progress») y `sheet_cancel(open_id)` la detiene.
 #[tauri::command]
-async fn read_spreadsheet(path: String, sheet: Option<String>) -> CmdResult<sheets::Sheet> {
-    tauri::async_runtime::spawn_blocking(move || sheets::read(&path, sheet.as_deref()))
-        .await
-        .map_err(err)?
-        .map_err(err)
+async fn sheet_open(app: tauri::AppHandle, path: String, sheet: Option<String>, open_id: String) -> CmdResult<sheets::SheetInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let last = std::cell::Cell::new(std::time::Instant::now());
+        let progress = |rows, total| {
+            if rows == total || last.get().elapsed().as_millis() > 150 {
+                last.set(std::time::Instant::now());
+                let _ = app.emit("sheet-progress", SheetProgress { open_id: open_id.clone(), rows, total });
+            }
+        };
+        sheets::open(&path, sheet.as_deref(), &open_id, &progress)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+fn sheet_cancel(open_id: String) {
+    sheets::cancel(&open_id);
+}
+
+/// Filas de una hoja abierta (posiciones de la hoja, 0 = fila 1 / columna A), con su tipo.
+#[tauri::command(async)]
+fn sheet_rows(handle: u64, row0: u32, row1: u32, col0: u32, col1: u32) -> CmdResult<Vec<Vec<sheets::SheetCell>>> {
+    sheets::rows(handle, row0, row1, col0, col1).map_err(err)
+}
+
+#[tauri::command]
+fn sheet_close(handle: u64) {
+    sheets::close(handle);
 }
 
 #[tauri::command]
@@ -1405,7 +1439,10 @@ pub fn run() {
             check_session,
             close_session,
             close_connection_sessions,
-            read_spreadsheet,
+            sheet_open,
+            sheet_cancel,
+            sheet_rows,
+            sheet_close,
             execute,
             fetch,
             close_cursor,

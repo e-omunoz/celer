@@ -1623,6 +1623,12 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .drop-zone b { color: var(--text); font-weight: 600; }
 .import-file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 9px; background: var(--panel); border: 1px solid var(--border); }
 .import-opts { display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap; margin: 12px 0; }
+.import-range input { width: 150px; font-family: var(--mono); text-transform: uppercase; }
+.import-range input.invalid { border-color: var(--danger); }
+.import-header select { max-width: 340px; }
+.import-typed { margin: -4px 0 8px; }
+.import-paste { display: flex; align-items: center; gap: 8px; margin: 10px auto 0; }
+.import-paste kbd { font-size: 10.5px; }
 .import-map { flex: 1; min-height: 120px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
 .import-map-head, .import-map-row { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(160px, 1fr) 1fr; gap: 10px; align-items: center; padding: 6px 12px; }
 .import-map-head { position: sticky; top: 0; background: var(--surface-alt); font-size: 11.5px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); }

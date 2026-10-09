@@ -2484,6 +2484,32 @@ export function insertTableRow(tabId: string, from?: number) {
   patchTab(tab.id, { inserts: [...tab.inserts, row] });
 }
 
+/**
+ * A block pasted into the table viewer (copied from Excel or another grid): each cell becomes a pending edit, and
+ * rows past the last one become new rows. `row` counts loaded rows first, then the new ones. One update for all.
+ */
+export function pasteTableCells(tabId: string, cells: { row: number; col: number; value: string | null }[]) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "table" || !cells.length) return;
+  const loaded = tab.rows.length;
+  const inserts = tab.inserts.map((line) => line.slice());
+  const edits = { ...tab.edits };
+  const deleted = new Set(tab.deleted);
+  for (const { row, col, value } of cells) {
+    if (col < 0 || col >= tab.columnsMeta.length || deleted.has(row)) continue;
+    if (row >= loaded) {
+      while (inserts.length <= row - loaded) inserts.push(tab.columnsMeta.map(() => null));
+      inserts[row - loaded][col] = value;
+      continue;
+    }
+    const original = tab.rows[row]?.[col];
+    const same = (original === null && value === null) || (original !== null && original !== undefined && value !== null && String(original) === value);
+    if (same) delete edits[`${row}:${col}`];
+    else edits[`${row}:${col}`] = value;
+  }
+  patchTab(tab.id, { edits, inserts });
+}
+
 /** Undoes pending changes: one cell's edit, or everything on a row (edits, its deletion, or the new row itself). */
 export function revertTableChange(tabId: string, row: number, col: number | null) {
   const tab = state.tabs[tabIndex(tabId)];

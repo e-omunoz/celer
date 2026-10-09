@@ -18,6 +18,21 @@ All notable changes to Celer are documented here. The format follows
   (12.50 and 12.5, true and 1, `2024-03-15T00:00:00` and `2024-03-15`). It works on the loaded rows: when a side has
   more, the view says so and offers «Cargar todo»; at most 200,000 rows per side are compared. «Fijar resultado» is
   also in the palette, and a result pinned before all its pages arrived says so.
+- **Excel import with types, header row and range** (#120): the import wizard finds the header row of a sheet
+  (skipping a title or notes above it; any row can be chosen, or none) and takes a cell range (`B3:F200`, `B3:F`,
+  `B:F`). Dates, numbers and booleans arrive with their type and are written for each column's type (a date-time into
+  a DATE keeps the date, a serial number into a date column is a date, no text round trip that breaks decimals);
+  mapping, examples, required-column warnings and the single transaction are the same as for CSV. The sheet is read
+  by the core with progress and «Cancelar», and imported in chunks, so a 100,000-row workbook never sits in the window
+  as text.
+- **Paste from Excel** (#120): Ctrl+V (or «Pegar celdas copiadas de Excel») in the import wizard imports the copied
+  cells the same way (header found, Spanish formats such as `1.234,50`, `15/03/2024` or `VERDADERO` read as numbers,
+  dates and booleans). In the table viewer, Ctrl+V pastes the block from the active cell as pending edits, with new
+  rows past the last one.
+
+### Fixed
+- Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row
+  in each batch, and dates go into Informix DATE columns as `MDY(…)` whatever DBDATE says.
 
 ### Changed
 - **Moving a result column lifts the whole column** (#109): dragging a header picks up the column with its visible

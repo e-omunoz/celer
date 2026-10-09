@@ -207,8 +207,19 @@ Doble clic en una tabla del explorador la abre.
 - **Claves foráneas**: las columnas FK llevan ↗ en la cabecera. Ctrl+clic en un valor abre la fila referenciada.
 - **Columnas**: se mueven arrastrando la cabecera, como en los resultados; la edición, la copia y la exportación siguen
   ese orden.
-- **Importar datos** (menú de la tabla): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con mapeo de columnas y
-  todo en una transacción.
+- **Importar datos** (menú de la tabla o botón de la pestaña): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con
+  mapeo de columnas y todo en una transacción.
+  - En una hoja, Celer busca la **fila de cabeceras** (salta un título o notas que haya encima); en *Cabeceras* puedes
+    elegir otra fila o ninguna. En *Rango* puedes limitar las celdas como en Excel: `B3:F200`, `B3:F` (hasta la
+    última fila), `B:F` o vacío para todo.
+  - Fechas, números y booleanos se importan **con su tipo** y se convierten al de cada columna: una fecha con hora en
+    una columna DATE se queda con la fecha y los decimales no pasan por texto.
+  - Un libro grande se lee con progreso y se puede cancelar; las filas se importan por tramos.
+  - **Pegar desde Excel**: copia las celdas en Excel y pulsa Ctrl+V en el asistente (o *Pegar celdas copiadas de
+    Excel*). Se leen como una hoja: con sus cabeceras, y `1.234,50`, `15/03/2024` o `VERDADERO` como número, fecha y
+    booleano.
+- **Pegar en la tabla**: Ctrl+V en la rejilla de una tabla pega el bloque copiado desde la celda activa como cambios
+  pendientes (las filas que sobran pasan a ser filas nuevas); se guardan con *Guardar*, como cualquier edición.
 
 Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,
 UPSERT/MERGE, DELETE, DROP y su DDL.

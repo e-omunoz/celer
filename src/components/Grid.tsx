@@ -8,6 +8,7 @@ import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNa
 import { copyText, openMenu, reducedMotion, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
+import { parseCsv, pastedValue } from "../importFormats";
 
 const HEAD_H = 30;
 const MIN_W = 56;
@@ -68,6 +69,11 @@ export interface GridProps {
   onActivate?: (row: number, col: number) => void;
   /** The column order changed (headers dragged): null when it is the query's own again. */
   onColumnOrder?: (order: ColumnOrder | null) => void;
+  /**
+   * Ctrl+V in an editable grid: the block on the clipboard (copied from Excel: tab-separated) goes into the cells
+   * from the active one rightwards and down, each value read for its column; a `row` past the rows shown is new.
+   */
+  onPaste?: (cells: { row: number; col: number; value: string | null }[]) => void;
   /** Ctrl+Enter in an editable grid (table viewer): review and save the pending changes. */
   onSave?: () => void;
   api?: (api: GridApi) => void;
@@ -1535,6 +1541,35 @@ export function DataGrid(props: GridProps) {
     }
   }
 
+  /** A block pasted into an editable grid: from the active cell, in screen order, past the last row as new rows. */
+  function onPaste(event: ClipboardEvent) {
+    if (!props.editable || !props.onPaste || editor()) return;
+    const text = event.clipboardData?.getData("text/plain") ?? "";
+    const at = focus();
+    if (!text || !at) return;
+    event.preventDefault();
+    const block = parseCsv(text.replace(/\r?\n$/, ""), "\t");
+    if (!block.length) return;
+    const order = ordered();
+    const cells: { row: number; col: number; value: string | null }[] = [];
+    let extra = 0;
+    for (let r = 0; r < block.length; r++) {
+      const screenRow = at.row + r;
+      const source = screenRow < order.length ? order[screenRow] : raw(props.rows).length + extra++;
+      for (let c = 0; c < block[r].length; c++) {
+        const screenCol = at.col + c;
+        if (screenCol >= props.columns.length) break;
+        const col = src(screenCol);
+        cells.push({ row: source, col, value: pastedValue(block[r][c], props.columns[col]?.kind ?? "text") });
+      }
+    }
+    props.onPaste(cells);
+    // The pasted block stays selected.
+    const width = Math.max(1, ...block.map((row) => row.length));
+    setAnchor(at);
+    setFocus({ row: at.row + block.length - 1, col: Math.min(props.columns.length - 1, at.col + width - 1) });
+  }
+
   // ------------------------------------------------------------ lifecycle
 
   onMount(() => {
@@ -1711,7 +1746,7 @@ export function DataGrid(props: GridProps) {
   };
 
   return (
-    <div class="grid" ref={root} tabIndex={0} onKeyDown={onKey} onContextMenu={contextMenu}>
+    <div class="grid" ref={root} tabIndex={0} onKeyDown={onKey} onContextMenu={contextMenu} onPaste={onPaste}>
       <canvas ref={canvas} class="grid-canvas" />
       <div
         class="grid-scroll"

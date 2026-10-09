@@ -1,3 +1,4 @@
+import type { SheetCell } from "./importFormats";
 import type {
   CompletionSchema,
   ConnConfig,
@@ -68,7 +69,15 @@ export interface Backend {
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */
-  readSpreadsheet(path: string, sheet?: string): Promise<{ sheets: string[]; sheet: string; rows: string[][] }>;
+  /**
+   * Opens a sheet of a workbook for the import (`openId` cancels it with sheetCancel while it reads; progress comes
+   * through onSheetProgress): the core keeps it and sends its first rows, typed; sheetRows reads more.
+   */
+  sheetOpen(path: string, sheet: string | null, openId: string): Promise<SheetInfo>;
+  sheetCancel(openId: string): Promise<void>;
+  /** Rows row0..=row1 and columns col0..=col1 (sheet positions, 0 = row 1 / column A) of an open sheet. */
+  sheetRows(handle: number, row0: number, row1: number, col0: number, col1: number): Promise<SheetCell[][]>;
+  sheetClose(handle: number): Promise<void>;
   /** Writes in `encoding` (UTF-8 by default); returns the encoding used (UTF-8 when Windows-1252 cannot hold the text). */
   writeTextFile(path: string, content: string, encoding?: string): Promise<string>;
   odbcDrivers(): Promise<string[]>;
@@ -109,6 +118,20 @@ export interface Backend {
   pickOpenPaths(filters: { name: string; extensions: string[] }[]): Promise<string[]>;
   onExportProgress(cb: (progress: { exportId: string; rows: number }) => void): Promise<() => void>;
   onDriverDownload(cb: (progress: { done: number; total: number; what?: string }) => void): Promise<() => void>;
+  onSheetProgress(cb: (progress: { openId: string; rows: number; total: number }) => void): Promise<() => void>;
+}
+
+/** A sheet opened for the import (sheets.rs): where its data is and its first rows. */
+export interface SheetInfo {
+  handle: number;
+  sheets: string[];
+  sheet: string;
+  firstRow: number;
+  firstCol: number;
+  lastRow: number;
+  lastCol: number;
+  rows: number;
+  preview: SheetCell[][];
 }
 
 export function isTauri(): boolean {
@@ -159,7 +182,10 @@ function tauriBackend(): Backend {
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),
-    readSpreadsheet: (path, sheet) => invoke("read_spreadsheet", { path, sheet: sheet ?? null }),
+    sheetOpen: (path, sheet, openId) => invoke("sheet_open", { path, sheet, openId }),
+    sheetCancel: (openId) => invoke("sheet_cancel", { openId }),
+    sheetRows: (handle, row0, row1, col0, col1) => invoke("sheet_rows", { handle, row0, row1, col0, col1 }),
+    sheetClose: (handle) => invoke("sheet_close", { handle }),
     writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),
     odbcDrivers: () => invoke("odbc_drivers"),
     odbcDsns: () => invoke("odbc_dsns"),
@@ -221,6 +247,10 @@ function tauriBackend(): Backend {
     onExportProgress: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");
       return listen<{ exportId: string; rows: number }>("export-progress", (e) => cb(e.payload));
+    },
+    onSheetProgress: async (cb) => {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<{ openId: string; rows: number; total: number }>("sheet-progress", (e) => cb(e.payload));
     },
     onDriverDownload: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");

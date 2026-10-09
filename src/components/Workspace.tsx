@@ -58,6 +58,7 @@ import {
   formatMs,
   gib,
   insertTableRow,
+  pasteTableCells,
   kindOf,
   moveTab,
   notify,
@@ -870,6 +871,7 @@ function TablePane(props: { tab: TableTab }) {
             onDelete={(list) => deleteTableRows(props.tab.id, list)}
             onClone={(row) => insertTableRow(props.tab.id, row)}
             onInsert={() => insertTableRow(props.tab.id)}
+            onPaste={(cells) => pasteTableCells(props.tab.id, cells)}
             onRevert={(row, col) => revertTableChange(props.tab.id, row, col)}
             sortState={props.tab.sort}
             onSortChange={(sort) => setTableSort(props.tab.id, sort)}
