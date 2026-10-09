@@ -14,7 +14,10 @@ Rules that hold in every step:
 - **WSL for development whenever possible**: the engines run in WSL Docker; Linux build and cargo tests run in WSL
   (`dev\wsl.ps1`). Windows is for editing, the Windows build and driving the desktop app.
 - **GitHub is the record**: plan comment per issue, one branch per package, one commit per issue `(#n)`, a comment per
-  issue with what was done and how it was tested, one PR that closes them. Nothing merged or released without the user.
+  issue with what was done and how it was tested, one PR that closes them.
+- **Merge and release on its own only as a solid product**: the owner authorised the sprint to merge its PR and publish
+  a release when every gate in `docs/review/RELEASE_GATE.md` passes on the PR's head SHA. One failed or unverifiable
+  gate: no merge, no release, a gate report on the PR and a summary to the user.
 
 ## 1. Preflight (inline)
 1. Tools on PATH (CLAUDE.md). `gh auth status`. Working tree clean; `git fetch --all --prune`.
@@ -45,13 +48,18 @@ What it does (`.claude/workflows/issue-sprint.js`):
   `dev\check-all.ps1`), draft PR with per-issue sections, "Closes #n" and engine results.
 - **Review**: runs the `macro-review` workflow on the integration branch with `since`, so every area audits the
   latest implementations first, then the rest; confirmed findings become issues and are fixed on the branch.
-- **Close**: PR updated with the review and the final engine matrix, CI and engines workflow triggered.
+- **Close**: PR updated with the review and the final engine matrix; CI, Engines and a package build (Release run
+  without a tag) triggered on the head.
+- **Gate**: a skeptical gatekeeper checks the 8 gates of `RELEASE_GATE.md` on the head SHA — waits for the Actions
+  runs, re-runs the local checks on every engine, smoke-tests the built packages — and comments the gate table on the PR.
+- **Release** (only if every gate passed): merge the PR, `dev/release.sh minor|patch` from main, follow the tag's build,
+  verify the published release and its files, comment and close the tracking issue and milestone.
 
-Resume after an interruption with `resumeFromRunId`. Run only part: `issues: [..]`, `review: false`, or the review
-alone with `/macro-review full` and `since`.
+Resume after an interruption with `resumeFromRunId`. Run only part: `issues: [..]`, `review: false`, `release: false`
+(stop at the gate report), or the review alone with `/macro-review full` and `since`.
 
 ## 3. After it returns
-1. Check the returned summary against GitHub (PR body, issue comments). Spot-check one implemented issue yourself in
-   the app on two engines.
-2. Report to the user: implemented / left out (why) / decisions needed / review results / PR link.
-3. Remove `.autocommit-pause`. Merging the PR and releasing (`dev\release.ps1`) only on the user's explicit OK.
+1. Check the returned summary against GitHub (PR body, issue comments, gate comment, release page).
+2. Report to the user: implemented / left out (why) / decisions needed / review results / gate result / release link
+   or why it was not released.
+3. Remove `.autocommit-pause`.

@@ -60,7 +60,10 @@ real/production database servers.
 ## Git and releases
 - `main` is the release branch. Work goes on a branch and reaches `main` by PR.
 - The Stop hook runs `dev/autocommit.ps1`, which commits **and pushes the current branch**. Create `.autocommit-pause` (gitignored) to hold it while work is half done; never leave work-in-progress on `main`.
-- Releases: `dev/release.ps1 -Bump patch|minor|major` bumps every manifest, moves the Unreleased notes, tags `vX.Y.Z` and pushes; the tag runs `.github/workflows/release-desktop.yml`, which publishes. A manual run of that workflow only builds artifacts. Releasing needs the user's explicit go-ahead.
+- Releases: `dev/release.ps1 -Bump patch|minor|major` bumps every manifest, moves the Unreleased notes, tags `vX.Y.Z` and pushes; the tag runs `.github/workflows/release-desktop.yml`, which publishes. A manual run of that workflow only builds artifacts. From WSL: `bash dev/release.sh patch|minor|major` (same steps).
+- Merging to `main` and releasing need the user's explicit go-ahead, with one standing exception the owner granted:
+  `/issue-sprint` merges its PR and releases on its own when every gate in `docs/review/RELEASE_GATE.md` passes on the
+  PR's head SHA. If any gate fails or cannot be verified, it stops at the gate report.
 
 ## Agent skills
 - `/issue-sprint` (`.claude/skills/issue-sprint/`): read all open issues → implement in parallel branches → test live on
