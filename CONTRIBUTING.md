@@ -63,8 +63,10 @@ CI runs the type checks and the Rust tests on every push and pull request.
   - AI features never send row data without the user's explicit permission.
 - **Code style.** Match the surrounding code. TypeScript is strict. Rust has no `unwrap()` on user-reachable paths.
   Comment the *why*, not the *what*.
-- **Commits** follow [Conventional Commits](https://www.conventionalcommits.org): `feat(grid): …`, `fix(mysql): …`,
-  `docs: …`, `chore: …`. Keep each commit focused.
+- **Commits** have a plain descriptive subject, "Area: what changed and why it matters", in English, for example
+  `Grid: keep the selection when results are refreshed` or `MySQL: read TIME values past 24 hours`. No
+  `feat:`/`fix:` prefixes: the only ones are `chore(release)` (dev/release.ps1) and `chore(auto)` (automatic commits).
+  Keep each commit focused.
 - **Changelog.** Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice.
 
 ## Releases
