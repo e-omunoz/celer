@@ -398,6 +398,36 @@ fn session_effects(sql: &str) -> Effects {
     e
 }
 
+/// Si un lote que empieza por INSERT, UPDATE, DELETE o MERGE es una sola sentencia: ninguna otra empieza fuera de
+/// paréntesis (T-SQL no pide `;` entre sentencias). Valen las partes de la propia sentencia: el SELECT o EXEC de un
+/// INSERT (con UNION y demás), el SET de un UPDATE y el UPDATE SET, INSERT y DELETE tras THEN de un MERGE.
+fn single_statement(sql: &str) -> bool {
+    let t: Vec<String> = sql_tokens(sql).iter().map(|s| s.to_uppercase()).collect();
+    let Some(first) = t.first().map(String::as_str) else { return true };
+    let (mut depth, mut sources, mut sets) = (0usize, 0, 0);
+    for i in 1..t.len() {
+        let prev = t[i - 1].as_str();
+        match t[i].as_str() {
+            "(" => depth += 1,
+            ")" => depth = depth.saturating_sub(1),
+            _ if depth > 0 => {}
+            "SELECT" | "EXEC" | "EXECUTE" if first == "INSERT" => {
+                if sources > 0 && !matches!(prev, "UNION" | "ALL" | "EXCEPT" | "INTERSECT") {
+                    return false;
+                }
+                sources += 1;
+            }
+            "INSERT" | "UPDATE" | "DELETE" if first == "MERGE" && prev == "THEN" => {}
+            "SET" if (first == "UPDATE" && sets == 0) || (first == "MERGE" && prev == "UPDATE") => sets += 1,
+            "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "SET" | "EXEC" | "EXECUTE" | "CREATE" | "ALTER" | "DROP"
+            | "DECLARE" | "PRINT" | "IF" | "WHILE" | "BEGIN" | "TRUNCATE" | "USE" | "RAISERROR" | "GRANT" | "REVOKE"
+            | "DENY" | "COMMIT" | "ROLLBACK" | "WAITFOR" | "DBCC" => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
 pub struct MssqlDriver {
     cfg: ConnConfig,
     /// `pool_key(cfg)`: las conexiones libres que puede tomar y dejar esta sesión.
@@ -1697,7 +1727,8 @@ impl Driver for MssqlDriver {
             && !self.showplan
             && !upper.contains("OUTPUT")
             && !upper.contains(';')
-            && !upper.contains("\nGO");
+            && !upper.contains("\nGO")
+            && single_statement(sql);
         self.start(sql.to_string(), dml)?;
         let sent = Instant::now();
         self.session_state |= effects.session || effects.temp;
@@ -2428,6 +2459,22 @@ mod tests {
         assert_eq!(e("USE [mi]]base];").use_only.as_deref(), Some("mi]base"));
         assert_eq!(e("  use Ventas  ").use_only.as_deref(), Some("Ventas"));
         assert_eq!(e("USE ventas; SELECT 1").use_only, None);
+    }
+
+    #[test]
+    fn dml_batches_of_one_statement() {
+        assert!(single_statement("UPDATE dbo.t SET x = 1, y = 2 WHERE id IN (SELECT id FROM u)"));
+        assert!(single_statement("INSERT INTO t (a) SELECT a FROM s UNION ALL SELECT a FROM r"));
+        assert!(single_statement("INSERT t EXEC dbo.p"));
+        assert!(single_statement("DELETE t FROM t JOIN u ON u.id = t.id -- SELECT * FROM t"));
+        assert!(single_statement("MERGE t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.a = s.a WHEN NOT MATCHED THEN INSERT (a) VALUES (s.a) WHEN NOT MATCHED BY SOURCE THEN DELETE"));
+        assert!(single_statement("UPDATE t SET note = 'SELECT 1'"));
+        // A second statement without ';' (the grid of the SELECT must not be lost).
+        assert!(!single_statement("UPDATE dbo.t SET x = 1 WHERE id = 1\nSELECT * FROM dbo.t"));
+        assert!(!single_statement("INSERT INTO t VALUES (1)\nINSERT INTO t VALUES (2)"));
+        assert!(!single_statement("INSERT INTO t SELECT 1 SELECT 2"));
+        assert!(!single_statement("DELETE FROM t\nEXEC dbo.p"));
+        assert!(!single_statement("UPDATE t SET a = 1 SET NOCOUNT ON"));
     }
 
     #[test]

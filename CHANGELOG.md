@@ -123,6 +123,7 @@ All notable changes to Celer are documented here. The format follows
 - **SQL Server**: running a statement after a big result left half read (the first page of 500) no longer waits up to 3 s for the rest of it and then reconnects, losing the session:
   - a session with nothing of its own goes on at once in its reserve connection, opened in the background while the result was open (same database, startup script applied); the old one is cut with the TDS `ATTENTION` signal and closed in the background;
   - a session with an open transaction, the manual transaction mode, `#temp` tables or `SET` options of its own keeps its connection: the rest is read, with its progress next to the running time, and "Detener" is the only way to cut it (then the session is lost).
+- **SQL Server: a SELECT after an UPDATE without `;` showed no grid**: in `UPDATE t SET … ` + new line + `SELECT * FROM t`, the batch went as a single DML statement, so the SELECT's rows were dropped and added to the affected count. Only a batch of one statement is run that way now.
 - **SQL Server**: a query whose server took more than 30 s to answer failed with a time-out from the driver; it now runs until it ends or is cancelled.
 - **Azure Synapse dedicated SQL pool**:
   - generated `SELECT`s use `TOP` (Synapse has no `OFFSET … FETCH`);

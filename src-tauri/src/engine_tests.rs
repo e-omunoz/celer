@@ -332,6 +332,9 @@ fn mssql_engine() {
     assert_eq!(scalar(d, "SELECT importe FROM dbo.celer_t WHERE id = 1"), "120.50", "el UPDATE bajo SHOWPLAN no debe ejecutarse");
     let out = d.execute("UPDATE dbo.celer_t SET importe = importe WHERE id = 1", 10).unwrap();
     assert_eq!(out.results.iter().find_map(|r| r.rows_affected), Some(1));
+    // A DML batch with a later SELECT and no ';' keeps the SELECT's grid.
+    let out = d.execute("UPDATE dbo.many SET n = n WHERE n = 1\nSELECT n FROM dbo.many WHERE n <= 5", 100).unwrap();
+    assert!(out.results.iter().any(|r| r.columns.len() == 1 && r.rows.len() == 5), "{:?}", out.results);
 
     // Cancel a running statement.
     assert_cancel(d, "WAITFOR DELAY '00:00:30'");
