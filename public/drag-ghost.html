@@ -1,0 +1,69 @@
+<!doctype html>
+<!--
+  The outline of the new window that follows the pointer while a tab is dragged out of every Celer window
+  (src-tauri/src/windows.rs, follow_with_ghost). A transparent window that never takes the mouse; the core hands
+  it the tab's title, preview and the theme's colours (window.__celerGhost, then __celerGhostUpdate).
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Celer</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+      body { font: 12.5px/1.35 var(--sans, "Inter", "Segoe UI Variable", system-ui, sans-serif); color: var(--text, #ecebe5); }
+      .frame {
+        position: absolute; inset: 6px; display: flex; flex-direction: column; border-radius: 12px;
+        border: 2px dashed var(--accent, #d97757);
+        background: color-mix(in srgb, var(--bg, #1a1918) 78%, transparent);
+        box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+        animation: in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .bar { display: flex; align-items: flex-end; height: 32px; padding: 0 10px; border-bottom: 1px solid color-mix(in srgb, var(--border, #47443e) 80%, transparent); }
+      .tab {
+        position: relative; display: flex; align-items: center; gap: 6px; max-width: 200px; height: 26px; margin-left: 88px; padding: 0 10px;
+        border-radius: 7px 7px 0 0; background: var(--popover, #2f2e2b); border: 1px solid var(--border, #47443e); border-bottom: 0;
+        font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .tab::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--strip, var(--accent, #d97757)); }
+      .tab span { overflow: hidden; text-overflow: ellipsis; }
+      .body { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; min-height: 0; }
+      pre {
+        margin: 0; padding: 6px 8px; border-radius: 6px; max-height: 64px; overflow: hidden; white-space: pre;
+        background: color-mix(in srgb, var(--popover, #2f2e2b) 85%, transparent); color: var(--muted, #a9a69c);
+        font: 10.5px/1.45 var(--mono, "JetBrains Mono", Consolas, monospace);
+      }
+      pre:empty { display: none; }
+      .label { margin-top: auto; align-self: center; padding: 5px 12px; border-radius: 999px; background: var(--accent, #d97757); color: var(--accent-fg, #fff); font-weight: 600; font-size: 12px; }
+      @keyframes in { from { opacity: 0; transform: scale(0.96); } }
+      @media (prefers-reduced-motion: reduce) { .frame { animation: none; } }
+      :root[data-motion="reduce"] .frame { animation: none; }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <div class="bar"><div class="tab"><span id="title"></span></div></div>
+      <div class="body">
+        <pre id="preview"></pre>
+        <div class="label" id="label">Soltar para abrir en una ventana nueva</div>
+      </div>
+    </div>
+    <script>
+      // Only plain values are taken (text set as text, colours as custom properties): nothing here runs or loads.
+      const VARS = ["bg", "text", "muted", "border", "popover", "accent", "accent-fg", "strip", "sans", "mono"];
+      function apply(data) {
+        if (!data || typeof data !== "object") return;
+        const root = document.documentElement;
+        for (const name of VARS) {
+          const value = data.colors && data.colors[name];
+          if (typeof value === "string" && value.length < 200 && !/url\(|[;{}]/i.test(value)) root.style.setProperty(`--${name}`, value);
+        }
+        if (data.reduce) root.dataset.motion = "reduce";
+        document.getElementById("title").textContent = String(data.title ?? "");
+        document.getElementById("preview").textContent = String(data.preview ?? "");
+        if (data.label) document.getElementById("label").textContent = String(data.label);
+      }
+      window.__celerGhostUpdate = apply;
+      apply(window.__celerGhost);
+    </script>
+  </body>
+</html>
