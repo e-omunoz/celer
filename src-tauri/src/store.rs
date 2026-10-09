@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::model::ConnConfig;
 
 const HISTORY_MAX: usize = 5000;
+/// history.jsonl is compacted past this size, down to about half of it, so the next compaction is far away.
+const HISTORY_COMPACT_AT: u64 = 8 * 1024 * 1024;
+const HISTORY_KEEP_BYTES: usize = 4 * 1024 * 1024;
+/// The SQL of one entry is kept up to this many characters (a pasted dump would otherwise fill the history).
+const HISTORY_SQL_MAX: usize = 100_000;
 
 /// Servicio del almacén de credenciales. Una compilación de depuración con `CELER_DATA_DIR` escribe en
 /// "Celer-dev" y solo lee "Celer" como alternativa: las pruebas nunca cambian las contraseñas de una copia
@@ -57,6 +62,8 @@ pub(crate) fn mark_deleted(id: &str, deleted: bool) {
 pub struct Store {
     pub dir: PathBuf,
     conns_file: parking_lot::Mutex<ConnsFile>,
+    /// One writer of history.jsonl at a time (windows append from their own threads).
+    history_lock: parking_lot::Mutex<()>,
 }
 
 /// What the last read of connections.json left behind.
@@ -86,7 +93,7 @@ pub struct HistoryEntry {
 impl Store {
     pub fn new(dir: PathBuf) -> Store {
         let _ = fs::create_dir_all(&dir);
-        Store { dir, conns_file: Default::default() }
+        Store { dir, conns_file: Default::default(), history_lock: Default::default() }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -260,23 +267,35 @@ impl Store {
     }
 
     pub fn add_history(&self, e: &HistoryEntry) -> Result<()> {
+        let _lock = self.history_lock.lock();
         let path = self.path("history.jsonl");
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)?;
-        writeln!(f, "{}", serde_json::to_string(e)?)?;
-        // Compactación ocasional para mantener el fichero acotado.
-        if f.metadata().map(|m| m.len()).unwrap_or(0) > 8 * 1024 * 1024 {
+        let line = match e.sql.char_indices().nth(HISTORY_SQL_MAX) {
+            Some((cut, _)) => {
+                let sql = format!("{}\n-- … (recortado en el historial)", &e.sql[..cut]);
+                serde_json::to_string(&HistoryEntry { sql, ..e.clone() })?
+            }
+            None => serde_json::to_string(e)?,
+        };
+        writeln!(f, "{line}")?;
+        // Compactación ocasional para mantener el fichero acotado: por tamaño, no solo por número, hasta la mitad.
+        if f.metadata().map(|m| m.len()).unwrap_or(0) > HISTORY_COMPACT_AT {
             drop(f);
-            let mut all = self.history_all();
-            let skip = all.len().saturating_sub(HISTORY_MAX);
-            all.drain(..skip);
-            let body: String = all
+            let lines: Vec<String> = self.history_all().iter().filter_map(|e| serde_json::to_string(e).ok()).collect();
+            let mut bytes = 0;
+            let keep = lines
                 .iter()
-                .filter_map(|e| serde_json::to_string(e).ok())
-                .map(|s| s + "\n")
-                .collect();
+                .rev()
+                .take(HISTORY_MAX)
+                .take_while(|l| {
+                    bytes += l.len() + 1;
+                    bytes <= HISTORY_KEEP_BYTES
+                })
+                .count();
+            let body: String = lines[lines.len() - keep..].iter().map(|l| format!("{l}\n")).collect();
             self.write_atomic("history.jsonl", &body)?;
         }
         Ok(())
@@ -308,6 +327,7 @@ impl Store {
     }
 
     pub fn clear_history(&self) -> Result<()> {
+        let _lock = self.history_lock.lock();
         let _ = fs::remove_file(self.path("history.jsonl"));
         Ok(())
     }
@@ -330,6 +350,45 @@ mod tests {
         std::fs::write(dir.join("ok.json"), "{\"a\":1}").unwrap();
         assert_eq!(store.load_json("ok.json").unwrap()["a"], 1);
         assert!(store.load_json("missing.json").unwrap().is_null());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_compacts_by_size() {
+        let dir = std::env::temp_dir().join(format!("celer-store-history-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let entry = |sql: String| super::HistoryEntry {
+            sql,
+            conn_id: "c".into(),
+            conn_name: "C".into(),
+            database: String::new(),
+            at: 0,
+            elapsed_ms: 0,
+            ok: true,
+            rows: None,
+        };
+        // 20 KB statements: 5000 of them are far past the threshold, so the count cap alone would not help.
+        let file = dir.join("history.jsonl");
+        let mut compactions = 0;
+        let mut last = 0;
+        for i in 0..1000 {
+            store.add_history(&entry(format!("SELECT {i} -- {}", "x".repeat(20_000)))).unwrap();
+            let len = std::fs::metadata(&file).unwrap().len();
+            if len < last {
+                compactions += 1;
+                assert!(len <= super::HISTORY_KEEP_BYTES as u64, "{len}");
+            }
+            last = len;
+        }
+        // ~20 MB written: compacted twice or so, not on every statement once past 8 MB.
+        assert!((1..=5).contains(&compactions), "{compactions}");
+        let newest = store.history("", 1);
+        assert!(newest[0].sql.starts_with("SELECT 999 "));
+        // A huge statement is cut.
+        store.add_history(&entry("y".repeat(300_000))).unwrap();
+        let cut = &store.history("", 1)[0].sql;
+        assert!(cut.len() < 100_100 && cut.ends_with("(recortado en el historial)"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -757,12 +757,13 @@ async fn run_export(
     .await
 }
 
-#[tauri::command]
+// Off the main thread: both read history.jsonl, and adding may compact it.
+#[tauri::command(async)]
 fn add_history(state: State<'_, Arc<AppState>>, entry: HistoryEntry) -> CmdResult<()> {
     state.store.add_history(&entry).map_err(err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_history(state: State<'_, Arc<AppState>>, filter: String, limit: usize) -> Vec<HistoryEntry> {
     state.store.history(&filter, limit)
 }
