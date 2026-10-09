@@ -273,6 +273,34 @@ fn mssql_engine() {
     assert_eq!(ix.detail.as_deref(), Some("(alta, nombre) · nonclustered"));
     assert!(indexes.iter().any(|n| n.detail.as_deref() == Some("(id) · PK · clustered")), "{:?}", indexes.iter().map(|n| &n.detail).collect::<Vec<_>>());
     assert_eq!(fk.detail.as_deref(), Some("parent_id → dbo.celer_p(id)"));
+    // Identity seed, CHECK, PERSISTED, INCLUDE, filters and other kinds of index, as SQL Server has them.
+    d.execute("IF OBJECT_ID('dbo.ddl_f') IS NOT NULL DROP TABLE dbo.ddl_f;
+               CREATE TABLE dbo.ddl_f (id int IDENTITY(1000,5) PRIMARY KEY, q int CONSTRAINT ck_ddl_f_q CHECK (q > 0), s nvarchar(10), doble AS (q * 2) PERSISTED, doc xml, g geometry);
+               CREATE INDEX ix_ddl_f ON dbo.ddl_f (q) INCLUDE (s) WHERE q > 10;
+               CREATE PRIMARY XML INDEX px_ddl_f ON dbo.ddl_f (doc);
+               CREATE XML INDEX sx_ddl_f ON dbo.ddl_f (doc) USING XML INDEX px_ddl_f FOR PATH;
+               CREATE SPATIAL INDEX gx_ddl_f ON dbo.ddl_f (g) WITH (BOUNDING_BOX = (0, 0, 100, 100));", 10).unwrap();
+    let f_obj = ObjectRef { database: "celer_test".into(), schema: "dbo".into(), name: "ddl_f".into(), kind: "table".into() };
+    let ddl = d.ddl(&f_obj).unwrap();
+    for want in [
+        "[id] int IDENTITY(1000,5) NOT NULL",
+        "[doble] AS ([q]*(2)) PERSISTED",
+        "CONSTRAINT [ck_ddl_f_q] CHECK ([q]>(0))",
+        "CREATE NONCLUSTERED INDEX [ix_ddl_f] ON [celer_test].[dbo].[ddl_f] ([q]) INCLUDE ([s]) WHERE ([q]>(10));",
+        "CREATE PRIMARY XML INDEX [px_ddl_f] ON [celer_test].[dbo].[ddl_f] ([doc]);",
+        "CREATE XML INDEX [sx_ddl_f] ON [celer_test].[dbo].[ddl_f] ([doc]) USING XML INDEX [px_ddl_f] FOR PATH;",
+        "CREATE SPATIAL INDEX [gx_ddl_f] ON [celer_test].[dbo].[ddl_f] ([g]) USING GEOMETRY_",
+        " WITH (BOUNDING_BOX = (0, 0, 100, 100));",
+    ] {
+        assert!(ddl.contains(want), "{want}\n{ddl}");
+    }
+    d.execute("IF OBJECT_ID('dbo.ddl_c') IS NOT NULL DROP TABLE dbo.ddl_c; CREATE TABLE dbo.ddl_c (a int, b int); CREATE NONCLUSTERED COLUMNSTORE INDEX cs_ddl_c ON dbo.ddl_c (b, a)", 10).unwrap();
+    let c_ddl = d.ddl(&ObjectRef { database: "celer_test".into(), schema: "dbo".into(), name: "ddl_c".into(), kind: "table".into() }).unwrap();
+    assert!(c_ddl.contains("CREATE NONCLUSTERED COLUMNSTORE INDEX [cs_ddl_c] ON [celer_test].[dbo].[ddl_c] ("), "{c_ddl}");
+    // It runs back as it is (under another name, GO-free since every index is its own statement).
+    let copy = ddl.replace("ddl_f", "ddl_f2").replace("[PK__", "[PK2__");
+    d.execute("IF OBJECT_ID('dbo.ddl_f2') IS NOT NULL DROP TABLE dbo.ddl_f2", 10).unwrap();
+    d.execute(&copy, 10).unwrap_or_else(|e| panic!("{e}\n{copy}"));
 
     // Paging through a cursor, closing it half way.
     d.execute("IF OBJECT_ID('dbo.many') IS NOT NULL DROP TABLE dbo.many; SELECT TOP 3000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n INTO dbo.many FROM sys.all_objects a CROSS JOIN sys.all_objects b", 10).unwrap();

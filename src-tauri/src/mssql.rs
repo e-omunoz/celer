@@ -1008,6 +1008,7 @@ impl MssqlDriver {
                     unique: true,
                     unique_constraint: !primary,
                     columns,
+                    ..Default::default()
                 }
             })
             .collect())
@@ -1027,17 +1028,27 @@ impl MssqlDriver {
         format!("OBJECT_ID({})", ql(&self.qualified_name(o)))
     }
 
+    /// Columnas de una tabla: nombre, tipo, max_length, precision, scale, nullable, identity, pk, default, calculada y
+    /// su expresión; en SQL Server también semilla e incremento del IDENTITY y si la calculada es PERSISTED.
     fn columns_query(&self, o: &ObjectRef) -> String {
         let db = qi(&o.database);
+        let (identity, identity_join) = if self.engine == Engine::SqlServer {
+            (
+                "CONVERT(varchar(40), idc.seed_value), CONVERT(varchar(40), idc.increment_value), cc.is_persisted",
+                format!("LEFT JOIN {db}.sys.identity_columns idc ON idc.object_id = c.object_id AND idc.column_id = c.column_id"),
+            )
+        } else {
+            ("NULL, NULL, 0", String::new())
+        };
         format!(
             "SELECT c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, \
              CASE WHEN EXISTS(SELECT 1 FROM {db}.sys.index_columns ic JOIN {db}.sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id \
                WHERE i.is_primary_key = 1 AND ic.object_id = c.object_id AND ic.column_id = c.column_id) THEN 1 ELSE 0 END, \
-             dc.definition, c.is_computed, cc.definition \
+             dc.definition, c.is_computed, cc.definition, {identity} \
              FROM {db}.sys.columns c JOIN {db}.sys.types ty ON ty.user_type_id = c.user_type_id \
              LEFT JOIN {db}.sys.default_constraints dc ON dc.object_id = c.default_object_id \
              LEFT JOIN {db}.sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id \
-             WHERE c.object_id = {} ORDER BY c.column_id",
+             {identity_join} WHERE c.object_id = {} ORDER BY c.column_id",
             self.obj_id(o)
         )
     }
@@ -1088,21 +1099,66 @@ impl MssqlDriver {
         }
         let db = qi(&o.database);
         let oid = self.obj_id(o);
+        let sql_server = self.engine == Engine::SqlServer;
+        let filter = if sql_server { "i.filter_definition" } else { "NULL" };
         let idx = self.query_rows(&format!(
-            "SELECT i.index_id, i.name, i.type, i.type_desc, i.is_primary_key, i.is_unique, i.is_unique_constraint \
+            "SELECT i.index_id, i.name, i.type, i.type_desc, i.is_primary_key, i.is_unique, i.is_unique_constraint, {filter} \
              FROM {db}.sys.indexes i WHERE i.object_id = {oid} ORDER BY i.is_primary_key DESC, i.name"
         ))?;
         let mut key_cols = self.index_columns(o, true)?;
+        // SQL Server: columnas INCLUDE (y las de un columnar), y lo propio de los índices XML secundarios y espaciales.
+        let mut included = HashMap::new();
+        let mut suffixes: HashMap<i64, String> = HashMap::new();
+        if sql_server {
+            let rows = self.query_rows(&format!(
+                "SELECT ic.index_id, c.name FROM {db}.sys.index_columns ic \
+                 JOIN {db}.sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
+                 WHERE ic.object_id = {oid} AND ic.is_included_column = 1 ORDER BY ic.index_id, ic.index_column_id"
+            ))?;
+            included = column_lists(rows.iter().map(|r| (cell_i64(&r[0]), qi(&cell_str(&r[1])))));
+            if idx.iter().any(|r| cell_i64(&r[2]) == 3) {
+                let rows = self.query_rows(&format!(
+                    "SELECT x.index_id, x.secondary_type_desc, p.name FROM {db}.sys.xml_indexes x \
+                     JOIN {db}.sys.indexes p ON p.object_id = x.object_id AND p.index_id = x.using_xml_index_id \
+                     WHERE x.object_id = {oid}"
+                ))?;
+                for r in rows {
+                    suffixes.insert(cell_i64(&r[0]), format!(" USING XML INDEX {} FOR {}", qi(&cell_str(&r[2])), cell_str(&r[1])));
+                }
+            }
+            if idx.iter().any(|r| cell_i64(&r[2]) == 4) {
+                let rows = self.query_rows(&format!(
+                    "SELECT t.index_id, t.tessellation_scheme, t.bounding_box_xmin, t.bounding_box_ymin, t.bounding_box_xmax, \
+                     t.bounding_box_ymax FROM {db}.sys.spatial_index_tessellations t WHERE t.object_id = {oid}"
+                ))?;
+                for r in rows {
+                    let scheme = cell_str(&r[1]);
+                    let mut suffix = format!(" USING {scheme}");
+                    // Un índice sobre geometry necesita su caja; uno sobre geography no la tiene.
+                    if scheme.starts_with("GEOMETRY") {
+                        let b: Vec<String> = r[2..6].iter().map(cell_str).collect();
+                        suffix.push_str(&format!(" WITH (BOUNDING_BOX = ({}))", b.join(", ")));
+                    }
+                    suffixes.insert(cell_i64(&r[0]), suffix);
+                }
+            }
+        }
         let mut indexes: Vec<IndexDef> = idx
             .iter()
-            .map(|r| IndexDef {
-                name: cell_str(&r[1]),
-                type_code: cell_i64(&r[2]),
-                type_desc: cell_str(&r[3]),
-                primary: cell_i64(&r[4]) == 1,
-                unique: cell_i64(&r[5]) == 1,
-                unique_constraint: cell_i64(&r[6]) == 1,
-                columns: key_cols.remove(&cell_i64(&r[0])).unwrap_or_default(),
+            .map(|r| {
+                let id = cell_i64(&r[0]);
+                IndexDef {
+                    name: cell_str(&r[1]),
+                    type_code: cell_i64(&r[2]),
+                    type_desc: cell_str(&r[3]),
+                    primary: cell_i64(&r[4]) == 1,
+                    unique: cell_i64(&r[5]) == 1,
+                    unique_constraint: cell_i64(&r[6]) == 1,
+                    columns: key_cols.remove(&id).unwrap_or_default(),
+                    included: included.remove(&id).unwrap_or_default(),
+                    filter: cell_str(&r[7]),
+                    suffix: suffixes.remove(&id).unwrap_or_default(),
+                }
             })
             .collect();
         // Synapse: las claves NOT ENFORCED que sys.indexes no tenga (sin columnas no se pueden escribir).
@@ -1139,10 +1195,21 @@ impl MssqlDriver {
                 }
             })
             .collect();
+        let checks = if sql_server {
+            self.query_rows(&format!(
+                "SELECT name, definition FROM {db}.sys.check_constraints WHERE parent_object_id = {oid} ORDER BY name"
+            ))?
+            .iter()
+            .map(|r| (cell_str(&r[0]), cell_str(&r[1])))
+            .collect()
+        } else {
+            Vec::new()
+        };
         let mut parts = TableParts {
             columns,
             indexes,
             foreign_keys,
+            checks,
             ..Default::default()
         };
         if self.engine == Engine::Synapse {
@@ -1190,7 +1257,9 @@ fn quoted_list(rows: &[Vec<Cell>]) -> String {
     rows.iter().map(|r| qi(&cell_str(&r[0]))).collect::<Vec<_>>().join(", ")
 }
 
-/// Un índice de la tabla (también el montón, `type_code` 0), con sus columnas clave ya escritas.
+/// Un índice de la tabla (también el montón, `type_code` 0), con sus columnas clave ya escritas. `type_code`: 1
+/// agrupado, 2 no agrupado, 3 XML, 4 espacial, 5 columnar agrupado, 6 columnar no agrupado.
+#[derive(Default)]
 struct IndexDef {
     name: String,
     type_code: i64,
@@ -1199,6 +1268,11 @@ struct IndexDef {
     unique: bool,
     unique_constraint: bool,
     columns: String,
+    /// SQL Server: las columnas INCLUDE (las de un columnar no agrupado), el filtro (`([q]>(10))`) y lo que va tras
+    /// las columnas de un índice XML secundario o espacial (`USING XML INDEX … FOR PATH`, `USING GEOMETRY_GRID …`).
+    included: String,
+    filter: String,
+    suffix: String,
 }
 
 struct ForeignKeyDef {
@@ -1218,6 +1292,8 @@ struct TableParts {
     columns: Vec<Vec<Cell>>,
     indexes: Vec<IndexDef>,
     foreign_keys: Vec<ForeignKeyDef>,
+    /// SQL Server: las restricciones CHECK, nombre y definición (`([q]>(0))`).
+    checks: Vec<(String, String)>,
     /// Synapse dedicated: HASH, ROUND_ROBIN o REPLICATE, las columnas del HASH y las del ORDER del índice columnar.
     distribution: String,
     distribution_columns: String,
@@ -1227,8 +1303,10 @@ struct TableParts {
 /// Definición de una columna para CREATE TABLE. Fabric Warehouse no admite semilla en IDENTITY ni DEFAULT.
 fn column_ddl(r: &[Cell], engine: Engine) -> String {
     let name = cell_str(&r[0]);
+    let extra = |i: usize| r.get(i).map(cell_str).filter(|s| !s.is_empty());
     if cell_i64(&r[9]) == 1 {
-        return format!("    {} AS {}", qi(&name), cell_str(&r[10]));
+        let persisted = if r.get(13).map(cell_i64) == Some(1) { " PERSISTED" } else { "" };
+        return format!("    {} AS {}{persisted}", qi(&name), cell_str(&r[10]));
     }
     let ty = mssql_type(
         &cell_str(&r[1]),
@@ -1238,11 +1316,12 @@ fn column_ddl(r: &[Cell], engine: Engine) -> String {
     );
     let mut l = format!("    {} {}", qi(&name), ty);
     if cell_i64(&r[6]) == 1 {
-        l.push_str(if engine == Engine::Warehouse {
-            " IDENTITY"
+        if engine == Engine::Warehouse {
+            l.push_str(" IDENTITY");
         } else {
-            " IDENTITY(1,1)"
-        });
+            let (seed, step) = (extra(11).unwrap_or_else(|| "1".into()), extra(12).unwrap_or_else(|| "1".into()));
+            l.push_str(&format!(" IDENTITY({seed},{step})"));
+        }
     }
     l.push_str(if cell_i64(&r[5]) == 1 {
         " NULL"
@@ -1291,20 +1370,29 @@ fn build_table_ddl(engine: Engine, table: &str, t: &TableParts) -> String {
         }
         lines.push(l);
     }
+    for (name, definition) in &t.checks {
+        lines.push(format!("    CONSTRAINT {} CHECK {definition}", qi(name)));
+    }
     let mut out = format!("CREATE TABLE {} (\n{}\n);\n", table, lines.join(",\n"));
     for i in indexes.iter().filter(|i| !i.primary) {
-        let unique = if i.unique { "UNIQUE " } else { "" };
-        let kind = if i.type_desc.starts_with("CLUSTERED") {
-            "CLUSTERED "
-        } else {
-            "NONCLUSTERED "
+        let name = qi(&i.name);
+        let statement = match i.type_code {
+            3 if i.suffix.is_empty() => format!("CREATE PRIMARY XML INDEX {name} ON {table} ({})", i.columns),
+            3 | 4 => format!("CREATE {}INDEX {name} ON {table} ({}){}", if i.type_code == 3 { "XML " } else { "SPATIAL " }, i.columns, i.suffix),
+            5 => format!("CREATE CLUSTERED COLUMNSTORE INDEX {name} ON {table}"),
+            6 => format!("CREATE NONCLUSTERED COLUMNSTORE INDEX {name} ON {table} ({})", i.included),
+            _ => {
+                let unique = if i.unique { "UNIQUE " } else { "" };
+                let kind = if i.type_desc.starts_with("CLUSTERED") { "CLUSTERED " } else { "NONCLUSTERED " };
+                let mut s = format!("CREATE {unique}{kind}INDEX {name} ON {table} ({})", i.columns);
+                if !i.included.is_empty() {
+                    s.push_str(&format!(" INCLUDE ({})", i.included));
+                }
+                s
+            }
         };
-        out.push_str(&format!(
-            "\nCREATE {unique}{kind}INDEX {} ON {} ({});",
-            qi(&i.name),
-            table,
-            i.columns
-        ));
+        let filter = if i.filter.is_empty() { String::new() } else { format!(" WHERE {}", i.filter) };
+        out.push_str(&format!("\n{statement}{filter};"));
     }
     out
 }
@@ -2620,6 +2708,7 @@ mod tests {
             unique,
             unique_constraint: unique && !primary && type_code == 2,
             columns: columns.into(),
+            ..Default::default()
         }
     }
 
@@ -2754,6 +2843,40 @@ mod tests {
     }
 
     #[test]
+    fn table_ddl_keeps_identity_checks_and_index_kinds() {
+        let mut id = col("id", "int", 4, false, true, None);
+        id.extend([Cell::Text("1000".into()), Cell::Text("5".into()), Cell::Bool(false)]);
+        let mut total = col("total", "int", 4, true, false, None);
+        total[9] = Cell::Bool(true);
+        total[10] = Cell::Text("([q]*(2))".into());
+        total.extend([Cell::Null, Cell::Null, Cell::Bool(true)]);
+        let parts = TableParts {
+            columns: vec![id, col("q", "int", 4, true, false, None), col("s", "nvarchar", 20, true, false, None), total],
+            indexes: vec![
+                index("PK_f", 1, "CLUSTERED", true, true, "[id]"),
+                IndexDef { included: "[s]".into(), filter: "([q]>(10))".into(), ..index("ix", 2, "NONCLUSTERED", false, false, "[q]") },
+                IndexDef { included: "[q], [s]".into(), ..index("ncci", 6, "NONCLUSTERED COLUMNSTORE", false, false, "") },
+                index("px", 3, "XML", false, false, "[doc]"),
+                IndexDef { suffix: " USING XML INDEX [px] FOR PATH".into(), ..index("sx", 3, "XML", false, false, "[doc]") },
+                IndexDef { suffix: " USING GEOMETRY_GRID WITH (BOUNDING_BOX = (0, 0, 100, 100))".into(), ..index("gx", 4, "SPATIAL", false, false, "[g]") },
+            ],
+            checks: vec![("CK_f_q".into(), "([q]>(0))".into())],
+            ..Default::default()
+        };
+        let ddl = build_table_ddl(Engine::SqlServer, "[dbo].[f]", &parts);
+        assert!(ddl.contains("    [id] int IDENTITY(1000,5) NOT NULL,"), "{ddl}");
+        assert!(ddl.contains("    [total] AS ([q]*(2)) PERSISTED,"), "{ddl}");
+        assert!(ddl.contains("    CONSTRAINT [CK_f_q] CHECK ([q]>(0))\n);"), "{ddl}");
+        assert!(ddl.contains("\nCREATE NONCLUSTERED INDEX [ix] ON [dbo].[f] ([q]) INCLUDE ([s]) WHERE ([q]>(10));"), "{ddl}");
+        assert!(ddl.contains("\nCREATE NONCLUSTERED COLUMNSTORE INDEX [ncci] ON [dbo].[f] ([q], [s]);"), "{ddl}");
+        assert!(ddl.contains("\nCREATE PRIMARY XML INDEX [px] ON [dbo].[f] ([doc]);"), "{ddl}");
+        assert!(ddl.contains("\nCREATE XML INDEX [sx] ON [dbo].[f] ([doc]) USING XML INDEX [px] FOR PATH;"), "{ddl}");
+        assert!(ddl.contains("\nCREATE SPATIAL INDEX [gx] ON [dbo].[f] ([g]) USING GEOMETRY_GRID WITH (BOUNDING_BOX = (0, 0, 100, 100));"), "{ddl}");
+        let cci = TableParts { columns: vec![col("a", "int", 4, true, false, None)], indexes: vec![index("cci", 5, "CLUSTERED COLUMNSTORE", false, false, "")], ..Default::default() };
+        assert!(build_table_ddl(Engine::SqlServer, "[dbo].[c]", &cci).ends_with("\nCREATE CLUSTERED COLUMNSTORE INDEX [cci] ON [dbo].[c];"));
+    }
+
+    #[test]
     fn engine_from_the_edition() {
         assert_eq!(Engine::detect(3, "Microsoft SQL Server 2022 (RTM) - 16.0.1000.6"), Engine::SqlServer);
         assert_eq!(Engine::detect(5, "Microsoft SQL Azure (RTM) - 12.0.2000.8"), Engine::SqlServer);
@@ -2789,6 +2912,7 @@ mod tests {
             distribution: distribution.into(),
             distribution_columns: distribution_columns.into(),
             order: order.into(),
+            ..Default::default()
         }
     }
 
