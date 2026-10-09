@@ -6,6 +6,15 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
+  «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
+  `jdbc:informix-sqli` without a port, SQL Server URLs with nothing after `//` (`serverName`, `instanceName`,
+  `portNumber`, `databaseName`) and multi-host PostgreSQL/MySQL URLs (the first server, and a note about the others)
+  come through. An empty host or database in the tool no longer hides the one in the URL, DBeaver's driver properties
+  and SSL settings apply to every engine (not only Informix), `jdbc:odbc:<DSN>` becomes an ODBC connection, and the list
+  says what was left out. dbvis.xml is read by Celer's own XML reader.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

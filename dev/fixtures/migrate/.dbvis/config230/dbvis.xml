@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sample DbVisualizer configuration for the migration assistant: one connection per engine of dev/wsl/compose.yml.
+     CELER_MIGRATE_HOME=dev/fixtures/migrate (debug builds) points Celer at it instead of ~/.dbvis. -->
+<DbVisualizer>
+  <Version>23.2</Version>
+  <Databases>
+    <Folder name="Celer">
+      <Database id="1">
+        <Alias>PG variables</Alias>
+        <Url></Url>
+        <Driver>PostgreSQL</Driver>
+        <Userid>celer</Userid>
+        <Profile>auto</Profile>
+        <Type>postgresql</Type>
+        <Properties>
+          <Property key="dbvis.ConnectionModeMigrated">true</Property>
+          <Property key="ApplicationName">Celer desde DbVisualizer</Property>
+        </Properties>
+        <UrlVariables>
+          <Driver>PostgreSQL</Driver>
+          <UrlVariable UrlVariableName="Server">localhost</UrlVariable>
+          <UrlVariable UrlVariableName="Port">15432</UrlVariable>
+          <UrlVariable UrlVariableName="Database">celer</UrlVariable>
+        </UrlVariables>
+      </Database>
+      <Database id="2">
+        <Alias>MySQL URL</Alias>
+        <Url>jdbc:mysql://localhost:33306/celer?useSSL=false</Url>
+        <Driver>MySQL 8</Driver>
+        <Userid>celer</Userid>
+        <Type>mysql</Type>
+        <UrlVariables>
+          <Driver>MySQL 8</Driver>
+          <UrlVariable UrlVariableName="Server"></UrlVariable>
+          <UrlVariable UrlVariableName="Port"></UrlVariable>
+          <UrlVariable UrlVariableName="Database"></UrlVariable>
+        </UrlVariables>
+      </Database>
+      <Database id="3">
+        <Alias>MariaDB</Alias>
+        <Url>jdbc:mariadb://localhost:33307/celer</Url>
+        <Driver>MariaDB</Driver>
+        <Userid>celer</Userid>
+        <Type>mariadb</Type>
+      </Database>
+      <Folder name="SQL Server">
+        <Database id="4">
+          <Alias>SQL Server propiedades</Alias>
+          <Url>jdbc:sqlserver://;serverName=localhost;portNumber=1433;databaseName=celerdemo</Url>
+          <Driver>SQL Server (Microsoft JDBC Driver)</Driver>
+          <Userid>sa</Userid>
+          <Type>sqlserver</Type>
+          <Properties>
+            <Property key="encrypt">true</Property>
+            <Property key="trustServerCertificate">true</Property>
+          </Properties>
+        </Database>
+      </Folder>
+      <Database id="5">
+        <Alias>Informix SQLI</Alias>
+        <Url>jdbc:informix-sqli://localhost:9088/celerdemo:INFORMIXSERVER=informix</Url>
+        <Driver>Informix</Driver>
+        <Userid>informix</Userid>
+        <Type>informix</Type>
+        <UrlVariables>
+          <Driver>Informix</Driver>
+          <UrlVariable UrlVariableName="Server">localhost</UrlVariable>
+          <UrlVariable UrlVariableName="Port">9088</UrlVariable>
+          <UrlVariable UrlVariableName="Database">celerdemo</UrlVariable>
+          <UrlVariable UrlVariableName="InformixServer">informix</UrlVariable>
+        </UrlVariables>
+      </Database>
+      <Database id="6">
+        <Alias>Informix DRDA</Alias>
+        <Url>jdbc:ids://localhost:9089/celerdemo</Url>
+        <Driver>Informix (DRDA)</Driver>
+        <Userid>informix</Userid>
+        <Type>informix</Type>
+      </Database>
+      <Database id="7">
+        <Alias>SQLite memoria</Alias>
+        <Url>jdbc:sqlite::memory:</Url>
+        <Driver>SQLite</Driver>
+        <Type>sqlite</Type>
+      </Database>
+      <Database id="8">
+        <Alias>ODBC CelerPG</Alias>
+        <Url>jdbc:odbc:CelerPG</Url>
+        <Driver>JDBC-ODBC Bridge</Driver>
+        <Userid>celer</Userid>
+        <Type>generic</Type>
+      </Database>
+    </Folder>
+  </Databases>
+</DbVisualizer>

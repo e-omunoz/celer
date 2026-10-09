@@ -25,6 +25,8 @@ export interface Candidate {
   sourceId: string;
   /** The tool says it keeps a password for this connection. */
   savedPassword: boolean;
+  /** What the import left out (other hosts of a multi-host URL, properties Celer does not use…), for the list. */
+  notes: string[];
 }
 
 const TOOL_LABEL = { dbeaver: "DBeaver", dbvisualizer: "DbVisualizer" } as const;
@@ -33,29 +35,17 @@ export const toolLabel = (tool: MigrationSource["tool"]) => TOOL_LABEL[tool];
 // ---------------------------------------------------------------- shared helpers
 
 /**
- * host, port, database from a JDBC URL (jdbc:postgresql://h:p/db, jdbc:sqlserver://h:p;databaseName=db, jdbc:sqlite:path).
- * Informix (jdbc:informix-sqli://h:p/db:informixserver=x;prop=v…): the server name, and the other properties as
- * Celer's "Parámetros extra" (`params`; user and password are not taken from the URL).
+ * host, port, database, file, instance and extra parameters of a JDBC URL: a thin view of `parseJdbc` (which reads
+ * everything else too), {} when Celer does not understand the URL.
  */
 export function parseJdbcUrl(url: string): { host?: string; port?: number; database?: string; file?: string; instance?: string; params?: string } {
-  const u = url.trim();
-  const sqlite = /^jdbc:sqlite:(.+)$/i.exec(u);
-  if (sqlite) return { file: sqlite[1] };
-  const mssql = /^jdbc:(?:sqlserver|jtds:sqlserver):\/\/([^:;/\\]+)(?:\\([^:;/]+))?(?::(\d+))?(?:\/([^;]+))?(.*)$/i.exec(u);
-  if (mssql) {
-    const db = /(?:^|;)\s*database(?:Name)?=([^;]+)/i.exec(mssql[5] ?? "")?.[1] ?? mssql[4];
-    return { host: mssql[1], instance: mssql[2], port: mssql[3] ? Number(mssql[3]) : undefined, database: db };
+  const info = parseJdbc(url);
+  if (!info) return {};
+  const out: ReturnType<typeof parseJdbcUrl> = {};
+  for (const key of ["host", "port", "database", "file", "instance", "params"] as const) {
+    if (info[key] !== undefined) (out as Record<string, unknown>)[key] = info[key];
   }
-  const informix = /^jdbc:informix-sqli:\/\/([^:/]+):(\d+)(?:\/([^:;]*))?(?:[:;](.*))?$/i.exec(u);
-  if (informix) {
-    const props = informixProps(informix[4] ?? "");
-    const server = props.find(([key]) => key.toLowerCase() === "informixserver")?.[1];
-    const params = props.filter(([key]) => !["informixserver", "user", "password"].includes(key.toLowerCase())).map(([key, value]) => `${key}=${value}`).join(";");
-    return { host: informix[1], port: Number(informix[2]), database: informix[3] || undefined, instance: server, params: params || undefined };
-  }
-  const generic = /^jdbc:[\w-]+(?::[\w-]+)?:\/\/([^:/?;]+)(?::(\d+))?(?:\/([^?;]*))?/i.exec(u);
-  if (generic) return { host: generic[1], port: generic[2] ? Number(generic[2]) : undefined, database: generic[3] || undefined };
-  return {};
+  return out;
 }
 
 /** Everything a JDBC URL says about a connection (the connection form's "URL JDBC"). */
@@ -374,28 +364,140 @@ function informixProps(text: string): [string, string][] {
     .filter(([key]) => key.length > 0);
 }
 
-/** Informix: the server name and extra parameters from the URL (and DBeaver's driver properties); "Automático". */
-function applyInformix(cfg: ConnConfig, fromUrl: ReturnType<typeof parseJdbcUrl>, server: string | undefined, properties?: Record<string, unknown>) {
-  cfg.informixMode = "auto";
-  cfg.instance = fromUrl.instance || server || cfg.instance;
-  const extra = informixProps(fromUrl.params ?? "");
-  const skip = new Set(["user", "password", "informixserver", ...extra.map(([key]) => key.toLowerCase())]);
-  for (const [key, value] of Object.entries(properties ?? {})) {
-    if (skip.has(key.toLowerCase()) || value === null || typeof value === "object") continue;
-    extra.push([key, String(value)]);
-  }
-  cfg.extra = extra.map(([key, value]) => `${key}=${value}`).join(";");
-}
-
 function kindFor(source: string): DbKind | null {
   const s = source.toLowerCase();
   if (/postgres|greenplum|timescale/.test(s)) return "postgres";
   if (/mariadb|mysql/.test(s)) return "mysql";
   if (/sqlserver|sql server|mssql|jtds|azure sql/.test(s)) return "mssql";
   if (/sqlite/.test(s)) return "sqlite";
-  if (/informix/.test(s)) return "informix";
+  if (/informix|jdbc:ids:/.test(s)) return "informix";
   if (/odbc/.test(s)) return "odbc";
   return null;
+}
+
+/** A value of a tool's configuration, or undefined when it is missing or empty (an empty field never wins). */
+function given(value: unknown): string | undefined {
+  if (value === undefined || value === null || typeof value === "object") return undefined;
+  const text = String(value).trim();
+  return text ? text : undefined;
+}
+
+/** The fields a tool keeps besides the URL (DBeaver's host/port/database/server, DbVisualizer's UrlVariables). */
+interface SourceFields {
+  host?: string;
+  port?: string;
+  database?: string;
+  /** Informix: INFORMIXSERVER. SQL Server: the instance. */
+  server?: string;
+}
+
+/** A URL for a connection the tool keeps only as fields (no URL, or one Celer cannot read). */
+function urlFromFields(kind: DbKind, f: SourceFields): string {
+  const host = f.host ?? "localhost";
+  const port = f.port ? `:${f.port}` : "";
+  switch (kind) {
+    case "postgres":
+      return `jdbc:postgresql://${host}${port}/${f.database ?? ""}`;
+    case "mysql":
+      return `jdbc:mysql://${host}${port}/${f.database ?? ""}`;
+    case "mssql":
+      return `jdbc:sqlserver://${host}${f.server ? `\\${f.server}` : ""}${port}${f.database ? `;databaseName=${f.database}` : ""}`;
+    case "informix":
+      return `jdbc:informix-sqli://${host}${port}/${f.database ?? ""}${f.server ? `:INFORMIXSERVER=${f.server}` : ""}`;
+    case "sqlite":
+      return `jdbc:sqlite:${f.database ?? ""}`;
+    default:
+      return "";
+  }
+}
+
+/**
+ * The driver properties of the tool (DBeaver's `properties`) added to the URL, so that the URL parser maps them as it
+ * maps URL properties (encrypt, sslmode, currentSchema, INFORMIXSERVER, DB_LOCALE…). One the URL already has wins;
+ * user and password are never taken.
+ */
+function withProperties(url: string, kind: DbKind, properties: Record<string, unknown> | undefined): string {
+  const entries = Object.entries(properties ?? {})
+    .map(([key, value]) => [key.trim(), given(value)] as const)
+    .filter((entry): entry is readonly [string, string] => Boolean(entry[0]) && entry[1] !== undefined && !/^(user|password)$/i.test(entry[0]))
+    .filter(([key]) => !new RegExp(`[?&;:]${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=`, "i").test(url));
+  if (!entries.length) return url;
+  if (kind === "postgres" || kind === "mysql") {
+    const query = entries.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&");
+    return `${url}${url.includes("?") ? "&" : "?"}${query}`;
+  }
+  const props = entries.map(([key, value]) => `${key}=${value}`).join(";");
+  if (kind === "informix") {
+    // Informix properties start with ":" after the database (jdbc:informix-sqli://h:9088/db:INFORMIXSERVER=x;…).
+    const existing = /^jdbc:(?:informix-sqli|ids):\/\/[^:/;]+(?::\d+)?(?:\/[^:;]*)?(?:[:;](.*))?$/i.exec(url)?.[1]?.trim();
+    return existing ? `${url.replace(/;$/, "")};${props}` : `${url.replace(/[:;]$/, "")}:${props}`;
+  }
+  if (kind === "mssql") return `${url.replace(/;$/, "")};${props}`;
+  return url;
+}
+
+/** The connection's settings from everything the URL says (parseJdbc), like «URL JDBC» in the connection form. */
+function applyJdbcInfo(cfg: ConnConfig, info: JdbcInfo, notes: string[]) {
+  if (info.kind === "sqlite") {
+    cfg.filePath = info.file ?? ":memory:";
+    cfg.host = "";
+    cfg.database = "";
+    return;
+  }
+  if (info.kind === "informix") cfg.informixMode = info.informixMode === "drda" ? "drda" : "auto";
+  cfg.host = info.host ?? "localhost";
+  cfg.instance = info.instance ?? "";
+  cfg.database = info.database ?? "";
+  const informixPort = cfg.informixMode === "drda" ? 9089 : 9088;
+  cfg.port = info.port ?? (info.kind === "informix" ? informixPort : info.kind === "mssql" && cfg.instance ? null : cfg.port);
+  if (info.kind === "mssql") cfg.integratedAuth = info.integratedAuth ?? false;
+  if (info.encryption) cfg.encryption = info.encryption;
+  if (info.trustCert !== undefined) cfg.trustCert = info.trustCert;
+  cfg.extra = info.params ?? "";
+  if (info.otherHosts.length) notes.push(`Celer conecta al primer servidor; no se usan: ${info.otherHosts.join(", ")}.`);
+  if (info.ignored.length) notes.push(`Propiedades que Celer no usa: ${info.ignored.join(", ")}.`);
+}
+
+/**
+ * One connection of a tool, read in full: its URL (with the driver properties) through parseJdbc, and the fields the
+ * tool keeps beside it. The fields win when the tool says the connection is made of fields (`fieldsWin`, DBeaver's
+ * MANUAL), the URL when it says it is made of a URL; an empty field never wins. Returns the engine Celer uses (null
+ * when it is not one Celer connects to).
+ */
+function readConnection(cfg: ConnConfig, hint: DbKind | null, rawUrl: string, fields: SourceFields, properties: Record<string, unknown> | undefined, fieldsWin: boolean, notes: string[]): DbKind | null {
+  const odbc = /^jdbc:odbc:(.+)$/i.exec(rawUrl.trim());
+  if (odbc || (hint === "odbc" && !rawUrl.trim())) {
+    const dsn = odbc?.[1].split(";")[0].trim() || fields.database || fields.host || "";
+    Object.assign(cfg, { ...emptyConn("odbc"), host: "", name: cfg.name, folder: cfg.folder, user: cfg.user, production: cfg.production, readOnly: cfg.readOnly, odbcConnStr: dsn ? `DSN=${dsn}` : "" });
+    return "odbc";
+  }
+  const parsedUrl = rawUrl.trim() ? parseJdbc(rawUrl) : null;
+  const kind = parsedUrl?.kind ?? hint;
+  if (!kind || kind === "odbc") return kind;
+  const url = parsedUrl ? rawUrl.trim() : urlFromFields(kind, fields);
+  const info = parseJdbc(withProperties(url, kind, properties)) ?? parseJdbc(url);
+  if (!info) return null;
+  if (fieldsWin || !parsedUrl) {
+    if (kind === "sqlite") {
+      if (fields.database) info.file = fields.database;
+    } else {
+      // "server\instance" in DBeaver's host field (SQL Server).
+      const [host, instanceInHost] = (fields.host ?? "").split("\\");
+      if (host) info.host = host;
+      if (kind === "mssql" && instanceInHost) info.instance = instanceInHost;
+      if (fields.port && /^\d+$/.test(fields.port)) info.port = Number(fields.port);
+      if (fields.database) info.database = fields.database;
+      if (fields.server) info.instance = fields.server;
+    }
+  } else if (kind !== "sqlite" && fields.server && !info.instance) {
+    info.instance = fields.server;
+  }
+  // The tool's own user field wins over one in the URL; without either, the engine's usual one.
+  const user = cfg.user || info.user || emptyConn(kind).user;
+  Object.assign(cfg, { ...emptyConn(kind), name: cfg.name, folder: cfg.folder, user, production: cfg.production, readOnly: cfg.readOnly });
+  applyJdbcInfo(cfg, info, notes);
+  if (info.password) notes.push("La URL traía una contraseña: no se copia.");
+  return kind;
 }
 
 function hexToBytes(hex: string) {
@@ -408,12 +510,17 @@ function hexToBytes(hex: string) {
  * DBeaver's credentials-config.json: AES-128-CBC with DBeaver's fixed, publicly documented default key;
  * the first 16 bytes are the IV. Returns { "<connection id>": { "#connection": { user, password } } }.
  */
-export async function decryptDbeaverCredentials(hex: string): Promise<Record<string, { "#connection"?: { user?: string; password?: string } }>> {
+export async function decryptDbeaverCredentials(hex: string): Promise<Record<string, DbeaverCredentials>> {
   const data = hexToBytes(hex);
   if (data.length <= 16) return {};
   const key = await crypto.subtle.importKey("raw", hexToBytes("babb4a9f774ab853c96c2d653dfe544a"), { name: "AES-CBC" }, false, ["decrypt"]);
   const plain = await crypto.subtle.decrypt({ name: "AES-CBC", iv: data.slice(0, 16) }, key, data.slice(16));
   return JSON.parse(new TextDecoder().decode(plain));
+}
+
+/** What DBeaver keeps for one connection in credentials-config.json. */
+export interface DbeaverCredentials {
+  "#connection"?: { user?: string; password?: string };
 }
 
 // ---------------------------------------------------------------- DBeaver
@@ -425,7 +532,40 @@ interface DbeaverConnection {
   folder?: string;
   "read-only"?: boolean;
   "save-password"?: boolean;
-  configuration?: Record<string, unknown> & { host?: string; port?: string | number; database?: string; url?: string; user?: string; type?: string; server?: string };
+  configuration?: Record<string, unknown> & {
+    host?: string;
+    port?: string | number;
+    database?: string;
+    url?: string;
+    user?: string;
+    type?: string;
+    server?: string;
+    /** MANUAL (made of fields; the URL is derived from them) or URL (typed as a URL). */
+    configurationType?: string;
+    "configuration-type"?: string;
+    properties?: Record<string, unknown>;
+    handlers?: Record<string, DbeaverHandler>;
+  };
+}
+
+interface DbeaverHandler {
+  type?: string;
+  enabled?: boolean;
+  "save-password"?: boolean;
+  user?: string;
+  properties?: Record<string, unknown>;
+}
+
+/** DBeaver's SSL handlers (postgre_ssl, mysql_ssl, ssl…), when they are on: the encryption they ask for. */
+function dbeaverSsl(cfg: ConnConfig, handlers: Record<string, DbeaverHandler> | undefined) {
+  for (const [id, handler] of Object.entries(handlers ?? {})) {
+    if (!/ssl/i.test(id) || handler.enabled !== true || cfg.kind === "sqlite" || cfg.kind === "odbc") continue;
+    const props = handler.properties ?? {};
+    const mode = (given(props.sslMode) ?? given(props["ssl.mode"]) ?? "").toLowerCase();
+    cfg.encryption = mode === "disable" || mode === "disabled" ? "off" : mode === "allow" || mode === "prefer" || mode === "preferred" ? "login" : "required";
+    if (/^verify/.test(mode) || given(props.verifyServerCert) === "true") cfg.trustCert = false;
+    else if (mode === "require" || mode === "required") cfg.trustCert = true;
+  }
 }
 
 /** DBeaver's connections, without credentials: the user comes from the plain configuration if it is there. */
@@ -435,27 +575,20 @@ export function parseDbeaver(source: MigrationSource): Candidate[] {
   for (const [id, c] of Object.entries(doc.connections ?? {})) {
     const conf = c.configuration ?? {};
     const driver = [c.provider, c.driver].filter(Boolean).join(" / ");
-    const kind = kindFor(`${c.provider ?? ""} ${c.driver ?? ""} ${conf.url ?? ""}`);
-    const fromUrl = parseJdbcUrl(String(conf.url ?? ""));
-    const cfg = emptyConn(kind ?? "postgres");
+    const url = given(conf.url) ?? "";
+    const hint = kindFor(`${c.provider ?? ""} ${c.driver ?? ""} ${url}`);
+    const cfg = emptyConn(hint ?? "postgres");
     cfg.name = c.name || id;
     cfg.folder = c.folder ? `DBeaver · ${c.folder}` : "DBeaver";
-    cfg.host = String(conf.host ?? fromUrl.host ?? cfg.host);
-    cfg.port = Number(conf.port ?? fromUrl.port ?? cfg.port) || cfg.port;
-    cfg.database = String(conf.database ?? fromUrl.database ?? "");
-    cfg.instance = fromUrl.instance ?? "";
-    cfg.user = String(conf.user ?? cfg.user);
-    cfg.password = "";
+    cfg.user = given(conf.user) ?? "";
     cfg.production = conf.type === "prod";
     cfg.readOnly = Boolean(c["read-only"]);
-    if (kind === "sqlite") {
-      cfg.filePath = String(conf.database ?? fromUrl.file ?? "");
-      cfg.host = "";
-      cfg.database = "";
-    }
-    if (kind === "mssql" && cfg.host.includes("\\")) [cfg.host, cfg.instance] = cfg.host.split("\\");
-    if (kind === "informix") applyInformix(cfg, fromUrl, conf.server, conf.properties as Record<string, unknown> | undefined);
-    out.push({ key: `dbeaver:${source.project}:${id}`, tool: "dbeaver", project: source.project, cfg, driver, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${c.provider ?? c.driver ?? "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: Boolean(c["save-password"]) });
+    const notes: string[] = [];
+    const type = (given(conf.configurationType) ?? given(conf["configuration-type"]) ?? "").toUpperCase();
+    const fields = { host: given(conf.host), port: given(conf.port), database: given(conf.database), server: given(conf.server) };
+    const kind = readConnection(cfg, hint, url, fields, conf.properties as Record<string, unknown> | undefined, type !== "URL", notes);
+    if (kind) dbeaverSsl(cfg, conf.handlers);
+    out.push({ key: `dbeaver:${source.project}:${id}`, tool: "dbeaver", project: source.project, cfg, driver, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${c.provider ?? c.driver ?? "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: Boolean(c["save-password"]), notes });
   }
   return out;
 }
@@ -475,42 +608,141 @@ export async function applyDbeaverCredentials(candidates: Candidate[], sourcePat
 
 // ---------------------------------------------------------------- DbVisualizer
 
-export function parseDbVisualizer(source: MigrationSource): Candidate[] {
-  const xml = new DOMParser().parseFromString(source.text, "application/xml");
-  if (xml.querySelector("parsererror")) throw new Error("dbvis.xml no es un XML válido");
-  const text = (el: Element | null | undefined, sel: string) => el?.querySelector(`:scope > ${sel}`)?.textContent?.trim() ?? "";
-  const out: Candidate[] = [];
-  xml.querySelectorAll("Database").forEach((db, index) => {
-    const alias = text(db, "Alias") || `Conexión ${index + 1}`;
-    const url = text(db, "Url");
-    const driverName = text(db, "Driver") || db.querySelector("UrlVariables > Driver")?.textContent?.trim() || "";
-    const vars: Record<string, string> = {};
-    db.querySelectorAll("UrlVariables > UrlVariable").forEach((v) => (vars[(v.getAttribute("UrlVariableName") ?? "").toLowerCase()] = v.textContent?.trim() ?? ""));
-    const kind = kindFor(`${driverName} ${url}`);
-    const fromUrl = parseJdbcUrl(url);
-    const cfg = emptyConn(kind ?? "postgres");
-    cfg.name = alias;
-    // Folders are nested <Folder name="…"> (or <Name>) elements around the database.
-    const folders: string[] = [];
-    for (let p = db.parentElement; p; p = p.parentElement) {
-      if (p.tagName === "Folder") folders.unshift(p.getAttribute("name") ?? text(p, "Name") ?? "");
+/** An element of dbvis.xml. */
+export interface XmlNode {
+  tag: string;
+  attrs: Record<string, string>;
+  children: XmlNode[];
+  text: string;
+  parent: XmlNode | null;
+}
+
+const ENTITIES: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+
+function decodeEntities(text: string) {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi, (whole, name: string) => {
+    if (name[0] === "#") {
+      const code = name[1].toLowerCase() === "x" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
     }
-    cfg.folder = ["DbVisualizer", ...folders.filter(Boolean)].join(" · ");
-    cfg.host = vars.server || fromUrl.host || cfg.host;
-    cfg.port = Number(vars.port || fromUrl.port || cfg.port) || cfg.port;
-    cfg.database = vars.database || fromUrl.database || "";
-    cfg.instance = vars.instance || fromUrl.instance || "";
-    cfg.user = text(db, "Userid") || cfg.user;
-    cfg.password = ""; // DbVisualizer passwords are not imported: Celer asks on first connect.
-    if (kind === "sqlite") {
-      cfg.filePath = vars.database || fromUrl.file || "";
-      cfg.host = "";
-      cfg.database = "";
-    }
-    if (kind === "informix") applyInformix(cfg, fromUrl, vars.informixserver || vars["informix server"] || vars.servername);
-    const id = db.getAttribute("id") ?? String(index);
-    out.push({ key: `dbvis:${id}`, tool: "dbvisualizer", project: source.project, cfg, driver: driverName, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${driverName || "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: false });
+    return ENTITIES[name.toLowerCase()] ?? whole;
   });
+}
+
+/**
+ * A small XML reader for dbvis.xml (elements, attributes, text, CDATA, comments): the same in the app and in the Node
+ * checks, which have no DOMParser. Throws on a document that is not well formed.
+ */
+export function parseXml(src: string): XmlNode {
+  const root: XmlNode = { tag: "#document", attrs: {}, children: [], text: "", parent: null };
+  const stack: XmlNode[] = [root];
+  const bad = (why: string): never => {
+    throw new Error(`dbvis.xml no es un XML válido (${why})`);
+  };
+  let i = 0;
+  while (i < src.length) {
+    const top = stack[stack.length - 1];
+    const lt = src.indexOf("<", i);
+    top.text += decodeEntities(lt < 0 ? src.slice(i) : src.slice(i, lt));
+    if (lt < 0) break;
+    const skipTo = (close: string, from: number) => {
+      const end = src.indexOf(close, from);
+      if (end < 0) bad(`falta «${close}»`);
+      return end + close.length;
+    };
+    if (src.startsWith("<!--", lt)) {
+      i = skipTo("-->", lt + 4);
+      continue;
+    }
+    if (src.startsWith("<![CDATA[", lt)) {
+      const end = skipTo("]]>", lt + 9);
+      top.text += src.slice(lt + 9, end - 3);
+      i = end;
+      continue;
+    }
+    if (src.startsWith("<?", lt) || src.startsWith("<!", lt)) {
+      i = skipTo(">", lt + 2);
+      continue;
+    }
+    // The end of the tag, past quoted attribute values.
+    let end = lt + 1;
+    let quote = "";
+    while (end < src.length && (quote || src[end] !== ">")) {
+      if (quote && src[end] === quote) quote = "";
+      else if (!quote && (src[end] === '"' || src[end] === "'")) quote = src[end];
+      end++;
+    }
+    if (end >= src.length) bad("etiqueta sin cerrar");
+    const body = src.slice(lt + 1, end).trim();
+    i = end + 1;
+    if (body.startsWith("/")) {
+      const name = body.slice(1).trim();
+      if (stack.length < 2 || top.tag !== name) bad(`</${name}> no cierra <${top.tag}>`);
+      stack.pop();
+      continue;
+    }
+    const selfClosing = body.endsWith("/");
+    const inner = selfClosing ? body.slice(0, -1) : body;
+    const name = /^[^\s/>]+/.exec(inner)?.[0];
+    if (!name) bad("etiqueta vacía");
+    const node: XmlNode = { tag: name!, attrs: {}, children: [], text: "", parent: top };
+    for (const a of inner.slice(name!.length).matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) node.attrs[a[1]] = decodeEntities(a[2] ?? a[3] ?? "");
+    top.children.push(node);
+    if (!selfClosing) stack.push(node);
+  }
+  if (stack.length !== 1) bad(`<${stack[stack.length - 1].tag}> sin cerrar`);
+  if (!root.children.length) bad("vacío");
+  return root;
+}
+
+/** Direct children named `tag` (case-insensitive, as DbVisualizer versions differ in case). */
+const kids = (node: XmlNode | undefined, tag: string) => (node?.children ?? []).filter((c) => c.tag.toLowerCase() === tag.toLowerCase());
+const kid = (node: XmlNode | undefined, tag: string) => kids(node, tag)[0];
+const textOf = (node: XmlNode | undefined, tag: string) => kid(node, tag)?.text.trim() ?? "";
+
+/** Every element named `tag` below `node`, in document order. */
+function descendants(node: XmlNode, tag: string, out: XmlNode[] = []): XmlNode[] {
+  for (const child of node.children) {
+    if (child.tag === tag) out.push(child);
+    descendants(child, tag, out);
+  }
   return out;
 }
 
+export function parseDbVisualizer(source: MigrationSource): Candidate[] {
+  const doc = parseXml(source.text);
+  const out: Candidate[] = [];
+  descendants(doc, "Database").forEach((db, index) => {
+    const alias = textOf(db, "Alias") || `Conexión ${index + 1}`;
+    const url = textOf(db, "Url");
+    const urlVariables = kid(db, "UrlVariables");
+    const driverName = textOf(db, "Driver") || textOf(urlVariables, "Driver");
+    const vars: Record<string, string> = {};
+    for (const v of kids(urlVariables, "UrlVariable")) vars[(v.attrs.UrlVariableName ?? "").toLowerCase()] = v.text.trim();
+    // Driver properties: <Properties><Property key="…">value</Property></Properties> (DbVisualizer's own: dbvis.*).
+    const properties: Record<string, string> = {};
+    for (const p of kids(kid(db, "Properties"), "Property")) {
+      const key = p.attrs.key ?? p.attrs.name ?? "";
+      if (key && !key.startsWith("dbvis.")) properties[key] = p.text.trim();
+    }
+    const hint = kindFor(`${driverName} ${url}`);
+    const cfg = emptyConn(hint ?? "postgres");
+    cfg.name = alias;
+    // Folders are nested <Folder name="…"> (or <Name>) elements around the database.
+    const folders: string[] = [];
+    for (let p = db.parent; p; p = p.parent) {
+      if (p.tag === "Folder") folders.unshift(p.attrs.name ?? textOf(p, "Name"));
+    }
+    cfg.folder = ["DbVisualizer", ...folders.filter(Boolean)].join(" · ");
+    cfg.user = textOf(db, "Userid");
+    cfg.password = ""; // DbVisualizer passwords are not imported: Celer asks on first connect.
+    const notes: string[] = [];
+    // With variables (the "Server Info" mode) DbVisualizer builds the URL from them: they win when not empty.
+    const fields = { host: given(vars.server), port: given(vars.port), database: given(vars.database), server: given(vars.informixserver ?? vars["informix server"] ?? vars.servername ?? vars.instance) };
+    const fieldsWin = Object.values(fields).some(Boolean);
+    const kind = readConnection(cfg, hint, url, fields, properties, fieldsWin, notes);
+    const id = db.attrs.id ?? String(index);
+    out.push({ key: `dbvis:${id}`, tool: "dbvisualizer", project: source.project, cfg, driver: driverName, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${driverName || "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: false, notes });
+  });
+  return out;
+}

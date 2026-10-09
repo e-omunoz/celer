@@ -93,8 +93,12 @@ En el explorador:
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas
 de producción. Las contraseñas guardadas en DBeaver solo se traen si marcas **Importar también las contraseñas
 guardadas** (desmarcada de entrada): solo entonces, y al pulsar *Importar*, Celer lee el fichero cifrado de credenciales
-de DBeaver; al listar las conexiones no lo abre. De una conexión Informix se traen también el `informixserver` y
-el resto de propiedades de la URL (van a *Parámetros extra*).
+de DBeaver; al listar las conexiones no lo abre. La URL JDBC de cada conexión se lee entera, como en el campo **URL
+JDBC** del formulario: servidor, puerto, base, instancia de SQL Server (también `jdbc:sqlserver://;serverName=…`),
+`informixserver`, protocolo de Informix (`jdbc:ids` es DRDA), cifrado y certificado, y lo que el driver entiende como
+*Parámetros extra*. Las propiedades del driver que guarda DBeaver se suman a las de la URL en todos los motores. Un
+campo vacío en la herramienta no pisa lo que dice la URL; en una URL con varios servidores Celer usa el primero, y la
+lista avisa de lo que no se ha podido traer.
 
 ### Conectar rápido
 

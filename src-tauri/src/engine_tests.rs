@@ -1107,3 +1107,68 @@ fn informix_jdbc_reconnects() {
     let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
     informix_reconnect_suite("JDBC", &connect, &mut admin);
 }
+
+// ───────────────────────────────────────────────────────────────── migration assistant (#102)
+
+/// A data folder of its own (its known_hosts starts empty) with the Informix drivers of the environment in its
+/// settings, as the app keeps them: what `lib.rs prepare` reads.
+fn sample_store(name: &str) -> crate::store::Store {
+    let dir = std::env::temp_dir().join(format!("celer-sample-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let jar = std::env::var_os("CELER_JDBC_JARS").and_then(|j| std::env::split_paths(&j).next()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let settings = json!({
+        "ibmDriverPath": std::env::var("CELER_IBM_LIB").unwrap_or_default(),
+        "javaPath": std::env::var("CELER_JAVA").unwrap_or_default(),
+        "informixJdbcPath": jar,
+    });
+    std::fs::write(dir.join("settings.json"), settings.to_string()).unwrap();
+    crate::store::Store::new(dir)
+}
+
+/// The connections the migration assistant makes of the DBeaver and DbVisualizer samples (dev/fixtures/migrate, one
+/// per engine of dev/wsl/compose.yml, printed by dev/migrate-sample.ts) open as imported, through lib.rs `prepare`,
+/// and answer a query. ODBC needs the DSN CelerPG (a PostgreSQL ODBC data source); without it, it is skipped.
+#[test]
+fn imported_connections_connect() {
+    if spec("CELER_PG_TEST").is_none() {
+        return;
+    }
+    let node = std::env::var("CELER_NODE").unwrap_or_else(|_| "node".into());
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../dev/migrate-sample.ts");
+    let out = Command::new(node).args(["--experimental-strip-types", "--no-warnings", script]).output().expect("node (CELER_NODE) para dev/migrate-sample.ts");
+    assert!(out.status.success(), "migrate-sample.ts: {}", String::from_utf8_lossy(&out.stderr));
+    let imported: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(imported.len(), 16, "8 de DBeaver y 8 de DbVisualizer");
+    let store = sample_store("imported");
+    let odbc_dsn = Command::new("odbcinst").args(["-q", "-s"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("[CelerPG]")).unwrap_or(false);
+    let mut failures = Vec::new();
+    for item in imported {
+        let tool = item["tool"].as_str().unwrap_or("").to_string();
+        let mut cfg: ConnConfig = serde_json::from_value(item).expect("ConnConfig");
+        let label = format!("{tool} «{}»", cfg.name);
+        if cfg.kind == DbKind::Odbc && !odbc_dsn {
+            eprintln!("⚠ {label}: sin el DSN CelerPG en este equipo");
+            continue;
+        }
+        if cfg.kind == DbKind::Informix && cfg.informix_mode == "drda" && std::env::var("CELER_IBM_LIB").is_err() {
+            eprintln!("⚠ {label}: sin el driver IBM CLI (CELER_IBM_LIB)");
+            continue;
+        }
+        cfg.id = String::new();
+        let probe = if cfg.kind == DbKind::Informix { "SELECT 1 FROM systables WHERE tabid = 1" } else { "SELECT 1" };
+        let result = crate::prepare(&store, cfg.clone()).map_err(anyhow::Error::msg).and_then(|p| (p.connector)().map(|d| (d, p.route)));
+        match result {
+            Ok((mut d, route)) => match d.execute(probe, 10) {
+                Ok(out) => {
+                    assert_eq!(txt(&out.results[0].rows[0][0]), "1", "{label}");
+                    eprintln!("✔ {label}: {} {}", d.server_info().unwrap_or_default(), route);
+                }
+                Err(e) => failures.push(format!("{label}: {e}")),
+            },
+            Err(e) => failures.push(format!("{label}: {e}")),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&store.dir);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -1,0 +1,134 @@
+{
+	"folders": {
+		"Celer": {}
+	},
+	"connections": {
+		"postgres-jdbc-18f2a1c9d10-5a1b2c3d4e5f6071": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "PG manual",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"host": "localhost",
+				"port": "15432",
+				"database": "celer",
+				"url": "jdbc:postgresql://localhost:15432/celer",
+				"configurationType": "MANUAL",
+				"home": "/usr/bin",
+				"type": "dev",
+				"closeIdleConnection": true,
+				"provider-properties": {
+					"@dbeaver-show-non-default-db@": "false",
+					"@dbeaver-show-template-db@": "false"
+				},
+				"auth-model": "native"
+			}
+		},
+		"mysql8-18f2a1ca0aa-6b7c8d9e0f1a2b3c": {
+			"provider": "mysql",
+			"driver": "mysql8",
+			"name": "MySQL solo URL",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"url": "jdbc:mysql://localhost:33306/celer?useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=10000",
+				"configurationType": "URL",
+				"type": "dev",
+				"auth-model": "native"
+			}
+		},
+		"mariaDB-18f2a1cb1bb-7c8d9e0f1a2b3c4d": {
+			"provider": "mysql",
+			"driver": "mariaDB",
+			"name": "MariaDB campos vacíos",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"host": "",
+				"port": "",
+				"database": "",
+				"url": "jdbc:mariadb://localhost:33307/celer",
+				"configurationType": "MANUAL",
+				"type": "test",
+				"auth-model": "native"
+			}
+		},
+		"microsoft-18f2a1cc2cc-8d9e0f1a2b3c4d5e": {
+			"provider": "sqlserver",
+			"driver": "microsoft",
+			"name": "SQL Server sin host en la URL",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"url": "jdbc:sqlserver://;serverName=localhost;portNumber=1433;databaseName=celerdemo",
+				"configurationType": "URL",
+				"type": "prod",
+				"properties": {
+					"encrypt": "true",
+					"trustServerCertificate": "true"
+				},
+				"auth-model": "sqlserver_database"
+			}
+		},
+		"informix-18f2a1cd3dd-9e0f1a2b3c4d5e6f": {
+			"provider": "generic",
+			"driver": "informix",
+			"name": "Informix JDBC",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"host": "localhost",
+				"port": "9088",
+				"server": "informix",
+				"database": "celerdemo",
+				"url": "jdbc:informix-sqli://localhost:9088/celerdemo:INFORMIXSERVER=informix",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"properties": {
+					"IFX_LOCK_MODE_WAIT": "10"
+				},
+				"auth-model": "native"
+			}
+		},
+		"db2_iseries-18f2a1ce4ee-0f1a2b3c4d5e6f70": {
+			"provider": "generic",
+			"driver": "informix_drda",
+			"name": "Informix DRDA",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"url": "jdbc:ids://localhost:9089/celerdemo",
+				"configurationType": "URL",
+				"type": "dev",
+				"auth-model": "native"
+			}
+		},
+		"sqlite_jdbc-18f2a1cf5ff-1a2b3c4d5e6f7081": {
+			"provider": "generic",
+			"driver": "sqlite_jdbc",
+			"name": "SQLite en memoria",
+			"folder": "Celer",
+			"configuration": {
+				"database": ":memory:",
+				"url": "jdbc:sqlite::memory:",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"auth-model": "native"
+			}
+		},
+		"odbc-18f2a1d0600-2b3c4d5e6f708192": {
+			"provider": "generic",
+			"driver": "odbc",
+			"name": "ODBC CelerPG",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"url": "jdbc:odbc:CelerPG",
+				"configurationType": "URL",
+				"type": "dev",
+				"auth-model": "native"
+			}
+		}
+	}
+}
