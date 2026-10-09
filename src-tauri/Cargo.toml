@@ -31,7 +31,8 @@ anyhow = "1"
 # Native credential stores: Windows Credential Manager, macOS Keychain, Linux Secret Service (keyutils fallback).
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 uuid = { version = "1", features = ["v4"] }
-rust_xlsxwriter = { version = "0.99", default-features = false }
+# constant_memory: Excel exports stream rows to a temp file instead of keeping the workbook in RAM (src/export.rs)
+rust_xlsxwriter = { version = "0.99", default-features = false, features = ["constant_memory"] }
 ureq = "3"
 sha2 = "0.11"
 zip = { version = "8", default-features = false, features = ["deflate"] }

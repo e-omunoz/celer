@@ -52,8 +52,14 @@ enum Sink {
     Xlsx {
         wb: rust_xlsxwriter::Workbook,
         row: u32,
+        /// Widest text per column in the header and the first rows, for the column widths (`autofit` needs the
+        /// whole sheet in memory, and the sheet is written row by row).
+        widths: Vec<usize>,
     },
 }
+
+/// Rows measured for the Excel column widths.
+const XLSX_FIT_ROWS: u32 = 1000;
 
 /// Error text of an export stopped with `cancel(export_id)`; the UI recognises it by "cancelada".
 pub const CANCELLED: &str = "Exportación cancelada";
@@ -111,6 +117,7 @@ fn export_rows(
         "xlsx" => Sink::Xlsx {
             wb: rust_xlsxwriter::Workbook::new(),
             row: 0,
+            widths: vec![0; cols.len()],
         },
         _ => {
             let mut w = BufWriter::with_capacity(1 << 20, File::create(out_path)?);
@@ -161,12 +168,10 @@ fn export_rows(
             }
             w.flush()?;
         }
-        Sink::Xlsx { mut wb, row } => {
-            if row > XLSX_MAX_ROWS {
-                bail!("Excel admite como máximo {XLSX_MAX_ROWS} filas");
-            }
-            if let Ok(ws) = wb.worksheet_from_index(0) {
-                ws.autofit();
+        Sink::Xlsx { mut wb, widths, .. } => {
+            let ws = wb.worksheet_from_index(0)?;
+            for (i, w) in widths.iter().enumerate() {
+                ws.set_column_width(i as u16, (*w as f64 * 1.1 + 2.0).clamp(6.0, 80.0))?;
             }
             wb.save(out_path)?;
         }
@@ -312,11 +317,12 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
             }
             _ => {}
         },
-        Sink::Xlsx { wb, row } => {
-            let ws = wb.add_worksheet();
+        Sink::Xlsx { wb, row, widths } => {
+            let ws = wb.add_worksheet_with_constant_memory();
             let bold = rust_xlsxwriter::Format::new().set_bold();
             for (i, c) in cols.iter().enumerate() {
                 ws.write_string_with_format(0, i as u16, &c.name, &bold)?;
+                widths[i] = c.name.chars().count();
             }
             ws.set_freeze_panes(1, 0)?;
             *row = 1;
@@ -416,11 +422,17 @@ fn write_row(
             }
             _ => {}
         },
-        Sink::Xlsx { wb, row } => {
+        Sink::Xlsx { wb, row, widths } => {
+            // Said at the first row too many, before reading the rest of the result.
             if *row > XLSX_MAX_ROWS {
-                return Ok(());
+                bail!("Excel admite como máximo {XLSX_MAX_ROWS} filas: exporta a CSV o filtra la consulta");
             }
             let ws = wb.worksheet_from_index(0)?;
+            if *row <= XLSX_FIT_ROWS {
+                for (w, c) in widths.iter_mut().zip(r) {
+                    *w = (*w).max(text_of(c, "").chars().count());
+                }
+            }
             for (i, c) in r.iter().enumerate() {
                 let col = i as u16;
                 match c {
@@ -601,6 +613,28 @@ mod tests {
         assert_eq!(n, 2);
         assert!(bytes.starts_with(b"PK"), "a zip file");
         assert!(!std::path::Path::new(&format!("{}.partial", o.path)).exists());
+        use calamine::Reader;
+        let mut book: calamine::Xlsx<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(bytes)).unwrap();
+        let range = book.worksheet_range_at(0).unwrap().unwrap();
+        let cells: Vec<String> = range.rows().flatten().map(|c| c.to_string()).collect();
+        assert_eq!(cells, ["a", "b", "1", "x", "2", ""]);
+    }
+
+    /// Past Excel's row limit the export stops at the first row too many, without reading the rest.
+    #[test]
+    fn xlsx_row_limit_stops_early() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-limit-{}.xlsx", std::process::id()));
+        let o = ExportOptions { format: "xlsx".into(), path: path.to_string_lossy().into_owned(), ..ExportOptions::default() };
+        let read = std::cell::Cell::new(0u64);
+        let sql = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000000) SELECT i FROM n";
+        let e = export(&mut d, sql, &o, DbKind::Sqlite, &|n| read.set(n), &|| false).unwrap_err();
+        assert!(e.to_string().contains("como máximo"), "{e}");
+        assert!(read.get() < XLSX_MAX_ROWS as u64 + PAGE as u64, "{}", read.get());
+        assert!(!path.exists() && !std::path::Path::new(&format!("{}.partial", o.path)).exists());
     }
 
     /// The same against PostgreSQL (CELER_PG_TEST), where the export reads a server cursor page by page.
