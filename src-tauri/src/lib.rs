@@ -449,7 +449,11 @@ async fn open_session(
             cfg.database = db.clone();
         }
     }
-    let home = wanted.unwrap_or_else(|| cfg.database.trim().to_string());
+    // SQLite y ODBC no tienen campo de base: un valor que quedó de otro motor no cuenta (la sesión no abriría).
+    let home = match cfg.kind {
+        DbKind::Sqlite | DbKind::Odbc => wanted.unwrap_or_default(),
+        _ => wanted.unwrap_or_else(|| cfg.database.trim().to_string()),
+    };
     let prepared = prepare(&state.store, cfg)?;
     let opts = guard::Opts { kind: prepared.kind, owner: conn_id.clone(), key: prepared.key, database: home, autocommit: autocommit.unwrap_or(true) };
     let connector = prepared.connector;

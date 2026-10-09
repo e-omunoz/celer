@@ -152,7 +152,8 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
       production: current.production,
       readOnly: current.readOnly,
       host: next === "sqlite" || next === "odbc" ? "" : current.host || "localhost",
-      database: current.database,
+      // SQLite and generic ODBC have no database field: a value carried over could not be seen or cleared.
+      database: next === "sqlite" || next === "odbc" ? "" : current.database,
     });
     setState({ testOutput: "", testOk: null, testReport: null });
   }
