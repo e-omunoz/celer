@@ -120,7 +120,9 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): [st
 function resolveColor(name: string, fallback: string) {
   if (!probe) {
     probe = document.createElement("span");
-    probe.style.cssText = "position:absolute;width:0;height:0;visibility:hidden;pointer-events:none";
+    // No transition: reduced motion gives every element a 60ms one (!important), and the colour read right after
+    // setting it would be the previous one, so the whole palette came out shifted (a grid of one flat colour).
+    probe.style.cssText = "position:absolute;width:0;height:0;visibility:hidden;pointer-events:none;transition:none !important";
     document.body.appendChild(probe);
   }
   probe.style.color = "";
