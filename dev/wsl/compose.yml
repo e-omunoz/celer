@@ -1,0 +1,60 @@
+# Every database engine Celer supports, in WSL (dev\wsl.ps1 db up). WSL2 forwards these ports to Windows localhost,
+# so the Windows desktop app connects to them like any server. Ports differ from the portable Windows servers
+# (dev\testdb-*.ps1: PostgreSQL 54329, MariaDB 33069) so both can run at once.
+#
+#   PostgreSQL 17   localhost:55432  celer/celer, database celer
+#   MySQL 8.4       localhost:33306  root/celer, celer/celer
+#   MariaDB 11.4    localhost:33307  root/celer, celer/celer
+#   SQL Server 2022 localhost:1433   sa/Celer_Test_2026!
+#   Informix        localhost:9088 (SQLI/JDBC), 9089 (DRDA)  informix/in4mix, server informix
+name: celer-engines
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: celer-pg
+    environment: { POSTGRES_USER: celer, POSTGRES_PASSWORD: celer, POSTGRES_DB: celer }
+    ports: ["55432:5432"]
+    volumes: [pg-data:/var/lib/postgresql/data]
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    container_name: celer-mysql
+    environment: { MYSQL_ROOT_PASSWORD: celer }
+    ports: ["33306:3306"]
+    volumes: [mysql-data:/var/lib/mysql]
+    restart: unless-stopped
+
+  mariadb:
+    image: mariadb:11.4
+    container_name: celer-mariadb
+    environment: { MARIADB_ROOT_PASSWORD: celer }
+    ports: ["33307:3306"]
+    volumes: [mariadb-data:/var/lib/mysql]
+    restart: unless-stopped
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: celer-mssql
+    environment: { ACCEPT_EULA: "Y", MSSQL_SA_PASSWORD: "Celer_Test_2026!" }
+    ports: ["1433:1433"]
+    volumes: [mssql-data:/var/opt/mssql]
+    restart: unless-stopped
+
+  informix:
+    image: icr.io/informix/informix-developer-database:latest
+    container_name: celer-ifx
+    hostname: ifx
+    privileged: true
+    environment: { LICENSE: accept }
+    ports: ["9088:9088", "9089:9089"]
+    volumes: [ifx-data:/opt/ibm/data]
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+  mysql-data:
+  mariadb-data:
+  mssql-data:
+  ifx-data:
