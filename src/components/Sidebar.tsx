@@ -232,7 +232,7 @@ export function Sidebar() {
     const root = state.tree[rootKey];
     const children: Row[] = [];
     if (state.sessions[conn.id] && root?.open) {
-      walk(conn.id, root.nodes, depth + 1, filter, children);
+      walk(conn.id, root.nodes, depth + 1, filter, children, new Set([rootKey]));
       if (root.status === "loading" && !root.nodes.length) children.push({ type: "status", key: `${rootKey}:s`, text: "Cargando…", depth: depth + 1 });
       if (root.status === "error") children.push({ type: "status", key: `${rootKey}:e`, text: root.error ?? "Error", depth: depth + 1, error: true });
     }
@@ -242,13 +242,21 @@ export function Sidebar() {
     out.push(...children);
   }
 
-  function walk(connId: string, nodes: MetaNode[], depth: number, filter: string, out: Row[]) {
+  /**
+   * The rows below an open node. `open` holds the tree entries being walked: a node whose entry is one of them (an
+   * empty or garbled name from a driver makes its path an ancestor's) is not expanded again, so the explorer never
+   * loops forever on it.
+   */
+  function walk(connId: string, nodes: MetaNode[], depth: number, filter: string, out: Row[], open: Set<string>) {
     for (const node of nodes) {
       const key = pathKey(connId, node.path.length ? node.path : [...node.path, node.name]);
-      const entry = node.leaf ? undefined : state.tree[pathKey(connId, node.path)];
+      const entryKey = pathKey(connId, node.path);
+      const entry = node.leaf || open.has(entryKey) ? undefined : state.tree[entryKey];
       const sub: Row[] = [];
       if (entry?.open) {
-        walk(connId, entry.nodes, depth + 1, filter, sub);
+        open.add(entryKey);
+        walk(connId, entry.nodes, depth + 1, filter, sub, open);
+        open.delete(entryKey);
         if (entry.status === "loading" && !entry.nodes.length) sub.push({ type: "status", key: `${key}:s`, text: "Cargando…", depth: depth + 1 });
         if (entry.status === "error") sub.push({ type: "status", key: `${key}:e`, text: entry.error ?? "Error", depth: depth + 1, error: true });
         if (entry.status === "ready" && !entry.nodes.length && !filter) sub.push({ type: "status", key: `${key}:v`, text: "Vacío", depth: depth + 1 });
