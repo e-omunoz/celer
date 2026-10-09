@@ -25,6 +25,35 @@ pub struct ExportOptions {
     pub null_text: String,
     /// SQL: rows per INSERT statement (1 = one statement per row).
     pub sql_batch: usize,
+    /// The grid's column order, when its headers were dragged: the file follows what is on screen.
+    pub column_order: Option<ColumnOrder>,
+}
+
+/// A grid's column order: `order[i]` is the query column shown i-th. `names` are the query's columns it was made
+/// for; a query that now returns other columns is exported in its own order.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ColumnOrder {
+    pub names: Vec<String>,
+    pub order: Vec<usize>,
+}
+
+/// The order to write the columns in, when `wanted` fits these columns and is not their own.
+fn column_order(cols: &[ColumnInfo], wanted: Option<&ColumnOrder>) -> Option<Vec<usize>> {
+    let wanted = wanted?;
+    let n = cols.len();
+    if wanted.names.len() != n || wanted.order.len() != n || cols.iter().zip(&wanted.names).any(|(c, name)| &c.name != name) {
+        return None;
+    }
+    let mut seen = vec![false; n];
+    for &i in &wanted.order {
+        if i >= n || std::mem::replace(&mut seen[i], true) {
+            return None;
+        }
+    }
+    if wanted.order.iter().enumerate().all(|(at, &i)| at == i) {
+        return None;
+    }
+    Some(wanted.order.clone())
 }
 
 impl Default for ExportOptions {
@@ -38,6 +67,7 @@ impl Default for ExportOptions {
             table_name: "tabla".into(),
             null_text: String::new(),
             sql_batch: 1,
+            column_order: None,
         }
     }
 }
@@ -105,6 +135,10 @@ fn export_rows(
         bail!("La consulta no devuelve filas para exportar");
     };
     let mut cols = first.columns;
+    let order = column_order(&cols, o.column_order.as_ref());
+    if let Some(order) = &order {
+        cols = order.iter().map(|&i| cols[i].clone()).collect();
+    }
     // JSON: one key per column, so columns that share a name (a join's two `id`) become id, id_2…
     if o.format == "json" {
         let keys = unique_names(cols.iter().map(|c| c.name.as_str()));
@@ -137,11 +171,21 @@ fn export_rows(
     write_header(&mut sink, &cols, o)?;
     let mut total = 0u64;
     let mut rows = first.rows;
+    // A row in the grid's column order (reused from row to row).
+    let mut shown: Vec<Cell> = Vec::new();
     loop {
         for (i, r) in rows.iter().enumerate() {
             if i % 500 == 0 && cancelled() {
                 bail!(CANCELLED);
             }
+            let r: &[Cell] = match &order {
+                Some(order) => {
+                    shown.clear();
+                    shown.extend(order.iter().map(|&c| r.get(c).cloned().unwrap_or(Cell::Null)));
+                    &shown
+                }
+                None => r,
+            };
             write_row(&mut sink, &cols, r, o, &sql_cols, &xml_tags, engine)?;
         }
         total += rows.len() as u64;
@@ -679,6 +723,30 @@ mod tests {
         assert_eq!(text, "[\n  {\"zeta\":1,\"alfa\":\"x\\\"y\",\"id\":null,\"id_2\":2.5}\n]\n");
         let back: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(back[0]["id_2"], 2.5);
+    }
+
+    #[test]
+    fn follows_the_grids_column_order() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-order-{}.csv", std::process::id()));
+        let sql = "SELECT 1 AS a, 'x' AS b, NULL AS c";
+        let order = |names: &[&str], order: &[usize]| ColumnOrder { names: names.iter().map(|n| n.to_string()).collect(), order: order.to_vec() };
+        let run = |column_order: Option<ColumnOrder>, d: &mut crate::sqlite::SqliteDriver| {
+            let o = ExportOptions { path: path.to_string_lossy().into_owned(), bom: false, null_text: "-".into(), column_order, ..ExportOptions::default() };
+            export(d, sql, &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let _ = std::fs::remove_file(&path);
+            text
+        };
+        assert_eq!(run(Some(order(&["a", "b", "c"], &[2, 0, 1])), &mut d), "c;a;b\r\n-;1;x\r\n");
+        assert_eq!(run(None, &mut d), "a;b;c\r\n1;x;-\r\n");
+        // Made for other columns, or not a permutation: the query's own order.
+        assert_eq!(run(Some(order(&["a", "b", "z"], &[2, 0, 1])), &mut d), "a;b;c\r\n1;x;-\r\n");
+        assert_eq!(run(Some(order(&["a", "b", "c"], &[2, 2, 1])), &mut d), "a;b;c\r\n1;x;-\r\n");
+        assert_eq!(run(Some(order(&["a", "b", "c"], &[0, 1, 3])), &mut d), "a;b;c\r\n1;x;-\r\n");
     }
 
     #[test]

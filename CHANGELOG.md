@@ -13,6 +13,11 @@ All notable changes to Celer are documented here. The format follows
   "+N" on a table adds only its own, a button on each card centres the diagram on that table (in the whole-schema
   diagram too, without reading it again), and "Todo el esquema" goes back to every table. To find what points to a
   table the keys of every table of its schema are read, but the columns only of the tables on show.
+- **Reorder result columns by dragging their headers** (query results and table viewer): a line shows where the column
+  will land and the grid scrolls by itself near its edges; Esc cancels the move. A click still selects the column and
+  Shift+click selects several (dragging across headers to select them now needs Shift). Everything follows the order on
+  screen: selection, keyboard, copy (all formats), search, the record view, cell editing and the export. «Restablecer
+  orden de columnas» in the header menu goes back to the query's order, and a new result or a re-run starts with it.
 
 ### Fixed
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was

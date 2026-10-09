@@ -23,7 +23,10 @@ export function ExportDialog() {
   const format = () => state.exportFormat;
   return (
     <Dialog title={`Exportar ${state.exportSource?.label ?? "datos"}`} class="export-dialog" onClose={() => !state.exportRunning && setState("exportOpen", false)}>
-      <p class="dialog-lead">Las filas se leen del servidor y se escriben en streaming: no se cargan en memoria, aunque sean millones.</p>
+      <p class="dialog-lead">
+        Las filas se leen del servidor y se escriben en streaming: no se cargan en memoria, aunque sean millones.
+        <Show when={state.exportSource?.columnOrder}> Las columnas salen en el orden en que las tienes en la rejilla.</Show>
+      </p>
       <div class="format-grid">
         <For each={FORMATS}>
           {([id, label, hint]) => (
