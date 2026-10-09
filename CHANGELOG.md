@@ -87,6 +87,7 @@ All notable changes to Celer are documented here. The format follows
 - Progress bars and the busy overlay animate with transforms only, and Gib's endless loops pause while the window is in the background.
 
 ### Fixed
+- **Upgrading Celer with the installer dropped the desktop shortcut and the `.sql` association**: running a newer Celer Setup over an installation (`--silent`, or "Instalar" in the window) went back to the default options. It now keeps the current installation's shortcuts and `.sql` association; new `--no-desktop`, `--start-menu` and `--no-associate-sql` flags change them in silent mode.
 - **Exporting a console result ran the script again**: after running a script (Ctrl+Shift+Enter), exporting a result re-ran every statement, writes included and without the production confirmation, and exported the first result instead of the one on show. Export now reads only the SELECT behind the result on show, and refuses a statement that writes.
 - **Unsaved consoles closed without asking**: closing a console with changes not saved to its library script or its `.sql` file (Ctrl+W, the tab's ×) dropped them, and closing a window treated any console opened from a file as saved. Both now ask first.
 - **JSON lost columns that share a name**: "Copiar como JSON" and the JSON export kept only one of a join's two `id` columns. Repeated names now get `_2`, `_3`… so every column is there.

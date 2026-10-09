@@ -172,13 +172,13 @@ herramienta de despliegue (Intune, Configuration Manager…) debe lanzarlo en el
 `https://github.com/e-omunoz/celer/releases/latest/download/Celer-Setup-Windows.exe` sirve siempre la última versión.
 
 ```bat
-Celer-Setup-Windows.exe --silent [--dir "C:\Tools\Celer"] [--desktop] [--no-start-menu] [--associate-sql] [--launch]
+Celer-Setup-Windows.exe --silent [--dir "C:\Tools\Celer"] [--desktop | --no-desktop] [--no-start-menu | --start-menu] [--associate-sql | --no-associate-sql] [--launch]
 "%LOCALAPPDATA%\Programs\Celer\uninstall.exe" --uninstall --silent [--purge-data]
 ```
 
 | | |
 |---|---|
-| Actualizar | Ejecuta el `Celer-Setup-Windows.exe --silent` nuevo; se conservan ajustes y conexiones |
+| Actualizar | Ejecuta el `Celer-Setup-Windows.exe --silent` nuevo; se conservan ajustes y conexiones, y también la carpeta, los accesos directos y la asociación de `.sql` de la instalación actual salvo que un parámetro los cambie (`--no-desktop`, `--no-associate-sql`…) |
 | Código de salida | 0 si todo va bien; los errores se escriben en `%TEMP%\celer-setup.log` |
 | Desinstalar | Quita todo menos el propio `uninstall.exe` (Windows no deja que un programa en ejecución se borre a sí mismo); lo retira la siguiente instalación, o bórralo a mano |
 

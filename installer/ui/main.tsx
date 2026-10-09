@@ -43,7 +43,8 @@ function App() {
     document.documentElement.dataset.theme = theme;
     const data = await setup.info();
     setInfo(data);
-    setOpts({ ...opts(), dir: data.existing?.dir ?? data.defaultDir });
+    // Over an existing install, start from its shortcuts and .sql association so an upgrade keeps them.
+    setOpts({ ...opts(), ...data.current, dir: data.existing?.dir ?? data.defaultDir, launchAfter: true });
     setFree(data.freeMb);
     if (data.isUninstall) setStep("confirm-uninstall");
     const off = await setup.onProgress((p) => setProgress(p));

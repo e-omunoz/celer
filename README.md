@@ -173,13 +173,13 @@ Celer Setup installs silently, for the user that runs it and without administrat
 `https://github.com/e-omunoz/celer/releases/latest/download/Celer-Setup-Windows.exe` always serves the latest version.
 
 ```bat
-Celer-Setup-Windows.exe --silent [--dir "C:\Tools\Celer"] [--desktop] [--no-start-menu] [--associate-sql] [--launch]
+Celer-Setup-Windows.exe --silent [--dir "C:\Tools\Celer"] [--desktop | --no-desktop] [--no-start-menu | --start-menu] [--associate-sql | --no-associate-sql] [--launch]
 "%LOCALAPPDATA%\Programs\Celer\uninstall.exe" --uninstall --silent [--purge-data]
 ```
 
 | | |
 |---|---|
-| Upgrade | Run the newer `Celer-Setup-Windows.exe --silent`; settings and connections are kept |
+| Upgrade | Run the newer `Celer-Setup-Windows.exe --silent`; settings and connections are kept, and so are the folder, the shortcuts and the `.sql` association of the current installation unless a flag changes them (`--no-desktop`, `--no-associate-sql`…) |
 | Exit code | 0 on success; errors are written to `%TEMP%\celer-setup.log` |
 | Uninstall | Removes everything except `uninstall.exe` itself (Windows does not let a running program delete itself); the next installation removes it, or delete it by hand |
 

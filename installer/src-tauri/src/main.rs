@@ -64,6 +64,8 @@ struct SetupInfo {
     free_mb: f64,
     webview2: bool,
     is_uninstall: bool,
+    /// Opciones de la instalación existente (accesos directos, asociación .sql), si la hay.
+    current: Option<InstallOptions>,
     /// Modo actualización: las opciones de la instalación actual (la UI instala sin preguntar).
     update: Option<InstallOptions>,
 }
@@ -89,8 +91,11 @@ fn setup_info() -> SetupInfo {
         .unwrap_or_else(setup::default_dir);
     // defaultDir: la instalación existente si la hay (actualizar in situ); si no, %LOCALAPPDATA%\Programs\Celer.
     let free_mb = win::free_bytes(&default_dir).map(mb).unwrap_or(0.0);
-    let update = (is_update() && existing.is_some()).then(|| setup::current_options(&layout, &default_dir));
+    // Over an existing install the UI starts from its options, so an upgrade keeps shortcuts and .sql association.
+    let current = (existing.is_some() && !uninstalling).then(|| setup::current_options(&layout, &default_dir));
+    let update = current.clone().filter(|_| is_update());
     SetupInfo {
+        current,
         update,
         version: payload.version.to_string(),
         default_dir: default_dir.display().to_string(),
@@ -214,7 +219,8 @@ fn webview2_installed() -> bool {
 
 // ---------------------------------------------------------------- modo silencioso
 
-/// `celer-setup.exe --silent [--dir <ruta>] [--desktop] [--no-start-menu] [--associate-sql] [--launch]`
+/// `celer-setup.exe --silent [--dir <ruta>] [--desktop|--no-desktop] [--start-menu|--no-start-menu]
+/// [--associate-sql|--no-associate-sql] [--launch]`; sobre una instalación existente conserva sus opciones.
 /// `uninstall.exe --uninstall --silent [--purge-data]`
 /// Errores en `%TEMP%\celer-setup.log`; código de salida 0/1.
 fn run_silent() -> i32 {
@@ -240,7 +246,8 @@ fn run_silent() -> i32 {
         .and_then(|i| args.get(i + 1).cloned())
         .or_else(|| setup::read_existing(&layout).map(|e| e.dir))
         .unwrap_or_else(|| setup::default_dir().display().to_string());
-    let opts = if is_update() && setup::read_existing(&layout).is_some() {
+    let existing = setup::read_existing(&layout);
+    let opts = if is_update() && existing.is_some() {
         // --silent --update: same options as the current install, after the app has closed
         // (Celer reopens only with --launch: the user closed it on purpose).
         let mut opts = setup::current_options(&layout, Path::new(&dir));
@@ -250,19 +257,30 @@ fn run_silent() -> i32 {
         }
         opts
     } else {
-        InstallOptions {
-            dir,
-            desktop_shortcut: has_flag("--desktop"),
-            start_menu: !has_flag("--no-start-menu"),
-            associate_sql: has_flag("--associate-sql"),
-            launch_after: has_flag("--launch"),
-        }
+        // Upgrading over an existing install keeps its shortcuts and .sql association; flags override them.
+        let base = existing.map(|e| setup::current_options(&layout, Path::new(&e.dir)));
+        silent_options(dir, base, &args)
     };
     let res = setup::install(&layout, &Payload::embedded(), &opts, &me, &mut noop);
     if let (Ok(exe), true) = (&res, opts.launch_after) {
         let _ = setup::launch(exe);
     }
     log_exit(res.map(|p| format!("instalado en {}", p.display())))
+}
+
+/// Options for `--silent` (without `--update`): `base` is the current install's options, if there is one,
+/// so an upgrade keeps them; otherwise the defaults (Start menu only). Explicit flags win either way.
+fn silent_options(dir: String, base: Option<InstallOptions>, args: &[String]) -> InstallOptions {
+    let has = |flag: &str| args.iter().any(|a| a.eq_ignore_ascii_case(flag));
+    let pick = |on: &str, off: &str, current: bool| if has(off) { false } else if has(on) { true } else { current };
+    let (desktop, start_menu, sql) = base.map(|b| (b.desktop_shortcut, b.start_menu, b.associate_sql)).unwrap_or((false, true, false));
+    InstallOptions {
+        dir,
+        desktop_shortcut: pick("--desktop", "--no-desktop", desktop),
+        start_menu: pick("--start-menu", "--no-start-menu", start_menu),
+        associate_sql: pick("--associate-sql", "--no-associate-sql", sql),
+        launch_after: has("--launch"),
+    }
 }
 
 fn log_exit(res: Result<String, String>) -> i32 {
@@ -277,6 +295,44 @@ fn log_exit(res: Result<String, String>) -> i32 {
         let _ = writeln!(f, "{line}");
     }
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn installed(desktop: bool, start_menu: bool, sql: bool) -> Option<InstallOptions> {
+        Some(InstallOptions { dir: "C:\\old".into(), desktop_shortcut: desktop, start_menu, associate_sql: sql, launch_after: true })
+    }
+
+    #[test]
+    fn silent_fresh_install_uses_defaults_and_flags() {
+        let o = silent_options("C:\\x".into(), None, &args(&["--silent"]));
+        assert_eq!((o.desktop_shortcut, o.start_menu, o.associate_sql, o.launch_after), (false, true, false, false));
+        let o = silent_options("C:\\x".into(), None, &args(&["--silent", "--desktop", "--no-start-menu", "--associate-sql", "--launch"]));
+        assert_eq!((o.desktop_shortcut, o.start_menu, o.associate_sql, o.launch_after), (true, false, true, true));
+        assert_eq!(o.dir, "C:\\x");
+    }
+
+    #[test]
+    fn silent_upgrade_keeps_current_options() {
+        let o = silent_options("C:\\old".into(), installed(true, false, true), &args(&["--silent"]));
+        assert_eq!((o.desktop_shortcut, o.start_menu, o.associate_sql, o.launch_after), (true, false, true, false));
+    }
+
+    #[test]
+    fn silent_upgrade_flags_override_current_options() {
+        let o = silent_options(
+            "C:\\old".into(),
+            installed(true, false, true),
+            &args(&["--silent", "--NO-DESKTOP", "--start-menu", "--no-associate-sql"]),
+        );
+        assert_eq!((o.desktop_shortcut, o.start_menu, o.associate_sql), (false, true, false));
+    }
 }
 
 // ---------------------------------------------------------------- main

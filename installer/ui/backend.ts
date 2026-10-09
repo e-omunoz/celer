@@ -8,6 +8,8 @@ export interface SetupInfo {
   freeMb: number;
   webview2: boolean;
   isUninstall: boolean;
+  /** Options of the existing install (shortcuts, .sql association), if any: the starting point of an upgrade. */
+  current: InstallOptions | null;
   /** Started by Celer to update itself: the current install's options, applied without questions. */
   update: InstallOptions | null;
 }
@@ -69,6 +71,9 @@ export const setup = {
           freeMb: 1520,
           webview2: true,
           isUninstall: new URLSearchParams(location.search).has("uninstall"),
+          current: new URLSearchParams(location.search).has("update")
+            ? { dir: "C:\\Users\\oscar\\AppData\\Local\\Programs\\Celer", desktopShortcut: false, startMenu: true, associateSql: true, launchAfter: true }
+            : null,
           update: new URLSearchParams(location.search).has("autoupdate")
             ? { dir: "C:\\Users\\oscar\\AppData\\Local\\Programs\\Celer", desktopShortcut: true, startMenu: true, associateSql: true, launchAfter: true }
             : null,

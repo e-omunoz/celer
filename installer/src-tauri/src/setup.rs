@@ -1047,6 +1047,9 @@ mod tests {
         assert_eq!(cmd, open_command(&exe));
         let ext = hkcu().open_subkey(format!(r"{CLASSES_ROOT}\{}", layout.ext)).unwrap();
         assert_eq!(ext.get_value::<String, _>("").unwrap(), layout.progid);
+        // A plain `--silent` upgrade starts from these options and keeps them.
+        let again = crate::silent_options(dir.display().to_string(), Some(current_options(&layout, &dir)), &["--silent".into()]);
+        assert!(again.desktop_shortcut && again.start_menu && again.associate_sql && !again.launch_after);
         drop(ext);
 
         // Actualización in situ, sin escritorio ni asociación: se retiran los nuestros.
