@@ -149,6 +149,14 @@ las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
 - **Fijar un resultado** lo conserva al volver a ejecutar; **Comparar** lo enfrenta al resultado actual y marca las
   celdas cambiadas, las filas nuevas y las que desaparecen.
 - **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
+- **Mover columnas**: arrastra la cabecera de una columna y suéltala donde quieras; una línea marca dónde caerá y, cerca
+  del borde, la rejilla se desplaza sola. Esc durante el arrastre la deja donde estaba. Un clic en la cabecera sigue
+  seleccionando la columna y Mayús+clic (o Mayús y arrastrar) selecciona varias.
+  - Todo sigue el orden de la pantalla: la selección, las flechas y Tab, **Copiar** (con cabeceras y en todos los
+    formatos), la búsqueda, el panel de registro y **Exportar**, que escribe las columnas en ese orden aunque vuelva a
+    leer la consulta del servidor.
+  - *Restablecer orden de columnas*, en el menú de la cabecera, vuelve al orden de la consulta. Un resultado nuevo, o
+    volver a ejecutar, empieza también con el orden de la consulta (igual que los anchos).
 - El panel derecho muestra el valor completo de una celda (JSON y XML se ven indentados) o la fila como formulario.
 
 ## Tablas
@@ -166,6 +174,8 @@ Doble clic en una tabla del explorador la abre.
 - **Guardar** (Ctrl+Intro) enseña el SQL antes de ejecutarlo todo en una transacción; si algo falla, no se guarda
   nada. Cada cambio pendiente se puede deshacer por celda o por fila.
 - **Claves foráneas**: las columnas FK llevan ↗ en la cabecera. Ctrl+clic en un valor abre la fila referenciada.
+- **Columnas**: se mueven arrastrando la cabecera, como en los resultados; la edición, la copia y la exportación siguen
+  ese orden.
 - **Importar datos** (menú de la tabla): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con mapeo de columnas y
   todo en una transacción.
 

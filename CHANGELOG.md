@@ -6,6 +6,13 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Reorder result columns by dragging their headers** (query results and table viewer): a line shows where the column
+  will land and the grid scrolls by itself near its edges; Esc cancels the move. A click still selects the column and
+  Shift+click selects several (dragging across headers to select them now needs Shift). Everything follows the order on
+  screen: selection, keyboard, copy (all formats), search, the record view, cell editing and the export. «Restablecer
+  orden de columnas» in the header menu goes back to the query's order, and a new result or a re-run starts with it.
+
 ## [2.1.1] - 2026-10-09
 
 ### Fixed
