@@ -7,7 +7,7 @@ import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
 import { cellLabel } from "../cellFormat";
 import { Gib } from "../gib/Gib";
-import { gibShows, copyText, openMenu, reducedMotion, setState, state, type GridStats, type MenuItem } from "../state";
+import { gibShows, copyText, openMenu, reducedMotion, rowHeight, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
 import { parseCsv, pastedValue } from "../importFormats";
@@ -221,7 +221,7 @@ export function DataGrid(props: GridProps) {
   let lifted = -1;
   let selecting: "cells" | "rows" | "cols" | null = null;
 
-  const rowH = () => (state.settings.density === "comfortable" ? 28 : 24);
+  const rowH = rowHeight;
   const gutter = () => Math.max(44, String(props.rows.length).length * 8 + 22);
 
   function computeOrder(data: Cell[][], current: { col: number; dir: 1 | -1 } | null) {
