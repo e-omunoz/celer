@@ -97,6 +97,25 @@ interface Palette {
 
 let probe: HTMLSpanElement | null = null;
 
+/** Characters that may not take one monospace cell (CJK, emoji, symbols…): text with them is measured, not counted. */
+const WIDE_CHARS = /[^\u0000-ɏ]/;
+
+/** `text` cut (with "…") to fit `maxW` pixels in the context's current font, and its width. */
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): [string, number] {
+  const full = ctx.measureText(text).width;
+  if (full <= maxW) return [text, full];
+  const chars = Array.from(text);
+  let lo = 0;
+  let hi = chars.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(`${chars.slice(0, mid).join("")}…`).width <= maxW) lo = mid;
+    else hi = mid - 1;
+  }
+  const cut = `${chars.slice(0, lo).join("")}…`;
+  return [cut, ctx.measureText(cut).width];
+}
+
 /** Resolves a custom property (which may hold var() or color-mix()) to a concrete colour the canvas understands. */
 function resolveColor(name: string, fallback: string) {
   if (!probe) {
@@ -251,13 +270,15 @@ export function DataGrid(props: GridProps) {
     charW = ctx.measureText("M").width || 7.5;
     const sample = raw(props.rows).slice(0, 300);
     return props.columns.map((_, index) => {
-      let longest = 4;
+      let longest = 4 * charW;
       for (const row of sample) {
         const value = row[index];
-        const len = isNullCell(value) ? 4 : Math.min(80, cellText(value).length);
-        if (len > longest) longest = len;
+        if (isNullCell(value)) continue;
+        const text = cellText(value).slice(0, 80);
+        const textW = WIDE_CHARS.test(text) ? ctx.measureText(text).width : text.length * charW;
+        if (textW > longest) longest = textW;
       }
-      return Math.round(Math.min(MAX_AUTO_W, Math.max(MIN_W, heads[index], longest * charW + 22)));
+      return Math.round(Math.min(MAX_AUTO_W, Math.max(MIN_W, heads[index], longest + 22)));
     });
   }
 
@@ -352,9 +373,15 @@ export function DataGrid(props: GridProps) {
         }
         if (label.length > 400) label = label.slice(0, 400);
         if (label.includes("\n") || label.includes("\r")) label = label.replace(/\r?\n|\r/g, " ↵ ");
-        const maxChars = Math.floor((w - 16) / charW);
-        if (label.length > maxChars) label = maxChars > 1 ? `${label.slice(0, maxChars - 1)}…` : "…";
         ctx.font = isNull || isDeleted ? fontItalic : fontCell;
+        const maxChars = Math.floor((w - 16) / charW);
+        // Counting characters assumes one monospace cell each; CJK, emoji and the like are measured instead.
+        let labelW: number;
+        if (WIDE_CHARS.test(label)) [label, labelW] = fitText(ctx, label, w - 16);
+        else {
+          if (label.length > maxChars) label = maxChars > 1 ? `${label.slice(0, maxChars - 1)}…` : "…";
+          labelW = label.length * charW;
+        }
         if (kind === "bool" && !isNull) {
           const on = raw === true || raw === 1 || /^(true|t|1|yes|y)$/i.test(String(raw));
           ctx.fillStyle = on ? p.success : p.faint;
@@ -362,14 +389,14 @@ export function DataGrid(props: GridProps) {
         } else {
           const right = kind === "number" && !isNull;
           ctx.fillStyle = isNull ? p.faint : right ? p.number : p.fg;
-          const tx = right ? x + w - 8 - label.length * charW : x + 8;
+          const tx = right ? x + w - 8 - labelW : x + 8;
           ctx.fillText(label, tx, y + RH / 2 + 0.5);
           if (isDeleted) {
             ctx.strokeStyle = p.danger;
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(tx, y + RH / 2 + 0.5);
-            ctx.lineTo(tx + label.length * charW, y + RH / 2 + 0.5);
+            ctx.lineTo(tx + labelW, y + RH / 2 + 0.5);
             ctx.stroke();
           }
         }
