@@ -25,7 +25,8 @@ import {
   closeCompare,
   closeErDiagram,
   closeTabsQuietly,
-  compareWithCurrent,
+  openComparison,
+  patchCompare,
   confirmDialog,
   connect,
   connectionById,
@@ -46,7 +47,6 @@ import {
   restoreTabs,
   runText,
   savedTabs,
-  setCompareKey,
   setGibEvent,
   setState,
   showPlan,
@@ -59,6 +59,7 @@ import {
   type GibEvent,
   type SavedTab,
   type SqlTab,
+  type ResultComparison,
   type Tab,
   type TableTab,
 } from "./state";
@@ -852,7 +853,9 @@ export async function detachPanel(kind: PanelKind) {
         return;
       }
       tabId = tab.id;
-      data = { kind: "panel-data", tab: clone(tab) };
+      // The other tabs whose results are compared go along (the window has only what it is sent).
+      const others = [tab.compare.base, tab.compare.other].map((ref) => ref.tabId).filter((id, at, all) => id !== tab.id && all.indexOf(id) === at);
+      data = { kind: "panel-data", tab: clone(tab), tabs: others.map((id) => state.tabs.find((item) => item.id === id)).filter(Boolean).map((item) => clone(item)) };
       hide = () => closeCompare(tab.id);
       break;
     }
@@ -907,12 +910,15 @@ function dock(kind: string, data: Record<string, unknown>) {
     case "er":
       if (data.er && typeof data.er === "object") setState("er", data.er as ErState);
       break;
-    case "compare":
-      if (tab?.kind === "sql" && typeof data.pinId === "string" && tab.pinned.some((pin) => pin.id === data.pinId)) {
-        compareWithCurrent(tab.id, data.pinId);
-        if (Array.isArray(data.key) || data.key === null) setCompareKey(tab.id, data.key as string[] | null);
+    case "compare": {
+      // Back as it was in its window (sides, key, only the differences), if what it compares is still here.
+      const compare = data.compare as ResultComparison | undefined;
+      if (tab?.kind === "sql" && compare?.base && compare.other && [compare.base, compare.other].every((ref) => state.tabs.some((item) => item.id === ref.tabId))) {
+        openComparison(tab.id, compare.base, compare.other, compare.key ?? null);
+        patchCompare(tab.id, { onlyDiff: Boolean(compare.onlyDiff), pk: compare.pk ?? null });
       }
       break;
+    }
   }
 }
 
@@ -1001,7 +1007,9 @@ function panelData(message: Message) {
   if (message.from && !SINGLE_PANELS.includes(panelKind)) setPanelOwner(message.from);
   if (message.tab && typeof message.tab === "object") {
     const tab = message.tab as Tab;
-    setState("tabs", [tab]);
+    // A comparison of results also gets the tabs holding its other side.
+    const others = Array.isArray(message.tabs) ? (message.tabs as Tab[]).filter((item) => item && item.id !== tab.id) : [];
+    setState("tabs", [tab, ...others]);
     setState("activeTabId", tab.id);
   }
   if (message.er && typeof message.er === "object") setState("er", message.er as ErState);
@@ -1032,10 +1040,7 @@ export async function dockPanel() {
   if (panelKind === "er" && state.er) data.er = clone(state.er);
   if (tab?.kind === "sql") {
     data.tabId = tab.id;
-    if (tab.compare) {
-      data.pinId = tab.compare.pinId;
-      data.key = clone(tab.compare.key);
-    }
+    if (tab.compare) data.compare = clone(tab.compare);
   }
   await post(panelTarget(), { kind: "panel-dock", panel: panelKind, data });
   await closeWindowNow();

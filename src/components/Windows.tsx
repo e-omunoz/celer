@@ -8,7 +8,7 @@ import { dataCompare } from "../dataCompareRun";
 import { answerWindow, closePanelWindow, dockPanel, panelKind, panelReady, prepareWindow, startWindows, windowAsk } from "../windows";
 import { panelName } from "../windowModel";
 import { AiPanel } from "./AiPanel";
-import { CompareView } from "./CompareView";
+import { ResultCompare } from "./ResultCompare";
 import { DataCompareView } from "./DataCompareView";
 import { ErDiagram } from "./ErDiagram";
 import { LibraryView } from "./LibraryView";
@@ -85,7 +85,7 @@ export function PanelApp() {
             <Match when={kind === "plan" && sqlTab()?.plan ? sqlTab() : undefined}>
               {(tab) => <PlanView tab={tab()} plan={tab().plan!.plan} sql={tab().plan!.sql} />}
             </Match>
-            <Match when={kind === "compare" && sqlTab()?.compare ? sqlTab() : undefined}>{(tab) => <CompareView tab={tab()} />}</Match>
+            <Match when={kind === "compare" && sqlTab()?.compare ? sqlTab() : undefined}>{(tab) => <ResultCompare tab={tab()} />}</Match>
             <Match when={kind === "er" && state.er}><ErDiagram /></Match>
             <Match when={kind === "schema-compare" && schemaCompare.open}><SchemaCompareView /></Match>
             <Match when={kind === "data-compare" && dataCompare.open}><DataCompareView /></Match>

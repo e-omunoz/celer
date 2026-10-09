@@ -1,6 +1,7 @@
 import { allSnippets } from "../snippets";
 import { PlanView } from "./PlanView";
-import { CompareView } from "./CompareView";
+import { ResultCompare } from "./ResultCompare";
+import { pickComparison } from "../resultCompare";
 import {
   AlignLeft,
   ArrowDownToLine,
@@ -198,6 +199,7 @@ function TabBar() {
             <div
               class="tab"
               role="tab"
+              data-id={tab.id}
               aria-selected={tab.id === state.activeTabId}
               classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index() }}
               draggable={renaming() !== tab.id}
@@ -384,6 +386,12 @@ function SqlPane(props: { tab: SqlTab }) {
     void startExport(pinned()?.sql);
   };
   const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
+  /** This pinned result is one of the two being compared. */
+  const comparing = (pinId: string) => {
+    const c = props.tab.compare;
+    return Boolean(c && [c.base, c.other].some((ref) => ref.kind === "pin" && ref.tabId === props.tab.id && ref.pinId === pinId));
+  };
+
   const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
   // Ln/Col in the status bar follow the editor only while this console is active: on activation, from its saved cursor.
   createEffect(() => {
@@ -533,13 +541,13 @@ function SqlPane(props: { tab: SqlTab }) {
           </Show>
           <For each={props.tab.pinned}>
             {(pin) => (
-              <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned || pin.id === props.tab.compare?.pinId }} title={pin.sql}>
+              <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned || comparing(pin.id) }} title={`Resultado fijado: se conserva al volver a ejecutar\n${pin.sql}`}>
                 <button type="button" class="rtab-main" onClick={() => showPinned(props.tab.id, pin.id)}>
                   <Pin size={12} />
                   {pin.title}
-                  <small>{pin.result.rows.length.toLocaleString()}</small>
+                  <small>{pin.result.rows.length.toLocaleString()}{pin.partial ? "+" : ""}</small>
                 </button>
-                <button type="button" class="rtab-close" classList={{ on: props.tab.compare?.pinId === pin.id }} title="Comparar con el resultado actual" onClick={() => (props.tab.compare?.pinId === pin.id ? closeCompare(props.tab.id) : compareWithCurrent(props.tab.id, pin.id))}><GitCompare size={11} /></button>
+                <button type="button" class="rtab-close" classList={{ on: comparing(pin.id) }} title="Comparar con el resultado actual" onClick={() => (comparing(pin.id) ? closeCompare(props.tab.id) : compareWithCurrent(props.tab.id, pin.id))}><GitCompare size={11} /></button>
                 <button type="button" class="rtab-close" title="Quitar este resultado fijado" onClick={() => unpinResult(props.tab.id, pin.id)}><X size={11} /></button>
               </span>
             )}
@@ -572,8 +580,9 @@ function SqlPane(props: { tab: SqlTab }) {
               <button type="button" class="tb-icon" title="Filtrar las filas cargadas" onClick={() => setFilterOpen(true)}><ListFilter size={15} /></button>
             </Show>
             <Show when={!pinned()}>
-              <button type="button" class="tb-icon" title="Fijar este resultado (se conserva al volver a ejecutar)" onClick={() => pinResult(props.tab.id)}><Pin size={14} /></button>
+              <button type="button" class="tb-icon" title="Fijar resultado (se conserva al volver a ejecutar)" onClick={() => pinResult(props.tab.id)}><Pin size={14} /></button>
             </Show>
+            <button type="button" class="tb-icon" title="Comparar con… (otro resultado de esta consola, de otra o de una tabla abierta)" onClick={(event) => pickComparison(props.tab.id, event)}><GitCompare size={14} /></button>
             <Show when={result()?.hasMore && !pinned() && !filtering()}>
               <button type="button" class="tb-icon" title="Cargar la siguiente página" onClick={() => void fetchMore(props.tab.id)}><ArrowDownToLine size={15} /></button>
               <button type="button" class="btn tiny" title="Cargar todas las filas" onClick={() => void fetchAll(props.tab.id)}>Cargar todo</button>
@@ -588,7 +597,7 @@ function SqlPane(props: { tab: SqlTab }) {
         </Show>
         <Switch>
           <Match when={props.tab.compare}>
-            <CompareView tab={props.tab} />
+            <ResultCompare tab={props.tab} />
           </Match>
           <Match when={props.tab.activePlan && props.tab.plan}>
             {(view) => <PlanView tab={props.tab} plan={view().plan} sql={view().sql} />}

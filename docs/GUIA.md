@@ -160,8 +160,23 @@ Los resultados llegan por páginas desde un cursor abierto: aunque la consulta d
 las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
 
 - **Filtro rápido** sobre las filas cargadas.
-- **Fijar un resultado** lo conserva al volver a ejecutar; **Comparar** lo enfrenta al resultado actual y marca las
-  celdas cambiadas, las filas nuevas y las que desaparecen.
+- **Fijar resultado** (la chincheta) lo conserva al volver a ejecutar: queda en su propia pestaña de resultado, con
+  la chincheta, y el nuevo resultado aparece al lado. El botón de comparar de esa pestaña lo enfrenta al resultado
+  actual.
+- **Comparar con…** (en la barra de resultados o en la paleta) enfrenta el resultado que ves (B) con otro que eliges
+  (A): otro resultado o uno fijado de esta consola, de otra consola (también de otra conexión, por ejemplo producción
+  frente a preproducción) o las filas cargadas de una tabla abierta.
+  - Las filas se emparejan por la **clave primaria** cuando un lado es una tabla (una pestaña de tabla o un
+    `SELECT … FROM tabla` sencillo); si no, por una columna única. En *Clave* puedes elegir una o varias columnas, o
+    comparar filas enteras.
+  - Verás cuántas filas son iguales, cuántas cambian y cuántas están solo en A o solo en B; las celdas cambiadas se
+    marcan (al pasar el ratón, su valor en A), las filas que solo están en A aparecen tachadas y las de B al final.
+    *Solo diferencias* oculta las iguales e *Intercambiar* cambia A y B.
+  - *Exportar* guarda lo que ves en CSV o JSON, con una columna *estado* y, por cada columna con cambios, su valor en A.
+  - Los valores se comparan por lo que significan: 12.50 y 12.5, true y 1, o una fecha escrita de dos formas son
+    iguales, así que se pueden comparar resultados de dos motores distintos.
+  - Se comparan las filas cargadas (hasta 200.000 por lado). Si un lado tiene más, se avisa y se ofrece *Cargar todo*;
+    un resultado fijado antes de cargar todas sus páginas se queda con las que tenía.
 - **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
 - **Mover columnas**: arrastra la cabecera de una columna y la columna entera se levanta (semitransparente, con
   sombra); las demás se apartan para abrirle hueco donde caerá y, cerca del borde, la rejilla se desplaza sola. Al

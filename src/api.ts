@@ -191,6 +191,12 @@ function tauriBackend(): Backend {
     mcpInstallClaudeDesktop: () => invoke("mcp_install_claude_desktop"),
     mcpTestTool: (name, args) => invoke("mcp_test_tool", { name, args }),
     pickSavePath: async (filters, defaultName) => {
+      // As with pickOpenPath: end-to-end checks hand over the path the native dialog would have given.
+      const scripted = (window as { __celerNextSavePath?: string }).__celerNextSavePath;
+      if (scripted) {
+        delete (window as { __celerNextSavePath?: string }).__celerNextSavePath;
+        return scripted;
+      }
       const { save } = await import("@tauri-apps/plugin-dialog");
       const picked = await save({ filters, defaultPath: defaultName });
       return picked ?? null;

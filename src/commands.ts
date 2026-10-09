@@ -20,7 +20,9 @@ import {
   openPalette,
   openQuery,
   openScript,
+  pinResult,
   reloadTableSafe,
+  shownResultRef,
   runActive,
   saveScript,
   saveSettings,
@@ -39,6 +41,7 @@ import { resetGibTips } from "./gib/memory";
 import { isTauri } from "./api";
 import { detachablePanel, detachPanel, openNewWindow, otherFullWindows, quitCeler, raiseWindow, sendTab } from "./windows";
 import { windowName } from "./windowModel";
+import { pickComparison } from "./resultCompare";
 
 export interface Command {
   id: string;
@@ -77,6 +80,8 @@ export function commands(): Command[] {
     { id: "commit", label: "Commit", group: "Transacción", run: () => void commitActive(false), enabled: () => Boolean(activeSql()?.inTransaction) },
     { id: "rollback", label: "Rollback", group: "Transacción", run: () => void commitActive(true), enabled: () => Boolean(activeSql()?.inTransaction) },
     { id: "export", label: "Exportar resultado…", group: "Consulta", run: () => void startExport(), enabled: sqlOnly },
+    { id: "pin-result", label: "Fijar resultado (se conserva al volver a ejecutar)", group: "Consulta", run: () => { const tab = activeSql(); if (tab) pinResult(tab.id); }, enabled: () => { const tab = activeSql(); return Boolean(tab && !tab.activePinned && tab.results[tab.activeResult]?.columns.length); } },
+    { id: "compare-result", label: "Comparar resultado con…", group: "Consulta", hint: "Otro resultado de esta consola, de otra (también de otra conexión) o las filas de una tabla abierta", run: () => { const tab = activeSql(); if (tab) pickComparison(tab.id); }, enabled: () => { const tab = activeSql(); return Boolean(tab && shownResultRef(tab)); } },
     { id: "new-console", label: "Nueva consola", group: "Archivo", run: () => openQuery(contextConnId()) },
     { id: "new-conn", label: "Nueva conexión…", group: "Archivo", run: () => openConnDialog() },
     { id: "disconnect", label: "Desconectar", group: "Conexión", run: () => { const id = contextConnId(); if (id) void disconnect(id); }, enabled: () => Boolean(contextConnId() && state.sessions[contextConnId()!]) },

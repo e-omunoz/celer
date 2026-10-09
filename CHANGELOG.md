@@ -6,6 +6,19 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Compare any two results** (#119): «Comparar con…» in the results bar (and «Comparar resultado con…» in the
+  palette) sets the result on show against another one: a result or pinned result of the same console, of another
+  console or another connection, or the rows a table tab has loaded. Rows are matched by the primary key when a side
+  is a table (a table tab, or a plain `SELECT … FROM table`), else by a unique column, or by the key columns chosen
+  (several at once, or the whole row). The comparison shows A and B with their console and connection, counts
+  (equal, changed, only in A, only in B), changed cells marked with A's value on hover, «Solo diferencias» to list
+  only what differs, «Intercambiar» and an export of what is on show to CSV or JSON (a state column and, for each
+  changed column, its value in A). Values are compared by what they mean, so the same data from two engines matches
+  (12.50 and 12.5, true and 1, `2024-03-15T00:00:00` and `2024-03-15`). It works on the loaded rows: when a side has
+  more, the view says so and offers «Cargar todo»; at most 200,000 rows per side are compared. «Fijar resultado» is
+  also in the palette, and a result pinned before all its pages arrived says so.
+
 ### Changed
 - **Moving a result column lifts the whole column** (#109): dragging a header picks up the column with its visible
   cells as a semi-transparent ghost with a shadow, and the other columns slide aside live to open the gap where it will
