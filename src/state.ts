@@ -261,6 +261,8 @@ export interface GridStats {
   min: number | null;
   max: number | null;
   distinct: number;
+  /** The grid's busyKey (its tab id): the status bar shows them only while that tab is active. */
+  owner?: string;
 }
 
 /**

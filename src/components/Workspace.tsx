@@ -32,7 +32,7 @@ import {
   Upload,
   X,
 } from "lucide-solid";
-import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
 import { cellText, isNullCell, rowsLabel, whereHints } from "../sql";
@@ -382,6 +382,17 @@ function SqlPane(props: { tab: SqlTab }) {
   };
   const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
   const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
+  // Ln/Col in the status bar follow the editor only while this console is active: on activation, from its saved cursor.
+  createEffect(() => {
+    if (props.tab.id !== state.activeTabId) return;
+    untrack(() => {
+      const sql = props.tab.sql;
+      const at = Math.min(props.tab.cursor, sql.length);
+      let line = 1;
+      for (let i = sql.indexOf("\n"); i >= 0 && i < at; i = sql.indexOf("\n", i + 1)) line++;
+      setState("cursorPos", { line, col: at - (sql.lastIndexOf("\n", at - 1) + 1) + 1 });
+    });
+  });
   // What the session does besides the statement (SQL Server reading the rest of the previous result to keep a
   // transaction or #temp tables): asked every half second while it runs.
   const [progress, setProgress] = createSignal<string | null>(null);

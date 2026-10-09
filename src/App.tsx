@@ -200,7 +200,12 @@ function StatusBar() {
   const tab = () => activeTab();
   const conn = () => connectionById(tab()?.connId);
   const session = () => (tab()?.connId ? state.sessions[tab()!.connId!] : undefined);
-  const stats = () => state.gridStats;
+  // A tab's grid statistics only while that tab is active (a grid outside the tabs, such as the data comparison, always).
+  const stats = () => {
+    const stats = state.gridStats;
+    if (!stats?.owner || stats.owner === state.activeTabId || !state.tabs.some((item) => item.id === stats.owner)) return stats;
+    return null;
+  };
   const fmt = (n: number) => (Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 4 }));
   return (
     <footer class="statusbar">

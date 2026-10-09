@@ -1333,11 +1333,12 @@ export function DataGrid(props: GridProps) {
     schedule();
   });
 
-  // Selection statistics for the status bar.
+  // Selection statistics for the status bar. Only this grid's own are cleared: another tab's grid may have written since.
+  const clearStats = () => untrack(() => state.gridStats && state.gridStats.owner === props.busyKey && setState("gridStats", null));
   createEffect(() => {
     const s = sel();
     if (!s || (s.r1 === s.r2 && s.c1 === s.c2)) {
-      setState("gridStats", null);
+      clearStats();
       return;
     }
     const rows = ordered();
@@ -1365,7 +1366,7 @@ export function DataGrid(props: GridProps) {
         }
       }
     }
-    const stats: GridStats = { cells, rows: s.r2 - s.r1 + 1, numeric, sum, min, max, distinct: distinct.size };
+    const stats: GridStats = { cells, rows: s.r2 - s.r1 + 1, numeric, sum, min, max, distinct: distinct.size, owner: untrack(() => props.busyKey) };
     setState("gridStats", stats);
   });
 
@@ -1381,7 +1382,7 @@ export function DataGrid(props: GridProps) {
     }
   });
 
-  onCleanup(() => setState("gridStats", null));
+  onCleanup(clearStats);
 
   const editorBox = () => {
     const current = editor();
