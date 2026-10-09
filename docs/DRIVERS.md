@@ -107,6 +107,8 @@ Each driver declares what it supports so the UI only shows what works:
   Showing them needs a patched `tiberius` that exposes `INFO` tokens on the query stream (#67).
 - For the same reason a batch of several statements run as a query reports no row counts; a batch of a single
   `INSERT`/`UPDATE`/`DELETE`/`MERGE` reports its count.
+- `money` is shown exact with its 4 decimals up to ±450,359,962,737 (2^52 ten-thousandths): `tiberius` decodes it
+  to an `f64`, from which Celer takes the integer back. Beyond that the last digit may already be rounded (#68).
 - Scripts are split on `GO` lines (`GO n` repeats a batch), as SSMS and sqlcmd do; other sqlcmd commands (`:r`,
   `:setvar`) are not read.
 

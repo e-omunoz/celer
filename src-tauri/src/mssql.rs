@@ -1815,7 +1815,33 @@ fn convert(cd: ColumnData<'static>) -> Cell {
 }
 
 fn row_to_cells(r: tiberius::Row) -> Vec<Cell> {
-    r.into_iter().map(convert).collect()
+    let money: Vec<bool> = r.columns().iter().map(|c| matches!(c.column_type(), ColumnType::Money | ColumnType::Money4)).collect();
+    r.into_iter()
+        .zip(money)
+        .map(|(cd, money)| match cd {
+            ColumnData::F64(Some(v)) if money => Cell::Text(money_text(v)),
+            cd => convert(cd),
+        })
+        .collect()
+}
+
+/// money / smallmoney as SQL Server shows it: exact, with its 4 decimals ("12.5000"). tiberius hands the value over
+/// as an f64 (the integer of ten-thousandths divided by 10^4); that integer is taken back exactly from the f64's bits.
+/// Exact up to ±450.359.962.737 (2^52 ten-thousandths); beyond that tiberius has already rounded the last digit.
+fn money_text(v: f64) -> String {
+    let bits = v.abs().to_bits();
+    let exp = ((bits >> 52) & 0x7ff) as i32;
+    let frac = (bits & ((1u64 << 52) - 1)) as i128;
+    // |v| = mantissa · 2^shift.
+    let (mantissa, shift) = if exp == 0 { (frac, -1074) } else { (frac | (1 << 52), exp - 1075) };
+    let scaled = mantissa * 10_000;
+    let units: i128 = match shift {
+        s if s >= 0 => scaled << s.min(60),
+        s if s <= -127 => 0,
+        s => (scaled + (1i128 << (-s - 1))) >> -s,
+    };
+    let sign = if v < 0.0 && units != 0 { "-" } else { "" };
+    format!("{sign}{}.{:04}", units / 10_000, units % 10_000)
 }
 
 pub fn cell_str(c: &Cell) -> String {
@@ -2746,6 +2772,21 @@ mod tests {
         assert_eq!(e("USE [mi]]base];").use_only.as_deref(), Some("mi]base"));
         assert_eq!(e("  use Ventas  ").use_only.as_deref(), Some("Ventas"));
         assert_eq!(e("USE ventas; SELECT 1").use_only, None);
+    }
+
+    #[test]
+    fn money_keeps_its_four_decimals() {
+        // What tiberius hands over: the integer of ten-thousandths over 10^4, as an f64.
+        let wire = |units: i64| units as f64 / 1e4;
+        assert_eq!(money_text(wire(125_000)), "12.5000");
+        assert_eq!(money_text(wire(-1)), "-0.0001");
+        assert_eq!(money_text(wire(0)), "0.0000");
+        assert_eq!(money_text(wire(4_503_599_627_370_495)), "450359962737.0495");
+        assert_eq!(money_text(wire(1_234_567_890_123_456)), "123456789012.3456");
+        assert_eq!(money_text(wire(-2_147_483_648)), "-214748.3648", "smallmoney's minimum");
+        for units in [1, 3, 7, 99_999, 100_001, 123_456_789, 999_999_999_999] {
+            assert_eq!(money_text(wire(units)), format!("{}.{:04}", units / 10_000, units % 10_000));
+        }
     }
 
     #[test]

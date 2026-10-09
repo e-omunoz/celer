@@ -342,6 +342,10 @@ fn mssql_engine() {
         }
     }
 
+    // money / smallmoney: exact, with their 4 decimals.
+    let (_, m) = all_rows(d, "SELECT CAST(123456789012.3456 AS money), CAST(12.5 AS money), CAST(-214748.3648 AS smallmoney), CAST(NULL AS money)");
+    assert_eq!(m[0].iter().map(txt).collect::<Vec<_>>(), vec!["123456789012.3456", "12.5000", "-214748.3648", "NULL"]);
+
     // Unicode through N'' literals (as the interface writes them).
     d.execute("IF OBJECT_ID('dbo.uni') IS NOT NULL DROP TABLE dbo.uni; CREATE TABLE dbo.uni (id int PRIMARY KEY, s nvarchar(50), v varchar(50))", 10).unwrap();
     d.execute("INSERT INTO dbo.uni VALUES (1, N'😀 李 ñ ж', N'ñandú')", 10).unwrap();
