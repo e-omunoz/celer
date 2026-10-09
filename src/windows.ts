@@ -66,6 +66,7 @@ import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, ope
 import { closeSchemaCompare, openSyncScript, schemaCompare, setSchemaCompare, swapCompare } from "./schemaCompareRun";
 import { closeDataCompare, dataCompare, openDataSyncScript, setDataCompare, swapDataCompare } from "./dataCompareRun";
 import { installOnClose } from "./update";
+import { raw } from "./raw";
 import type { CompletionSchema, ObjectRef, Settings } from "./types";
 import {
   cascadeFrom,
@@ -384,7 +385,15 @@ async function cascadeAt(): Promise<[number, number] | null> {
 function tabMessage(tabs: Tab[], index: number | null): Message {
   const passwords: Record<string, string> = {};
   for (const tab of tabs) if (tab.connId && state.passwords[tab.connId]) passwords[tab.connId] = state.passwords[tab.connId];
-  return { kind: "adopt", tabs: clone(tabs), index, passwords };
+  // The plain tabs behind the store, not a clone: the message is serialized once on its way, and a loaded result
+  // can be up to a million rows.
+  return { kind: "adopt", tabs: tabs.map(raw), index, passwords };
+}
+
+/** Rows a tab carries with it to another window (its results, pinned ones included, or a table's page). */
+function loadedRows(tab: Tab): number {
+  if (tab.kind === "table") return tab.rows.length;
+  return [...tab.results, ...tab.pinned.map((pin) => pin.result)].reduce((sum, result) => sum + result.rows.length, 0);
 }
 
 /**
@@ -400,6 +409,8 @@ export async function sendTab(tabId: string, target: string | null, options: { a
     notify(blocker, "warning");
     return;
   }
+  const rows = loadedRows(tab);
+  if (rows > 100_000) notify(`Moviendo la pestaña con ${rows.toLocaleString()} filas cargadas: puede tardar unos segundos`, "info");
   const message = tabMessage([tab], options.index ?? null);
   let sent: boolean;
   if (target) {
