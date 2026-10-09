@@ -37,3 +37,7 @@ installer/src-tauri/gen/schemas/
 
 # Macro review scratch output (screenshots, downloads)
 review-out/
+
+# Engine test output (the workflow collects it; see CELER_ENGINE_OUT)
+target-showplan-*.xml
+target-informix-speed.txt

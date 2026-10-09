@@ -141,6 +141,12 @@ fn result_set(d: &mut dyn Driver, sql: &str) -> ResultSet {
 /// A test that hangs fails instead: after `secs` it prints the JDBC bridge's threads (if it runs) and ends the process.
 struct Watchdog(Option<std::sync::mpsc::Sender<()>>);
 
+/// Where a test leaves a file for the engines workflow to collect: `CELER_ENGINE_OUT` (the workflow sets it), else the
+/// system's temp folder, never the checkout.
+fn engine_out(name: &str) -> std::path::PathBuf {
+    std::env::var_os("CELER_ENGINE_OUT").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(name)
+}
+
 fn watchdog(what: &'static str, secs: u64) -> Watchdog {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
@@ -358,7 +364,7 @@ fn mssql_engine() {
         let out = d.execute(sql, 10).unwrap();
         let xml = out.results.iter().find(|r| !r.columns.is_empty()).map(|r| txt(&r.rows[0][0])).unwrap_or_default();
         assert!(xml.contains("<ShowPlanXML") && xml.contains("<QueryPlan"), "{name}: {xml:.200}");
-        let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-showplan-").to_string() + name + ".xml", &xml);
+        let _ = std::fs::write(engine_out(&format!("target-showplan-{name}.xml")), &xml);
     }
     d.execute("SET SHOWPLAN_XML OFF", 1).unwrap();
     assert_eq!(scalar(d, "SELECT importe FROM dbo.celer_t WHERE id = 1"), "120.50", "el UPDATE bajo SHOWPLAN no debe ejecutarse");
@@ -944,7 +950,7 @@ fn informix_speed() {
     }
     let text = report.join("\n");
     println!("\n{text}\n");
-    let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-informix-speed.txt"), text);
+    let _ = std::fs::write(engine_out("target-informix-speed.txt"), text);
 }
 
 // ───────────────────────────────────────────────────────────────── reconnection and the pool (guard.rs)

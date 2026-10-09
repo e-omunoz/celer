@@ -1,8 +1,0 @@
-200.000 filas, páginas de 5.000       conexión      mejor    mediana    filas/s
-DRDA (IBM CLI)                           13 ms    1802 ms    1821 ms     109793
-JDBC, como lo usa Celer                  17 ms     727 ms     727 ms     274979
-JDBC, FET_BUF_SIZE del driver            16 ms    1359 ms    1367 ms     146258
-JDBC, FET_BUF_SIZE=32767                 16 ms     800 ms     806 ms     248103
-JDBC, FET_BUF_SIZE=262144                16 ms     726 ms     734 ms     272240
-JDBC, FET_BUF_SIZE=1048576               16 ms     745 ms     751 ms     266131
-JDBC, FET_BUF_SIZE=4194304               15 ms    1063 ms    1065 ms     187677
