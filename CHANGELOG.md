@@ -6,6 +6,11 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
+  closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
+  *mayúsculas / regexp / palabra completa* toggles, which light up when on (#88).
+
 ## [2.1.1] - 2026-10-09
 
 ### Fixed
