@@ -348,6 +348,12 @@ struct Bridge {
 static BRIDGE: LazyLock<Mutex<Option<Arc<Bridge>>>> = LazyLock::new(|| Mutex::new(None));
 static NEXT_SESSION: AtomicU32 = AtomicU32::new(1);
 
+/// What Java wrote on stdout instead of the bridge's hello, as a line for the error.
+fn stray_output(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    format!("Java escribió en la salida del puente: {}", text.trim())
+}
+
 /// The bridge jar in Celer's data folder (named after its hash: a new Celer writes its own).
 fn bridge_jar(dir: &Path) -> Result<PathBuf> {
     if BRIDGE_JAR.is_empty() {
@@ -386,6 +392,9 @@ impl Bridge {
         // Celer's data (a user name the console code page cannot write never reaches Java's command line), and Java
         // writes nothing elsewhere: no hsperfdata, and its temporary files (a driver's LOB cache) go there too.
         let _ = std::fs::create_dir_all(folder.join("tmp"));
+        // stdout is the protocol: the JVM's own warnings (unified logging and the rest of its output go to stdout by
+        // default) are sent to stderr. A JRE without its base CDS archive (DBeaver's) warns about it at start.
+        cmd.args(["-Xlog:disable", "-Xlog:all=warning:stderr", "-XX:+DisplayVMOutputToStderr"]);
         cmd.args(["-XX:+UseSerialGC", "-XX:-UsePerfData", "-Xss2m", "-Djava.awt.headless=true", "-Djava.io.tmpdir=tmp"]);
         if rt.java_major >= 19 {
             // Class data of the bridge and the driver, kept from one start to the next (JDK 19+): a faster start.
@@ -464,6 +473,12 @@ impl Bridge {
             }
             let n = u32::from_le_bytes(len) as usize;
             if !(5..=MAX_FRAME).contains(&n) {
+                if first {
+                    // Not the bridge's hello: text Java wrote before it, which the error then shows.
+                    let mut text = len.to_vec();
+                    let _ = r.by_ref().take(2048).read_until(b'\n', &mut text);
+                    self.stderr.lock().push_back(stray_output(&text));
+                }
                 break;
             }
             let mut frame = vec![0u8; n];
@@ -1108,6 +1123,15 @@ mod tests {
         assert_eq!(get(&props, "OPT"), vec!["a=b"]);
     }
 
+    /// A JVM warning on stdout (DBeaver's JRE has no base CDS archive) is shown, not dropped.
+    #[test]
+    fn stray_output_is_shown() {
+        let warning = b"[0.003s][warning][cds] -XX:ArchiveClassesAtExit is unsupported when base CDS archive is not loaded.\r\n";
+        let line = stray_output(warning);
+        assert!(line.starts_with("Java escribió en la salida del puente: [0.003s][warning][cds]"), "{line}");
+        assert!(!line.ends_with('\n'), "{line}");
+    }
+
     /// The real bridge, when CI has a Java to run it (CELER_TEST_JAVA): it starts, says hello and answers errors.
     #[test]
     fn bridge_answers() {
@@ -1115,7 +1139,8 @@ mod tests {
         assert!(bridge_included(), "CI builds the bridge (CELER_REQUIRE_BRIDGE=1)");
         let dir = std::env::temp_dir().join(format!("celer-bridge-test-{}", std::process::id()));
         let class = "com.informix.jdbc.IfxDriver";
-        let rt = Runtime { java: PathBuf::from(java), java_major: 11, driver_class: class.into(), jars: vec![dir.join("no-such-driver.jar")], dir: dir.clone() };
+        // CI runs Java 21: the bridge starts with the class-data archive options it gets from a JRE 19 and newer.
+        let rt = Runtime { java: PathBuf::from(java), java_major: 21, driver_class: class.into(), jars: vec![dir.join("no-such-driver.jar")], dir: dir.clone() };
         let err = check(&rt).unwrap_err().to_string();
         assert!(err.contains("ClassNotFound") || err.contains(class), "{err}");
         // A connection whose driver cannot load fails cleanly, and the bridge keeps serving.
