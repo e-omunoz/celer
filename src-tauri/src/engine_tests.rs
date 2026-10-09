@@ -1113,6 +1113,8 @@ fn informix_jdbc_reconnects() {
 /// A data folder of its own (its known_hosts starts empty) with the Informix drivers of the environment in its
 /// settings, as the app keeps them: what `lib.rs prepare` reads.
 fn sample_store(name: &str) -> crate::store::Store {
+    // The IBM CLI reads one db2dsdriver.cfg per process: the suite's (as informix_cfg), not this throwaway folder's.
+    crate::drivers::use_cli_cfg_dir(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/target/celer-engine-tests")));
     let dir = std::env::temp_dir().join(format!("celer-sample-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1130,7 +1132,7 @@ fn sample_store(name: &str) -> crate::store::Store {
 /// per engine of dev/wsl/compose.yml, printed by dev/migrate-sample.ts) open as imported, through lib.rs `prepare`,
 /// and answer a query. ODBC needs the DSN CelerPG (a PostgreSQL ODBC data source); without it, it is skipped.
 #[test]
-fn imported_connections_connect() {
+fn migrated_connections_connect() {
     if spec("CELER_PG_TEST").is_none() {
         return;
     }
@@ -1195,7 +1197,7 @@ fn imported_connections_connect() {
 /// opens nothing), and given back to the connections as the interface does on import; each one then connects from a
 /// fresh data folder without any password typed.
 #[test]
-fn exported_passwords_connect_after_import() {
+fn migrated_passwords_connect_after_export_and_import() {
     if spec("CELER_PG_TEST").is_none() {
         return;
     }

@@ -1,6 +1,6 @@
 // Prints, as JSON, the connections the migration assistant makes of the samples in dev/fixtures/migrate (DBeaver with
-// its saved credentials, and DbVisualizer), for src-tauri/src/engine_tests.rs `imported_connections_connect`, which
-// opens each one against the engines of dev/wsl/compose.yml.
+// its saved credentials, and DbVisualizer), for src-tauri/src/engine_tests.rs `migrated_connections_connect` and
+// `migrated_passwords_connect_after_export_and_import`, which open each one against the engines of dev/wsl/compose.yml.
 //   node --experimental-strip-types dev/migrate-sample.ts
 import { readFileSync } from "node:fs";
 import { applyDbeaverCredentials, parseDbeaver, parseDbVisualizer } from "../src/migrateParse.ts";

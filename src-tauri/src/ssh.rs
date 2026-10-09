@@ -513,7 +513,13 @@ async fn open_tunnel(plan: Plan) -> Result<Tunnel> {
         sessions.push(Arc::new(session));
         summary.push(label);
     }
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| anyhow!("SSH: no se pudo abrir un puerto local para el túnel: {e}"))?;
+    // The same local port every time for the same connection and server when it is free: Informix over DRDA keeps
+    // its "no automatic reconnection" setting per host and port in db2dsdriver.cfg (drivers.rs cli_acr_off), which
+    // the IBM CLI reads once, so a port that changed on every tunnel would leave it out.
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", plan.preferred_port())).await {
+        Ok(listener) => listener,
+        Err(_) => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| anyhow!("SSH: no se pudo abrir un puerto local para el túnel: {e}"))?,
+    };
     let local_port = listener.local_addr()?.port();
     let active = Arc::new(AtomicUsize::new(0));
     let last_used = Arc::new(Mutex::new(Instant::now()));
@@ -600,6 +606,16 @@ impl Plan {
         hasher.update(serde_json::to_string(&(&cfg.ssh, &target)).unwrap_or_default().as_bytes());
         let key = format!("{}:{}", cfg.id, hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>());
         Ok(Plan { key, ssh: cfg.ssh.clone(), hops, target, known: Arc::new(KnownHosts::new(data_dir)) })
+    }
+
+    /// The local port this connection's tunnel asks for first: fixed for a connection and its server, in 20000-29999
+    /// (below the systems' ephemeral ports, so a random outgoing connection rarely holds it).
+    pub fn preferred_port(&self) -> u16 {
+        let owner = self.key.split(':').next().unwrap_or("");
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{owner}\n{}\n{}", self.target.0, self.target.1).as_bytes());
+        let digest = hasher.finalize();
+        20000 + (u16::from_be_bytes([digest[0], digest[1]]) % 10000)
     }
 
     /// "user@bastion:22 → db:5432", for the route of «Probar conexión».
@@ -721,6 +737,12 @@ oT+7zi7n5b16A2yisQfOaro8B1uWQy6ZmZvlCLI6DQ6tI5st2f4D4NYouIPMGOmCoKXTwY
         other.ssh.password = Some("otra".into());
         assert_ne!(Plan::new(&other, &dir).unwrap().key, plan.key);
         // A key that is neither a file nor pasted.
+        // The local port is the same for the connection and its server (whatever the secrets), in 20000-29999.
+        let port = plan.preferred_port();
+        assert!((20000..30000).contains(&port));
+        assert_eq!(Plan::new(&other, &dir).unwrap().preferred_port(), port);
+        let elsewhere = ConnConfig { host: "otra".into(), ..cfg.clone() };
+        assert_ne!(Plan::new(&elsewhere, &dir).unwrap().preferred_port(), port);
         cfg.ssh.auth = "key".into();
         assert!(Plan::new(&cfg, &dir).err().unwrap().to_string().contains("clave privada"));
         cfg.ssh.private_key = Some("-----BEGIN OPENSSH PRIVATE KEY-----".into());
