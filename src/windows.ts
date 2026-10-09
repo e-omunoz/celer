@@ -31,6 +31,7 @@ import {
   connectionById,
   detachTab,
   disconnect,
+  endTransactions,
   explainStatement,
   fileDirty,
   insertIntoActive,
@@ -43,6 +44,7 @@ import {
   refreshConnections,
   releaseWindowSessions,
   replaceActiveSql,
+  settleTransactions,
   restoreTabs,
   runText,
   savedTabs,
@@ -606,9 +608,14 @@ function ownRisk(): WindowRisk {
   };
 }
 
+/** This window's consoles with an open transaction. */
+const txTabIds = () => state.tabs.filter((tab) => tab.kind === "sql" && tab.inTransaction).map((tab) => tab.id);
+
 async function answer(message: Message) {
   let value: unknown = null;
   if (message.question === "risk") value = ownRisk();
+  // Quitting Celer: the user chose Commit or Rollback for every window's open transactions (confirmQuit).
+  if (message.question === "tx-commit" || message.question === "tx-rollback") value = await endTransactions(txTabIds(), message.question === "tx-rollback");
   if (message.question === "flush") {
     await persistNow().catch(() => {});
     // The window that downloaded an update installs it as Celer closes.
@@ -638,7 +645,7 @@ export interface WindowChoice {
 const [windowAsk, setWindowAsk] = createStore({ current: null as { title: string; body: string; choices: WindowChoice[]; resolve: (value: string) => void } | null });
 export { windowAsk };
 
-function askWindow(title: string, body: string, choices: WindowChoice[]): Promise<string> {
+export function askWindow(title: string, body: string, choices: WindowChoice[]): Promise<string> {
   windowAsk.current?.resolve("");
   return new Promise<string>((resolve) => setWindowAsk("current", { title, body, choices, resolve }));
 }
@@ -708,15 +715,24 @@ async function handOverTabs(target: string): Promise<boolean> {
   const risky = riskyTabs(tabRisks());
   if (!risky.length) return true;
   const tx = risky.some((tab) => tab.transaction);
+  // Open transactions: Commit or Rollback here, or the consoles go on in the other window (never an implicit commit).
   const choice = await askWindow(
     `Cerrar ${windowName(windowLabel)}`,
-    `Tiene ${riskSummary(risky)}. Puedes moverlas a ${windowName(target)}, con sus sesiones como están; si no, se pierden${tx ? " y las transacciones se deshacen" : ""}.`,
-    [
-      { label: "Cerrar y descartar", value: "discard", style: "danger" },
-      { label: `Moverlas a ${windowName(target)}`, value: "move", style: "primary" },
-    ],
+    tx
+      ? `Tiene ${riskSummary(risky)}. Puedes moverlas a ${windowName(target)}, con sus sesiones y transacciones como están; si no, elige qué hacer con las transacciones (lo demás se pierde).`
+      : `Tiene ${riskSummary(risky)}. Puedes moverlas a ${windowName(target)}, con sus sesiones como están; si no, se pierden.`,
+    tx
+      ? [
+          { label: "Commit y cerrar", value: "commit" },
+          { label: "Rollback y cerrar", value: "discard", style: "danger" },
+          { label: `Moverlas a ${windowName(target)}`, value: "move", style: "primary" },
+        ]
+      : [
+          { label: "Cerrar y descartar", value: "discard", style: "danger" },
+          { label: `Moverlas a ${windowName(target)}`, value: "move", style: "primary" },
+        ],
   );
-  if (choice === "discard") return true;
+  if (choice === "commit" || choice === "discard") return endTransactions(txTabIds(), choice === "discard");
   if (choice !== "move") return false;
   const ids = new Set(risky.map((tab) => tab.id));
   const tabs = state.tabs.filter((tab) => ids.has(tab.id));
@@ -744,13 +760,34 @@ export async function confirmQuit(): Promise<boolean> {
   const risks = [ownRisk(), ...(await askAll<WindowRisk | null>("risk")).filter((r): r is WindowRisk => Boolean(r))];
   const tx = risks.reduce((n, r) => n + r.tx, 0);
   const edits = risks.reduce((n, r) => n + r.edits, 0);
-  if (tx || edits) {
-    const parts = [
-      tx ? `${tx} ${tx === 1 ? "consola con una transacción abierta (se deshará)" : "consolas con transacciones abiertas (se desharán)"}` : "",
-      edits ? `${edits} ${edits === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}` : "",
-    ].filter(Boolean);
-    const where = risks.filter((r) => r.tx || r.edits).map((r) => windowName(r.label));
-    const ok = await confirmDialog("¿Salir de Celer?", `Hay ${parts.join(" y ")} en ${where.join(", ")}.`, "Salir de todos modos", true);
+  if (tx) {
+    // Only this window's: the same question as with one window.
+    if (tx === risks[0].tx) {
+      if (!(await settleTransactions(state.tabs, "salir de Celer"))) return false;
+    } else {
+      const where = risks.filter((r) => r.tx).map((r) => windowName(r.label));
+      const choice = await askWindow(
+        "¿Salir de Celer?",
+        `Hay ${tx} ${tx === 1 ? "consola con una transacción abierta" : "consolas con transacciones abiertas"} en ${where.join(", ")}. Antes de salir, confírmalas (Commit) o deshazlas (Rollback).`,
+        [
+          { label: "Commit en todas", value: "commit", style: "primary" },
+          { label: "Rollback en todas", value: "rollback", style: "danger" },
+        ],
+      );
+      if (choice !== "commit" && choice !== "rollback") return false;
+      const rollback = choice === "rollback";
+      const own = await endTransactions(txTabIds(), rollback);
+      // A window that does not answer in time keeps its transactions, and Celer stays open.
+      const answers = await askAll<boolean | null>(rollback ? "tx-rollback" : "tx-commit", 15000);
+      if (!own || answers.length < risks.length - 1 || answers.some((ok) => ok !== true)) {
+        notify("No se pudieron cerrar todas las transacciones: Celer sigue abierto", "error");
+        return false;
+      }
+    }
+  }
+  if (edits) {
+    const where = risks.filter((r) => r.edits).map((r) => windowName(r.label));
+    const ok = await confirmDialog("¿Salir de Celer?", `Hay ${edits} ${edits === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"} en ${where.join(", ")}.`, "Salir de todos modos", true);
     if (!ok) return false;
   }
   await Promise.all([persistNow().catch(() => {}), askAll("flush", 2000)]);

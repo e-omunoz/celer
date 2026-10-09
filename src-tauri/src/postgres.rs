@@ -2305,6 +2305,18 @@ mod tests {
         assert!(!server_in_tx(&mut d));
     }
 
+    /// A console closed (or Celer quitting) with its manual transaction open never commits it.
+    #[test]
+    fn pg_close_never_commits() {
+        let Some(mut d) = driver() else { return };
+        d.execute("DROP TABLE IF EXISTS tx_close; CREATE TABLE tx_close (id int); INSERT INTO tx_close VALUES (1), (2), (3)", 10).unwrap();
+        let other = driver().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "DELETE FROM tx_close WHERE id > 1", "SELECT count(*) FROM tx_close");
+        let other = driver().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "INSERT INTO tx_close VALUES (4)", "SELECT count(*) FROM tx_close");
+        d.execute("DROP TABLE tx_close", 10).unwrap();
+    }
+
     #[test]
     fn pg_cancel() {
         let Some(mut d) = driver() else { return };

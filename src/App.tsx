@@ -37,7 +37,7 @@ import {
 } from "./state";
 import { engineOf } from "./types";
 import { UpdateDialog } from "./components/UpdateDialog";
-import { EnvChip } from "./components/ConsoleSafety";
+import { EnvChip, TxStatus } from "./components/ConsoleSafety";
 import { MigrateDialog } from "./components/MigrateDialog";
 import { migration, openMigration } from "./migrate";
 import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
@@ -220,9 +220,7 @@ function StatusBar() {
         <EnvChip conn={conn()} short tiny />
         <Show when={session()?.serverInfo}><span class="st-item muted st-server" title={session()!.serverInfo}>{session()!.serverInfo.split("\n")[0]}</span></Show>
       </Show>
-      <Show when={tab()?.kind === "sql" && (tab() as { inTransaction: boolean }).inTransaction}>
-        <span class="tag warn tiny">TX pendiente</span>
-      </Show>
+      <TxStatus />
       <span class="spacer" />
       <Show when={stats()}>
         <span class="st-item stats" title="Agregados de la selección">

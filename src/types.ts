@@ -252,6 +252,14 @@ export interface Settings {
   favoriteConns: string[];
   /** Explorer: the connections connected to last, newest first. */
   recentConns: { id: string; at: number }[];
+  /** Manual transactions: seconds open before the console's indicator turns amber, then red (src/txWatch.ts). */
+  txWarnSecs: number;
+  txAlertSecs: number;
+  /** The same on production connections (stricter). */
+  txProdWarnSecs: number;
+  txProdAlertSecs: number;
+  /** A reminder (Gib, or a notice when he is off) once a transaction passes the red threshold, and again each time. */
+  txRemind: boolean;
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -308,6 +316,11 @@ export const defaultSettings: Settings = {
   connSort: "manual",
   favoriteConns: [],
   recentConns: [],
+  txWarnSecs: 60,
+  txAlertSecs: 300,
+  txProdWarnSecs: 30,
+  txProdAlertSecs: 120,
+  txRemind: true,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

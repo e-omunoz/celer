@@ -2118,6 +2118,18 @@ mod tests {
         cell_i64(&d.execute(sql, 10).unwrap().results[0].rows[0][0])
     }
 
+    /// A console closed (or Celer quitting) with its manual transaction open never commits it.
+    #[test]
+    fn close_never_commits() {
+        let Some(mut d) = connect() else { return };
+        d.execute("DROP TABLE IF EXISTS tx_close; CREATE TABLE tx_close (id INT) ENGINE=InnoDB; INSERT INTO tx_close VALUES (1), (2), (3)", 10).unwrap();
+        let other = connect().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "DELETE FROM tx_close WHERE id > 1", "SELECT COUNT(*) FROM tx_close");
+        let other = connect().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "INSERT INTO tx_close VALUES (4)", "SELECT COUNT(*) FROM tx_close");
+        d.execute("DROP TABLE tx_close", 10).unwrap();
+    }
+
     #[test]
     fn it_cancels() {
         let Some(mut d) = connect() else { return };

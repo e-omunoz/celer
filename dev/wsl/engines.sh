@@ -36,7 +36,10 @@ engine_env() {
   export CELER_MSSQL_TEST="host=localhost port=1433 user=sa password=$MSSQL_PASSWORD"
   export CELER_INFORMIX_TEST="host=localhost port=9089 user=informix password=in4mix database=celer"
   export CELER_INFORMIX_JDBC_TEST="host=$ifx_ip port=9088 user=informix password=in4mix database=celer server=informix proxied=localhost"
-  export CELER_IBM_LIB="$D/clidriver/lib/libdb2.so" LD_LIBRARY_PATH="$D/clidriver/lib"
+  # compat: libraries the IBM CLI needs that newer distros dropped (libxml2.so.2), when setup put them there.
+  export CELER_IBM_LIB="$D/clidriver/lib/libdb2.so" LD_LIBRARY_PATH="$D/clidriver/lib:$D/compat"
+  # Generic ODBC through the PostgreSQL ODBC driver (psqlODBC), when it is installed.
+  odbcinst -q -d 2>/dev/null | grep -q "PostgreSQL Unicode" && export CELER_ODBC_TEST="DRIVER={PostgreSQL Unicode};SERVER=localhost;PORT=15432;DATABASE=celer;UID=celer;PWD=celer"
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"
   export CELER_JDBC_JARS="$D/jdbc/jdbc-15.0.1.4.jar:$D/jdbc/bson-3.8.0.jar"
   export CELER_REQUIRE_BRIDGE=1 CELER_NODE=node CELER_INFORMIX_CONTAINER=celer-ifx

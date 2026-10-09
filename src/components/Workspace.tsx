@@ -125,7 +125,7 @@ import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, star
 import { windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
-import { EnvChip, EnvStrip } from "./ConsoleSafety";
+import { EnvChip, EnvStrip, TxIndicator, TxTabBadge } from "./ConsoleSafety";
 import { envOf } from "../environment";
 
 export function Workspace() {
@@ -194,7 +194,8 @@ function TabBar() {
       <For each={state.tabs}>
         {(tab, index) => {
           const conn = () => connectionById(tab.connId);
-          const dirty = () => (tab.kind === "table" ? tableDirty(tab) : tab.inTransaction);
+          const dirty = () => tab.kind === "table" && tableDirty(tab);
+          const tx = () => tab.kind === "sql" && tab.inTransaction;
           const busy = () => (tab.kind === "sql" ? tab.running : tab.loading);
           return (
             <div
@@ -257,7 +258,8 @@ function TabBar() {
                 />
               </Show>
               <Show when={busy()}><span class="tab-spinner" /></Show>
-              <Show when={dirty() && !busy()}><span class="tab-dirty" title={tab.kind === "table" ? "Cambios sin guardar" : "Transacción abierta"} /></Show>
+              <Show when={dirty() && !busy()}><span class="tab-dirty" title="Cambios sin guardar" /></Show>
+              <Show when={tx()}><TxTabBadge tab={tab as SqlTab} /></Show>
               <button
                 type="button"
                 class="tab-close"
@@ -460,7 +462,7 @@ function SqlPane(props: { tab: SqlTab }) {
         <button type="button" class="tb-icon rollback" title={withShortcut("Rollback", "rollback")} disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>
           <Undo2 size={16} />
         </button>
-        <Show when={props.tab.inTransaction}><span class="tag warn">Transacción abierta</span></Show>
+        <TxIndicator tab={props.tab} />
         <span class="tb-sep" />
         <button type="button" class="tb-icon secondary" title={withShortcut("Formatear SQL", "format")} onClick={formatActive}>
           <AlignLeft size={16} />

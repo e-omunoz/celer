@@ -29,12 +29,13 @@ import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, par
 import { activitySpec, readSessions, synapseDedicated, type ServerSession } from "./activity";
 import type { AiMessage } from "./ai";
 import { insertAt } from "./windowModel";
-import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
+import { askWindow, forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
 import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
 import { envOf, normalizeEnvironment } from "./environment";
+import { NO_TX, countStatements, reminderDue, txAfterRun, txDuration, txLabel, txThresholds } from "./txWatch";
 import type { ColumnOrder } from "./columnOrder";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
@@ -69,6 +70,10 @@ export interface SqlTab {
   startedAt: number | null;
   running: boolean;
   inTransaction: boolean;
+  /** The open manual transaction: when it began, statements run in it, reminders given (src/txWatch.ts). */
+  txStartedAt: number | null;
+  txStatements: number;
+  txReminders: number;
   autocommit: boolean;
   completion: CompletionSchema | null;
   lastSql: string;
@@ -355,7 +360,7 @@ export const [resolvedTheme, setResolvedTheme] = createSignal<Exclude<ThemeName,
 
 /** Things Gib reacts to. The companion decides how (mood, tip, nothing). */
 export interface GibEvent {
-  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off";
+  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off" | "tx-open";
   at: number;
   ms?: number;
   detail?: string;
@@ -595,6 +600,7 @@ export function blankSql(id: string, connId: string | null = null, sql = "", tit
     startedAt: null,
     running: false,
     inTransaction: false,
+    ...NO_TX,
     autocommit: true,
     completion: null,
     lastSql: "",
@@ -675,11 +681,11 @@ export function persistNow() {
 
 /** Before the window closes: warn about open transactions and unsaved table edits, then save the workspace. */
 export async function beforeClose(): Promise<boolean> {
-  const tx = state.tabs.filter((tab) => tab.kind === "sql" && tab.inTransaction).length;
+  // Open transactions: Commit, Rollback or stay (never an implicit commit).
+  if (!(await settleTransactions(state.tabs, "cerrar Celer"))) return false;
   const dirty = state.tabs.filter((tab) => tab.kind === "table" && tableDirty(tab)).length;
-  if (tx || dirty) {
-    const parts = [tx ? `${tx} ${tx === 1 ? "consola con una transacción abierta (se deshará)" : "consolas con transacciones abiertas (se desharán)"}` : "", dirty ? `${dirty} ${dirty === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}` : ""].filter(Boolean);
-    const ok = await confirmDialog("¿Cerrar Celer?", `Hay ${parts.join(" y ")}.`, "Cerrar de todos modos", true);
+  if (dirty) {
+    const ok = await confirmDialog("¿Cerrar Celer?", `Hay ${dirty} ${dirty === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}.`, "Cerrar de todos modos", true);
     if (!ok) return false;
   }
   await persistNow().catch(() => {});
@@ -1125,6 +1131,7 @@ export async function submitConnection(cfg: ConnConfig) {
 export async function removeConnection(id: string) {
   const conn = connectionById(id);
   if (!conn) return;
+  if (!(await settleTransactions(state.tabs.filter((tab) => tab.connId === id), `eliminar «${conn.name}»`))) return;
   const ok = await confirmDialog(`Eliminar «${conn.name}»`, "Se borrará la conexión y su contraseña guardada. Las consolas abiertas se quedarán sin conexión.", "Eliminar", true);
   if (!ok) return;
   await disconnect(id, false);
@@ -1322,6 +1329,7 @@ const connectGeneration = (connId: string) => generations[connId] ?? 0;
  * confirmed first (they would be lost); consoles and tables stay open and reconnect on their next run or reload.
  */
 export async function disconnect(connId: string, confirm = true) {
+  if (confirm && !(await settleTransactions(state.tabs.filter((tab) => tab.connId === connId), `desconectar «${connectionById(connId)?.name ?? ""}»`))) return;
   const affected = state.tabs.filter((tab) => tab.connId === connId);
   const inTransaction = affected.filter((tab) => tab.kind === "sql" && tab.inTransaction).length;
   const dirty = affected.filter((tab) => tab.kind === "table" && tableDirty(tab)).length;
@@ -1475,18 +1483,12 @@ export function updateSql(id: string, sql: string, cursor: number, selection: st
 export async function setTabConnection(tabId: string, connId: string) {
   const before = state.tabs[tabIndex(tabId)];
   if (!before || before.kind !== "sql" || before.connId === connId) return;
-  // Its session closes: same confirmation as closing the console.
-  if (before.inTransaction || before.running) {
-    const ok = await confirmDialog(
-      before.inTransaction ? "Transacción abierta" : "Sentencia en curso",
-      before.inTransaction
-        ? "La consola tiene una transacción sin confirmar. Al cambiar de conexión se deshará (rollback)."
-        : "La consola está ejecutando una sentencia. Al cambiar de conexión se interrumpirá.",
-      before.inTransaction ? "Cambiar y deshacer" : "Cambiar de conexión",
-      true,
-    );
+  // Its session closes: same questions as closing the console.
+  if (before.running) {
+    const ok = await confirmDialog("Sentencia en curso", "La consola está ejecutando una sentencia. Al cambiar de conexión se interrumpirá.", "Cambiar de conexión", true);
     if (!ok) return;
   }
+  if (!(await settleTransactions([before], "cambiar de conexión"))) return;
   const index = tabIndex(tabId);
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "sql" || tab.connId === connId) return;
@@ -1747,7 +1749,7 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       resultsSql: sql,
       messages: output.messages,
       elapsedMs: output.elapsedMs,
-      inTransaction: output.inTransaction,
+      ...txAfterRun(txOf(tab.id), output.inTransaction, countStatements(sql, conn?.kind), Date.now()),
       error: "",
     });
     const summary = describeResults(output.results, output.elapsedMs);
@@ -1816,10 +1818,18 @@ export function canAnalyze(tab: SqlTab, sql: string): boolean {
 function afterSideStatement(tabId: string, inTransaction: boolean | null): Partial<SqlTab> {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "sql") return {};
-  const patch: Partial<SqlTab> = {};
+  let patch: Partial<SqlTab> = {};
   if (tab.results.some((result) => result.hasMore)) patch.results = tab.results.map((result) => (result.hasMore ? { ...result, hasMore: false } : result));
-  if (inTransaction !== null) patch.inTransaction = inTransaction;
+  if (inTransaction !== null) patch = { ...patch, ...txAfterRun(txOf(tabId), inTransaction, 1, Date.now()) };
   return patch;
+}
+
+/** A console's transaction as txWatch.ts reads it. */
+function txOf(tabId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  return tab?.kind === "sql"
+    ? { inTransaction: tab.inTransaction, txStartedAt: tab.txStartedAt ?? null, txStatements: tab.txStatements ?? 0, txReminders: tab.txReminders ?? 0 }
+    : { inTransaction: false, ...NO_TX };
 }
 
 /**
@@ -2051,10 +2061,12 @@ function concatRows(current: Cell[][], extra: Cell[][]): Cell[][] {
 export async function changeAutocommit(on: boolean) {
   const tab = activeSql();
   if (!tab) return;
+  // Back to Auto with a transaction open: some drivers would commit it on their own (JDBC does), so it is asked.
+  if (on && !(await settleTransactions([tab], "pasar a modo automático"))) return;
   try {
     const ready = await ensureSqlSession(tab);
     const inTransaction = await api().setAutocommit(ready.sessionId!, on);
-    patchTab(ready.id, { autocommit: on, inTransaction });
+    patchTab(ready.id, { autocommit: on, ...txAfterRun(txOf(ready.id), inTransaction, 0, Date.now()) });
     persistSoon();
   } catch (err) {
     notify(errorText(err), "error");
@@ -2066,7 +2078,7 @@ export async function commitActive(rollback = false) {
   if (!tab?.sessionId) return;
   try {
     const inTransaction = rollback ? await api().rollback(tab.sessionId) : await api().commit(tab.sessionId);
-    patchTab(tab.id, { inTransaction });
+    patchTab(tab.id, { inTransaction, ...NO_TX });
     pushOutput(tab.id, { at: Date.now(), sql: rollback ? "ROLLBACK" : "COMMIT", ok: true, text: rollback ? "Transacción deshecha" : "Transacción confirmada", elapsedMs: null });
     notify(rollback ? "Rollback hecho" : "Commit hecho", "success");
     gib(rollback ? "rollback" : "commit");
@@ -2075,12 +2087,105 @@ export async function commitActive(rollback = false) {
   }
 }
 
+/**
+ * Before something that would end consoles' open transactions (closing them or the window, disconnecting, another
+ * connection or database, Auto mode, quitting): Commit, Rollback or Cancelar, never an implicit commit. True when it
+ * can go on, with every transaction ended as chosen; false when cancelled or a commit failed.
+ */
+export async function settleTransactions(tabs: readonly Tab[], doing: string): Promise<boolean> {
+  const open = tabs.filter((tab): tab is SqlTab => tab.kind === "sql" && tab.inTransaction && Boolean(tab.sessionId));
+  if (!open.length) return true;
+  const at = Date.now();
+  const describe = (tab: SqlTab) => `«${tab.title}»${tab.txStartedAt ? ` (${txDuration(at - tab.txStartedAt)}, ${tab.txStatements} ${tab.txStatements === 1 ? "sentencia" : "sentencias"})` : ""}`;
+  const one = open.length === 1;
+  const choice = await askWindow(
+    one ? "Transacción abierta" : `${open.length} transacciones abiertas`,
+    `${one ? `La consola ${describe(open[0])} tiene una transacción` : `Las consolas ${open.map(describe).join(", ")} tienen transacciones`} sin confirmar. Antes de ${doing}, confírma${one ? "la" : "las"} (Commit) o deshaz${one ? "la" : "las"} (Rollback).`,
+    [
+      { label: one ? "Commit" : "Commit en todas", value: "commit", style: "primary" },
+      { label: one ? "Rollback" : "Rollback en todas", value: "rollback", style: "danger" },
+    ],
+  );
+  if (choice !== "commit" && choice !== "rollback") return false;
+  return endTransactions(open.map((tab) => tab.id), choice === "rollback");
+}
+
+/**
+ * Commits or rolls back the open transactions of these consoles. A failed commit stops (false: its changes are not
+ * saved, the user decides); a failed rollback does not (the session closing undoes it, see guard.rs and the drivers).
+ */
+export async function endTransactions(ids: string[], rollback: boolean): Promise<boolean> {
+  let ok = true;
+  for (const id of ids) {
+    const tab = state.tabs[tabIndex(id)];
+    if (tab?.kind !== "sql" || !tab.inTransaction || !tab.sessionId) continue;
+    try {
+      const inTransaction = rollback ? await api().rollback(tab.sessionId) : await api().commit(tab.sessionId);
+      patchTab(id, { inTransaction, ...NO_TX });
+      pushOutput(id, { at: Date.now(), sql: rollback ? "ROLLBACK" : "COMMIT", ok: true, text: rollback ? "Transacción deshecha" : "Transacción confirmada", elapsedMs: null });
+    } catch (err) {
+      pushOutput(id, { at: Date.now(), sql: rollback ? "ROLLBACK" : "COMMIT", ok: false, text: errorText(err), elapsedMs: null });
+      notify(rollback ? `No se pudo deshacer la transacción de «${tab.title}»` : `No se pudo confirmar la transacción de «${tab.title}»: sigue abierta`, "error", errorText(err));
+      if (!rollback) ok = false;
+    }
+  }
+  if (ok) gib(rollback ? "rollback" : "commit");
+  return ok;
+}
+
+/** This window's consoles with an open transaction (the status bar, the reminders). */
+export function openTransactions(): SqlTab[] {
+  return state.tabs.filter((tab): tab is SqlTab => tab.kind === "sql" && tab.inTransaction);
+}
+
+/** How long a console's transaction has been open, at `at` (0 when it has none). */
+export function txAge(tab: SqlTab, at = now()): number {
+  return tab.inTransaction && tab.txStartedAt ? Math.max(0, at - tab.txStartedAt) : 0;
+}
+
+/** The thresholds for a console's connection (stricter on production). */
+export function txThresholdsOf(tab: SqlTab) {
+  return txThresholds(state.settings, Boolean(connectionById(tab.connId)?.production));
+}
+
+/**
+ * Every few seconds while a transaction is open: the clocks move on, a console known open without a start (moved from
+ * a window of an earlier version, or reconnected) starts counting, and one past the red threshold gets a reminder.
+ */
+function watchTransactions() {
+  const open = openTransactions();
+  if (!open.length) return;
+  const at = Date.now();
+  setNow(at);
+  for (const tab of open) {
+    if (!tab.txStartedAt) {
+      patchTab(tab.id, { txStartedAt: at, txStatements: tab.txStatements || 1, txReminders: 0 });
+      continue;
+    }
+    const th = txThresholdsOf(tab);
+    const ms = at - tab.txStartedAt;
+    if (!reminderDue(ms, th, tab.txReminders ?? 0)) continue;
+    patchTab(tab.id, { txReminders: Math.floor(ms / (th.alertSecs * 1000)) });
+    if (state.settings.txRemind) remindTransaction(tab, ms);
+  }
+}
+window.setInterval(watchTransactions, 5000);
+
+/** The reminder: Gib says it when he is around, a notice otherwise. Neither takes the focus. */
+function remindTransaction(tab: SqlTab, ms: number) {
+  const conn = connectionById(tab.connId);
+  const text = `«${tab.title}»${conn ? ` (${conn.name})` : ""}: ${txLabel(ms, tab.txStatements).toLowerCase()}. Mientras no hagas commit o rollback puede bloquear a otros.`;
+  if (state.settings.companion !== "off") gib("tx-open", { detail: text, production: Boolean(conn?.production) });
+  else notify("Transacción abierta", "warning", text, { label: "Ir a la consola", run: () => selectTab(tab.id) });
+}
+
 export async function switchDatabase(database: string) {
   const tab = activeTab();
   const connId = tab?.connId;
   if (!connId) return;
   const session = state.sessions[connId];
   if (!session) return;
+  if (tab?.kind === "sql" && tab.database !== database && !(await settleTransactions([tab], `cambiar a la base de datos ${database}`))) return;
   try {
     if (tab?.kind === "sql" && tab.sessionId) {
       const used = await api().useDatabase(tab.sessionId, database);
@@ -2678,10 +2783,7 @@ export async function closeTab(id: string) {
     const ok = await confirmDialog(`Descartar cambios en ${tab.title}`, `La consola tiene cambios que no se han guardado en ${where}.`, "Descartar", true);
     if (!ok) return;
   }
-  if (tab?.kind === "sql" && tab.inTransaction) {
-    const ok = await confirmDialog("Transacción abierta", "La consola tiene una transacción sin confirmar. Al cerrarla se deshará (rollback).", "Cerrar y deshacer", true);
-    if (!ok) return;
-  }
+  if (tab && !(await settleTransactions([tab], "cerrar la consola"))) return;
   if (tab?.sessionId) await api().closeSession(tab.sessionId).catch(() => {});
   const position = state.tabs.findIndex((item) => item.id === id);
   const tabs = state.tabs.filter((item) => item.id !== id);
@@ -2730,6 +2832,8 @@ export function adoptTab(tab: Tab, index: number | null) {
 export async function closeTabsQuietly(ids: string[]) {
   const closing = state.tabs.filter((tab) => ids.includes(tab.id));
   if (!closing.length) return;
+  // Their open transactions are undone on purpose before the sessions close: closing never commits.
+  await endTransactions(closing.filter((tab) => tab.kind === "sql" && tab.inTransaction).map((tab) => tab.id), true);
   for (const tab of closing) bumpToken(tab.id);
   setState("tabs", state.tabs.filter((tab) => !ids.includes(tab.id)));
   if (!state.tabs.some((tab) => tab.id === state.activeTabId)) setState("activeTabId", state.tabs[0]?.id ?? "");

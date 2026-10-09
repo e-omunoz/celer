@@ -33,6 +33,7 @@ import { checkForUpdates, openReleasePage } from "../update";
 import { isDetached, isPanelWindow } from "../windows";
 import { DriversSettings, InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
 import { ConnectionDialog } from "./ConnectionDialog";
+import { TxSettings } from "./ConsoleSafety";
 
 export function Modals() {
   return (
@@ -277,6 +278,7 @@ function SettingsDialog() {
             <label class="check"><input type="checkbox" checked={s().confirmNoWhere} onChange={(event) => void saveSettings({ confirmNoWhere: event.currentTarget.checked })} /> En todas las conexiones, confirmar UPDATE y DELETE sin WHERE (el editor ya los subraya)</label>
             <label class="check"><input type="checkbox" checked={s().confirmMutations} onChange={(event) => void saveSettings({ confirmMutations: event.currentTarget.checked })} /> En conexiones de producción, confirmar UPDATE/DELETE sin WHERE, DROP, TRUNCATE y ALTER</label>
             <p class="settings-note">Las conexiones de solo lectura rechazan cualquier sentencia que modifique datos, también desde el núcleo en Rust. Las contraseñas se guardan en el almacén de credenciales del sistema operativo.</p>
+            <TxSettings />
           </Show>
           <Show when={section() === "ai"}>
             <AiSettings />

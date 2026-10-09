@@ -470,6 +470,9 @@ impl OdbcConn {
 impl Drop for OdbcConn {
     fn drop(&mut self) {
         unsafe {
+            // An open transaction is rolled back first: some drivers refuse to disconnect with one (SQLSTATE 25000)
+            // and others commit it. Closing never commits. With autocommit on there is nothing to undo.
+            (self.api.end_tran)(SQL_HANDLE_DBC, self.dbc, 1);
             (self.api.disconnect)(self.dbc);
             (self.api.free_handle)(SQL_HANDLE_DBC, self.dbc);
             (self.api.free_handle)(SQL_HANDLE_ENV, self.env);

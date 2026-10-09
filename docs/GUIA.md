@@ -134,8 +134,8 @@ Celer lo detecta y vuelve a conectar solo:
 - El punto de la conexión en el explorador y en la pestaña dice el estado: ámbar que late mientras conecta, ámbar
   fijo si se reconectó, rojo si se perdió estado o no hay conexión; el tooltip lo explica.
 
-**Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta, cambios sin guardar
-en una tabla o una exportación en curso, lo pregunta antes.
+**Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta pregunta Commit,
+Rollback o Cancelar; si hay cambios sin guardar en una tabla o una exportación en curso, lo pregunta antes.
 
 ## La consola SQL
 
@@ -157,7 +157,14 @@ en una tabla o una exportación en curso, lo pregunta antes.
 - **Parámetros**: `:nombre`, `?` o `${nombre}` en una consulta abren un diálogo para darles valor antes de ejecutar.
 - **UPDATE / DELETE sin WHERE** se subrayan mientras escribes y piden confirmación al ejecutarlos.
 - **Transacciones**: *Auto* confirma cada sentencia; en *Manual* aparecen Commit y Rollback
-  (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R).
+  (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R). Con una transacción abierta, junto a ellos se ve «Transacción abierta · N min
+  · M sentencias» y en la pestaña «TX N min»: en ámbar pasado el primer umbral y en rojo pasado el segundo (1 y 5
+  minutos; en producción, 30 segundos y 2 minutos; se cambian en *Ajustes › Seguridad*). Pasado el rojo, Gib (o un
+  aviso si está apagado) te lo recuerda sin quitarte el foco. La barra de estado lista las transacciones abiertas de la
+  ventana; un clic lleva a su consola.
+- **Nunca se confirma sola**: al cerrar la consola o la ventana, desconectar, eliminar la conexión, cambiar la
+  conexión o la base de datos de la consola, volver a *Auto* o salir de Celer con una transacción abierta, Celer
+  pregunta **Commit**, **Rollback** o **Cancelar**.
 - **Ficheros**: Ctrl+O abre un `.sql`, Ctrl+S lo guarda en su sitio con la misma codificación y saltos de línea, y
   Ctrl+Mayús+S guarda como.
 
@@ -281,7 +288,7 @@ biblioteca, los ajustes, el tema, los atajos y a Gib; cada una tiene sus pestañ
   devuelve a su sitio.
 - **Cerrar**: al cerrar una ventana que no es la última, Celer pregunta qué hacer con las pestañas que perderían
   trabajo (una transacción abierta, cambios en una tabla, una consola sin guardar): moverlas a la ventana principal o
-  descartarlas. Cerrar la ventana principal con otras abiertas pregunta si quieres salir de Celer o cerrar solo esa.
+  descartarlas; con transacciones abiertas, *Commit y cerrar* o *Rollback y cerrar*. Cerrar la ventana principal con otras abiertas pregunta si quieres salir de Celer o cerrar solo esa.
   Cerrar la última sale de Celer, como siempre.
 - **Al volver**: *Salir de Celer* (paleta) cierra todas las ventanas y la próxima vez se abren como estaban, con sus
   pestañas, en su sitio y en su monitor. Si un monitor ya no está, la ventana aparece en uno que sí. Cerrar las
@@ -298,7 +305,8 @@ Gib vive en una sola ventana: la que estás usando.
 - **Plantillas**: las tuyas, junto a las de serie.
 - **Atajos de teclado**: pulsa **+** junto a una acción y después la combinación. Si ya la usa otra acción, Celer
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.
-- **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción.
+- **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción, y los umbrales y el recordatorio de
+  las transacciones manuales abiertas.
 
 ## Gib
 

@@ -698,7 +698,7 @@ kbd {
 .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
 /* Scoped to .pane so they win over the base rules below (same specificity otherwise, and those come later). */
 @container (max-width: 760px) {
-  .pane .tx-toggle, .pane .pane-toolbar .tag.warn { display: none; }
+  .pane .tx-toggle, .pane .pane-toolbar .tag.warn, .pane .tx-indicator > span { display: none; }
   .pane .picker { max-width: 150px; }
 }
 @container (max-width: 600px) {
@@ -2041,7 +2041,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .panel-body > .dialog .dc-grid { height: auto; flex: 1; min-height: 240px; }
 
 /* ============================================================================
-   Console safety (src/components/ConsoleSafety.tsx): the connection's environment
+   Console safety (src/components/ConsoleSafety.tsx): the connection's environment and the open transaction
    ========================================================================== */
 
 /* Environment: a band across the top of its consoles and tables, a chip (icon + label, never only colour). */
@@ -2057,3 +2057,28 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .env-field .env-custom { margin-top: 8px; align-items: flex-end; }
 .env-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
 .env-preview small { flex-basis: 100%; }
+
+/* Open manual transaction: neutral, then amber, then red past the thresholds (Ajustes > Seguridad). */
+.tx-indicator {
+  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: 4px; flex: none;
+  font-size: 11px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums;
+  color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.tx-indicator.warn, .tab-tx.warn, .st-tx.warn { color: var(--env-staging-fg); background: var(--env-staging); }
+.tx-indicator.alert, .tab-tx.alert, .st-tx.alert { color: var(--env-prod-fg); background: var(--env-prod); }
+.tab-tx {
+  flex: none; height: 15px; padding: 0 4px; border-radius: 3px; font-size: 9.5px; font-weight: 700; line-height: 15px;
+  white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.st-tx {
+  display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px; border-radius: 4px; max-width: 280px;
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+.st-tx span { overflow: hidden; text-overflow: ellipsis; }
+.st-tx:hover { filter: brightness(1.08); }
+.tx-settings { margin-top: 18px; }
+.input-unit { display: inline-flex; align-items: center; gap: 6px; }
+.input-unit input { width: 76px; }
+.tx-indicator.alert svg { animation: tx-pulse 1.6s ease-in-out infinite; }
+:root[data-motion="reduce"] .tx-indicator.alert svg { animation: none; }
+@keyframes tx-pulse { 50% { opacity: 0.45; } }

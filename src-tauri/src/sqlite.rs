@@ -1084,4 +1084,25 @@ mod tests {
         assert!(!d.set_autocommit(true).unwrap());
         assert!(!d.execute("INSERT INTO t(name) VALUES ('e')", 10).unwrap().in_transaction);
     }
+
+    /// A console closed (or Celer quitting) with its manual transaction open never commits it.
+    #[test]
+    fn close_never_commits() {
+        let dir = std::env::temp_dir().join(format!("celer-tx-close-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tx.db");
+        let _ = std::fs::remove_file(&file);
+        let open = || {
+            let mut cfg = ConnConfig::default();
+            cfg.kind = DbKind::Sqlite;
+            cfg.file_path = file.to_string_lossy().into_owned();
+            SqliteDriver::connect(cfg).unwrap()
+        };
+        let mut d = open();
+        d.execute("CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1), (2), (3)", 10).unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(open()), "DELETE FROM t WHERE id > 1", "SELECT COUNT(*) FROM t");
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(open()), "INSERT INTO t VALUES (4)", "SELECT COUNT(*) FROM t");
+        drop(d);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

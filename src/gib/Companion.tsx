@@ -276,6 +276,12 @@ export function Companion() {
         case "rollback":
           react("wave", 1200);
           break;
+        case "tx-open":
+          // A transaction left open too long (state.ts, watchTransactions): a warning, so also when he is quiet.
+          setAsleep(false);
+          react("idea", 2200);
+          say({ text: event.detail ?? "Hay una transacción abierta.", kind: "warn" }, 12000);
+          break;
         case "mouse-run": {
           mouseRuns++;
           const keys = shortcutLabel("run");

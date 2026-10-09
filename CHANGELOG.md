@@ -7,6 +7,16 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Open manual transactions are timed and never left behind** (#116). In Manual mode the console shows
+  «Transacción abierta · N min · M sentencias» next to Commit/Rollback, and its tab a «TX N min» badge, amber after
+  the first threshold and red after the second (1 min / 5 min by default, 30 s / 2 min on production; *Ajustes ›
+  Seguridad › Transacciones manuales*). Past the red one Gib (or a notice, when he is off) reminds you without taking
+  the focus, and again each time that much more goes by. The status bar lists this window's open transactions; a
+  click goes to the console. Closing a console or a window, disconnecting, deleting the connection, changing the
+  console's connection or database, going back to Auto or quitting with a transaction open asks Commit / Rollback /
+  Cancelar, and Celer never commits on its own: a session closed with a transaction still open is rolled back first
+  (the generic ODBC and IBM CLI drivers and the Informix JDBC bridge are now told so; the other engines' servers undo
+  it when the connection goes), checked live on every engine.
 - **Environments: the whole window wears the connection's colour** (#117). Each connection has an environment
   (Desarrollo, Pruebas, Preproducción, Producción, or a name and colour of your own) chosen in its form. Its consoles
   and tables get a coloured band on top and a chip with icon and label (not only colour) in the toolbar and the status

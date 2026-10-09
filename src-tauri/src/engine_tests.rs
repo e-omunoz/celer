@@ -58,6 +58,30 @@ fn scalar(d: &mut dyn Driver, sql: &str) -> String {
     txt(&rows[0][0])
 }
 
+/// A session closed with its manual transaction still open (a console closed, Celer quitting) never commits it: the
+/// other session `d` still counts the rows `change` touched. Rollback and Cancelar in the interface end the same way.
+pub(crate) fn assert_close_never_commits(d: &mut dyn Driver, mut other: Box<dyn Driver>, change: &str, count: &str) {
+    let before = scalar(d, count);
+    other.set_autocommit(false).unwrap();
+    let out = other.execute(change, 10).unwrap_or_else(|e| panic!("{change}\n→ {e}"));
+    assert!(out.in_transaction, "manual mode: {change} leaves a transaction open");
+    drop(other);
+    // The server may still hold the rows' locks for a moment (Informix does not wait for them: error -244).
+    let mut last = String::new();
+    for _ in 0..50 {
+        match d.execute(count, 10) {
+            Ok(out) => {
+                let after = txt(&out.results[0].rows[0][0]);
+                assert_eq!(after, before, "closing a session with an open transaction must not commit it");
+                return;
+            }
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("{count}\n→ {last}");
+}
+
 #[derive(Deserialize)]
 struct Statement {
     name: String,
@@ -217,6 +241,27 @@ INSERT INTO dbo.celer_t VALUES
   (3, N'Zoë Martín', 1, NULL, -5.25, N'[corchetes]', NULL, NULL),
   (4, N'O''Neil', NULL, '2023-12-31', 99999.99, N'', 1, NULL);";
 
+/// Generic ODBC (the driver manager of the system): a session closed with its manual transaction open is rolled back
+/// first, never committed. CELER_ODBC_TEST is a connection string to a scratch database (for example the PostgreSQL
+/// ODBC driver on the WSL engine: "DRIVER={PostgreSQL Unicode};SERVER=localhost;PORT=15432;DATABASE=celer;UID=celer;PWD=celer").
+#[test]
+fn odbc_close_never_commits() {
+    let Ok(conn_str) = std::env::var("CELER_ODBC_TEST") else { return };
+    let open = || {
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: conn_str.clone(), ..Default::default() };
+        Box::new(crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).unwrap()) as Box<dyn Driver>
+    };
+    let mut d = open();
+    let d: &mut dyn Driver = d.as_mut();
+    let _ = d.execute("DROP TABLE odbc_tx_close", 10);
+    d.execute("CREATE TABLE odbc_tx_close (id INT)", 10).unwrap();
+    d.execute("INSERT INTO odbc_tx_close VALUES (1)", 10).unwrap();
+    d.execute("INSERT INTO odbc_tx_close VALUES (2)", 10).unwrap();
+    assert_close_never_commits(d, open(), "DELETE FROM odbc_tx_close WHERE id > 1", "SELECT COUNT(*) FROM odbc_tx_close");
+    assert_close_never_commits(d, open(), "INSERT INTO odbc_tx_close VALUES (3)", "SELECT COUNT(*) FROM odbc_tx_close");
+    d.execute("DROP TABLE odbc_tx_close", 10).unwrap();
+}
+
 #[test]
 fn mssql_engine() {
     let Some(mut master) = mssql("master") else { return };
@@ -320,6 +365,7 @@ fn mssql_engine() {
     d.commit().unwrap();
     d.set_autocommit(true).unwrap();
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.many"), "2990");
+    assert_close_never_commits(d, Box::new(mssql("celer_test").unwrap()), "DELETE FROM dbo.many WHERE n > 2980", "SELECT COUNT(*) FROM dbo.many");
 
     // Errors with SQL Server's own message.
     let err = d.execute("SELECT nope FROM dbo.celer_t", 10).unwrap_err().to_string();
@@ -804,6 +850,8 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     d.commit().unwrap();
     d.set_autocommit(true).unwrap();
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM many"), "2990");
+    // Over DRDA the IBM CLI and over JDBC the bridge are told to roll back before they disconnect.
+    assert_close_never_commits(d, connect(cfg.clone()).unwrap(), "DELETE FROM many WHERE n > 2980", "SELECT COUNT(*) FROM many WHERE n >= 0");
 
     // Errors with the server's message.
     let err = d.execute("SELECT nope FROM celer_t", 10).unwrap_err().to_string();
