@@ -1,6 +1,7 @@
 import { CalendarDays } from "lucide-solid";
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
 import { raw } from "../raw";
+import { dropGap, identityOrder, inOrder, inverseOrder, isIdentity, moveColumn, type ColumnOrder } from "../columnOrder";
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
@@ -11,6 +12,10 @@ import type { LookupItem, LookupSession } from "../fkLookup";
 const HEAD_H = 30;
 const MIN_W = 56;
 const MAX_AUTO_W = 420;
+/** Pixels a header is dragged before it moves the column (less is a click: select it). */
+const MOVE_THRESHOLD = 6;
+/** Width of the band at each side where a column being moved scrolls the grid. */
+const EDGE_ZONE = 32;
 
 interface Pos {
   row: number;
@@ -22,7 +27,7 @@ export type CopyFormat = "tsv" | "tsv-head" | "csv" | "json" | "markdown" | "xml
 export interface GridProps {
   columns: ColumnInfo[];
   rows: Cell[][];
-  /** Stable identity for the data set; changing it resets sort, widths and selection. */
+  /** Stable identity for the data set; changing it resets sort, widths, column order and selection. */
   resetKey?: unknown;
   /** The rows changed but not the result (a quick filter): selection and vertical scroll reset, sort and widths stay. */
   rowsKey?: unknown;
@@ -59,7 +64,10 @@ export interface GridProps {
   sortState?: { col: number; dir: 1 | -1 } | null;
   onSortChange?: (sort: { col: number; dir: 1 | -1 } | null) => void;
   onExport?: () => void;
+  /** Shift+Enter or a double click on a read-only cell: the grid has put the cell and its row (in screen order) in the inspector state. */
   onActivate?: (row: number, col: number) => void;
+  /** The column order changed (headers dragged): null when it is the query's own again. */
+  onColumnOrder?: (order: ColumnOrder | null) => void;
   /** Ctrl+Enter in an editable grid (table viewer): review and save the pending changes. */
   onSave?: () => void;
   api?: (api: GridApi) => void;
@@ -168,7 +176,16 @@ export function DataGrid(props: GridProps) {
 
   const [scroll, setScroll] = createSignal({ x: 0, y: 0 });
   const [viewport, setViewport] = createSignal({ w: 0, h: 0 });
+  /** Width of each query column (by its index in `props.columns`): a moved column keeps its own. */
   const [widths, setWidths] = createSignal<number[]>([]);
+  /**
+   * Screen order of the columns: `colOrder()[i]` is the query column shown i-th. Positions (anchor, focus, editor,
+   * hover) are screen columns; `src()` turns one into the query column the data, keys and callbacks use.
+   */
+  const [colOrder, setColOrder] = createSignal<readonly number[]>([]);
+  const src = (col: number) => colOrder()[col] ?? col;
+  /** A header being dragged to another place: the column, the gap it would drop at, the pointer (x in the grid). */
+  const [colMove, setColMove] = createSignal<{ col: number; gap: number; x: number; grab: number } | null>(null);
   const [anchor, setAnchor] = createSignal<Pos | null>(null);
   const [focus, setFocus] = createSignal<Pos | null>(null);
   const [localSort, setLocalSort] = createSignal<{ col: number; dir: 1 | -1 } | null>(null);
@@ -180,6 +197,10 @@ export function DataGrid(props: GridProps) {
   const [lookup, setLookup] = createSignal<{ title: string; items: LookupItem[]; index: number; loading: boolean; error: string } | null>(null);
   const [search, setSearch] = createSignal<string | null>(null);
   let drag: { col: number; startX: number; startW: number } | null = null;
+  /** A header pressed without Shift: it becomes a column move once dragged past MOVE_THRESHOLD. */
+  let headerPress: { col: number; startX: number; grab: number } | null = null;
+  let moveClientX = 0;
+  let edgeFrame = 0;
   let selecting: "cells" | "rows" | "cols" | null = null;
 
   const rowH = () => (state.settings.density === "comfortable" ? 28 : 24);
@@ -238,18 +259,25 @@ export function DataGrid(props: GridProps) {
     });
   });
 
-  const colX = () => {
+  /** Widths in screen order. */
+  const shownWidths = createMemo(() => {
+    const w = widths();
+    return colOrder().map((col) => w[col] ?? MIN_W);
+  });
+
+  /** Left edge of each screen column, and the right edge of the last. */
+  const colX = createMemo(() => {
     const xs: number[] = [];
     let x = gutter();
-    for (const w of widths()) {
+    for (const w of shownWidths()) {
       xs.push(x);
       x += w;
     }
     xs.push(x);
     return xs;
-  };
+  });
 
-  const contentW = () => colX()[widths().length] ?? gutter();
+  const contentW = () => colX()[shownWidths().length] ?? gutter();
   const contentH = () => HEAD_H + ordered().length * rowH() + (props.hasMore ? rowH() : 0);
 
   const sel = () => {
@@ -314,8 +342,9 @@ export function DataGrid(props: GridProps) {
     ctx.fillRect(0, 0, width, height);
     const RH = rowH();
     const G = gutter();
-    const cols = widths();
+    const cols = shownWidths();
     const xs = colX();
+    const order = colOrder();
     const rows = ordered();
     const data = raw(props.rows);
     const view = scroll();
@@ -350,8 +379,9 @@ export function DataGrid(props: GridProps) {
         const w = cols[col];
         if (x > width) break;
         const inside = rowSelected && col >= s!.c1 && col <= s!.c2;
-        const raw = data[source]?.[col];
-        const edited = props.edits && Object.prototype.hasOwnProperty.call(props.edits, `${source}:${col}`);
+        const sc = order[col] ?? col;
+        const raw = data[source]?.[sc];
+        const edited = props.edits && Object.prototype.hasOwnProperty.call(props.edits, `${source}:${sc}`);
         if (edited) {
           ctx.fillStyle = p.modified;
           ctx.fillRect(x, y, w, RH);
@@ -361,7 +391,7 @@ export function DataGrid(props: GridProps) {
           ctx.fillRect(x, y, w, RH);
         }
         const isNull = isNullCell(raw);
-        const kind = props.columns[col]?.kind;
+        const kind = props.columns[sc]?.kind;
         let label = isNull ? "NULL" : cellText(raw);
         if (query && !isNull && label.toLowerCase().includes(query)) {
           ctx.fillStyle = p.match;
@@ -444,6 +474,7 @@ export function DataGrid(props: GridProps) {
       const x = xs[col] - view.x;
       const w = cols[col];
       if (x > width) break;
+      const sc = order[col] ?? col;
       const colSelected = s && col >= s.c1 && col <= s.c2;
       if (colSelected) {
         ctx.fillStyle = p.sel;
@@ -454,7 +485,7 @@ export function DataGrid(props: GridProps) {
       ctx.rect(x, 0, w - 1, HEAD_H);
       ctx.clip();
       let tx = x + 8;
-      if (pk.has(col)) {
+      if (pk.has(sc)) {
         ctx.strokeStyle = p.key;
         ctx.lineWidth = 1.2;
         ctx.beginPath();
@@ -468,22 +499,22 @@ export function DataGrid(props: GridProps) {
       }
       ctx.font = `600 12px ${p.sans}`;
       ctx.fillStyle = p.headFg;
-      const name = props.columns[col].name;
+      const name = props.columns[sc].name;
       ctx.fillText(name, tx, HEAD_H / 2 + 0.5);
       let nameW = ctx.measureText(name).width;
-      if (links.has(col)) {
+      if (links.has(sc)) {
         // Foreign key: a small arrow after the name (Ctrl+click a value to follow it).
         ctx.fillStyle = p.key;
         ctx.fillText("↗", tx + nameW + 4, HEAD_H / 2 + 0.5);
         nameW += 14;
       }
-      const type = props.columns[col].typeName;
+      const type = props.columns[sc].typeName;
       if (type) {
         ctx.font = `11px ${p.sans}`;
         ctx.fillStyle = p.faint;
         ctx.fillText(type.toLowerCase(), tx + nameW + 6, HEAD_H / 2 + 0.5);
       }
-      const sorted = sort()?.col === col;
+      const sorted = sort()?.col === sc;
       if (sorted || hoverCol() === col) {
         const ax = x + w - 16;
         ctx.fillStyle = p.head;
@@ -533,6 +564,35 @@ export function DataGrid(props: GridProps) {
     ctx.fillStyle = p.line;
     ctx.fillRect(G - 1, 0, 1, height);
     ctx.fillRect(0, HEAD_H - 1, G, 1);
+
+    // a header being dragged: where it would land, and the header itself under the pointer
+    const moving = colMove();
+    if (moving && moving.col < cols.length) {
+      if (moving.gap !== moving.col && moving.gap !== moving.col + 1) {
+        const lx = Math.round(xs[moving.gap] - view.x);
+        if (lx >= G - 1 && lx <= width + 1) {
+          ctx.fillStyle = p.accent;
+          ctx.fillRect(lx - 1, 0, 2, height);
+        }
+      }
+      const w = cols[moving.col];
+      const gx = Math.max(G, Math.min(width - w, moving.x - moving.grab));
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = p.head;
+      ctx.fillRect(gx, 0, w, HEAD_H);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = p.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(gx + 0.5, 0.5, w - 1, HEAD_H - 1);
+      ctx.beginPath();
+      ctx.rect(gx, 0, w - 1, HEAD_H);
+      ctx.clip();
+      ctx.font = `600 12px ${p.sans}`;
+      ctx.fillStyle = p.headFg;
+      ctx.fillText(props.columns[order[moving.col] ?? moving.col]?.name ?? "", gx + 8, HEAD_H / 2 + 0.5);
+      ctx.restore();
+    }
   }
 
   // ------------------------------------------------------------ geometry
@@ -545,7 +605,7 @@ export function DataGrid(props: GridProps) {
   function colAt(x: number) {
     const xs = colX();
     const vx = x + scroll().x;
-    for (let col = 0; col < widths().length; col++) {
+    for (let col = 0; col < shownWidths().length; col++) {
       if (vx >= xs[col] && vx < xs[col + 1]) return col;
     }
     return -1;
@@ -557,7 +617,7 @@ export function DataGrid(props: GridProps) {
     const xs = colX();
     if (y < HEAD_H) {
       if (x < gutter()) return { type: "corner" as const };
-      for (let col = 0; col < widths().length; col++) {
+      for (let col = 0; col < shownWidths().length; col++) {
         const edge = xs[col + 1] - scroll().x;
         if (Math.abs(x - edge) <= 4) return { type: "resize" as const, col };
       }
@@ -583,7 +643,7 @@ export function DataGrid(props: GridProps) {
     else if (top + RH > scroller.scrollTop + viewH) scroller.scrollTop = top + RH - viewH;
     const xs = colX();
     const left = xs[pos.col] - gutter();
-    const w = widths()[pos.col] ?? 0;
+    const w = shownWidths()[pos.col] ?? 0;
     const viewW = scroller.clientWidth - gutter();
     if (left < scroller.scrollLeft) scroller.scrollLeft = left;
     else if (left + w > scroller.scrollLeft + viewW) scroller.scrollLeft = Math.min(left, left + w - viewW);
@@ -617,18 +677,22 @@ export function DataGrid(props: GridProps) {
     }
     if (target.type === "resize") {
       event.preventDefault();
-      drag = { col: target.col, startX: event.clientX, startW: widths()[target.col] };
+      const col = src(target.col);
+      drag = { col, startX: event.clientX, startW: widths()[col] };
       return;
     }
     if (target.type === "sort") {
-      toggleSort(target.col);
+      toggleSort(src(target.col));
       return;
     }
     if (target.type === "header") {
+      // A click selects the column (Shift+click or Shift+drag: several); dragging it moves it.
+      event.preventDefault();
       if (event.shiftKey && anchor()) setFocus({ row: Math.max(0, ordered().length - 1), col: target.col });
       else {
         setAnchor({ row: 0, col: target.col });
         setFocus({ row: Math.max(0, ordered().length - 1), col: target.col });
+        headerPress = { col: target.col, startX: event.clientX, grab: local(event).x + scroll().x - colX()[target.col] };
       }
       selecting = "cols";
       return;
@@ -651,12 +715,12 @@ export function DataGrid(props: GridProps) {
       props.onNeedMore?.();
       return;
     }
-    if (target.type === "cell" && (event.ctrlKey || event.metaKey) && props.onFollow && props.linkCols?.includes(target.col)) {
+    if (target.type === "cell" && (event.ctrlKey || event.metaKey) && props.onFollow && props.linkCols?.includes(src(target.col))) {
       // Ctrl+click on a foreign-key value: jump to the referenced row.
       event.preventDefault();
       setCursor({ row: target.row, col: target.col });
       const source = ordered()[target.row];
-      if (source !== undefined) props.onFollow(source, target.col);
+      if (source !== undefined) props.onFollow(source, src(target.col));
       return;
     }
     if (target.type === "cell") {
@@ -674,6 +738,17 @@ export function DataGrid(props: GridProps) {
       return;
     }
     if (!scroller) return;
+    if (headerPress && !colMove() && event.buttons & 1 && Math.abs(event.clientX - headerPress.startX) >= MOVE_THRESHOLD) {
+      selecting = null;
+      setColMove({ col: headerPress.col, gap: headerPress.col, x: 0, grab: headerPress.grab });
+    }
+    if (colMove()) {
+      moveClientX = event.clientX;
+      trackMove();
+      scroller.style.cursor = "grabbing";
+      if (!edgeFrame) edgeFrame = requestAnimationFrame(edgeScroll);
+      return;
+    }
     const { y } = local(event);
     if (y < HEAD_H) {
       const target = hit(event);
@@ -687,7 +762,7 @@ export function DataGrid(props: GridProps) {
     if (props.edits && props.editsAreBefore && !(event.buttons & 1)) {
       const target = y >= HEAD_H ? hit(event) : null;
       const source = target?.type === "cell" ? ordered()[target.row] : undefined;
-      const old = source !== undefined && target?.type === "cell" ? props.edits[`${source}:${target.col}`] : undefined;
+      const old = source !== undefined && target?.type === "cell" ? props.edits[`${source}:${src(target.col)}`] : undefined;
       const title = old === undefined ? "" : `Antes: ${old === null ? "NULL" : old.length > 300 ? `${old.slice(0, 300)}…` : old}`;
       if (scroller.title !== title) scroller.title = title;
     }
@@ -701,17 +776,78 @@ export function DataGrid(props: GridProps) {
   function onMouseUp() {
     drag = null;
     selecting = null;
+    headerPress = null;
+    const moving = colMove();
+    if (moving) {
+      endMove();
+      moveColumnTo(moving.col, moving.gap);
+    }
+  }
+
+  // ---- moving a column by its header
+
+  /** The gap under the pointer and the dragged header's place follow the mouse (and the grid scrolled under it). */
+  function trackMove() {
+    const moving = colMove();
+    if (!moving || !scroller) return;
+    const x = moveClientX - scroller.getBoundingClientRect().left;
+    const gap = dropGap(colX(), x + scroller.scrollLeft);
+    if (gap !== moving.gap || x !== moving.x) setColMove({ ...moving, gap, x });
+  }
+
+  /** Near the left or right edge, a column being moved scrolls the grid, faster the closer it gets. */
+  function edgeScroll() {
+    edgeFrame = 0;
+    if (!colMove() || !scroller) return;
+    const x = moveClientX - scroller.getBoundingClientRect().left;
+    const left = gutter() + EDGE_ZONE - x;
+    const right = x - (scroller.clientWidth - EDGE_ZONE);
+    const step = left > 0 ? -Math.min(24, Math.ceil(left / 2)) : right > 0 ? Math.min(24, Math.ceil(right / 2)) : 0;
+    if (!step) return;
+    const before = scroller.scrollLeft;
+    scroller.scrollLeft = before + step;
+    if (scroller.scrollLeft === before) return;
+    trackMove();
+    edgeFrame = requestAnimationFrame(edgeScroll);
+  }
+
+  function endMove() {
+    setColMove(null);
+    if (edgeFrame) cancelAnimationFrame(edgeFrame);
+    edgeFrame = 0;
+    if (scroller) scroller.style.cursor = "default";
+  }
+
+  /** A new screen order: the selection stays on the same columns, wherever they went. */
+  function applyColumnOrder(next: readonly number[]) {
+    const before = colOrder();
+    if (next === before) return;
+    const at = inverseOrder(next);
+    const follow = (pos: Pos | null) => pos && { row: pos.row, col: at[before[pos.col] ?? pos.col] ?? pos.col };
+    setColOrder(next);
+    setAnchor(follow(anchor()));
+    setFocus(follow(focus()));
+    setEditor(null);
+    if (hoverCol() !== -1) setHoverCol(-1);
+  }
+
+  function moveColumnTo(from: number, gap: number) {
+    applyColumnOrder(moveColumn(colOrder(), from, gap));
+  }
+
+  function resetColumnOrder() {
+    applyColumnOrder(identityOrder(props.columns.length));
   }
 
   function onDoubleClick(event: MouseEvent) {
     const target = hit(event);
     if (target.type === "resize") {
-      autofit(target.col);
+      autofit(src(target.col));
       return;
     }
     if (target.type === "cell") {
       if (props.editable && props.onEdit) beginEdit({ row: target.row, col: target.col });
-      else props.onActivate?.(ordered()[target.row], target.col);
+      else activate({ row: target.row, col: target.col });
     }
   }
 
@@ -748,14 +884,15 @@ export function DataGrid(props: GridProps) {
   function beginEdit(pos: Pos, initial?: string) {
     if (!props.editable || !props.onEdit) return;
     const source = ordered()[pos.row];
+    const col = src(pos.col);
     if (source === undefined || props.deleted?.includes(source)) return;
-    const current = raw(props.rows)[source]?.[pos.col];
-    if (props.columns[pos.col]?.kind === "bool") {
+    const current = raw(props.rows)[source]?.[col];
+    if (props.columns[col]?.kind === "bool") {
       // Booleans: t / 1 / f / 0 / space set the value straight away; anything else opens the true / false picker.
       const now = boolOf(current);
       const typed = initial === undefined ? undefined : /^[t1sy]$/i.test(initial) ? true : /^[f0n]$/i.test(initial) ? false : initial === " " ? !now : undefined;
       if (typed !== undefined) {
-        props.onEdit(source, pos.col, String(typed));
+        props.onEdit(source, col, String(typed));
         return;
       }
       scrollIntoView(pos);
@@ -775,7 +912,7 @@ export function DataGrid(props: GridProps) {
   /** The column being edited takes dates (not just a time of day): the editor offers a calendar. */
   const editorDate = () => {
     const current = editor();
-    const col = current ? props.columns[current.col] : undefined;
+    const col = current ? props.columns[src(current.col)] : undefined;
     return Boolean(col && col.kind === "date" && !/^time(?!stamp)/i.test(col.typeName.trim()));
   };
 
@@ -888,7 +1025,8 @@ export function DataGrid(props: GridProps) {
         if (key === previous) return;
         closeLookup();
         const current = editor();
-        if (current && props.columns[current.col]?.kind !== "bool") void openLookup(current.col, untrack(() => editor()?.value ?? ""));
+        const col = current ? untrack(() => src(current.col)) : -1;
+        if (current && props.columns[col]?.kind !== "bool") void openLookup(col, untrack(() => editor()?.value ?? ""));
       },
     ),
   );
@@ -958,7 +1096,7 @@ export function DataGrid(props: GridProps) {
   function commitEditor(value: string | null, move?: Pos) {
     const current = editor();
     if (!current) return;
-    props.onEdit?.(ordered()[current.row], current.col, value);
+    props.onEdit?.(ordered()[current.row], src(current.col), value);
     setEditor(null);
     root?.focus({ preventScroll: true });
     if (move) setCursor(move);
@@ -976,11 +1114,12 @@ export function DataGrid(props: GridProps) {
     return rows;
   }
 
+  /** The query columns selected, in screen order: copies and SQL follow what is on screen. */
   function selectedCols() {
     const s = sel();
     if (!s) return [] as number[];
     const cols: number[] = [];
-    for (let c = s.c1; c <= s.c2; c++) cols.push(c);
+    for (let c = s.c1; c <= s.c2; c++) cols.push(src(c));
     return cols;
   }
 
@@ -1047,10 +1186,11 @@ export function DataGrid(props: GridProps) {
     const f = focus();
     if (!f || !props.onFilter) return;
     const source = ordered()[f.row];
-    const cell = raw(props.rows)[source]?.[f.col];
+    const col = src(f.col);
+    const cell = raw(props.rows)[source]?.[col];
     const isNull = isNullCell(cell);
     const op = isNull && mode === "eq" ? "null" : isNull && mode === "ne" ? "not-null" : mode;
-    props.onFilter({ col: f.col, op, value: isNull ? "" : cellText(cell) });
+    props.onFilter({ col, op, value: isNull ? "" : cellText(cell) });
   }
   function setNull() {
     const s = sel();
@@ -1061,16 +1201,18 @@ export function DataGrid(props: GridProps) {
   function contextMenu(event: MouseEvent) {
     const target = hit(event);
     if (target.type === "header" || target.type === "sort") {
+      const col = src(target.col);
       openMenu(event, [
-        { label: "Orden ascendente", icon: "asc", run: () => toggleSort(target.col, 1) },
-        { label: "Orden descendente", icon: "desc", run: () => toggleSort(target.col, -1) },
+        { label: "Orden ascendente", icon: "asc", run: () => toggleSort(col, 1) },
+        { label: "Orden descendente", icon: "desc", run: () => toggleSort(col, -1) },
         { label: "Quitar orden", disabled: !sort(), run: () => setSort(null) },
-        ...(props.onColumnFilter ? [{ separator: true }, { label: "Filtrar esta columna…", icon: "filter", run: () => props.onColumnFilter?.(target.col) }] : []),
+        ...(props.onColumnFilter ? [{ separator: true }, { label: "Filtrar esta columna…", icon: "filter", run: () => props.onColumnFilter?.(col) }] : []),
         { separator: true },
-        { label: "Ajustar ancho", run: () => autofit(target.col) },
+        { label: "Ajustar ancho", run: () => autofit(col) },
         { label: "Ajustar todas las columnas", run: () => autofit() },
+        { label: "Restablecer orden de columnas", disabled: isIdentity(colOrder()), run: resetColumnOrder },
         { separator: true },
-        { label: "Copiar nombre de columna", run: () => void copyText(props.columns[target.col].name) },
+        { label: "Copiar nombre de columna", run: () => void copyText(props.columns[col].name) },
       ]);
       return;
     }
@@ -1090,10 +1232,11 @@ export function DataGrid(props: GridProps) {
       { label: "Ver valor", hint: "Mayús+Intro", icon: "eye", run: () => activate() },
     ];
     const f = focus();
-    if (f && props.onFollow && props.linkCols?.includes(f.col)) {
+    const fc = f ? src(f.col) : -1;
+    if (f && props.onFollow && props.linkCols?.includes(fc)) {
       const source = ordered()[f.row];
       items.unshift(
-        { label: `Ir a la fila referenciada${props.linkLabel ? ` (${props.linkLabel(f.col)})` : ""}`, hint: "Ctrl+clic", icon: "link", run: () => source !== undefined && props.onFollow?.(source, f.col) },
+        { label: `Ir a la fila referenciada${props.linkLabel ? ` (${props.linkLabel(fc)})` : ""}`, hint: "Ctrl+clic", icon: "link", run: () => source !== undefined && props.onFollow?.(source, fc) },
         { separator: true },
       );
     }
@@ -1120,23 +1263,45 @@ export function DataGrid(props: GridProps) {
       const at = focus();
       const source = at ? ordered()[at.row] : undefined;
       if (at && source !== undefined && props.onRevert) {
-        const cellEdited = props.edits?.[`${source}:${at.col}`] !== undefined;
+        const col = src(at.col);
+        const cellEdited = props.edits?.[`${source}:${col}`] !== undefined;
         const rowEdited = Object.keys(props.edits ?? {}).some((key) => key.startsWith(`${source}:`));
         const rowDeleted = props.deleted?.includes(source) ?? false;
         const rowNew = props.insertStart !== undefined && source >= props.insertStart;
-        if (cellEdited) items.push({ label: "Deshacer el cambio de la celda", icon: "undo", run: () => props.onRevert?.(source, at.col) });
+        if (cellEdited) items.push({ label: "Deshacer el cambio de la celda", icon: "undo", run: () => props.onRevert?.(source, col) });
         if (rowEdited || rowDeleted || rowNew) items.push({ label: rowNew ? "Quitar la fila nueva" : rowDeleted ? "Restaurar la fila" : "Deshacer los cambios de la fila", icon: "undo", run: () => props.onRevert?.(source, null) });
       }
     }
     items.push({ separator: true }, { label: "Ajustar todas las columnas", run: () => autofit() });
+    if (!isIdentity(colOrder())) items.push({ label: "Restablecer orden de columnas", run: resetColumnOrder });
     if (props.onExport) items.push({ label: "Exportar…", icon: "download", run: () => props.onExport?.() });
     openMenu(event, items);
   }
 
-  function activate() {
-    const f = focus();
-    if (!f) return;
-    props.onActivate?.(ordered()[f.row], f.col);
+  /** The cell and its row, in screen order, for the inspector's value and record views. */
+  function inspectAt(pos: Pos) {
+    const source = ordered()[pos.row];
+    const col = src(pos.col);
+    const info = props.columns[col];
+    if (source === undefined || !info) return null;
+    const row = raw(props.rows)[source] ?? [];
+    const order = colOrder();
+    return {
+      source,
+      col,
+      inspect: { column: info.name, typeName: info.typeName, value: row[col] ?? null },
+      record: { columns: inOrder(props.columns, order), row: inOrder(row, order), index: source },
+    };
+  }
+
+  /** Shift+Enter or a double click: the value and the row go to the inspector, which the owner opens. */
+  function activate(pos = focus()) {
+    if (!pos || !props.onActivate) return;
+    const shown = inspectAt(pos);
+    if (!shown) return;
+    setState("inspect", shown.inspect);
+    setState("record", shown.record);
+    props.onActivate(shown.source, shown.col);
   }
 
   function nextMatch(step = 1) {
@@ -1148,11 +1313,12 @@ export function DataGrid(props: GridProps) {
     const f = focus() ?? { row: 0, col: -1 };
     let index = f.row * cols + f.col;
     const data = raw(props.rows);
+    const order = colOrder();
     for (let i = 0; i < total; i++) {
       index = (index + step + total) % total;
       const vr = Math.floor(index / cols);
       const col = index % cols;
-      const cell = data[rows[vr]]?.[col];
+      const cell = data[rows[vr]]?.[order[col] ?? col];
       if (!isNullCell(cell) && cellText(cell).toLowerCase().includes(query)) {
         setCursor({ row: vr, col });
         return;
@@ -1163,6 +1329,15 @@ export function DataGrid(props: GridProps) {
   // ------------------------------------------------------------ keyboard
 
   function onKey(event: KeyboardEvent) {
+    if (colMove()) {
+      // Esc drops a column being moved where it was.
+      if (event.key === "Escape") {
+        event.preventDefault();
+        headerPress = null;
+        endMove();
+      }
+      return;
+    }
     if (editor()) return;
     const ctrl = event.ctrlKey || event.metaKey;
     const f = focus();
@@ -1291,8 +1466,9 @@ export function DataGrid(props: GridProps) {
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "data-density"] });
     const up = () => onMouseUp();
     window.addEventListener("mouseup", up);
+    // Resizing or moving a column goes on outside the grid.
     const move = (event: MouseEvent) => {
-      if (drag) onMouseMove(event);
+      if (drag || headerPress) onMouseMove(event);
     };
     window.addEventListener("mousemove", move);
     onCleanup(() => {
@@ -1301,6 +1477,7 @@ export function DataGrid(props: GridProps) {
       window.removeEventListener("mouseup", up);
       window.removeEventListener("mousemove", move);
       if (frame) cancelAnimationFrame(frame);
+      if (edgeFrame) cancelAnimationFrame(edgeFrame);
     });
   });
 
@@ -1312,6 +1489,10 @@ export function DataGrid(props: GridProps) {
         setAnchor(null);
         setFocus(null);
         setEditor(null);
+        // A new result shows its columns in the query's order, like it gets its own widths.
+        headerPress = null;
+        if (colMove()) endMove();
+        setColOrder(identityOrder(props.columns.length));
         if (scroller) {
           scroller.scrollTop = 0;
           scroller.scrollLeft = 0;
@@ -1349,7 +1530,9 @@ export function DataGrid(props: GridProps) {
     ordered();
     scroll();
     viewport();
-    widths();
+    shownWidths();
+    colOrder();
+    colMove();
     anchor();
     focus();
     sort();
@@ -1369,6 +1552,7 @@ export function DataGrid(props: GridProps) {
       return;
     }
     const rows = ordered();
+    const order = colOrder();
     let cells = 0;
     let numeric = 0;
     let sum = 0;
@@ -1381,10 +1565,11 @@ export function DataGrid(props: GridProps) {
       const row = data[rows[vr]];
       for (let c = s.c1; c <= s.c2; c++) {
         if (cells++ > budget) break outer;
-        const cell = row?.[c];
+        const sc = order[c] ?? c;
+        const cell = row?.[sc];
         if (isNullCell(cell)) continue;
         if (distinct.size < 10_000) distinct.add(cellText(cell));
-        const n = typeof cell === "number" ? cell : props.columns[c]?.kind === "number" ? Number(cell) : NaN;
+        const n = typeof cell === "number" ? cell : props.columns[sc]?.kind === "number" ? Number(cell) : NaN;
         if (!Number.isNaN(n) && Number.isFinite(n)) {
           numeric++;
           sum += n;
@@ -1400,14 +1585,23 @@ export function DataGrid(props: GridProps) {
   createEffect(() => {
     const f = focus();
     if (!f) return;
-    const source = ordered()[f.row];
-    const col = props.columns[f.col];
-    if (source === undefined || !col) return;
     if (state.inspectorOpen && (state.inspectorMode === "value" || state.inspectorMode === "record")) {
-      setState("inspect", { column: col.name, typeName: col.typeName, value: raw(props.rows)[source]?.[f.col] ?? null });
-      setState("record", { columns: props.columns, row: raw(props.rows)[source] ?? [], index: source });
+      const shown = inspectAt(f);
+      if (!shown) return;
+      setState("inspect", shown.inspect);
+      setState("record", shown.record);
     }
   });
+
+  // The owner hears of the order (the export follows it); a grid that goes away takes its order with it.
+  createEffect(
+    on(colOrder, (order) => {
+      const report = props.onColumnOrder;
+      if (!report) return;
+      report(isIdentity(order) ? null : { names: untrack(() => props.columns.map((col) => col.name)), order: [...order] });
+    }),
+  );
+  onCleanup(() => props.onColumnOrder?.(null));
 
   onCleanup(clearStats);
 
@@ -1418,7 +1612,7 @@ export function DataGrid(props: GridProps) {
     return {
       left: xs[current.col] - scroll().x,
       top: HEAD_H + current.row * rowH() - scroll().y,
-      width: widths()[current.col],
+      width: shownWidths()[current.col],
       height: rowH(),
     };
   };
@@ -1445,7 +1639,7 @@ export function DataGrid(props: GridProps) {
         {(box) => (
           <div class="cell-editor" style={{ left: `${box().left}px`, top: `${box().top}px`, width: `${Math.max(box().width, editorDate() ? 190 : 160)}px`, height: `${box().height}px` }}>
             <Show
-              when={props.columns[editor()!.col]?.kind === "bool"}
+              when={props.columns[src(editor()!.col)]?.kind === "bool"}
               fallback={
                 <>
                   <input

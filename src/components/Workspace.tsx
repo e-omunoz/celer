@@ -614,14 +614,7 @@ function SqlPane(props: { tab: SqlTab }) {
               dialect={kindOf(props.tab.connId)}
               onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
               onExport={exportShown}
-              onActivate={(row, col) => {
-                const r = result();
-                if (!r) return;
-                const values = shownRows()[row] ?? [];
-                setState("inspect", { column: r.columns[col].name, typeName: r.columns[col].typeName, value: values[col] ?? null });
-                setState("record", { columns: r.columns, row: values, index: row });
-                openInspector("value");
-              }}
+              onActivate={() => openInspector("value")}
             />
           </Match>
         </Switch>
@@ -871,12 +864,7 @@ function TablePane(props: { tab: TableTab }) {
             onExport={() => startTableExport(props.tab.id)}
             onSave={() => void saveTable(props.tab.id)}
             onColumnFilter={(col) => openFilter(newFilter(props.tab, props.tab.gridCols[col]?.name, "in"))}
-            onActivate={(row, col) => {
-              const r = rows();
-              setState("inspect", { column: props.tab.gridCols[col].name, typeName: props.tab.gridCols[col].typeName, value: r[row]?.[col] ?? null });
-              setState("record", { columns: props.tab.gridCols, row: r[row] ?? [], index: row });
-              openInspector("value");
-            }}
+            onActivate={() => openInspector("value")}
           />
           <Show when={changes()}>
             <div class="changes-bar">
