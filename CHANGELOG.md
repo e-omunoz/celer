@@ -6,6 +6,20 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **MCP from Claude Code inside WSL** (#124): Settings › IA y MCP › "Claude Code en WSL" lists the installed distros,
+  whether Windows interop is on in each and where Claude Code is, and shows the `claude mcp add` command with
+  `celer.exe` as the distro sees it (`/mnt/c/…`, honouring a custom `automount.root`). "Registrar en WSL" shows that
+  command, asks for confirmation, runs it inside the distro and then reads the distro's `~/.claude.json` to confirm
+  it; a registration that points to an old path of Celer is flagged with "Volver a registrar". The WSL client is the
+  same Windows process (interop stdio), so it gets the same per-connection levels, masking, limits and audit. Claude
+  Code on Windows also shows whether it is registered.
+- **The MCP audit log records the client** (#124): Windows or WSL and the distro, and the client program
+  (`claude-code`…), shown in Settings › IA y MCP.
+- **MCP indicator in the status bar** (#124): «MCP · Windows + WSL (Ubuntu)» while MCP is on, with the registered
+  clients, the last call and a warning for an old registration in its tooltip; a click opens Settings › IA y MCP.
+  Hidden while MCP is off.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

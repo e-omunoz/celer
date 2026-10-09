@@ -254,6 +254,19 @@ El **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y o
 con un nivel de permiso por conexión (ninguno, solo estructura, lectura o escritura), límites de filas y de tiempo,
 columnas enmascaradas y un registro de auditoría.
 
+**Claude Code dentro de WSL**: en *Ajustes › IA y MCP › Claude Code en WSL* aparecen tus distribuciones. Para cada una
+ves si la interoperabilidad con Windows está activa, si Claude Code está instalado y el comando con la ruta de
+`celer.exe` tal como la ve la distribución (`/mnt/c/…`). *Registrar en WSL* te enseña ese comando, pide confirmación y
+lo ejecuta dentro de la distribución; después Celer comprueba en su `~/.claude.json` que quedó registrado. Si Celer
+cambia de carpeta (reinstalado en otra ruta), la distribución aparece como *registrado con otra ruta* con el botón
+*Volver a registrar*. Una distribución detenida solo se mira al pulsar *Comprobar* (eso la arranca). Desde WSL se
+aplican los mismos permisos, la misma ocultación de columnas y el mismo registro que desde Windows; el registro dice
+desde dónde llegó cada llamada (Windows o WSL y la distribución).
+
+Mientras el servidor MCP está activo, la barra de estado muestra **MCP · Windows + WSL (Ubuntu)**: dónde están los
+clientes que tienen Celer registrado. Al pasar el ratón ves los clientes y la última llamada; con un clic vas a
+*Ajustes › IA y MCP*. Con MCP desactivado no aparece.
+
 ## Varias ventanas
 
 Celer puede tener varias ventanas, por ejemplo una en cada monitor. Todas comparten las conexiones guardadas, la

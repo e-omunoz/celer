@@ -1051,7 +1051,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .dialog > header { display: flex; align-items: center; gap: 8px; margin: -4px -6px 12px 0; }
 .dialog h2 { margin: 0; flex: 1; font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
 .dialog footer { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 18px; }
-.dialog-lead { margin: 0 0 12px; color: var(--text-muted); line-height: 1.55; }
+.dialog-lead { margin: 0 0 12px; color: var(--text-muted); line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
 .preview-code { height: min(360px, 50vh); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; display: flex; }
 
 .conn-dialog { padding: 0; overflow: hidden; height: min(620px, calc(100vh - 48px)); }
@@ -1216,6 +1216,18 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .st-update:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .st-update.ready { color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent); border-color: color-mix(in srgb, var(--success) 38%, transparent); }
 .st-update.busy { font-variant-numeric: tabular-nums; }
+
+/* MCP: status-bar indicator (MCP on, its clients in Windows and WSL) */
+.st-mcp {
+  display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px; border-radius: 9px; border: 1px solid transparent;
+  font-size: 11px; color: var(--text-muted); background: transparent; white-space: nowrap; max-width: 280px;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.st-mcp span { overflow: hidden; text-overflow: ellipsis; }
+.st-mcp svg { color: var(--success); flex: none; }
+.st-mcp.idle svg { color: var(--text-faint); }
+.st-mcp:hover, .st-mcp.open { background: var(--surface-alt); color: var(--text); }
+.st-mcp.stale svg { color: var(--warning); }
 .update-dialog { width: min(560px, calc(100vw - 48px)); }
 .upd-head { display: flex; align-items: center; gap: 16px; padding: 22px 0 14px; }
 .upd-head .gib { flex: none; }
@@ -1615,6 +1627,19 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .mcp-audit-row time, .mcp-audit-row small { color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .mcp-audit-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
 .mcp-audit-row.bad b { color: var(--danger); }
+.mcp-audit-row span { display: flex; flex-direction: column; min-width: 0; }
+.mcp-from { color: var(--text-faint); font-size: 10.5px; }
+.mcp-ok { color: var(--success) !important; display: inline-flex; align-items: center; gap: 4px; }
+.mcp-stale { color: var(--warning) !important; display: inline-flex; align-items: center; gap: 4px; }
+.mcp-error { color: var(--danger); font-size: 11.5px; }
+.mcp-wsl { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.mcp-wsl-head { display: flex; align-items: center; gap: 6px; }
+.mcp-distro { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.mcp-distro.stale { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.mcp-distro-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mcp-distro-head small { color: var(--text-muted); font-size: 11.5px; }
+.mcp-distro code { font-size: 10.5px; color: var(--text-muted); word-break: break-all; }
+.mcp-distro-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* CSV import */
 .import-dialog { height: min(640px, calc(100vh - 48px)); }

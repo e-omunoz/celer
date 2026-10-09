@@ -1134,6 +1134,12 @@ pub struct AuditEntry {
     pub ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Where the assistant runs: "Windows", "WSL (Ubuntu)", "Linux"… (entries written before it was kept: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
+    /// The MCP client program, as it introduced itself (`clientInfo.name` of initialize: "claude-code"…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_app: Option<String>,
 }
 
 fn audit_path(store: &Store) -> PathBuf {
@@ -1187,6 +1193,22 @@ pub fn clear_audit(store: &Store) -> anyhow::Result<()> {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
     }
+}
+
+/// The last entry, read from the end of the file (the status bar asks often; the file can be large).
+pub fn last_audit(store: &Store) -> Option<AuditEntry> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(audit_path(store)).ok()?;
+    let len = f.metadata().ok()?.len();
+    let start = len.saturating_sub(64 * 1024);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    String::from_utf8_lossy(&buf).lines().rev().find_map(|l| serde_json::from_str(l).ok())
+}
+
+pub(crate) fn now_ms_pub() -> i64 {
+    now_ms()
 }
 
 fn now_ms() -> i64 {
@@ -1408,15 +1430,25 @@ pub struct McpServer {
     sensitive: Mutex<HashMap<String, (Instant, String, Arc<Sensitive>)>>,
     /// Vista previa desde la interfaz: ignora `enabled` y no se audita.
     preview: bool,
+    /// Where the assistant runs ("Windows", "WSL (Ubuntu)"…), for the audit log.
+    origin: String,
+    /// The client program, from `initialize`.
+    client_app: Mutex<String>,
 }
 
 impl McpServer {
     pub fn new(dir: PathBuf, preview: bool) -> McpServer {
+        McpServer::with_origin(dir, preview, default_origin())
+    }
+
+    pub fn with_origin(dir: PathBuf, preview: bool, origin: String) -> McpServer {
         McpServer {
             store: Store::new(dir),
             sessions: Mutex::new(HashMap::new()),
             sensitive: Mutex::new(HashMap::new()),
             preview,
+            origin,
+            client_app: Mutex::new(String::new()),
         }
     }
 
@@ -1580,6 +1612,8 @@ impl McpServer {
                 rows: res.as_ref().ok().and_then(|r| r.1),
                 ms: t0.elapsed().as_millis() as u64,
                 error: res.as_ref().err().map(|e| truncate_chars(e, 500)),
+                client: Some(self.origin.clone()),
+                client_app: Some(self.client_app.lock().clone()).filter(|a| !a.is_empty()),
             };
             if let Err(e) = append_audit(&self.store, &entry) {
                 eprintln!("celer mcp: no se pudo escribir la auditoría: {e}");
@@ -1912,7 +1946,12 @@ impl McpServer {
         };
         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
         let res: Result<Value, (i64, String)> = match method {
-            "initialize" => Ok(initialize_result(&params)),
+            "initialize" => {
+                if let Some(name) = params.pointer("/clientInfo/name").and_then(Value::as_str) {
+                    *self.client_app.lock() = truncate_chars(name.trim(), 60);
+                }
+                Ok(initialize_result(&params))
+            }
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tool_defs() })),
             "tools/call" => {
@@ -2066,6 +2105,34 @@ pub fn tool_defs() -> Value {
     ])
 }
 
+/// Where this process's client runs. `--client=wsl:<distro>` is what Settings › IA y MCP adds when it registers
+/// Celer in a WSL distro (a Windows program started from WSL gets no WSL variables unless WSLENV passes them).
+pub fn origin_from_args(args: &[String]) -> String {
+    let value = args.iter().find_map(|a| a.strip_prefix("--client=")).map(str::trim).unwrap_or("");
+    let clean = |s: &str| s.chars().filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ')).take(40).collect::<String>().trim().to_string();
+    match value.split_once(':') {
+        Some((kind, distro)) if kind.eq_ignore_ascii_case("wsl") && !clean(distro).is_empty() => format!("WSL ({})", clean(distro)),
+        _ if value.eq_ignore_ascii_case("wsl") => "WSL".into(),
+        _ if !clean(value).is_empty() => clean(value),
+        _ => default_origin(),
+    }
+}
+
+fn default_origin() -> String {
+    // A Windows program started from WSL sees WSL_DISTRO_NAME only when WSLENV passes it.
+    if let Some(distro) = std::env::var("WSL_DISTRO_NAME").ok().filter(|d| !d.trim().is_empty()) {
+        if cfg!(windows) {
+            return format!("WSL ({})", distro.trim());
+        }
+    }
+    match std::env::consts::OS {
+        "windows" => "Windows".into(),
+        "macos" => "macOS".into(),
+        "linux" => "Linux".into(),
+        other => other.to_string(),
+    }
+}
+
 /// Bucle principal de `celer --mcp`: JSON-RPC por stdio, un mensaje por línea.
 pub fn serve_stdio() -> i32 {
     let rt = match tokio::runtime::Builder::new_current_thread()
@@ -2084,7 +2151,8 @@ pub fn serve_stdio() -> i32 {
         env!("CARGO_PKG_VERSION"),
         dir.display()
     );
-    let server = McpServer::new(dir, false);
+    let args: Vec<String> = std::env::args().collect();
+    let server = McpServer::with_origin(dir, false, origin_from_args(&args));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -2116,6 +2184,10 @@ pub struct ClientInfo {
     pub claude_desktop_config_path: String,
     pub claude_desktop_configured: bool,
     pub claude_code_command: String,
+    /// Claude Code on this system (`~/.claude.json`): "yes", "stale" (another path), "no".
+    pub claude_code_registered: String,
+    /// This system is Windows: the WSL section applies.
+    pub wsl_supported: bool,
 }
 
 /// Ficheros de configuración posibles de Claude Desktop. En Windows, la versión empaquetada
@@ -2178,10 +2250,74 @@ pub fn client_info() -> ClientInfo {
         .unwrap_or_default();
     ClientInfo {
         claude_desktop_configured: paths.iter().any(|p| configured_in(p, &exe)),
-        claude_code_command: format!("claude mcp add celer -- \"{exe}\" --mcp"),
+        claude_code_command: format!("claude mcp add --scope user celer -- \"{exe}\" --mcp"),
+        claude_code_registered: claude_code_registered(&exe),
         claude_desktop_config_path: primary,
         args: vec!["--mcp".into()],
         exe_path: exe,
+        wsl_supported: cfg!(windows),
+    }
+}
+
+/// Claude Code on this system: how its `~/.claude.json` has `celer` ("yes", "stale", "no").
+fn claude_code_registered(exe: &str) -> String {
+    let Some(path) = dirs::home_dir().map(|h| h.join(".claude.json")) else { return "no".into() };
+    let Ok(text) = fs::read_to_string(&path) else { return "no".into() };
+    match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
+        Ok(v) => crate::mcp_wsl::registration(&v, exe, same_path).0,
+        Err(_) => "no".into(),
+    }
+}
+
+pub fn exe_path_pub() -> String {
+    exe_path()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientStatus {
+    /// "Claude Desktop", "Claude Code".
+    pub name: String,
+    /// "Windows", "WSL (Ubuntu)"…
+    pub place: String,
+    /// "yes" or "stale" (registered with another path: register again).
+    pub state: String,
+}
+
+/// What the status bar shows: whether MCP is on, the clients registered and the last call.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatus {
+    pub enabled: bool,
+    pub clients: Vec<ClientStatus>,
+    /// The WSL distros have been read (it takes a moment after start).
+    pub wsl_checked: bool,
+    pub last_call: Option<AuditEntry>,
+}
+
+pub fn status(store: &Store) -> McpStatus {
+    let cfg = load_config(store);
+    let exe = exe_path();
+    let local = default_origin();
+    let mut clients = Vec::new();
+    if claude_desktop_config_paths().iter().any(|p| configured_in(p, &exe)) {
+        clients.push(ClientStatus { name: "Claude Desktop".into(), place: local.clone(), state: "yes".into() });
+    }
+    let code = claude_code_registered(&exe);
+    if code != "no" {
+        clients.push(ClientStatus { name: "Claude Code".into(), place: local, state: code });
+    }
+    let wsl = if cfg.enabled { crate::mcp_wsl::cached(&exe, Duration::from_secs(120)) } else { None };
+    for d in wsl.iter().flat_map(|w| w.distros.iter()) {
+        if d.registered == "yes" || d.registered == "stale" {
+            clients.push(ClientStatus { name: "Claude Code".into(), place: format!("WSL ({})", d.name), state: d.registered.clone() });
+        }
+    }
+    McpStatus {
+        enabled: cfg.enabled,
+        clients,
+        wsl_checked: wsl.is_some() || !cfg!(windows),
+        last_call: last_audit(store),
     }
 }
 
@@ -2786,6 +2922,36 @@ mod tests {
     }
 
     #[test]
+    fn the_audit_records_the_client() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(origin_from_args(&args(&["celer.exe", "--mcp", "--client=wsl:Ubuntu-24.04"])), "WSL (Ubuntu-24.04)");
+        assert_eq!(origin_from_args(&args(&["celer", "--mcp", "--client=wsl"])), "WSL");
+        assert_eq!(origin_from_args(&args(&["celer", "--mcp", "--client=wsl:$(rm -rf);"])), "WSL (rm -rf)");
+        assert_eq!(origin_from_args(&args(&["celer", "--mcp"])), default_origin());
+
+        let dir = temp_dir();
+        let file = dir.join("c.db");
+        rusqlite::Connection::open(&file).unwrap().execute_batch("CREATE TABLE t (id INTEGER)").unwrap();
+        fs::write(dir.join("connections.json"), json!([sqlite_conn("s", &file.to_string_lossy(), false)]).to_string()).unwrap();
+        let store = Store::new(dir.clone());
+        let mut cfg = McpConfig { enabled: true, ..McpConfig::default() };
+        cfg.connections.insert("s".into(), ConnPermission { level: Level::Read, max_rows: None });
+        save_config(&store, cfg).unwrap();
+        let mut c = Client { server: McpServer::with_origin(dir.clone(), false, "WSL (Ubuntu)".into()), rt: rt(), next: 0 };
+        c.rpc("initialize", json!({"protocolVersion": PROTOCOL_VERSION, "clientInfo": {"name": "claude-code", "version": "2.1"}}));
+        c.ok("run_query", json!({"connId": "s", "sql": "SELECT count(*) FROM t"}));
+        let last = last_audit(&store).unwrap();
+        assert_eq!(last.client.as_deref(), Some("WSL (Ubuntu)"));
+        assert_eq!(last.client_app.as_deref(), Some("claude-code"));
+        assert_eq!(read_audit(&store, 1)[0], last);
+        // Entries written before the client was kept still read.
+        fs::write(dir.join(AUDIT_FILE), "{\"at\":1,\"tool\":\"run_query\",\"connId\":\"s\",\"connName\":\"S\",\"detail\":\"x\",\"ok\":true,\"ms\":1}\n").unwrap();
+        assert_eq!(last_audit(&store).unwrap().client, None);
+        drop(c);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn masking_bypasses_are_refused() {
         let sens = Sensitive {
             columns: ["password_hash".to_string()].into(),
@@ -2862,6 +3028,8 @@ mod tests {
             rows: Some(1),
             ms: 1,
             error: Some("e".repeat(500)),
+            client: Some("WSL (Ubuntu-24.04)".into()),
+            client_app: Some("claude-code".into()),
         };
         let line = serde_json::to_string(&e).unwrap().len() as u64 + 1;
         assert!(line * (AUDIT_KEEP as u64) < AUDIT_COMPACT_BYTES * 3 / 4);

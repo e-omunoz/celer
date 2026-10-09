@@ -1,10 +1,11 @@
-import { CircleCheck, Copy, RefreshCw, ShieldCheck, Trash2 } from "lucide-solid";
+import { CircleCheck, Copy, RefreshCw, ShieldCheck, Terminal, Trash2, TriangleAlert } from "lucide-solid";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { AI_MODELS, refreshAiKeyStatus, saveAiKey } from "../ai";
 import { api, errorText, isTauri } from "../api";
 import { EngineIcon } from "../icons";
-import { copyText, notify, openInspector, saveSettings, serverOf, setState, state } from "../state";
-import type { McpConfig, McpLevel } from "../types";
+import { refreshMcpStatus } from "../mcpStatus";
+import { confirmDialog, copyText, notify, openInspector, saveSettings, serverOf, setState, state } from "../state";
+import type { McpConfig, McpLevel, WslDistro, WslInfo } from "../types";
 
 const LEVELS: { id: McpLevel; label: string; hint: string }[] = [
   { id: "none", label: "Sin acceso", hint: "La IA no ve esta conexión" },
@@ -28,6 +29,7 @@ export function AiSettings() {
       notify(errorText(err), "error");
       void refetch();
     }
+    void refreshMcpStatus();
   }
 
   const levelOf = (id: string) => config()?.connections[id]?.level ?? "none";
@@ -136,7 +138,9 @@ export function AiSettings() {
                   <button type="button" class="btn tiny" onClick={() => void installDesktop()}>{client()?.claudeDesktopConfigured ? "Volver a configurar" : "Configurar"}</button>
                 </div>
                 <div class="mcp-client">
-                  <b>Claude Code</b>
+                  <b>Claude Code{client()?.wslSupported ? " (Windows)" : ""}</b>
+                  <Show when={client()?.claudeCodeRegistered === "yes"}><small class="mcp-ok"><CircleCheck size={12} /> Registrado</small></Show>
+                  <Show when={client()?.claudeCodeRegistered === "stale"}><small class="mcp-stale"><TriangleAlert size={12} /> Registrado con otra ruta de Celer: vuelve a ejecutar el comando</small></Show>
                   <code>{client()?.claudeCodeCommand}</code>
                   <button type="button" class="btn tiny" onClick={() => void copyText(client()?.claudeCodeCommand ?? "", "Comando copiado")}><Copy size={12} /> Copiar</button>
                 </div>
@@ -146,6 +150,7 @@ export function AiSettings() {
                   <button type="button" class="btn tiny" onClick={() => void copyText(`${client()?.exePath} ${client()?.args.join(" ")}`, "Comando copiado")}><Copy size={12} /> Copiar</button>
                 </div>
               </div>
+              <Show when={client()?.wslSupported}><WslClients /></Show>
               <div class="mcp-test">
                 <button type="button" class="btn tiny" onClick={() => void test()}><ShieldCheck size={13} /> Ver lo que vería la IA</button>
                 <Show when={preview()}><pre>{preview()}</pre></Show>
@@ -161,8 +166,8 @@ export function AiSettings() {
                   {(entry) => (
                     <div class="mcp-audit-row" classList={{ bad: !entry.ok }}>
                       <time>{new Date(entry.at).toLocaleString()}</time>
-                      <b>{entry.tool}</b>
-                      <span>{entry.connName ?? ""}</span>
+                      <b title={entry.client ? `Desde ${clientText(entry)}` : undefined}>{entry.tool}</b>
+                      <span>{entry.connName ?? ""}<Show when={entry.client}><small class="mcp-from">{entry.client}</small></Show></span>
                       <code title={entry.error ?? entry.detail ?? ""}>{entry.error ?? entry.detail ?? ""}</code>
                       <small>{entry.ok ? `${entry.rows ?? 0} filas · ${entry.ms ?? 0} ms` : "rechazado"}</small>
                     </div>
@@ -174,5 +179,116 @@ export function AiSettings() {
         </Show>
       </Show>
     </>
+  );
+}
+
+/** "claude-code · WSL (Ubuntu)": who called, as the audit log has it. */
+export function clientText(entry: { client?: string | null; clientApp?: string | null }): string {
+  return [entry.clientApp, entry.client].filter(Boolean).join(" · ");
+}
+
+const REGISTERED: Record<WslDistro["registered"], string> = {
+  yes: "Registrado",
+  stale: "Registrado con otra ruta de Celer: vuelve a registrarlo",
+  no: "No registrado",
+  unknown: "Sin comprobar",
+};
+
+/**
+ * Claude Code inside WSL: every installed distro, whether Windows interop is on there, the command with celer.exe as
+ * the distro sees it, and «Registrar en WSL», which runs it inside the distro after showing it.
+ */
+function WslClients() {
+  const [info, setInfo] = createSignal<WslInfo | null>(null);
+  /** "list" while the distros are read, or the distro being checked or registered. */
+  const [busy, setBusy] = createSignal("");
+
+  async function load(check?: string) {
+    setBusy(check ?? "list");
+    try {
+      setInfo(await api().mcpWslInfo(check));
+    } catch (err) {
+      setInfo({ available: false, distros: [], error: errorText(err), checkedAt: Date.now() });
+    } finally {
+      setBusy("");
+    }
+    void refreshMcpStatus();
+  }
+  void load();
+
+  async function register(distro: WslDistro) {
+    const again = distro.registered === "yes" || distro.registered === "stale";
+    const ok = await confirmDialog(
+      `${again ? "Volver a registrar" : "Registrar"} Celer en WSL (${distro.name})`,
+      `Se ejecutará dentro de ${distro.name}:\n\n${distro.command}\n\nAñade Celer a Claude Code de esa distribución, para todos sus proyectos${again ? "; la entrada «celer» que ya tiene se sustituye" : ""}. Tendrá los mismos permisos por conexión, ocultación y registro que desde Windows.`,
+      again ? "Volver a registrar" : "Registrar",
+    );
+    if (!ok) return;
+    setBusy(distro.name);
+    try {
+      const said = await api().mcpWslRegister(distro.name);
+      notify(`Celer registrado en Claude Code de ${distro.name}`, "success", said || "Comprueba con «claude mcp list» dentro de la distribución.");
+    } catch (err) {
+      notify(`No se pudo registrar Celer en ${distro.name}`, "error", errorText(err));
+    }
+    await load(distro.name);
+  }
+
+  return (
+    <div class="mcp-wsl">
+      <div class="mcp-wsl-head">
+        <Terminal size={14} />
+        <b>Claude Code en WSL</b>
+        <span class="spacer" />
+        <button type="button" class="icon-btn" title="Volver a buscar distribuciones" disabled={Boolean(busy())} onClick={() => void load()}><RefreshCw size={13} class={busy() === "list" ? "spin" : ""} /></button>
+      </div>
+      <Show when={info()} fallback={<p class="settings-note">Buscando distribuciones de WSL…</p>}>
+        {(wsl) => (
+          <Show
+            when={wsl().distros.length}
+            fallback={<p class="settings-note">{wsl().error ? `No se pudo consultar WSL: ${wsl().error}` : "No hay ninguna distribución de WSL instalada."}</p>}
+          >
+            <For each={wsl().distros}>
+              {(distro) => (
+                <div class="mcp-distro" classList={{ stale: distro.registered === "stale" }}>
+                  <div class="mcp-distro-head">
+                    <b>{distro.name}</b>
+                    <Show when={distro.default}><span class="tag tiny">predeterminada</span></Show>
+                    <small>{distro.running ? "En ejecución" : "Detenida"}</small>
+                    <Show when={distro.interop === false}><small class="mcp-stale"><TriangleAlert size={12} /> Interoperabilidad con Windows desactivada</small></Show>
+                    <Show when={distro.checked && distro.interop !== false && !distro.claude}><small class="mcp-stale">Claude Code no está instalado</small></Show>
+                    <span class="spacer" />
+                    <small classList={{ "mcp-ok": distro.registered === "yes", "mcp-stale": distro.registered === "stale" }}>
+                      <Show when={distro.registered === "yes"}><CircleCheck size={12} /> </Show>
+                      {REGISTERED[distro.registered]}
+                    </small>
+                  </div>
+                  <Show when={distro.error}><small class="mcp-error">{distro.error}</small></Show>
+                  <Show when={distro.registered === "stale" && distro.registeredCommand}><small class="mcp-stale">Ahora ejecuta: {distro.registeredCommand}</small></Show>
+                  <Show when={distro.command} fallback={<small class="mcp-error">Celer está en una ruta de red: WSL no la ve por su letra de unidad.</small>}>
+                    <code title={`Ruta en WSL (raíz de montaje ${distro.automountRoot}): ${distro.exePath}`}>{distro.command}</code>
+                  </Show>
+                  <div class="mcp-distro-actions">
+                    <button type="button" class="btn tiny" disabled={!distro.command} onClick={() => void copyText(distro.command, "Comando copiado")}><Copy size={12} /> Copiar</button>
+                    <Show when={!distro.checked}>
+                      <button type="button" class="btn tiny" disabled={Boolean(busy())} title="Arranca la distribución para leer su configuración" onClick={() => void load(distro.name)}>{busy() === distro.name ? "Comprobando…" : "Comprobar"}</button>
+                    </Show>
+                    <button
+                      type="button"
+                      class="btn tiny"
+                      classList={{ primary: distro.registered === "stale" }}
+                      disabled={Boolean(busy()) || !distro.command || distro.interop === false || (distro.checked && !distro.claude)}
+                      onClick={() => void register(distro)}
+                    >
+                      {busy() === distro.name && distro.checked ? "Registrando…" : distro.registered === "yes" || distro.registered === "stale" ? "Volver a registrar" : "Registrar en WSL"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </For>
+          </Show>
+        )}
+      </Show>
+    </div>
   );
 }

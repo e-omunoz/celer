@@ -13,6 +13,7 @@ import type {
   ExecOutput,
   FetchOutput,
   HistoryEntry,
+  McpAuditEntry,
   MetaNode,
   ObjectRef,
   ResultSet,
@@ -331,6 +332,16 @@ function tableColumns(db: Database, obj: ObjectRef): TableColumn[] {
       kind,
     };
   });
+}
+
+/** What the MCP audit log would show after an assistant worked a while (the browser demo has no MCP server). */
+function demoAudit(): McpAuditEntry[] {
+  const at = Date.now();
+  return [
+    { at: at - 2 * 60_000, tool: "run_query", connId: "demo", connName: "Demo SQLite", detail: "SELECT count(*) FROM customers", ok: true, rows: 1, ms: 3, client: "WSL (Ubuntu)", clientApp: "claude-code" },
+    { at: at - 3 * 60_000, tool: "describe_table", connId: "demo", connName: "Demo SQLite", detail: "main.customers", ok: true, rows: 6, ms: 4, client: "WSL (Ubuntu)", clientApp: "claude-code" },
+    { at: at - 9 * 60_000, tool: "execute_statement", connId: "demo", connName: "Demo SQLite", detail: "DELETE FROM customers", ok: false, ms: 1, error: "La conexión «Demo SQLite» tiene nivel «read» para asistentes y execute_statement requiere «write».", client: "Windows", clientApp: "claude-code" },
+  ];
 }
 
 function download(filename: string, body: string, type: string) {
@@ -720,15 +731,51 @@ export function createDemoBackend(): Backend {
     async mcpConfigSet() {
       throw new Error("El servidor MCP solo está disponible en la aplicación de escritorio");
     },
-    async mcpAudit() {
-      return [];
+    async mcpAudit(limit) {
+      return demoAudit().slice(0, limit);
     },
     async mcpClearAudit() {},
     async mcpClientInfo() {
-      return { exePath: "celer.exe", args: ["--mcp"], claudeDesktopConfigPath: "", claudeDesktopConfigured: false, claudeCodeCommand: "claude mcp add celer -- celer.exe --mcp" };
+      return {
+        exePath: "C:\\Users\\demo\\AppData\\Local\\Celer\\celer.exe",
+        args: ["--mcp"],
+        claudeDesktopConfigPath: "",
+        claudeDesktopConfigured: false,
+        claudeCodeCommand: 'claude mcp add --scope user celer -- "C:\\Users\\demo\\AppData\\Local\\Celer\\celer.exe" --mcp',
+        claudeCodeRegistered: "yes",
+        wslSupported: true,
+      };
     },
     async mcpInstallClaudeDesktop() {
       throw new Error("Solo en la aplicación de escritorio");
+    },
+    // The browser demo shows the indicator as a Windows machine with Claude Code in Windows and in WSL would.
+    async mcpStatus() {
+      return {
+        enabled: true,
+        clients: [
+          { name: "Claude Code", place: "Windows", state: "yes" },
+          { name: "Claude Code", place: "WSL (Ubuntu)", state: "yes" },
+        ],
+        wslChecked: true,
+        lastCall: demoAudit()[0] ?? null,
+      };
+    },
+    async mcpWslInfo() {
+      const exePath = "/mnt/c/Users/demo/AppData/Local/Celer/celer.exe";
+      const command = (claude: string, distro: string) => `${claude} mcp add --scope user celer -- '${exePath}' --mcp --client=wsl:${distro}`;
+      return {
+        available: true,
+        error: "",
+        checkedAt: Date.now(),
+        distros: [
+          { name: "Ubuntu", default: true, running: true, checked: true, interop: true, home: "/home/demo", claude: "/home/demo/.local/bin/claude", automountRoot: "/mnt/", exePath, command: command("/home/demo/.local/bin/claude", "Ubuntu"), registered: "yes", registeredCommand: `${exePath} --mcp --client=wsl:Ubuntu`, error: "" },
+          { name: "Debian", default: false, running: false, checked: false, interop: null, home: "", claude: "", automountRoot: "/mnt/", exePath, command: command("claude", "Debian"), registered: "unknown", registeredCommand: "", error: "" },
+        ],
+      };
+    },
+    async mcpWslRegister() {
+      throw new Error("Registrar en WSL solo es posible en la aplicación de escritorio");
     },
     async mcpTestTool() {
       throw new Error("Solo en la aplicación de escritorio");

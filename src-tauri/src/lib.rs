@@ -5,6 +5,7 @@ mod export;
 mod guard;
 mod jdbc;
 mod mcp;
+mod mcp_wsl;
 mod migrate;
 mod model;
 mod mssql;
@@ -1283,6 +1284,27 @@ fn mcp_install_claude_desktop() -> CmdResult<String> {
     mcp::install_claude_desktop()
 }
 
+/// The status bar's MCP indicator: on or off, the clients registered (Windows and WSL) and the last call.
+#[tauri::command(async)]
+fn mcp_status(state: State<'_, Arc<AppState>>) -> mcp::McpStatus {
+    mcp::status(&state.store)
+}
+
+/// The WSL distros, whether interop is on, the command for each and whether Celer is registered there. `check`:
+/// also look into this stopped distro (which starts it).
+#[tauri::command]
+async fn mcp_wsl_info(check: Option<String>) -> CmdResult<mcp_wsl::WslInfo> {
+    let exe = mcp::exe_path_pub();
+    tauri::async_runtime::spawn_blocking(move || mcp_wsl::info(&exe, check.as_deref())).await.map_err(err)
+}
+
+/// Runs `claude mcp add` inside a distro (the interface showed the command and the user confirmed it).
+#[tauri::command]
+async fn mcp_wsl_register(distro: String) -> CmdResult<String> {
+    let exe = mcp::exe_path_pub();
+    tauri::async_runtime::spawn_blocking(move || mcp_wsl::register(&exe, &distro)).await.map_err(err)?
+}
+
 /// Ejecuta una herramienta MCP con los permisos actuales (sin exigir `enabled` y sin auditar).
 /// Devuelve `{ isError, text, json }`: `text` es exactamente lo que recibiría el asistente.
 #[tauri::command]
@@ -1451,6 +1473,9 @@ pub fn run() {
             mcp_clear_audit,
             mcp_client_info,
             mcp_install_claude_desktop,
+            mcp_status,
+            mcp_wsl_info,
+            mcp_wsl_register,
             mcp_test_tool,
             ai_key_status,
             ai_key_set,

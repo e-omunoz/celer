@@ -50,7 +50,43 @@ and shown in the settings.
 
 - **Claude Desktop**: Settings › IA y MCP › Configurar (merges into `claude_desktop_config.json`, keeps a `.bak`), then
   restart Claude Desktop.
-- **Claude Code**: copy the shown command, e.g. `claude mcp add celer -- "C:\…\celer.exe" --mcp`.
+- **Claude Code**: copy the shown command, e.g. `claude mcp add --scope user celer -- "C:\…\celer.exe" --mcp`. The
+  settings say whether it is registered, and flag a registration that points to another path of `celer.exe` (after a
+  reinstall to another folder): run the command again.
+- **Claude Code inside WSL**: see below.
 - **Other clients**: command `celer.exe`, argument `--mcp`.
 
 Files (in `%APPDATA%\es.celer.app`): `mcp.json` (permissions), `mcp-audit.jsonl` (log).
+
+### Claude Code inside WSL
+
+A WSL distro runs Windows programs through interop with their stdin and stdout piped, so Claude Code inside the
+distro starts `/mnt/c/…/celer.exe --mcp` and talks to it over stdio like any MCP server. It is still the Windows
+process: it reads the Windows `mcp.json`, takes passwords from the Windows credential store and writes the Windows
+audit log, so the connections, levels, masking and limits are exactly the ones set in Settings. Verified from Ubuntu
+on WSL 2: the release build (GUI subsystem) answers `initialize` and `tools/list` over interop stdio, and a debug
+build with its own data folder (`CELER_DATA_DIR` passed through `WSLENV`) runs `list_connections`, `list_tables` and
+`run_query` with passwords from the Windows credential store. No relay is needed.
+
+Settings › IA y MCP › *Claude Code en WSL* lists the installed distros (`wsl.exe -l -q`; Docker Desktop's own ones are
+left out). A running distro is looked into right away; a stopped one only on *Comprobar*, which starts it. For each:
+
+- whether Windows interop is on (`[interop] enabled` in `/etc/wsl.conf` and the binfmt entry WSL registers), and
+  where Claude Code is (`command -v claude`, then `~/.local/bin/claude` and the other usual places);
+- the command, with `celer.exe` converted to the distro's path, honouring `[automount] root`:
+  `claude mcp add --scope user celer -- '/mnt/c/…/celer.exe' --mcp --client=wsl:<distro>`;
+- *Registrar en WSL*: shows that exact command, asks for confirmation and runs it inside the distro
+  (`wsl.exe -d <distro> -e sh -lc …`; an earlier `celer` entry of user scope is removed first);
+- whether it is registered, read from the distro's `~/.claude.json` (through `\\wsl.localhost\<distro>\…`, or
+  `cat` inside the distro): user scope or any project. An entry whose command is another path of `celer.exe` is
+  flagged *registrado con otra ruta* with a *Volver a registrar* button.
+
+`--client=wsl:<distro>` tells the audit log where the client runs: each entry records the client (`Windows`,
+`WSL (Ubuntu)`, `Linux`) and the client program from `initialize` (`claude-code`…), and the settings show it.
+
+### Status bar indicator
+
+While MCP is on, the status bar shows «MCP · Windows + WSL (Ubuntu)»: where the registered clients are (Claude Desktop
+and Claude Code on Windows, Claude Code in each WSL distro). Its tooltip lists the clients, the last call (when, which
+tool, from where) and warns about a registration with an old path; a click opens Settings › IA y MCP. It is hidden
+while MCP is off. The WSL distros are read in the background at most every two minutes.
