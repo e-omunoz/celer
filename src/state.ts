@@ -34,6 +34,7 @@ import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
+import type { ColumnOrder } from "./columnOrder";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
 
@@ -2790,6 +2791,19 @@ export interface ExportSource {
   label: string;
   /** Table name used by SQL INSERT exports. */
   tableName: string;
+  /** The grid's column order (headers dragged): the file follows what is on screen. */
+  columnOrder?: ColumnOrder;
+}
+
+/**
+ * Column order of the grid on show in each tab, when its headers were dragged. Not reactive and not saved: the grid
+ * reports it (and clears it when it goes away or gets another result) and only an export reads it.
+ */
+const gridColumnOrders = new Map<string, ColumnOrder>();
+
+export function setGridColumnOrder(tabId: string, order: ColumnOrder | null) {
+  if (order) gridColumnOrders.set(tabId, order);
+  else gridColumnOrders.delete(tabId);
 }
 
 const EXT: Record<ExportFormat, string> = { csv: "csv", tsv: "tsv", json: "json", sql: "sql", markdown: "md", html: "html", xml: "xml", xlsx: "xlsx" };
@@ -2833,7 +2847,7 @@ export async function startExport(sqlOverride?: string) {
     return;
   }
   const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
-  openExport({ connId: tab.connId!, database: tab.database, sql: sql.replace(/;\s*$/, ""), label: "el resultado de la consulta", tableName: from });
+  openExport({ connId: tab.connId!, database: tab.database, sql: sql.replace(/;\s*$/, ""), label: "el resultado de la consulta", tableName: from, columnOrder: gridColumnOrders.get(tab.id) });
 }
 
 /** Export a table tab with its current filters and order. */
@@ -2845,7 +2859,7 @@ export function startTableExport(tabId: string) {
   if (where) sql += ` WHERE ${where}`;
   const order = tableOrderBy(tab);
   if (order) sql += ` ORDER BY ${order}`;
-  openExport({ connId: tab.connId, database: tab.obj.database || tab.database, sql, label: where ? `${tab.obj.name} (filtrada)` : tab.obj.name, tableName: tab.qualified });
+  openExport({ connId: tab.connId, database: tab.obj.database || tab.database, sql, label: where ? `${tab.obj.name} (filtrada)` : tab.obj.name, tableName: tab.qualified, columnOrder: gridColumnOrders.get(tab.id) });
 }
 
 /** Export a whole table or view from the explorer. */
@@ -2891,6 +2905,7 @@ export async function runExport() {
       tableName: opts.tableName || "resultado",
       nullText: opts.nullText,
       sqlBatch: opts.sqlBatch,
+      columnOrder: source.columnOrder ?? null,
     });
     setState({ exportRows: rows, exportRunning: false, exportOpen: false, exportId: "" });
     const target = path;

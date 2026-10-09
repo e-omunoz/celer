@@ -88,6 +88,7 @@ import {
   selectTab,
   serverOf,
   setActiveResult,
+  setGridColumnOrder,
   setState,
   setTabConnection,
   setTableFilter,
@@ -615,6 +616,7 @@ function SqlPane(props: { tab: SqlTab }) {
               onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
               onExport={exportShown}
               onActivate={() => openInspector("value")}
+              onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
             />
           </Match>
         </Switch>
@@ -865,6 +867,7 @@ function TablePane(props: { tab: TableTab }) {
             onSave={() => void saveTable(props.tab.id)}
             onColumnFilter={(col) => openFilter(newFilter(props.tab, props.tab.gridCols[col]?.name, "in"))}
             onActivate={() => openInspector("value")}
+            onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
           />
           <Show when={changes()}>
             <div class="changes-bar">
