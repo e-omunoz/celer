@@ -45,7 +45,7 @@ for (const theme of ["contrast", "contrast-light"]) {
 }
 for (const token of Object.keys(themes.sand).filter((t) => t.startsWith("--obj-"))) atLeast("sand", token, "--panel", 3);
 // Secondary and faint text carry information (hints, counts, headings): AA on the surfaces they sit on.
-for (const theme of ["sand"]) {
+for (const theme of Object.keys(themes)) {
   for (const bg of ["--bg", "--panel", "--surface"]) {
     atLeast(theme, "--text-muted", bg, 4.5);
     atLeast(theme, "--text-faint", bg, 4.5);

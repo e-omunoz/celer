@@ -167,6 +167,7 @@ All notable changes to Celer are documented here. The format follows
 - **White labels on the accent and on red buttons were hard to read**: "Guardar y conectar", "Empezar" and the other main buttons were white on the default accent (3.1:1), and "Eliminar"-style buttons and the PROD tag white on red, also in both high-contrast themes. The label is now black or white, whichever reaches 4.5:1 on the chosen accent, and each theme's red has its own label colour.
 - **The editor's find/replace panel was in English** ("Find", "next", "match case"…), as were its folding and go-to-line texts. They are now in Spanish.
 - **Pale secondary text in Sand**: the top bar's "Nuevo", the settings navigation, the status bar and the explorer counts were at 3.7:1 and 2.3:1. Sand's secondary and faint text are now darker, 4.5:1 or better.
+- **Faint text that carries information was hard to read** in Celer Claro, Celer Oscuro, Darcula and Fjord: explorer row counts, headings such as "EMPEZAR" and the hints under fields were at 2.6–3.9:1. The faint text colour now reaches 4.5:1 on the panels and surfaces in every theme.
 
 ## [2.0.1] - 2026-10-08
 
