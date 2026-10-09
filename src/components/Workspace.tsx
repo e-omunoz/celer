@@ -295,7 +295,7 @@ function ConnectionPicker(props: { tab: SqlTab }) {
                   ...state.connections.map((item) => ({
                     label: `${item.id === props.tab.connId ? "● " : ""}${item.name}`,
                     hint: engineOf(item.kind).label,
-                    run: () => setTabConnection(props.tab.id, item.id),
+                    run: () => void setTabConnection(props.tab.id, item.id),
                   })),
                   { separator: true },
                   { label: "Nueva conexión…", run: () => openConnDialog() },
@@ -486,7 +486,7 @@ function SqlPane(props: { tab: SqlTab }) {
         <Show when={!props.tab.connId && state.connections.length}>
           <div class="editor-hint">
             Esta consola no tiene conexión ·{" "}
-            <button type="button" class="link" onClick={(event) => openMenu(event, state.connections.map((item) => ({ label: item.name, hint: engineOf(item.kind).label, run: () => setTabConnection(props.tab.id, item.id) })))}>
+            <button type="button" class="link" onClick={(event) => openMenu(event, state.connections.map((item) => ({ label: item.name, hint: engineOf(item.kind).label, run: () => void setTabConnection(props.tab.id, item.id) })))}>
               elegir conexión
             </button>
           </div>

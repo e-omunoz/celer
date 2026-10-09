@@ -1316,7 +1316,21 @@ export function updateSql(id: string, sql: string, cursor: number, selection: st
   persistSoon();
 }
 
-export function setTabConnection(tabId: string, connId: string) {
+export async function setTabConnection(tabId: string, connId: string) {
+  const before = state.tabs[tabIndex(tabId)];
+  if (!before || before.kind !== "sql" || before.connId === connId) return;
+  // Its session closes: same confirmation as closing the console.
+  if (before.inTransaction || before.running) {
+    const ok = await confirmDialog(
+      before.inTransaction ? "Transacción abierta" : "Sentencia en curso",
+      before.inTransaction
+        ? "La consola tiene una transacción sin confirmar. Al cambiar de conexión se deshará (rollback)."
+        : "La consola está ejecutando una sentencia. Al cambiar de conexión se interrumpirá.",
+      before.inTransaction ? "Cambiar y deshacer" : "Cambiar de conexión",
+      true,
+    );
+    if (!ok) return;
+  }
   const index = tabIndex(tabId);
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "sql" || tab.connId === connId) return;
