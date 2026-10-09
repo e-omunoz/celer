@@ -1504,11 +1504,12 @@ export function formatMs(ms: number | null | undefined) {
   return `${m} min ${Math.round((ms % 60000) / 1000)} s`;
 }
 
-export async function runActive(mode: "statement" | "script" | "explain" | "analyze") {
+/** Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive). */
+export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string) {
   const current = activeSql();
   if (!current || current.running) return;
   const conn = connectionById(current.connId);
-  let sql = current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
+  let sql = text?.trim() || current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
   if (!sql) return;
   // Parameters (:name, ?, ${name}): ask for their values and write them in as literals.
   if (state.settings.askParams) {
@@ -1720,10 +1721,7 @@ export async function runText(sql: string) {
   if (forwardFromPanel("run-text", { sql })) return;
   const tab = activeSql();
   if (!tab) return;
-  const keep = tab.selection;
-  patchTab(tab.id, { selection: sql });
-  await runActive("statement");
-  patchTab(tab.id, { selection: keep });
+  await runActive("statement", sql);
 }
 
 /** Replaces the whole text of the active console. */
@@ -1741,10 +1739,7 @@ export function replaceActiveSql(sql: string) {
 export async function rerunActive() {
   const tab = activeSql();
   if (!tab?.lastSql) return runActive("statement");
-  const keep = tab.selection;
-  patchTab(tab.id, { selection: tab.lastSql });
-  await runActive("statement");
-  patchTab(tab.id, { selection: keep });
+  await runActive("statement", tab.lastSql);
 }
 
 export async function cancelActive() {
