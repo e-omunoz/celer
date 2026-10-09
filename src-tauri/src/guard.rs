@@ -188,6 +188,18 @@ pub fn looks_lost(msg: &str) -> bool {
     LOST.iter().any(|p| m.contains(p))
 }
 
+/// El corte lo hizo un administrador a propósito (KILL en MySQL/MariaDB, pg_terminate_backend en PostgreSQL): la
+/// sentencia no se repite aunque solo lea, porque era justo lo que se quería parar. Tras un KILL el driver de
+/// MySQL/MariaDB solo dice «server disconnected» (el servidor cerró la conexión limpiamente), aunque la sentencia
+/// acabe de empezar; como una conexión parada un rato se comprueba antes de usarla (`check`), ese cierre limpio a
+/// mitad de sentencia es un KILL o un reinicio del servidor, y tampoco se repite.
+fn killed_on_purpose(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    ["connection was killed", "(1927)", "1927 (", "terminating connection due to administrator command", "57p01", "server disconnected"]
+        .iter()
+        .any(|p| m.contains(p))
+}
+
 /// Errores que solo pueden ser un corte (no hace falta comprobar la conexión para creerlos).
 fn surely_lost(msg: &str) -> bool {
     let m = msg.to_lowercase();
@@ -665,6 +677,9 @@ impl Driver for Guarded {
                     if !lost.is_empty() {
                         bail!(lost_msg(&reason, &lost, ms));
                     }
+                    if killed_on_purpose(&error.to_string()) {
+                        bail!("CONN_RESET: El servidor cerró la sesión mientras corría la sentencia ({reason}): la terminó un administrador o el servidor se reinició. Celer ha vuelto a conectar en {ms} ms, pero la sentencia no se ha repetido.");
+                    }
                     if !self.repeatable(sql) {
                         bail!("CONN_RESET: La conexión con el servidor se había cortado ({reason}). Celer ha vuelto a conectar en {ms} ms, pero la sentencia no se ha repetido porque modifica datos y no se sabe si llegó a ejecutarse: compruébalo antes de lanzarla otra vez.");
                     }
@@ -926,6 +941,8 @@ mod tests {
         executed: Mutex<Vec<String>>,
         /// La conexión actual está cortada (la siguiente operación falla).
         cut: AtomicBool,
+        /// Como `cut`, pero el corte lo hace un administrador (KILL).
+        killed: AtomicBool,
         /// Conectar falla con este error tantas veces.
         refuse: Mutex<(usize, String)>,
     }
@@ -941,6 +958,10 @@ mod tests {
 
     impl Fake {
         fn alive(&mut self) -> Result<()> {
+            if !self.dead && self.server.killed.swap(false, Ordering::SeqCst) {
+                self.dead = true;
+                bail!("ERROR 1927 (70100): Connection was killed");
+            }
             if self.dead || self.server.cut.swap(false, Ordering::SeqCst) {
                 self.dead = true;
                 bail!("Connection reset by peer (os error 104)");
@@ -1119,6 +1140,21 @@ mod tests {
         assert_eq!(first_cell(&out), 2, "ran again on the new connection");
         assert!(out.messages[0].starts_with(RECOVERED), "{:?}", out.messages);
         assert_eq!(server.connects.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_read_killed_by_an_administrator_is_not_repeated() {
+        let server = Arc::new(Server::default());
+        let mut g = Guarded::open(connector(&server), opts(DbKind::Mysql, "")).unwrap();
+        server.killed.store(true, Ordering::SeqCst);
+        let e = g.execute("SELECT SLEEP(30)", 10).unwrap_err().to_string();
+        assert!(e.starts_with("CONN_RESET:"), "{e}");
+        assert!(!server.executed.lock().iter().any(|s| s.contains("SLEEP")), "the killed query is not run again");
+        assert!(killed_on_purpose("FATAL: terminating connection due to administrator command"));
+        assert!(killed_on_purpose("IoError { server disconnected }"), "MariaDB's KILL mid-query");
+        assert!(!killed_on_purpose("Connection reset by peer (os error 104)"));
+        // The session works again.
+        assert_eq!(first_cell(&g.execute("SELECT 1", 10).unwrap()), 2);
     }
 
     #[test]
