@@ -1471,8 +1471,12 @@ function refreshCompletion(tabId: string, results: ResultSet[]) {
 async function loadCompletion(tabId: string) {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "sql" || !tab.sessionId) return;
+  const { sessionId, database } = tab;
   try {
-    const completion = await api().completion(tab.sessionId, tab.database);
+    const completion = await api().completion(sessionId, database);
+    // The database (or the session) changed meanwhile: a newer request describes the one on show.
+    const now = state.tabs[tabIndex(tabId)];
+    if (now?.kind !== "sql" || now.sessionId !== sessionId || now.database !== database) return;
     patchTab(tabId, { completion });
   } catch {
     /* completion is optional */

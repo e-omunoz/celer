@@ -150,6 +150,7 @@ All notable changes to Celer are documented here. The format follows
 - **A console could run on the connection it had before**: changing a console's connection while its session was still opening attached the old connection's session, so statements ran on the wrong server. The old session is now closed when it arrives and the console opens its own on the new connection.
 - **"Volver a ejecutar" lost a selection made while it ran**: text selected in the editor during a re-run (or an assistant's "Ejecutar") was replaced by the old selection when it finished, so the next Ctrl+Enter ran the statement at the cursor instead. The selection is now left alone.
 - **Changing a console's connection rolled back its transaction without asking**: picking another connection with a transaction open (or a statement running) closed the session silently. It now asks first, as closing the console does.
+- **Autocompletion could describe the previous database**: choosing a big database and then right away a small one could leave the console's completion, warnings and assistant context on the big one. An answer for a database no longer on show is now dropped.
 
 ## [2.0.1] - 2026-10-08
 
