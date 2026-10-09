@@ -27,6 +27,13 @@ All notable changes to Celer are documented here. The format follows
   connection is saved again); DBeaver's dev/test/prod types come in as the same environments, and the MCP server
   lists each connection's environment.
 
+### Fixed
+- **Informix over DRDA on Windows: database names and the explorer** (#117). IBM's CLI driver on Windows writes
+  32-bit lengths like on Linux and macOS, so names came back padded with invisible characters or empty, and an empty
+  one made the explorer stop updating until Celer restarted (stale environment chips, a connection still shown
+  connected and «Cargando…» after disconnecting). Names now read correctly, and an odd name from any driver can no
+  longer stop the explorer.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

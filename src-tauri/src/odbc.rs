@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
-use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, LazyLock};
 
@@ -126,8 +125,9 @@ pub struct Api {
     get_info: FnGetInfo,
     drivers: Option<FnEnum>,
     data_sources: Option<FnEnum>,
-    /// SQLLEN is 32 bits: IBM's CLI driver outside Windows (built without ODBC64) writes 4-byte lengths and
-    /// indicators where the ODBC headers of a 64-bit system say 8. Windows and unixODBC use 8.
+    /// SQLLEN is 32 bits: IBM's CLI driver loaded directly (built without ODBC64) writes 4-byte lengths and
+    /// indicators where the ODBC headers of a 64-bit system say 8, on Windows (db2cli64.dll) as on Linux and macOS.
+    /// A driver manager (odbc32.dll, unixODBC) and the other drivers use 8.
     len32: bool,
 }
 
@@ -136,7 +136,8 @@ unsafe impl Sync for Api {}
 
 /// IBM Data Server Driver (CLI) library: libdb2.so / libdb2.dylib (db2cli64.dll on Windows).
 fn is_ibm_cli(path: &str) -> bool {
-    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    // The file name after either separator: a Windows path is recognised on every system (and in the unit test).
+    let name = path.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();
     name.starts_with("libdb2") || name.starts_with("db2cli") || name.starts_with("libdb2o")
 }
 
@@ -160,7 +161,7 @@ impl Api {
         let lib: Library = {
             // Permite que el driver encuentre sus DLL dependientes en su propia carpeta.
             const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x8;
-            let p = Path::new(path);
+            let p = std::path::Path::new(path);
             let l = if p.is_absolute() {
                 libloading::os::windows::Library::load_with_flags(p, LOAD_WITH_ALTERED_SEARCH_PATH)
             } else {
@@ -211,7 +212,7 @@ impl Api {
             drivers: opt!("SQLDriversW"),
             data_sources: opt!("SQLDataSourcesW"),
             _lib: lib,
-            len32: !cfg!(windows) && is_ibm_cli(path),
+            len32: is_ibm_cli(path),
         })
     }
 
