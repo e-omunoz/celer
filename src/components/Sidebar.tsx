@@ -27,7 +27,7 @@ import {
   toggleConnection,
   toggleNode,
 } from "../state";
-import type { MenuItem } from "../state";
+import type { GenerateKind, MenuItem } from "../state";
 import { isTauri } from "../api";
 import { emptyConn, ENGINES, type ConnSummary, type DbKind, type MetaNode } from "../types";
 import { startImport } from "../importer";
@@ -38,22 +38,27 @@ import { compareDataWithMarked, dataCompare, isTableMarked, markTableForCompare,
 import { engineOf } from "../types";
 import { connLink, linkTitle } from "../connStatus";
 import { LinkDot } from "./LinkDot";
-import { buildConnTree, connMatches, countConns, filterActive, folderName, NO_FILTER, parentFolder, passesFilter, sortConns, type FolderNode, type QuickFilter } from "../connTree";
+import { buildConnTree, connMatches, countConns, filterActive, folderName, isInside, NO_FILTER, parentFolder, passesFilter, sortConns, type FolderNode, type QuickFilter } from "../connTree";
+import { clickSelection, countOf, effectiveKeys, extendSelection, isToggleClick, selectAllLike, selectionLabel, singleSelection, stepKey, type TreeSelection } from "../treeSelect";
 import {
   createFolder,
   deleteConnectionUndoable,
   deleteFolder,
+  deleteItems,
   duplicateConnectionNow,
   exportConnections,
   folderCollapsed,
   importConnections,
   isFavorite,
+  knownFolders,
   moveConnectionsTo,
   moveFolder,
+  moveItemsTo,
   noteRecent,
   renameConnection,
   renameFolder,
   setConnSort,
+  setFavorites,
   toggleFavorite,
   toggleFolder,
 } from "../connManage";
@@ -66,9 +71,15 @@ const FAV_KEY = ":favoritas";
 // Drag and drop of connections and folders (into a folder, before a connection, or to the root).
 const CONN_MIME = "application/x-celer-connection";
 const FOLDER_MIME = "application/x-celer-folder";
+/** A multi-selection being dragged: `{ conns, folders }` as JSON. */
+const SELECTION_MIME = "application/x-celer-selection";
 const [dropOver, setDropOver] = createSignal<string | null>(null);
-/** What is being dragged: a connection id, or "g:<folder path>". */
+/** What is being dragged: a connection id, "g:<folder path>", or "*" for the multi-selection. */
 const [dragging, setDragging] = createSignal<string | null>(null);
+/** The multi-selection (Ctrl/Shift+click, Shift+arrows, Ctrl+A); its focus is `state.treeSelected`, see effectiveKeys. */
+const [picked, setPicked] = createSignal<TreeSelection>(singleSelection(""));
+/** A plain mouse down on a row of the multi-selection: the click (not a drag) then leaves that row alone selected. */
+let pendingSingle: string | null = null;
 /** The row being renamed in place (F2): "c:<id>" or "g:<folder path>". */
 const [editing, setEditing] = createSignal<string | null>(null);
 /** Puts the keyboard back on the tree (after renaming in place). */
@@ -76,7 +87,7 @@ let focusTree: () => void = () => {};
 
 function acceptDrop(event: DragEvent, key: string) {
   const types = event.dataTransfer?.types ?? [];
-  if (!types.includes(CONN_MIME) && !types.includes(FOLDER_MIME)) return;
+  if (!types.includes(CONN_MIME) && !types.includes(FOLDER_MIME) && !types.includes(SELECTION_MIME)) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
   setDropOver(key);
@@ -84,11 +95,16 @@ function acceptDrop(event: DragEvent, key: string) {
 
 /** Drops on a folder (or before a connection of it): a connection moves there, a folder goes inside it. */
 function dropInto(event: DragEvent, folder: string, beforeId?: string) {
+  const many = event.dataTransfer?.getData(SELECTION_MIME);
   const id = event.dataTransfer?.getData(CONN_MIME);
   const path = event.dataTransfer?.getData(FOLDER_MIME);
   setDropOver(null);
   setDragging(null);
-  if (id) {
+  if (many) {
+    event.preventDefault();
+    const items = JSON.parse(many) as { conns: string[]; folders: string[] };
+    void moveItemsTo(items.conns, items.folders, folder, beforeId);
+  } else if (id) {
     event.preventDefault();
     void moveConnection(id, folder, beforeId);
   } else if (path) {
@@ -105,6 +121,31 @@ type Row =
   | { type: "conn"; key: string; conn: ConnSummary; depth: number }
   | { type: "node"; key: string; connId: string; node: MetaNode; depth: number }
   | { type: "status"; key: string; text: string; depth: number; error?: boolean };
+type NodeRow = Extract<Row, { type: "node" }>;
+
+/**
+ * Rows that can be selected together: favourite shortcuts; connections and folders; database objects. Section, status
+ * and drop rows are only ever selected alone.
+ */
+function familyOf(row: Row | undefined): string | null {
+  if (row?.type === "fav") return "fav";
+  if (row?.type === "conn" || row?.type === "folder") return "conn";
+  if (row?.type === "node") return "node";
+  return null;
+}
+
+/** What Ctrl+A selects every visible one of: connections, folders, favourite shortcuts, or objects of one kind. */
+function kindOfRow(row: Row | undefined): string | null {
+  if (row?.type === "node") return `node:${row.node.kind}`;
+  return row?.type === "conn" || row?.type === "folder" || row?.type === "fav" ? row.type : null;
+}
+
+/** The name a row is copied as. */
+function rowName(row: Row): string {
+  if (row.type === "conn" || row.type === "fav") return row.conn.name;
+  if (row.type === "folder") return row.name;
+  return row.type === "node" ? row.node.name : "";
+}
 
 /** "hace 5 min" for the recent connections. */
 function ago(at: number) {
@@ -235,8 +276,81 @@ export function Sidebar() {
     return rows().findIndex((row) => row.key === state.treeSelected);
   }
 
+  const byKey = createMemo(() => new Map(rows().map((row) => [row.key, row] as const)));
+  const order = createMemo(() => rows().map((row) => row.key));
+  const family = (key: string) => familyOf(byKey().get(key));
+  /** The selected rows' keys in visible order: the focused row alone unless there is a multi-selection. */
+  const selection = createMemo(() => effectiveKeys(picked(), order(), state.treeSelected));
+  /** The rows of a multi-selection (empty when one row or none is selected). */
+  const pickedKeys = createMemo(() => new Set(selection().length > 1 ? selection() : []));
+  const selectedRows = () => selection().flatMap((key) => byKey().get(key) ?? []);
+
+  /** The selection as it stands, or the focused row alone if something else has moved the focus. */
+  function currentSelection(): TreeSelection {
+    const sel = picked();
+    return sel.focus === state.treeSelected ? sel : singleSelection(state.treeSelected);
+  }
+
+  function applySelection(next: TreeSelection) {
+    setPicked(next);
+    setState("treeSelected", next.focus);
+  }
+
   function select(key: string) {
-    setState("treeSelected", key);
+    applySelection(singleSelection(key));
+  }
+
+  /**
+   * Mouse down on a row: select it, or add it (Ctrl, Cmd on macOS) or a range (Shift) to the selection. On a row of a
+   * multi-selection a plain press only moves the focus: it may start dragging them all, and the click selects it alone.
+   */
+  function press(row: Row, event?: MouseEvent) {
+    pendingSingle = null;
+    if (!event) return select(row.key);
+    if (event.button !== 0) return;
+    const toggle = isToggleClick(event);
+    if (toggle || event.shiftKey) return applySelection(clickSelection(currentSelection(), order(), row.key, { toggle, range: event.shiftKey }, family));
+    if (pickedKeys().has(row.key)) {
+      pendingSingle = row.key;
+      applySelection({ ...currentSelection(), focus: row.key });
+      return;
+    }
+    select(row.key);
+  }
+
+  function release(row: Row) {
+    if (pendingSingle !== row.key) return;
+    pendingSingle = null;
+    select(row.key);
+  }
+
+  /** The right click (or the menu key) keeps a multi-selection the row is part of; otherwise it selects the row. */
+  function menuSelect(row: Row) {
+    if (pickedKeys().has(row.key)) applySelection({ ...currentSelection(), focus: row.key });
+    else select(row.key);
+  }
+
+  /** The connections (once each, also through their favourite shortcut) and folders of the selection. */
+  function selectionItems() {
+    const list = selectedRows();
+    return {
+      ids: [...new Set(list.flatMap((row) => (row.type === "conn" || row.type === "fav" ? [row.conn.id] : [])))],
+      folders: list.flatMap((row) => (row.type === "folder" ? [row.path] : [])),
+      favs: list[0]?.type === "fav",
+    };
+  }
+
+  /** Dragging a row of the multi-selection drags all of it: connections and folders to a folder, objects' names as text. */
+  function dragSelection(event: DragEvent, row: Row): boolean {
+    if (!pickedKeys().has(row.key) || !event.dataTransfer) return false;
+    pendingSingle = null;
+    event.dataTransfer.setData("text/plain", selectedRows().map(rowName).join(row.type === "node" ? ", " : "\n"));
+    if (row.type === "node") return true;
+    const { ids, folders } = selectionItems();
+    event.dataTransfer.setData(SELECTION_MIME, JSON.stringify({ conns: ids, folders }));
+    event.dataTransfer.effectAllowed = "move";
+    setDragging("*");
+    return true;
   }
 
   function ensureVisible(index: number) {
@@ -316,11 +430,105 @@ export function Sidebar() {
     const rect = scroller?.getBoundingClientRect();
     const x = (rect?.left ?? 0) + 24 + row.depth * 14;
     const y = (rect?.top ?? 0) + index * ROW - (scroller?.scrollTop ?? 0) + ROW;
-    const event = new MouseEvent("contextmenu", { clientX: x, clientY: y });
-    if (row.type === "conn" || row.type === "fav") connMenu(event, row.conn);
+    rowMenu(new MouseEvent("contextmenu", { clientX: x, clientY: y }), row);
+  }
+
+  /** The context menu of a row: the whole selection's when the row is part of a multi-selection. */
+  function rowMenu(event: MouseEvent, row: Row) {
+    if (pickedKeys().has(row.key)) selectionMenu(event);
+    else if (row.type === "conn" || row.type === "fav") connMenu(event, row.conn);
     else if (row.type === "folder") folderMenu(event, row.path);
     else if (row.type === "node") nodeMenu(event, row.connId, row.node);
     else backgroundMenu(event);
+  }
+
+  /** Supr on a multi-selection: connections and folders are deleted (one confirmation), favourite shortcuts unmarked. */
+  function deleteSelection() {
+    const { ids, folders, favs } = selectionItems();
+    if (favs) setFavorites(ids, false);
+    else if (ids.length || folders.length) void deleteItems(ids, folders);
+  }
+
+  /** Ctrl+Mayús+F on a multi-selection: all favourites, or none if they already all are. */
+  function favoriteSelection() {
+    const { ids } = selectionItems();
+    if (ids.length) setFavorites(ids, !ids.every(isFavorite));
+  }
+
+  /** A new folder holding the selection, next to its first row, named in place right away. */
+  async function folderWithSelection(ids: string[], folders: string[], parent: string) {
+    const path = await createFolder(parent);
+    await moveItemsTo(ids, folders, path);
+    reveal(`g:${path}`);
+    setEditing(`g:${path}`);
+  }
+
+  async function disconnectAll(ids: string[]) {
+    for (const id of ids) await disconnect(id);
+  }
+
+  /**
+   * The context menu of a multi-selection: what can be done to all of it at once. Connecting, disconnecting and
+   * exporting also take the connections inside the selected folders (as a folder's own menu does); favourites, moving
+   * and deleting act on the selected rows themselves.
+   */
+  function selectionMenu(event: MouseEvent) {
+    const list = selectedRows();
+    if (list[0]?.type === "node") return objectsMenu(event, list.filter((row): row is NodeRow => row.type === "node"));
+    const { ids, folders, favs } = selectionItems();
+    const all = [...new Set([...ids, ...state.connections.filter((conn) => folders.some((path) => isInside(conn.folder || "", path))).map((conn) => conn.id)])];
+    const off = all.filter((id) => !state.sessions[id]);
+    const on = all.filter((id) => state.sessions[id]);
+    const conns = (n: number) => countOf(n, "conexión", "conexiones");
+    const items: MenuItem[] = [
+      { label: `Conectar ${conns(off.length)}`, icon: "plug", disabled: !off.length, run: () => off.forEach((id) => void connect(id)) },
+      { label: `Desconectar ${conns(on.length)}`, icon: "unplug", disabled: !on.length, run: () => void disconnectAll(on) },
+      { separator: true },
+    ];
+    if (favs) items.push({ label: `Quitar ${conns(ids.length)} de favoritas`, hint: "Supr", run: () => setFavorites(ids, false) });
+    else if (ids.length) {
+      const allFav = ids.every(isFavorite);
+      items.push({ label: allFav ? "Quitar de favoritas" : "Añadir a favoritas", hint: "Ctrl+Mayús+F", run: () => setFavorites(ids, !allFav) });
+    }
+    if (!favs) {
+      const first = list[0];
+      const parent = first?.type === "folder" ? parentFolder(first.path) : first?.type === "conn" ? first.conn.folder || "" : "";
+      items.push({ label: "Nueva carpeta con la selección", run: () => void folderWithSelection(ids, folders, parent) });
+    }
+    items.push(
+      { separator: true },
+      { label: "Copiar nombres", hint: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
+      { label: `Exportar ${conns(all.length)} (sin contraseñas)…`, disabled: !all.length, run: () => void exportConnections(all, `${all.length} conexiones`) },
+    );
+    if (!favs) {
+      items.push({ separator: true }, { label: `Eliminar ${selectionLabel(ids.length, folders.length)}`, hint: "Supr", icon: "trash", danger: true, run: () => void deleteItems(ids, folders) });
+      // Every folder the selection can go to (not into one of its own folders): the menu scrolls when there are many.
+      const targets = knownFolders().filter((path) => !folders.some((folder) => isInside(path, folder)));
+      items.push(
+        { separator: true },
+        { label: "Mover a la raíz (sin carpeta)", run: () => void moveItemsTo(ids, folders, "") },
+        ...targets.map((path) => ({ label: `Mover a «${path}»`, run: () => void moveItemsTo(ids, folders, path) })),
+      );
+    }
+    openMenu(event, items);
+  }
+
+  /** The context menu of several database objects: a statement for each table or view, and their names. */
+  function objectsMenu(event: MouseEvent, list: NodeRow[]) {
+    const tables = list.flatMap((row) => (row.node.obj && (row.node.obj.kind === "table" || row.node.obj.kind === "view") ? [{ connId: row.connId, obj: row.node.obj }] : []));
+    const what = tables.every((t) => t.obj.kind === "table") ? countOf(tables.length, "tabla", "tablas") : tables.every((t) => t.obj.kind === "view") ? countOf(tables.length, "vista", "vistas") : countOf(tables.length, "objeto", "objetos");
+    // One after another, so they go to the same console (the one the first opens) for each connection.
+    const generate = async (kind: GenerateKind) => {
+      for (const t of tables) await generateSql(t.connId, t.obj, kind);
+    };
+    const objs = list.flatMap((row) => (row.node.obj ? [row.node.obj] : []));
+    openMenu(event, [
+      { label: `Generar SELECT de ${what}`, disabled: !tables.length, run: () => void generate("select") },
+      { label: `Generar SELECT COUNT(*) de ${what}`, disabled: !tables.length, run: () => void generate("count") },
+      { separator: true },
+      { label: `Copiar ${countOf(list.length, "nombre", "nombres")}`, hint: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
+      { label: "Copiar nombres completos", disabled: !objs.length, run: () => void copyText(objs.map((obj) => [obj.schema, obj.name].filter(Boolean).join(".")).join("\n")) },
+    ]);
   }
 
   function onKey(event: KeyboardEvent) {
@@ -338,6 +546,12 @@ export function Sidebar() {
       void newFolder();
       return;
     }
+    // Esc first leaves a multi-selection as the focused row alone, then clears the search.
+    if (event.key === "Escape" && selection().length > 1) {
+      event.preventDefault();
+      select(state.treeSelected);
+      return;
+    }
     if (event.key === "Escape" && (state.treeFilter || filterActive(quick()))) {
       event.preventDefault();
       setState("treeFilter", "");
@@ -346,6 +560,31 @@ export function Sidebar() {
     }
     const list = rows();
     if (!list.length) return;
+    // Ctrl+A: every visible row of the focused one's kind (connections when the focus is on none).
+    if (ctrl && !event.shiftKey && !event.altKey && key === "a") {
+      event.preventDefault();
+      const kindAt = (k: string) => kindOfRow(byKey().get(k));
+      const focus = kindAt(state.treeSelected) ? state.treeSelected : (list.find((r) => r.type === "conn")?.key ?? "");
+      const next = selectAllLike(order(), focus, kindAt);
+      if (next) applySelection(next);
+      return;
+    }
+    // Shift+arrows, Shift+Home/End: extend the selection over the rows of the anchor's family.
+    if (event.shiftKey && !ctrl && !event.altKey && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      const base = currentSelection();
+      const from = order().includes(base.anchor) ? base : { ...base, anchor: base.focus };
+      const fam = family(from.anchor);
+      if (fam !== null) {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : event.key === "End" ? Infinity : -Infinity;
+        const target = stepKey(order(), from.focus, step, fam, family);
+        if (target) {
+          applySelection(extendSelection(from, order(), target, family));
+          ensureVisible(order().indexOf(target));
+        }
+        return;
+      }
+    }
     const index = selectedIndex();
     const row = list[index];
     const go = (next: number) => {
@@ -363,6 +602,24 @@ export function Sidebar() {
       event.preventDefault();
       menuFromKeyboard(row, index);
       return;
+    }
+    // On a multi-selection, Supr, Ctrl+C and Ctrl+Mayús+F act on all of it; the other keys on the focused row.
+    if (selection().length > 1) {
+      if (event.key === "Delete") {
+        event.preventDefault();
+        deleteSelection();
+        return;
+      }
+      if (ctrl && !event.shiftKey && key === "c") {
+        event.preventDefault();
+        void copyText(selectedRows().map(rowName).join("\n"));
+        return;
+      }
+      if (ctrl && event.shiftKey && key === "f") {
+        event.preventDefault();
+        favoriteSelection();
+        return;
+      }
     }
     const conn = row.type === "conn" || row.type === "fav" ? row.conn : null;
     if (conn && (event.key === "F4" || (event.altKey && event.key === "Enter"))) {
@@ -676,21 +933,24 @@ export function Sidebar() {
         }}
         role="tree"
         aria-label="Conexiones y objetos"
+        aria-multiselectable="true"
       >
         <div class="tree-space" style={{ height: `${visible().total * ROW}px`, position: "relative" }}>
           <For each={visible().items}>
             {(row, i) => (
-              <div class="tree-row-wrap" style={{ transform: `translateY(${(visible().first + i()) * ROW}px)` }}>
+              <div class="tree-row-wrap" style={{ transform: `translateY(${(visible().first + i()) * ROW}px)` }} onClick={() => release(row)}>
                 <TreeRow
                   row={row}
                   selected={state.treeSelected === row.key}
+                  picked={pickedKeys().has(row.key)}
                   filter={state.treeFilter}
-                  onSelect={() => select(row.key)}
+                  onSelect={(event) => press(row, event)}
                   onActivate={() => activate(row)}
-                  onConnMenu={connMenu}
-                  onFolderMenu={folderMenu}
-                  onNodeMenu={nodeMenu}
-                  onBackgroundMenu={backgroundMenu}
+                  onMenu={(event) => {
+                    menuSelect(row);
+                    rowMenu(event, row);
+                  }}
+                  onDragMany={(event) => dragSelection(event, row)}
                 />
               </div>
             )}
@@ -756,14 +1016,17 @@ function finishRename(key: string, apply: () => void) {
 
 function TreeRow(props: {
   row: Row;
+  /** The focused row. */
   selected: boolean;
+  /** Part of a multi-selection. */
+  picked: boolean;
   filter: string;
-  onSelect: () => void;
+  /** Mouse down on the row (with its event), or a click on its arrow (without one). */
+  onSelect: (event?: MouseEvent) => void;
   onActivate: () => void;
-  onConnMenu: (event: MouseEvent, conn: ConnSummary) => void;
-  onFolderMenu: (event: MouseEvent, path: string) => void;
-  onNodeMenu: (event: MouseEvent, connId: string, node: MetaNode) => void;
-  onBackgroundMenu: (event: MouseEvent) => void;
+  onMenu: (event: MouseEvent) => void;
+  /** Starts dragging the whole multi-selection when the row is part of one (and says so). */
+  onDragMany: (event: DragEvent) => boolean;
 }) {
   const indent = () => 6 + props.row.depth * 14;
   const row = props.row;
@@ -793,10 +1056,7 @@ function TreeRow(props: {
         aria-expanded={row.open}
         onMouseDown={props.onSelect}
         onClick={props.onActivate}
-        onContextMenu={(event) => {
-          props.onSelect();
-          props.onBackgroundMenu(event);
-        }}
+        onContextMenu={props.onMenu}
       >
         <span class="twist" classList={{ open: row.open }}>
           <ChevronRight size={12} />
@@ -812,14 +1072,15 @@ function TreeRow(props: {
     return (
       <div
         class="tree-row folder-row"
-        classList={{ selected: props.selected, "drop-into": dropOver() === key, dragging: dragging() === key }}
+        classList={{ selected: props.selected, picked: props.picked, "drop-into": dropOver() === key, dragging: dragging() === key || (dragging() === "*" && props.picked) }}
         style={{ "padding-left": `${indent()}px` }}
         role="treeitem"
         aria-level={row.depth + 1}
-        aria-selected={props.selected}
+        aria-selected={props.selected || props.picked}
         aria-expanded={row.open}
         draggable={editing() !== key}
         onDragStart={(event) => {
+          if (props.onDragMany(event)) return;
           event.dataTransfer?.setData(FOLDER_MIME, row.path);
           event.dataTransfer?.setData("text/plain", row.name);
           if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
@@ -834,10 +1095,7 @@ function TreeRow(props: {
         onDrop={(event) => dropInto(event, row.path)}
         onMouseDown={props.onSelect}
         onDblClick={props.onActivate}
-        onContextMenu={(event) => {
-          props.onSelect();
-          props.onFolderMenu(event, row.path);
-        }}
+        onContextMenu={props.onMenu}
         title={`${row.path} · ${row.count} ${row.count === 1 ? "conexión" : "conexiones"}`}
       >
         <span
@@ -876,14 +1134,15 @@ function TreeRow(props: {
     return (
       <div
         class="tree-row conn"
-        classList={{ selected: props.selected, connected: connected(), alias, "drop-before": !alias && dropOver() === key, dragging: dragging() === conn.id }}
+        classList={{ selected: props.selected, picked: props.picked, connected: connected(), alias, "drop-before": !alias && dropOver() === key, dragging: dragging() === conn.id || (dragging() === "*" && props.picked) }}
         style={{ "padding-left": `${indent()}px` }}
         role="treeitem"
         aria-level={row.depth + 1}
-        aria-selected={props.selected}
+        aria-selected={props.selected || props.picked}
         aria-expanded={alias ? undefined : Boolean(open())}
         draggable={!alias && editing() !== key}
         onDragStart={(event) => {
+          if (props.onDragMany(event)) return;
           event.dataTransfer?.setData(CONN_MIME, conn.id);
           event.dataTransfer?.setData("text/plain", conn.name);
           if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
@@ -899,10 +1158,7 @@ function TreeRow(props: {
         onDrop={(event) => !alias && dropInto(event, conn.folder || "", conn.id)}
         onMouseDown={props.onSelect}
         onDblClick={() => (alias ? props.onActivate() : connected() ? toggleConnection(conn.id) : void connect(conn.id))}
-        onContextMenu={(event) => {
-          props.onSelect();
-          props.onConnMenu(event, conn);
-        }}
+        onContextMenu={props.onMenu}
         title={`${conn.name}\n${where}${conn.folder ? `\nCarpeta: ${conn.folder}` : ""}\n${linkTitle(link())}`}
       >
         <span
@@ -956,25 +1212,22 @@ function TreeRow(props: {
   return (
     <div
       class="tree-row"
-      classList={{ selected: props.selected, leaf: node.leaf }}
+      classList={{ selected: props.selected, picked: props.picked, leaf: node.leaf }}
       style={{ "padding-left": `${indent()}px` }}
       role="treeitem"
       aria-level={row.depth + 1}
-      aria-selected={props.selected}
+      aria-selected={props.selected || props.picked}
       aria-expanded={node.leaf ? undefined : open()}
       draggable={draggable}
       onDragStart={(event) => {
         const obj = node.obj;
-        if (!obj) return;
+        if (!obj || props.onDragMany(event)) return;
         event.dataTransfer?.setData("text/plain", obj.schema && obj.schema !== "main" ? `${obj.schema}.${obj.name}` : obj.name);
       }}
       onMouseDown={props.onSelect}
-      onClick={(event) => event.detail === 1 && !node.leaf && !node.obj && void toggleNode(row.connId, node)}
+      onClick={(event) => event.detail === 1 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !node.leaf && !node.obj && void toggleNode(row.connId, node)}
       onDblClick={() => node.obj && props.onActivate()}
-      onContextMenu={(event) => {
-        props.onSelect();
-        props.onNodeMenu(event, row.connId, node);
-      }}
+      onContextMenu={props.onMenu}
       title={node.detail ? `${node.name} · ${node.detail}` : node.name}
     >
       <span
