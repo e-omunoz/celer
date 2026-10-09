@@ -3,75 +3,84 @@
 Fast desktop SQL client: Tauri 2 + Rust core + SolidJS interface.
 Full plan: [docs/ROADMAP.md](docs/ROADMAP.md) · drivers: [docs/DRIVERS.md](docs/DRIVERS.md).
 
-## Done
-- **Windows build works** with the MSVC toolchain (Visual Studio Build Tools 2022). Releases (Celer Setup, portable,
-  macOS and Linux packages) are built by GitHub Actions on a `vX.Y.Z` tag (`.github/workflows/release-desktop.yml`).
-- **Drivers** (all native, nothing to install):
-  - `postgres.rs`: PostgreSQL (sync `postgres` crate). Server-side cursors (`DECLARE … NO SCROLL CURSOR`) for
-    paging, cancel token, manual/auto transactions with exact `in_transaction`, multi-database tree with a cached
-    secondary connection, full DDL reconstruction (tables, constraints, indexes, triggers, views, matviews,
-    functions, sequences), dollar-quote aware script splitter, error position (line/column).
-  - `mysql.rs`: MySQL / MariaDB. Streaming reader thread with a bounded channel (1,024 rows) so large results
-    never load into memory, `KILL QUERY` cancellation, DELIMITER-aware splitter, TLS modes, SHOW CREATE DDL.
-  - `mssql.rs` (tiberius), `sqlite.rs` (embedded), `odbc.rs` + `odbc_driver.rs` (Informix, generic ODBC), `jdbc.rs` + `bridge/` (JDBC bridge: Informix over SQLI).
-- **Tests**: `cargo test --lib` — 27 tests, including integration tests against live PostgreSQL 17 and
-  MariaDB 11.4 when `CELER_PG_TEST` / `CELER_MYSQL_TEST` are set (see "Test databases").
-- **Interface** (redesigned, Claude-warm palette with DataGrip density):
-  - Explorer: virtualised tree (10k+ objects), keyboard navigation, type-to-filter, context menus (open data,
-    structure, DDL, generate SELECT/INSERT/UPDATE/DELETE/COUNT, copy names, refresh), drag a table into the editor,
-    approximate row counts, auto-expands the current database on connect.
-  - Consoles: CodeMirror 6 with schema-aware completion per dialect, current-statement band, run statement /
-    selection / script, EXPLAIN, format, multi-cursor, folding, search; connection and database pickers per console;
-    Auto/Manual transaction toggle with commit/rollback.
-  - Results: canvas grid with native scrollbars, active cell, keyboard navigation, autofit, in-grid search (Ctrl+F),
-    copy as TSV/CSV/JSON/Markdown/INSERT/IN/WHERE, selection aggregates (Σ, avg, min, max, distinct) in the status bar,
-    infinite paging and "load all" in large chunks; Output log with errors and timings.
-  - Table viewer: data with WHERE / ORDER BY filters, quick filters from a cell, editing (cells, NULL, add/clone/
-    delete rows) with SQL preview and **atomic save** (one transaction, rolled back on error); columns, indexes,
-    keys and highlighted DDL.
-  - Inspector panel: value viewer (JSON pretty-print, wrap), record view, searchable query history.
-  - Command palette (Shift Shift, Ctrl+K, Ctrl+N for tables, Ctrl+Shift+A for actions), DataGrip shortcuts.
-  - Connection dialog with engine picker and connection test; production connections confirm dangerous statements;
-    read-only connections enforced in the Rust core.
-  - 8 themes (Celer Dark/Light, Darcula, Fjord, Sand, two high-contrast, System) with live previews, accent colours,
-    density, Gib the mascot.
-- **Window**: custom title bar in the theme's colours (no generic Windows frame) with Windows 11-style caption
-  buttons; the window is shown after its first paint (no white flash).
-- **Gib**: startup splash (thinks while loading → light bulb and smile → hops to the status bar), thinks while a
-  query runs and gets an idea when a long one finishes, reacts to errors/connections/commits, contextual tips learned
-  from use (mouse runs, slow queries, paging, production), waves on hover, heart on double click.
-- **Table filters**: per-column filter chips (=, ≠, <, >, between, contains, starts/ends, in list with value
-  checklist from loaded rows, NULL / empty), toggle/edit/remove, combined with the free WHERE; server-side sorting
-  from the header; exact row count on a side session.
-- **Export**: from a console, a filtered table or the explorer; CSV (delimiter), TSV, Excel (auto-fit), JSON,
-  SQL INSERT (batched rows, dialect-correct booleans), Markdown and HTML; streaming with progress, cancel and
-  "show in folder".
-- **Import**: CSV/TSV into a table with delimiter/header detection, automatic column mapping, preview, required
-  column warnings, batched multi-row INSERTs, all-or-nothing transaction.
-- **AI**: in-app assistant (Claude via the official SDK, streaming; Opus 5.5 by default, Sonnet 5.5 / Haiku 4.5
-  selectable) that generates, explains, fixes and optimises SQL from the real schema — never row data; the API key
-  lives in the OS credential store. "Copiar esquema para IA" copies an AI-ready Markdown description. MCP server
-  (`celer.exe --mcp`) for external assistants with per-connection permission levels, row limits, sensitive-column
-  masking and an audit log, configurable in Settings › IA y MCP.
-- **Logo**: redesigned mark and app icon (all sizes regenerated from `docs/brand/app-icon.svg`).
-- **Engine logos**: official PostgreSQL, MySQL, MariaDB (detected from the server banner) and SQLite marks from Simple
-  Icons (CC0 paths, `dev/brand-icons.mjs`); Microsoft and IBM don't license theirs, so SQL Server, Informix and ODBC use a
-  neutral database glyph. See [docs/AI_MCP.md](docs/AI_MCP.md) for the AI features.
-- **Quality pass**: 23 issues from a code review fixed (statement under the cursor after `;`, formatter and line
-  comments, Manual mode after reconnect, read-only batches, LIKE escaping, MySQL backslashes, dialect quoting,
-  stale counts, dead table tabs after disconnect, F5 reloading the page, close-with-unsaved-work prompt, …).
-- **Tests**: `cargo test --lib` (40, incl. live PostgreSQL/MariaDB and MCP); `node dev/e2e.mjs` drives the running
-  desktop app over CDP (14 end-to-end checks: connect, filters, count, server sort, all export formats with 200k rows,
-  credential store, MCP defaults, read-only protection, Ctrl+Enter).
+## Done (2.2.0)
+
+What each area is for is defined in [docs/ARCHITECTURE.md › Areas](docs/ARCHITECTURE.md#areas); here is what each
+one has today.
+
+- **Platform**: Windows, macOS (universal dmg) and Linux (AppImage, deb, rpm) builds from GitHub Actions on a `vX.Y.Z`
+  tag; Celer Setup (per-user, no administrator, silent mode for deployment) and portable builds; in-app updates on
+  Windows verified against `SHA256SUMS.txt`. Several windows with tabs dragged between them, sessions kept, and the
+  layout restored per monitor. Custom title bar in the theme's colours.
+- **Drivers** (nothing to install except for Informix):
+  - PostgreSQL (server-side cursors, full DDL, dollar-quote aware splitter, error position), MySQL / MariaDB
+    (streaming reader, `KILL QUERY`, `DELIMITER`), SQL Server (TDS, Windows authentication, its own connection pool),
+    SQLite (embedded), Informix over JDBC (Celer's bridge, one shared JVM; Java and the driver found or downloaded on
+    demand), the Client SDK or IBM CLI (DRDA), and any ODBC source.
+  - Watched sessions on every engine: checked before use, reconnected when nothing was lost, `SESSION_LOST` when a
+    transaction, temporary tables or `SET` would be; connections reused for a few minutes; a startup script per
+    connection; "Probar conexión" step by step with an explanation of each failure.
+- **Explorer**: connections in nested folders, favourites, recent, search across every field, manual or alphabetical
+  order, multi-selection (connections, folders, objects) with undo; virtualised object tree (10k+ objects); per-object
+  menus to open, generate SQL (SELECT with joins, INSERT, UPDATE, DELETE, UPSERT/MERGE, DROP, DDL), export, import,
+  diagram and compare; connection export/import as JSON without passwords; server activity (sessions, cancel, kill).
+- **Consoles**: CodeMirror 6 with schema-aware completion per dialect, live templates, query parameters, current
+  statement band, run statement / selection / script, Ctrl+click to open a table, warnings on UPDATE/DELETE without
+  WHERE, Auto/Manual transactions with commit/rollback, `.sql` files kept with their encoding and line endings.
+  **Execution plans** as a tree on every engine, with real rows and times where the engine measures them (EXPLAIN
+  ANALYZE) and warnings worth acting on.
+- **Results**: canvas grid paged from an open cursor ("Cargar todo" in chunks, cancellable), keyboard navigation,
+  search, quick filter over loaded rows, columns reordered by dragging, copy as TSV/CSV/JSON/XML/Markdown/INSERT/IN/
+  WHERE, selection aggregates in the status bar, a pinned result compared with the current one.
+- **Table viewer**: per-column filter chips and free WHERE / ORDER BY (with a fix for `"text"`), server-side sort,
+  exact count, typed cell editors (booleans, dates, foreign-key lookup), add/clone/delete rows, SQL preview and atomic
+  save, foreign keys followed to the referenced row; Columns, Indexes, Keys and DDL tabs.
+- **Library**: named scripts in folders with tags and a connection, linked consoles that save back, search and
+  palette entries, drag into the editor, import/export of `.sql` files keeping folders and tags.
+- **History**: every statement with connection, time, duration and rows, searchable, pasted or reopened in a click.
+- **E-R diagram**: a whole schema or one table with its relations both ways, expandable a level at a time, centred on
+  a table, searchable, SVG export, in its own window if wanted.
+- **Schema and data compare**: two schemas (same or different connections) with a script to make the target match;
+  two tables' rows paired by primary key (up to 50,000 per table) with an INSERT/UPDATE script, DELETEs commented.
+- **Import / export**: streaming export to CSV, TSV, Excel, JSON, XML, SQL INSERT, Markdown and HTML with progress
+  and cancel; import of CSV, TSV, JSON and spreadsheets (xlsx, xls, ods) with column mapping, preview, required-column
+  warnings and one transaction.
+- **Migrate**: connections from DBeaver (saved passwords only when asked) and DbVisualizer, with folders, production
+  flags and Informix properties.
+- **Settings**: 8 themes (Celer Oscuro and Claro, Darcula, Fjord, Sand, high contrast dark and light, follow the
+  system) with live previews, accent colour, density, interface and editor size, motion, page size, templates,
+  every shortcut rebindable (AltGr safe), safety confirmations, AI and MCP, Informix drivers.
+- **AI / MCP**: in-app assistant (Claude Opus 5.5 by default, Sonnet 5.5 / Haiku 4.5) that writes, explains, fixes
+  and optimises SQL from the schema, never rows, key in the OS credential store; MCP server (`celer --mcp`) with a
+  permission level per connection, row and time limits, masked columns and an audit log. See
+  [docs/AI_MCP.md](docs/AI_MCP.md).
+- **Gib**: start-up splash, thinks while queries run and shows progress with cancel on long operations, idle
+  routines, reactions, tips learned from use and advice about the query just run; quiet or off in Settings.
+- **Safety**: read-only connections enforced in the Rust core, production connections confirm risky statements,
+  passwords only in the OS credential store, damaged data files set aside instead of overwritten.
+- **Tests**: `cargo test --lib` has 136 tests, the live ones run against every engine when its `CELER_*_TEST`
+  variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix); 22 pure logic
+  checks (`dev/*-check.ts`); 22 end-to-end scripts that drive the desktop app over CDP (`dev/*-check.mjs`) plus
+  `dev/e2e.mjs`, all run by `dev/check-all.ps1`.
 - **Performance** (debug build, PostgreSQL, 6 columns): first page of 200k rows in 3 ms; loading all 200,000 rows in
   1.3 s with a 54 MB JS heap; scrolling the grid at ~7 ms per frame.
 - Browser preview: `npm run dev` runs the same UI against an in-memory sql.js demo.
 
 ## Next
-1. SQL Server integration tests (no local server yet) and Informix.
-2. Graphical execution plans; ER diagrams; schema/data compare.
-3. Data import (CSV/Excel), saved scripts library, migration assistant from DBeaver/DataGrip.
-4. Signed installer and auto-update.
+
+From the open issues (see [docs/ROADMAP.md](docs/ROADMAP.md) for the longer view):
+
+1. **Fixes**: DBeaver/DbVisualizer JDBC URL parsing (#102), Gib's animations (#103), SQL Server PRINT and
+   low-severity RAISERROR messages (#67), Informix recovery after an idle drop (#97).
+2. **Working tools**: the library on any database (#99), variables (#118), Excel import with typed values and
+   streaming (#120), pinned results compared with any other (#119), transaction timer (#116), engine compatibility
+   indicator (#113), E-R foreign keys in one query (#98).
+3. **Connections**: SSH tunnel (#115), export with secrets (#101), environment colours for the whole window (#117).
+4. **AI**: MCP from Claude Code inside WSL with a status indicator (#124), MCP acting in the app (#100).
+5. **Look and feel**: simplify overgrown areas (#111, proposal on the issue), settings review (#106), theme editor
+   (#107), tear-off hint (#108), column drag (#109), animations (#110), Gib (#104, #105).
+6. **Support**: local error log (#122), report bugs from the app (#112); Informix point-in-time rows (#123,
+   feasibility).
 
 ## Development
 ```powershell
@@ -83,13 +92,20 @@ npm run tauri dev                         # or: powershell -File dev\run-desktop
 `dev/run-desktop.ps1` builds a debug app and starts it with the DevTools protocol on port 9333;
 `node dev/cdp.mjs eval|shot|click|type|key …` drives it for end-to-end checks.
 
-## Test databases (portable, no admin)
+## Test databases
+
+Every engine runs in Docker inside WSL (`dev\wsl.ps1 db up|seed`, or `bash dev/wsl/engines.sh up|seed` from WSL);
+ports, credentials and the `CELER_*_TEST` variables are in
+[docs/review/ENGINE_MATRIX.md](docs/review/ENGINE_MATRIX.md). Portable PostgreSQL and MariaDB servers for Windows
+are still there:
+
 | Engine | Start | Connection |
 |---|---|---|
 | PostgreSQL 17 | `powershell -File dev\testdb-postgres.ps1 start` | `localhost:54329`, user/password `celer`, db `celer` |
 | MariaDB 11.4 | `powershell -File dev\testdb-mysql.ps1 start` | `127.0.0.1:33069`, user/password `celer`, db `celer` |
 
-Seeds: `dev/seed-postgres.sql`, `dev/seed-mysql.sql` (each has a 200k-row `events` table for paging tests).
+Seeds: `dev/seed-postgres.sql`, `dev/seed-mysql.sql`, `dev/seed-mssql.sql`, `dev/seed-informix.sql` (PostgreSQL and
+MySQL have a 200k-row `events` table for paging tests).
 ```powershell
 $env:CELER_PG_TEST = "host=localhost port=54329 user=celer password=celer dbname=celer"
 $env:CELER_MYSQL_TEST = "mysql://celer:celer@127.0.0.1:33069/celer"

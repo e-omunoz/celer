@@ -85,7 +85,12 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
   conexiones con un nivel de permiso por conexión, límites de filas y tiempo, columnas enmascaradas y registro de
   auditoría.
 - **Trae tus conexiones.** Impórtalas desde **DBeaver** (con las contraseñas guardadas, si quieres) y
-  **DbVisualizer**, con carpetas y marcas de producción. Arrastra conexiones entre carpetas en el explorador.
+  **DbVisualizer**, con carpetas y marcas de producción. Organízalas en carpetas anidadas con favoritas y búsqueda, y
+  actúa sobre varias a la vez. «Probar conexión» enseña cada paso y qué hacer si uno falla; una conexión caída vuelve
+  sola, y nunca en silencio si se perdería una transacción.
+- **Varias ventanas.** Arrastra una pestaña fuera para llevarla a su propia ventana, una por monitor si quieres: la
+  consola conserva su sesión, la transacción abierta y las filas que faltaban por cargar. La biblioteca, el asistente
+  de IA, los planes, los diagramas y las comparaciones también pueden tener su ventana, y todas vuelven a su sitio.
 - **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
   configurables, biblioteca de scripts, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
   tiene una idea cuando acaba una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como
@@ -227,8 +232,9 @@ Todos los atajos se pueden cambiar en *Ajustes › Atajos de teclado*. En macOS,
 - Sin cuentas ni telemetría. Tus datos no salen del equipo salvo que tú lo pidas.
 - Las contraseñas y la clave de IA se guardan en el almacén de credenciales del sistema, nunca en ficheros.
 - Más allá de tus bases de datos, Celer solo se conecta para: comprobar actualizaciones en la API de GitHub Releases
-  (no envía nada sobre ti y se puede desactivar), descargar el driver de IBM cuando lo pides y el asistente de IA si
-  configuras tu propia clave (recibe el esquema, nunca filas).
+  (no envía nada sobre ti y se puede desactivar), descargar los drivers de Informix cuando lo pides (IBM CLI, el driver
+  JDBC de Maven Central y, solo si no hay Java, un JRE de Adoptium) y el asistente de IA si configuras tu propia clave
+  (recibe el esquema, nunca filas).
 - El servidor MCP funciona en local por stdio, está desactivado por defecto y solo ve lo que permite cada conexión.
 - Las conexiones de solo lectura rechazan escrituras, aunque vayan escondidas en un lote; las de producción piden
   confirmación antes de sentencias arriesgadas.
