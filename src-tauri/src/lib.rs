@@ -287,6 +287,7 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     }
     // A PWD= typed into the ODBC string or "Parámetros extra" goes to the credential store like the field's.
     cfg.take_inline_password();
+    cfg.normalize_environment();
     if cfg.save_password {
         if let Some(p) = cfg.password.as_ref().filter(|p| !p.is_empty()) {
             app.store.set_password(&cfg.id, p).map_err(err)?;

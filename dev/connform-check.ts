@@ -126,6 +126,9 @@ assert.equal(applied.cfg.kind, "mssql");
 assert.equal(applied.cfg.name, "CRM");
 assert.equal(applied.cfg.folder, "Clientes");
 assert.equal(applied.cfg.production, true);
+// The environment goes with the connection, not with the engine.
+const staged = applyJdbcUrl(conn({ kind: "postgres", environment: "custom", envLabel: "QA", envColor: "#2BA3A3" }), "jdbc:mysql://my/web");
+assert.deepEqual([staged?.cfg.environment, staged?.cfg.envLabel, staged?.cfg.envColor], ["custom", "QA", "#2BA3A3"]);
 assert.equal(applied.cfg.port, null, "a named instance without a port: SQL Server Browser gives it");
 assert.equal(applied.cfg.instance, "SQLEXPRESS");
 assert.equal(applied.cfg.user, "app");

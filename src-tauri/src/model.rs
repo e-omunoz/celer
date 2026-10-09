@@ -176,7 +176,17 @@ pub struct ConnConfig {
     /// Parámetros extra que se añaden a la cadena de conexión.
     pub extra: String,
     pub color: String,
+    /// Confirmations before dangerous statements, the MCP's write cap and the stricter transaction warnings. Always
+    /// true for the "prod" environment, false for the other built-in ones; a custom environment keeps its own.
     pub production: bool,
+    /// "" (none) | "dev" | "test" | "staging" | "prod" | "custom": colours the consoles, tabs and explorer node.
+    #[serde(default)]
+    pub environment: String,
+    /// A custom environment's name and colour (`#rrggbb`).
+    #[serde(default)]
+    pub env_label: String,
+    #[serde(default)]
+    pub env_color: String,
     pub read_only: bool,
     pub folder: String,
     /// SQLite: ruta del fichero, o `:memory:` para una base en memoria.
@@ -208,6 +218,9 @@ impl Default for ConnConfig {
             extra: String::new(),
             color: String::new(),
             production: false,
+            environment: String::new(),
+            env_label: String::new(),
+            env_color: String::new(),
             read_only: false,
             folder: String::new(),
             file_path: String::new(),
@@ -217,6 +230,18 @@ impl Default for ConnConfig {
 }
 
 impl ConnConfig {
+    /// The environment and the production flag agree: a connection saved before environments existed with the
+    /// production flag is "prod"; "prod" is always production and the other built-in environments never are. An
+    /// unknown environment (a later version's) is left as it is. src/environment.ts does the same.
+    pub fn normalize_environment(&mut self) {
+        match self.environment.as_str() {
+            "" if self.production => self.environment = "prod".into(),
+            "prod" => self.production = true,
+            "dev" | "test" | "staging" => self.production = false,
+            _ => {}
+        }
+    }
+
     /// Moves a `PWD=` / `Password=` written into the ODBC connection string or "Parámetros extra" out of them, so it
     /// is kept in the credential store and never in connections.json. A password typed in the field wins.
     /// Returns true when something was moved.
@@ -399,5 +424,25 @@ mod tests {
         cfg.password = Some("typed".into());
         assert!(cfg.take_inline_password());
         assert_eq!((cfg.extra.as_str(), cfg.password.as_deref()), ("", Some("typed")));
+    }
+
+    #[test]
+    fn environments_follow_the_production_flag() {
+        // connections.json written before environments: no field, the production flag maps to "prod".
+        let mut old: ConnConfig = serde_json::from_str(r#"{"id":"a","name":"CRM","kind":"postgres","production":true}"#).unwrap();
+        assert_eq!(old.environment, "");
+        old.normalize_environment();
+        assert_eq!((old.environment.as_str(), old.production), ("prod", true));
+        let mut plain: ConnConfig = serde_json::from_str(r#"{"id":"b","name":"Dev","kind":"mysql"}"#).unwrap();
+        plain.normalize_environment();
+        assert_eq!((plain.environment.as_str(), plain.production), ("", false));
+        let mut staging = ConnConfig { environment: "staging".into(), production: true, ..Default::default() };
+        staging.normalize_environment();
+        assert!(!staging.production);
+        let mut custom = ConnConfig { environment: "custom".into(), env_label: "Cliente".into(), production: true, ..Default::default() };
+        custom.normalize_environment();
+        assert!(custom.production, "a custom environment keeps its own flag");
+        let json = serde_json::to_value(&custom).unwrap();
+        assert_eq!((json["environment"].as_str(), json["envLabel"].as_str()), (Some("custom"), Some("Cliente")));
     }
 }

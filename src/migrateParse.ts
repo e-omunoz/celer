@@ -447,6 +447,8 @@ export function parseDbeaver(source: MigrationSource): Candidate[] {
     cfg.user = String(conf.user ?? cfg.user);
     cfg.password = "";
     cfg.production = conf.type === "prod";
+    // DBeaver's connection types dev / test / prod are Celer's environments of the same name.
+    if (conf.type === "dev" || conf.type === "test" || conf.type === "prod") cfg.environment = conf.type;
     cfg.readOnly = Boolean(c["read-only"]);
     if (kind === "sqlite") {
       cfg.filePath = String(conf.database ?? fromUrl.file ?? "");

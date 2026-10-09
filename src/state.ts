@@ -34,6 +34,7 @@ import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
+import { envOf, normalizeEnvironment } from "./environment";
 import type { ColumnOrder } from "./columnOrder";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
@@ -448,10 +449,10 @@ function tabIndex(id: string) {
   return state.tabs.findIndex((tab) => tab.id === id);
 }
 
+/** A connection's colour: its environment's (production red, preproduction amber…), else its own or its engine's. */
 export function connColor(conn: ConnSummary | undefined) {
   if (!conn) return "var(--text-faint)";
-  if (conn.production) return "var(--danger)";
-  return conn.color || engineOf(conn.kind).color;
+  return envOf(conn)?.color ?? (conn.color || engineOf(conn.kind).color);
 }
 
 // ---------------------------------------------------------------- theme
@@ -513,7 +514,7 @@ export async function boot() {
   });
   let connectionsLoaded = false;
   try {
-    setState("connections", await api().listConnections());
+    setState("connections", (await api().listConnections()).map(normalizeEnvironment));
     connectionsLoaded = true;
     const problem = await api().connectionsProblem();
     if (problem) notify("Problema al leer las conexiones guardadas", "error", problem);
@@ -1069,7 +1070,8 @@ function needsPassword(conn: ConnSummary) {
 }
 
 export async function refreshConnections() {
-  setState("connections", await api().listConnections());
+  // The core already maps an old production flag to the "prod" environment; the browser demo does not.
+  setState("connections", (await api().listConnections()).map(normalizeEnvironment));
 }
 
 /** Folders in use by the saved connections, in order of first appearance. */
@@ -1107,7 +1109,8 @@ export async function moveConnection(id: string, folder: string, beforeId?: stri
 
 export function openConnDialog(cfg?: ConnConfig) {
   setState({ testOutput: "", testOk: null, testing: false, testGuide: "", testReport: null });
-  setState("connDialog", cfg ? { ...cfg, password: "" } : emptyConn(isTauri() ? "postgres" : "sqlite"));
+  // A connection saved before environments shows its production flag as Producción.
+  setState("connDialog", cfg ? normalizeEnvironment({ ...cfg, password: "" }) : emptyConn(isTauri() ? "postgres" : "sqlite"));
 }
 
 export async function submitConnection(cfg: ConnConfig) {

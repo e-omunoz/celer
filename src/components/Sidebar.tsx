@@ -63,6 +63,7 @@ import {
   toggleFavorite,
   toggleFolder,
 } from "../connManage";
+import { EnvChip } from "./ConsoleSafety";
 
 const ROW = 24;
 
@@ -1185,7 +1186,7 @@ function TreeRow(props: {
         <Show when={editing() === key} fallback={<span class="tree-name">{highlight(conn.name, props.filter)}</span>}>
           <RenameInput value={conn.name} onDone={(value) => finishRename(key, () => value !== null && void renameConnection(conn.id, value))} />
         </Show>
-        <Show when={conn.production}><span class="tag prod">PROD</span></Show>
+        <EnvChip conn={conn} short tiny />
         <Show when={conn.readOnly}><span class="tag">RO</span></Show>
         <small class="tree-detail">{busy() ? "conectando…" : conn.host || (conn.filePath ? conn.filePath.split(/[\\/]/).pop() : "")}</small>
         <button

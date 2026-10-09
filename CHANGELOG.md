@@ -6,6 +6,17 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Environments: the whole window wears the connection's colour** (#117). Each connection has an environment
+  (Desarrollo, Pruebas, Preproducción, Producción, or a name and colour of your own) chosen in its form. Its consoles
+  and tables get a coloured band on top and a chip with icon and label (not only colour) in the toolbar and the status
+  bar; its tabs, its explorer node and the same consoles in other windows wear the same colour, production red and
+  preproduction amber by default, with contrast checked in every theme including high contrast. Production keeps its
+  confirmations, and the form suggests read-only and explains the stricter transaction warnings. A connection saved
+  as production before is Producción, read from connections.json as it was (the file changes only when the
+  connection is saved again); DBeaver's dev/test/prod types come in as the same environments, and the MCP server
+  lists each connection's environment.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

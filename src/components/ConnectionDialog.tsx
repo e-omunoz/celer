@@ -6,6 +6,8 @@ import { knownFolders } from "../connManage";
 import { ENGINES, emptyConn, engineOf, type ConnConfig, type ConnTestReport, type DbKind } from "../types";
 import { applyJdbcUrl, defaultPort, hasErrors, looksLikeJdbcUrl, validateConn, visibleFields, withInstanceName, type FieldIssue, type IssueField } from "../connForm";
 import { Dialog } from "./Modals";
+import { EnvChip } from "./ConsoleSafety";
+import { ENV_SWATCHES, ENVIRONMENTS, envIdOf, envPatch, envSuggestions, type EnvId } from "../environment";
 import { openInformixGuide } from "./InformixDrivers";
 
 /** Informix: what each protocol needs, under the protocol select. */
@@ -150,6 +152,9 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
       folder: current.folder,
       color: current.color,
       production: current.production,
+      environment: current.environment,
+      envLabel: current.envLabel,
+      envColor: current.envColor,
       readOnly: current.readOnly,
       host: next === "sqlite" || next === "odbc" ? "" : current.host || "localhost",
       // SQLite and generic ODBC have no database field: a value carried over could not be seen or cleared.
@@ -429,9 +434,10 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
             </div>
           </Show>
 
+          <EnvironmentField cfg={cfg()} onChange={fix} />
+
           <div class="checks">
             <label class="check"><input type="checkbox" checked={cfg().readOnly} onChange={(event) => set("readOnly", event.currentTarget.checked)} /> Solo lectura</label>
-            <label class="check danger"><input type="checkbox" checked={cfg().production} onChange={(event) => set("production", event.currentTarget.checked)} /> Producción <small>(confirma cambios peligrosos)</small></label>
           </div>
 
           <div class="field">
@@ -515,5 +521,59 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
         </form>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * The connection's environment (src/environment.ts): Desarrollo, Pruebas, Preproducción, Producción or the user's own
+ * name and colour. It colours every console, tab and explorer node of the connection; production also confirms
+ * dangerous statements and warns sooner about open transactions.
+ */
+function EnvironmentField(props: { cfg: ConnConfig; onChange: (patch: Partial<ConnConfig>) => void }) {
+  const current = () => envIdOf(props.cfg);
+  const pick = (id: EnvId) => props.onChange(envPatch(id, props.cfg));
+  const choices: { id: EnvId; label: string; hint: string }[] = [{ id: "", label: "Sin indicar", hint: "Sin color de entorno" }, ...ENVIRONMENTS, { id: "custom", label: "Otro…", hint: "Un nombre y un color propios" }];
+  return (
+    <div class="field env-field">
+      <span>Entorno</span>
+      <div class="seg env-seg" role="radiogroup" aria-label="Entorno">
+        <For each={choices}>
+          {(choice) => (
+            <button type="button" role="radio" aria-checked={current() === choice.id} classList={{ on: current() === choice.id, [`env-${choice.id || "none"}`]: true }} title={choice.hint} onClick={() => pick(choice.id)}>
+              {choice.label}
+            </button>
+          )}
+        </For>
+      </div>
+      <Show when={current() === "custom"}>
+        <div class="form-row env-custom">
+          <label class="field grow">
+            <span>Nombre del entorno</span>
+            <input value={props.cfg.envLabel ?? ""} maxLength={40} placeholder="QA, Formación, Cliente…" onInput={(event) => props.onChange({ envLabel: event.currentTarget.value })} />
+          </label>
+          <div class="field">
+            <span>Color</span>
+            <div class="swatches">
+              <For each={ENV_SWATCHES}>
+                {(color) => <button type="button" class="swatch" classList={{ on: (props.cfg.envColor ?? "").toLowerCase() === color.toLowerCase() }} style={{ background: color }} title={color} onClick={() => props.onChange({ envColor: color })} />}
+              </For>
+              <label class="swatch custom" title="Otro color">
+                <input type="color" value={props.cfg.envColor || "#8b949e"} onChange={(event) => props.onChange({ envColor: event.currentTarget.value })} />
+              </label>
+            </div>
+          </div>
+        </div>
+        <label class="check danger"><input type="checkbox" checked={props.cfg.production} onChange={(event) => props.onChange({ production: event.currentTarget.checked })} /> Tratar como producción <small>(confirma cambios peligrosos y avisa antes de transacciones largas)</small></label>
+      </Show>
+      <Show when={current()}>
+        <div class="env-preview">
+          <EnvChip conn={{ ...props.cfg, hasPassword: false }} />
+          <For each={envSuggestions(props.cfg)}>{(text) => <small class="muted">{text}</small>}</For>
+          <Show when={(props.cfg.production || current() === "staging") && !props.cfg.readOnly}>
+            <button type="button" class="btn tiny" onClick={() => props.onChange({ readOnly: true })}>Marcar solo lectura</button>
+          </Show>
+        </div>
+      </Show>
+    </div>
   );
 }

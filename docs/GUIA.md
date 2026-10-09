@@ -22,7 +22,14 @@ La ventana tiene tres zonas:
 Informix conecta por JDBC, por el Client SDK o por el driver IBM CLI (ver [Drivers de Informix](#drivers-de-informix)),
 y cualquier otra base de datos entra por ODBC.
 
-- **Producción** pide confirmación antes de un UPDATE/DELETE sin WHERE, DROP, TRUNCATE o ALTER.
+- **Entorno**: *Desarrollo*, *Pruebas*, *Preproducción*, *Producción* u *Otro…* (un nombre y un color tuyos). Todas
+  las consolas y tablas de la conexión llevan una franja de ese color arriba y una etiqueta con icono y nombre en la
+  barra de la consola y en la barra de estado; sus pestañas, su nodo del explorador y sus consolas en otras ventanas
+  llevan el mismo color. Producción va en rojo y Preproducción en ámbar.
+- **Producción** pide confirmación antes de un UPDATE/DELETE sin WHERE, DROP, TRUNCATE o ALTER, y avisa antes de una
+  transacción abierta mucho rato. El formulario sugiere marcarla de solo lectura si solo vas a consultar. Un entorno
+  propio puede tratarse como producción. Las conexiones marcadas como producción en versiones anteriores aparecen como
+  Producción.
 - **Solo lectura** rechaza en el núcleo cualquier sentencia que modifique datos.
 - **Avanzado › Script de inicio**: sentencias que se ejecutan en cada conexión que abre Celer, también al reconectar
   (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).

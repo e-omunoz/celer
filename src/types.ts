@@ -62,7 +62,16 @@ export interface ConnConfig {
   odbcConnStr: string;
   extra: string;
   color: string;
+  /**
+   * Confirmations before dangerous statements, the MCP's write cap and stricter transaction warnings. Always true for
+   * the "prod" environment and false for the other built-in ones (src/environment.ts); a custom one keeps its own.
+   */
   production: boolean;
+  /** "" (none) | dev | test | staging | prod | custom: colours the consoles, tabs and explorer node (environment.ts). */
+  environment?: string;
+  /** A custom environment's name and colour. */
+  envLabel?: string;
+  envColor?: string;
   readOnly: boolean;
   folder: string;
   filePath: string;
@@ -323,6 +332,9 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     extra: "",
     color: "",
     production: false,
+    environment: "",
+    envLabel: "",
+    envColor: "",
     readOnly: false,
     folder: "",
     filePath: kind === "sqlite" ? "" : "",

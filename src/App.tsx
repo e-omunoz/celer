@@ -37,6 +37,7 @@ import {
 } from "./state";
 import { engineOf } from "./types";
 import { UpdateDialog } from "./components/UpdateDialog";
+import { EnvChip } from "./components/ConsoleSafety";
 import { MigrateDialog } from "./components/MigrateDialog";
 import { migration, openMigration } from "./migrate";
 import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
@@ -216,7 +217,7 @@ function StatusBar() {
           {conn()!.name}
           <Show when={tab()?.database}><span class="muted"> · {tab()!.database}</span></Show>
         </span>
-        <Show when={conn()!.production}><span class="tag prod tiny">PROD</span></Show>
+        <EnvChip conn={conn()} short tiny />
         <Show when={session()?.serverInfo}><span class="st-item muted st-server" title={session()!.serverInfo}>{session()!.serverInfo.split("\n")[0]}</span></Show>
       </Show>
       <Show when={tab()?.kind === "sql" && (tab() as { inTransaction: boolean }).inTransaction}>

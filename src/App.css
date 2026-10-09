@@ -23,6 +23,15 @@
   --success: #6cc070;
   --warning: #e0a84a;
   --danger: #ec6a5e;
+  /* connection environments (src/environment.ts): strip, chip and dots; -fg is the label on them */
+  --env-dev: #6cc070;
+  --env-dev-fg: #000;
+  --env-test: #6aa9e9;
+  --env-test-fg: #000;
+  --env-staging: #e0a84a;
+  --env-staging-fg: #000;
+  --env-prod: #ec6a5e;
+  --env-prod-fg: #000;
   --danger-fg: #000;
   --info: #6aa9e9;
   --run: #5fb865;
@@ -76,6 +85,14 @@
   --success: #2f8a3e;
   --warning: #a8670a;
   --danger: #c8352b;
+  --env-dev: #2f8a3e;
+  --env-dev-fg: #000;
+  --env-test: #2468b3;
+  --env-test-fg: #fff;
+  --env-staging: #a8670a;
+  --env-staging-fg: #fff;
+  --env-prod: #c8352b;
+  --env-prod-fg: #fff;
   --danger-fg: #fff;
   --info: #2468b3;
   --run: #27773a;
@@ -123,6 +140,14 @@
   --success: #5fb865;
   --warning: #e0b34a;
   --danger: #f75464;
+  --env-dev: #5fb865;
+  --env-dev-fg: #000;
+  --env-test: #56a8f5;
+  --env-test-fg: #000;
+  --env-staging: #e0b34a;
+  --env-staging-fg: #000;
+  --env-prod: #f75464;
+  --env-prod-fg: #000;
   --danger-fg: #000;
   --info: #56a8f5;
   --run: #5fb865;
@@ -159,6 +184,14 @@
   --success: #a3be8c;
   --warning: #ebcb8b;
   --danger: #bf616a;
+  --env-dev: #a3be8c;
+  --env-dev-fg: #000;
+  --env-test: #81a1c1;
+  --env-test-fg: #000;
+  --env-staging: #ebcb8b;
+  --env-staging-fg: #000;
+  --env-prod: #bf616a;
+  --env-prod-fg: #000;
   --danger-fg: #000;
   --info: #81a1c1;
   --run: #a3be8c;
@@ -195,6 +228,14 @@
   --success: #6f8500;
   --warning: #a77b00;
   --danger: #cf3a30;
+  --env-dev: #6f8500;
+  --env-dev-fg: #000;
+  --env-test: #268bd2;
+  --env-test-fg: #000;
+  --env-staging: #a77b00;
+  --env-staging-fg: #000;
+  --env-prod: #cf3a30;
+  --env-prod-fg: #fff;
   --danger-fg: #fff;
   --info: #268bd2;
   --run: #5f7200;
@@ -242,6 +283,14 @@
   --success: #3ff36d;
   --warning: #ffd23f;
   --danger: #ff6b6b;
+  --env-dev: #3ff36d;
+  --env-dev-fg: #000;
+  --env-test: #6cc8ff;
+  --env-test-fg: #000;
+  --env-staging: #ffd23f;
+  --env-staging-fg: #000;
+  --env-prod: #ff6b6b;
+  --env-prod-fg: #000;
   --danger-fg: #000;
   --info: #6cc8ff;
   --run: #3ff36d;
@@ -275,6 +324,14 @@
   --success: #005c1a;
   --warning: #6b4500;
   --danger: #a30000;
+  --env-dev: #005c1a;
+  --env-dev-fg: #fff;
+  --env-test: #00418a;
+  --env-test-fg: #fff;
+  --env-staging: #6b4500;
+  --env-staging-fg: #fff;
+  --env-prod: #a30000;
+  --env-prod-fg: #fff;
   --danger-fg: #fff;
   --info: #00418a;
   --run: #005c1a;
@@ -1982,3 +2039,21 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .panel-body > .scrim { display: none; }
 .panel-body > .dialog { position: static; transform: none; width: auto; max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; animation: none; overflow: auto; }
 .panel-body > .dialog .dc-grid { height: auto; flex: 1; min-height: 240px; }
+
+/* ============================================================================
+   Console safety (src/components/ConsoleSafety.tsx): the connection's environment
+   ========================================================================== */
+
+/* Environment: a band across the top of its consoles and tables, a chip (icon + label, never only colour). */
+.env-strip { height: 3px; flex: none; }
+.env-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 4px; flex: none;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; max-width: 160px; overflow: hidden;
+}
+.env-chip span { overflow: hidden; text-overflow: ellipsis; }
+.env-chip.tiny { height: 16px; font-size: 10px; padding: 0 5px; gap: 3px; }
+.tab.env .tab-strip { height: 3px; opacity: 1; }
+.env-field .env-seg { flex-wrap: wrap; }
+.env-field .env-custom { margin-top: 8px; align-items: flex-end; }
+.env-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
+.env-preview small { flex-basis: 100%; }

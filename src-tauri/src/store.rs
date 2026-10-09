@@ -123,7 +123,11 @@ impl Store {
             Ok(serde_json::Value::Array(items)) => {
                 for item in items {
                     match serde_json::from_value::<ConnConfig>(item.clone()) {
-                        Ok(c) => conns.push(c),
+                        Ok(mut c) => {
+                            // In memory only: the file stays as it was until the connection is saved.
+                            c.normalize_environment();
+                            conns.push(c)
+                        }
                         Err(_) => file.unknown.push(item),
                     }
                 }

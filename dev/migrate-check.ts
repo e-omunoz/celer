@@ -48,7 +48,7 @@ assert.equal(informix.cfg.extra, "DB_LOCALE=en_US.819;CLIENT_LOCALE=en_US.819", 
 const withSaved = JSON.stringify({
   connections: {
     "postgres-jdbc-1": { provider: "postgresql", driver: "postgres-jdbc", name: "Ventas", "save-password": true, configuration: { host: "pg", port: "5432", database: "ventas" } },
-    "mysql-2": { provider: "mysql", driver: "mysql8", name: "Web", configuration: { host: "my", port: "3306", database: "web", user: "lector" } },
+    "mysql-2": { provider: "mysql", driver: "mysql8", name: "Web", configuration: { host: "my", port: "3306", database: "web", user: "lector", type: "prod" } },
   },
 });
 const source = { tool: "dbeaver" as const, project: "General", path: "/ws/General/.dbeaver/data-sources.json", text: withSaved };
@@ -60,6 +60,9 @@ assert.equal(listed[0].sourceId, "postgres-jdbc-1");
 assert.equal(listed[0].sourcePath, source.path);
 assert.equal(listed[1].cfg.user, "lector", "the plain user is kept");
 assert.equal(listed[1].savedPassword, false);
+// DBeaver's connection type is the environment: prod is Producción (and production), none is none.
+assert.deepEqual([listed[1].cfg.environment, listed[1].cfg.production], ["prod", true]);
+assert.deepEqual([listed[0].cfg.environment, listed[0].cfg.production], ["", false]);
 
 // credentials-config.json as DBeaver writes it: AES-128-CBC with its default key, the IV in the first 16 bytes.
 const toHex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
