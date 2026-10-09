@@ -116,7 +116,9 @@ await sleep(150);
 
 // ---------------------------------------------------------------- foreign key (column 1: parent_id)
 const celerSessions = `return (await sql("SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE 'Celer%' OR application_name = ''")).results[0].rows[0][0];`;
+const celerPids = `return (await sql("SELECT pid FROM pg_stat_activity WHERE application_name LIKE 'Celer%' OR application_name = ''")).results[0].rows.map((r) => r[0]);`;
 const sessionsBefore = Number(await js(celerSessions));
+const pidsBefore = await js(celerPids);
 await press("ArrowUp");
 await goCol(1);
 await press("F2");
@@ -128,6 +130,7 @@ await js(`await sleep(150); pane().querySelector('.cell-editor input').dispatchE
 const found = await js(`await until(() => pane().querySelectorAll('.cell-lookup-list button').length === 1, 5000); return [...pane().querySelectorAll('.cell-lookup-list button')].map((b) => b.textContent);`);
 check("typing searches the referenced table (by name, any case)", JSON.stringify(found) === JSON.stringify(["77Zoe Martín"]), JSON.stringify(found));
 const during = Number(await js(celerSessions));
+const lookupPids = (await js(celerPids)).filter((p) => !pidsBefore.includes(p));
 await press("ArrowDown");
 await press("Enter");
 await sleep(400);
@@ -161,8 +164,27 @@ await js(`
   const discard = [...document.querySelectorAll('.dialog button')].find((b) => /No guardar|Descartar|Cerrar/.test(b.textContent)); discard?.click();
   await sleep(800);
 `);
-const sessionsClosed = Number(await js(celerSessions));
-check("closing the table closes the lookup's session", sessionsClosed === sessionsBefore - 1, JSON.stringify({ sessionsBefore, sessionsClosed }));
+// Closed sessions go back to the connection pool, so the server keeps the connection: the lookup's is released if
+// a new session gets it back (or the pool, being full, closed it).
+const released = await js(`
+  const want = ${JSON.stringify(lookupPids)};
+  const c = (await inv('list_connections')).find((x) => x.name === 'Postgres local');
+  const held = [];
+  const got = [];
+  let alive = [];
+  try {
+    for (let i = 0; i < 4 && !want.every((p) => got.includes(p)); i++) {
+      const s = await inv('open_session', { connId: c.id, password: null });
+      held.push(s.sessionId);
+      got.push((await inv('execute', { sessionId: s.sessionId, sql: 'SELECT pg_backend_pid()', fetch: 1 })).results[0].rows[0][0]);
+    }
+    alive = (await inv('execute', { sessionId: held[0], sql: 'SELECT pid FROM pg_stat_activity', fetch: 1000 })).results[0].rows.map((r) => r[0]);
+  } finally {
+    for (const id of held) await inv('close_session', { sessionId: id });
+  }
+  return { want, got, ok: want.length > 0 && want.every((p) => got.includes(p) || !alive.includes(p)) };
+`);
+check("closing the table releases the lookup's session", released.ok, JSON.stringify(released));
 
 await js(`await sql("DROP TABLE IF EXISTS ge_child; DROP TABLE IF EXISTS ge_parent");`);
 app.close?.();
