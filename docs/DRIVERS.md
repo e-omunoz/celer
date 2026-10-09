@@ -100,6 +100,16 @@ Each driver declares what it supports so the UI only shows what works:
 | Informix Client SDK, other ODBC drivers | Installed by the user | Vendor licences |
 | SQLite, DuckDB | Bundled (compiled in) | Public domain / MIT |
 
+## SQL Server: known limits
+
+- `PRINT` and `RAISERROR` messages of severity 10 or less are not shown: `tiberius` reads the TDS `INFO` tokens
+  that carry them but does not hand them to the caller. Errors (severity 11 and up) are shown with their `Msg` number.
+  Showing them needs a patched `tiberius` that exposes `INFO` tokens on the query stream (#67).
+- For the same reason a batch of several statements run as a query reports no row counts; a batch of a single
+  `INSERT`/`UPDATE`/`DELETE`/`MERGE` reports its count.
+- Scripts are split on `GO` lines (`GO n` repeats a batch), as SSMS and sqlcmd do; other sqlcmd commands (`:r`,
+  `:setvar`) are not read.
+
 ## Informix: which protocol
 
 | Protocol | Driver | Server side | Needs |
