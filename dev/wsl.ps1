@@ -54,6 +54,7 @@ switch ($Command) {
     # setup.sh runs as root for the system packages and installs the rest for the distro's regular user.
     $out = & wsl.exe -d $Distro -u root -- bash "$winRepo/dev/wsl/setup.sh" $winRepo
     $out | Out-Host
+    if (-not ($out -match "SETUP_OK")) { throw "WSL setup did not finish (look for USER_SETUP_FAILED above); run it again after fixing the cause" }
     if ($out -match "RESTART_NEEDED") { & wsl.exe --terminate $Distro; & wsl.exe -d $Distro -u root -- systemctl enable --now docker }
     # A new login picks up the docker group.
     & wsl.exe --terminate $Distro

@@ -40,6 +40,7 @@ systemctl enable --now docker 2>/dev/null || service docker start || true
 # ---------------------------------------------------------------- user part
 su - "$U" -s /bin/bash -c "WIN_REPO='$WIN_REPO' bash -s" <<'USER'
 set -euo pipefail
+trap 'echo "USER_SETUP_FAILED at line $LINENO: $BASH_COMMAND"' ERR
 if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
   curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy,rustfmt
 fi
@@ -58,11 +59,10 @@ echo "d30b5aeba3ae9b7c68c8a6103b41918c5f7318972007b9b92033ee861762d87e  bson-3.8
 git config --global --add safe.directory "$WIN_REPO"
 git config --global --get user.name >/dev/null || git config --global user.name "$(git -C "$WIN_REPO" config user.name)"
 git config --global --get user.email >/dev/null || git config --global user.email "$(git -C "$WIN_REPO" config user.email)"
-if [ ! -d "$HOME/celer/.git" ]; then
-  git clone -q "$WIN_REPO" "$HOME/celer"
-  git -C "$HOME/celer" remote rename origin win
-  git -C "$HOME/celer" remote add origin https://github.com/e-omunoz/celer.git
-fi
+[ -d "$HOME/celer/.git" ] || git clone -q "$WIN_REPO" "$HOME/celer"
+# Idempotent remotes: a run cut short after the clone is completed by the next one.
+if ! git -C "$HOME/celer" remote get-url win >/dev/null 2>&1; then git -C "$HOME/celer" remote rename origin win; fi
+git -C "$HOME/celer" remote get-url origin >/dev/null 2>&1 || git -C "$HOME/celer" remote add origin https://github.com/e-omunoz/celer.git
 git -C "$HOME/celer" config credential.https://github.com.helper '!gh auth git-credential'
 cd "$HOME/celer" && npm ci --no-audit --no-fund >/dev/null
 # Claude Code, to work from inside WSL (sign in on first run).
