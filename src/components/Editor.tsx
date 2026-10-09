@@ -11,7 +11,7 @@ import {
 } from "@codemirror/autocomplete";
 import { copyLineDown, defaultKeymap, deleteLine, history, historyKeymap, indentWithTab, moveLineDown, moveLineUp, toggleComment } from "@codemirror/commands";
 import { MariaSQL, MSSQL, MySQL, PostgreSQL, sql, SQLite, StandardSQL } from "@codemirror/lang-sql";
-import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, RangeSetBuilder, StateEffect, StateField, type Extension } from "@codemirror/state";
 import {
@@ -35,11 +35,45 @@ import { chordsFor, codeMirrorKey } from "../keymap";
 import { splitSql } from "../sql";
 import { unfilteredWrites, type Snippet } from "../snippets";
 import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
-import type { CompletionTable, DbKind } from "../types";
+import type { CompletionTable, DbKind, KeywordCase } from "../types";
 
 const language = new Compartment();
 const theme = new Compartment();
 const userKeys = new Compartment();
+const gutter = new Compartment();
+const wrapping = new Compartment();
+const indentation = new Compartment();
+const completing = new Compartment();
+
+/** Ajustes › Editor: how the SQL editor writes and looks. */
+export interface EditorPrefs {
+  /** Font family ("" for Celer's monospace). */
+  font: string;
+  tabSize: number;
+  indentSpaces: boolean;
+  wordWrap: boolean;
+  lineNumbers: boolean;
+  autocomplete: boolean;
+  autocompleteDelay: number;
+  keywordCase: KeywordCase;
+}
+
+export const DEFAULT_EDITOR_PREFS: EditorPrefs = {
+  font: "",
+  tabSize: 2,
+  indentSpaces: true,
+  wordWrap: false,
+  lineNumbers: true,
+  autocomplete: true,
+  autocompleteDelay: 100,
+  keywordCase: "upper",
+};
+
+/** A font family for CSS: the user's (without anything that would end the declaration) before Celer's monospace. */
+export function editorFontFamily(font: string): string {
+  const clean = font.replace(/[;{}<>\\]/g, "").trim();
+  return clean ? `${clean}, var(--mono)` : "var(--mono)";
+}
 
 const sqlHighlight = HighlightStyle.define([
   { tag: [tags.keyword, tags.operatorKeyword, tags.modifier], color: "var(--syntax-keyword)" },
@@ -293,7 +327,10 @@ export function SqlEditor(props: {
   onReady?: (view: EditorView) => void;
   /** The user's shortcuts (settings.keymap): run, run script, plan and format follow them. */
   keymap?: Record<string, string[]>;
+  /** Ajustes › Editor (defaults when not given). */
+  prefs?: EditorPrefs;
 }) {
+  const prefs = () => props.prefs ?? DEFAULT_EDITOR_PREFS;
   let host: HTMLDivElement | undefined;
   let view: EditorView | undefined;
   let applying = false;
@@ -307,7 +344,7 @@ export function SqlEditor(props: {
   function themeExtension(): Extension {
     return EditorView.theme({
       "&": { height: "100%", fontSize: `${props.fontSize}px`, background: "var(--editor-bg)", color: "var(--text)" },
-      ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55" },
+      ".cm-scroller": { fontFamily: editorFontFamily(prefs().font), lineHeight: "1.55" },
       ".cm-content": { padding: "8px 0", caretColor: "var(--accent)" },
       ".cm-gutters": { background: "var(--editor-bg)", border: "none", color: "var(--text-faint)", paddingLeft: "6px" },
       ".cm-lineNumbers .cm-gutterElement": { padding: "0 10px 0 6px", minWidth: "32px", fontSize: "0.9em" },
@@ -334,8 +371,18 @@ export function SqlEditor(props: {
 
   // Keywords and functions come from lang-sql; tables and columns from catalogCompletion (always current).
   function languageExtension() {
-    return sql({ dialect: dialectOf(props.kind), upperCaseKeywords: true });
+    return sql({ dialect: dialectOf(props.kind), upperCaseKeywords: prefs().keywordCase !== "lower" });
   }
+
+  const gutterExtension = (): Extension => (prefs().lineNumbers ? [lineNumbers(), highlightActiveLineGutter()] : []);
+  const wrapExtension = (): Extension => (prefs().wordWrap ? EditorView.lineWrapping : []);
+  const indentExtension = (): Extension => {
+    const size = Math.min(8, Math.max(1, Math.round(prefs().tabSize) || 2));
+    return [EditorState.tabSize.of(size), indentUnit.of(prefs().indentSpaces ? " ".repeat(size) : "\t")];
+  };
+  // Ctrl+Space opens the list even with typing completion off.
+  const completeExtension = (): Extension =>
+    autocompletion({ activateOnTyping: prefs().autocomplete, activateOnTypingDelay: Math.max(0, prefs().autocompleteDelay), icons: true, defaultKeymap: true, maxRenderedOptions: 80 });
 
   /** The catalog table an identifier at `pos` refers to: schema.table, table, or an alias of the statement. */
   function tableAt(state: EditorState, pos: number): { table: CompletionTable; from: number; to: number } | null {
@@ -375,8 +422,7 @@ export function SqlEditor(props: {
       state: EditorState.create({
         doc: props.doc,
         extensions: [
-          lineNumbers(),
-          highlightActiveLineGutter(),
+          gutter.of(gutterExtension()),
           highlightSpecialChars(),
           foldGutter({ openText: "⌄", closedText: "›" }),
           history(),
@@ -387,7 +433,9 @@ export function SqlEditor(props: {
           indentOnInput(),
           bracketMatching(),
           closeBrackets(),
-          autocompletion({ activateOnTyping: true, icons: true, defaultKeymap: true, maxRenderedOptions: 80 }),
+          completing.of(completeExtension()),
+          wrapping.of(wrapExtension()),
+          indentation.of(indentExtension()),
           rectangularSelection(),
           crosshairCursor(),
           highlightSelectionMatches(),
@@ -500,6 +548,25 @@ export function SqlEditor(props: {
     on(
       () => props.fontSize,
       () => view?.dispatch({ effects: theme.reconfigure(themeExtension()) }),
+      { defer: true },
+    ),
+  );
+
+  // Ajustes › Editor: applied to every open console as soon as it changes.
+  createEffect(
+    on(
+      () => JSON.stringify(prefs()),
+      () =>
+        view?.dispatch({
+          effects: [
+            theme.reconfigure(themeExtension()),
+            language.reconfigure(languageExtension()),
+            gutter.reconfigure(gutterExtension()),
+            wrapping.reconfigure(wrapExtension()),
+            indentation.reconfigure(indentExtension()),
+            completing.reconfigure(completeExtension()),
+          ],
+        }),
       { defer: true },
     ),
   );

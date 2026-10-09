@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::ConnConfig;
 
+/// Queries kept by default (Ajustes › Historial changes it: `set_history_retention`).
 const HISTORY_MAX: usize = 5000;
 /// history.jsonl is compacted past this size, down to about half of it, so the next compaction is far away.
 const HISTORY_COMPACT_AT: u64 = 8 * 1024 * 1024;
@@ -64,6 +65,9 @@ pub struct Store {
     conns_file: parking_lot::Mutex<ConnsFile>,
     /// One writer of history.jsonl at a time (windows append from their own threads).
     history_lock: parking_lot::Mutex<()>,
+    /// Ajustes › Historial: entries kept, and days an entry is kept (0: no limit).
+    history_max: std::sync::atomic::AtomicUsize,
+    history_days: std::sync::atomic::AtomicU64,
 }
 
 /// What the last read of connections.json left behind.
@@ -93,7 +97,13 @@ pub struct HistoryEntry {
 impl Store {
     pub fn new(dir: PathBuf) -> Store {
         let _ = fs::create_dir_all(&dir);
-        Store { dir, conns_file: Default::default(), history_lock: Default::default() }
+        Store {
+            dir,
+            conns_file: Default::default(),
+            history_lock: Default::default(),
+            history_max: std::sync::atomic::AtomicUsize::new(HISTORY_MAX),
+            history_days: std::sync::atomic::AtomicU64::new(0),
+        }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -289,7 +299,7 @@ impl Store {
             let keep = lines
                 .iter()
                 .rev()
-                .take(HISTORY_MAX)
+                .take(self.history_max())
                 .take_while(|l| {
                     bytes += l.len() + 1;
                     bytes <= HISTORY_KEEP_BYTES
@@ -299,6 +309,38 @@ impl Store {
             self.write_atomic("history.jsonl", &body)?;
         }
         Ok(())
+    }
+
+    fn history_max(&self) -> usize {
+        self.history_max.load(std::sync::atomic::Ordering::Relaxed).max(1)
+    }
+
+    /// Entries older than this (milliseconds since 1970) are past the retention; 0 when there is no limit.
+    fn history_cutoff(&self) -> i64 {
+        let days = self.history_days.load(std::sync::atomic::Ordering::Relaxed);
+        if days == 0 {
+            return 0;
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        now - days as i64 * 86_400_000
+    }
+
+    /// Ajustes › Historial: keep the newest `max` entries of the last `days` days (0: any age), from now on and in the
+    /// file right away. Returns how many entries were dropped.
+    pub fn set_history_retention(&self, max: usize, days: u64) -> Result<usize> {
+        self.history_max.store(max.max(1), std::sync::atomic::Ordering::Relaxed);
+        self.history_days.store(days, std::sync::atomic::Ordering::Relaxed);
+        let _lock = self.history_lock.lock();
+        let all = self.history_all();
+        let cutoff = self.history_cutoff();
+        let kept: Vec<&HistoryEntry> = all.iter().filter(|e| e.at >= cutoff).collect();
+        let kept = &kept[kept.len().saturating_sub(self.history_max())..];
+        let dropped = all.len() - kept.len();
+        if dropped > 0 {
+            let body: String = kept.iter().filter_map(|e| serde_json::to_string(e).ok()).map(|l| format!("{l}\n")).collect();
+            self.write_atomic("history.jsonl", &body)?;
+        }
+        Ok(dropped)
     }
 
     fn history_all(&self) -> Vec<HistoryEntry> {
@@ -314,9 +356,12 @@ impl Store {
 
     pub fn history(&self, filter: &str, limit: usize) -> Vec<HistoryEntry> {
         let f = filter.to_lowercase();
+        let cutoff = self.history_cutoff();
         let mut all = self.history_all();
         all.reverse();
         all.into_iter()
+            .take(self.history_max())
+            .filter(|e| e.at >= cutoff)
             .filter(|e| {
                 f.is_empty()
                     || e.sql.to_lowercase().contains(&f)
@@ -350,6 +395,30 @@ mod tests {
         std::fs::write(dir.join("ok.json"), "{\"a\":1}").unwrap();
         assert_eq!(store.load_json("ok.json").unwrap()["a"], 1);
         assert!(store.load_json("missing.json").unwrap().is_null());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_keeps_what_the_settings_say() {
+        let dir = std::env::temp_dir().join(format!("celer-store-retention-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let day = 86_400_000;
+        let entry = |sql: &str, at: i64| super::HistoryEntry { sql: sql.into(), conn_id: "c".into(), conn_name: "n".into(), database: String::new(), at, elapsed_ms: 1, ok: true, rows: None };
+        for (i, age) in [40, 20, 5, 1, 0].iter().enumerate() {
+            store.add_history(&entry(&format!("SELECT {i}"), now - age * day)).unwrap();
+        }
+        // Thirty days: the 40-day-old entry goes, from the file too.
+        assert_eq!(store.set_history_retention(5000, 30).unwrap(), 1);
+        assert_eq!(store.history("", 100).len(), 4);
+        // Two entries at most: the newest two.
+        assert_eq!(store.set_history_retention(2, 0).unwrap(), 2);
+        let sqls: Vec<String> = store.history("", 100).into_iter().map(|e| e.sql).collect();
+        assert_eq!(sqls, vec!["SELECT 4", "SELECT 3"]);
+        // No limit again: nothing comes back, nothing more goes.
+        assert_eq!(store.set_history_retention(5000, 0).unwrap(), 0);
+        assert_eq!(store.history("", 100).len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

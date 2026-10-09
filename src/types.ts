@@ -243,7 +243,58 @@ export interface Settings {
   favoriteConns: string[];
   /** Explorer: the connections connected to last, newest first. */
   recentConns: { id: string; at: number }[];
+  // ---- Editor
+  /** Editor font family (empty: Celer's monospace). */
+  editorFont: string;
+  /** Spaces per indentation level and tab width. */
+  tabSize: number;
+  /** Tab inserts spaces (true) or a tab character. */
+  indentSpaces: boolean;
+  wordWrap: boolean;
+  lineNumbers: boolean;
+  /** Completion list while typing (Ctrl+Space always opens it). */
+  autocomplete: boolean;
+  /** Milliseconds after the last key before the completion list opens. */
+  autocompleteDelay: number;
+  /** Case of the keywords the editor writes (completion and «Formatear SQL»). */
+  keywordCase: KeywordCase;
+  // ---- Results
+  /** How a NULL cell reads in the grid. */
+  nullText: string;
+  /** Dates in the grid: as the server sends them, or day/month/year. */
+  dateFormat: DateFormat;
+  /** Numbers in the grid: as they come, or with a thousands separator. */
+  numberFormat: NumberFormat;
+  /** Characters of a value drawn in a grid cell (the whole value is in the value panel and in copies). */
+  maxCellChars: number;
+  /** What Ctrl+C copies from the grid. */
+  copyFormat: CopyFormatSetting;
+  // ---- Execution
+  /** Seconds a console statement may run before Celer cancels it (0: no limit). */
+  queryTimeout: number;
+  /** New consoles start in auto-commit (true) or in manual mode. */
+  autocommitDefault: boolean;
+  // ---- Window and tabs
+  /** Reopen the tabs of the last session on start. */
+  restoreSession: boolean;
+  /** Opening a table: show its open tab, or always open a new one. */
+  tableTabs: "reuse" | "new";
+  // ---- History
+  /** Queries kept in the history (newest first). */
+  historyMax: number;
+  /** Days a query stays in the history (0: no limit). */
+  historyDays: number;
+  // ---- Notifications
+  /** Seconds a notice stays on screen (errors and notices with a button stay twice as long). */
+  toastSeconds: number;
+  /** Desktop notification when a query longer than this many seconds ends while Celer is in the background (0: off). */
+  notifyAfter: number;
 }
+
+export type KeywordCase = "upper" | "lower";
+export type DateFormat = "iso" | "dmy";
+export type NumberFormat = "plain" | "grouped";
+export type CopyFormatSetting = "tsv" | "tsv-head" | "csv" | "markdown" | "json";
 
 /** A live template for the SQL editor (see src/snippets.ts). */
 export interface Snippet {
@@ -299,6 +350,27 @@ export const defaultSettings: Settings = {
   connSort: "manual",
   favoriteConns: [],
   recentConns: [],
+  editorFont: "",
+  tabSize: 2,
+  indentSpaces: true,
+  wordWrap: false,
+  lineNumbers: true,
+  autocomplete: true,
+  autocompleteDelay: 100,
+  keywordCase: "upper",
+  nullText: "NULL",
+  dateFormat: "iso",
+  numberFormat: "plain",
+  maxCellChars: 400,
+  copyFormat: "tsv",
+  queryTimeout: 0,
+  autocommitDefault: true,
+  restoreSession: true,
+  tableTabs: "reuse",
+  historyMax: 5000,
+  historyDays: 0,
+  toastSeconds: 4.5,
+  notifyAfter: 0,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

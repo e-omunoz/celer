@@ -38,7 +38,8 @@ export interface Backend {
   closeSession(sessionId: string): Promise<void>;
   /** Closes every session of a connection (disconnect); returns how many were open. */
   closeConnectionSessions(connId: string): Promise<number>;
-  execute(sessionId: string, sql: string, fetch: number): Promise<ExecOutput>;
+  /** `timeoutSecs` (Ajustes › Ejecución): the core cancels the statement after that many seconds (0 or none: no limit). */
+  execute(sessionId: string, sql: string, fetch: number, timeoutSecs?: number): Promise<ExecOutput>;
   fetch(sessionId: string, n: number): Promise<FetchOutput>;
   closeCursor(sessionId: string): Promise<void>;
   cancel(sessionId: string): Promise<void>;
@@ -59,6 +60,10 @@ export interface Backend {
   addHistory(entry: HistoryEntry): Promise<void>;
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
+  /** Ajustes › Historial: queries kept and days kept (0: any age); returns how many entries were dropped. */
+  setHistoryRetention(max: number, days: number): Promise<number>;
+  /** A desktop notification (and the taskbar button asks for attention). */
+  desktopNotify(title: string, body: string): Promise<void>;
   loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
   /**
    * Writes a shared file through the core, which tells the other windows. `merge`: `value` holds only some top-level
@@ -135,7 +140,7 @@ function tauriBackend(): Backend {
     checkSession: (sessionId, force) => invoke("check_session", { sessionId: sessionId, force }),
     closeSession: (sessionId) => invoke("close_session", { sessionId: sessionId }),
     closeConnectionSessions: (connId) => invoke("close_connection_sessions", { connId }),
-    execute: (sessionId, sql, fetch) => invoke("execute", { sessionId: sessionId, sql, fetch }),
+    execute: (sessionId, sql, fetch, timeoutSecs) => invoke("execute", { sessionId: sessionId, sql, fetch, timeoutSecs: timeoutSecs || null }),
     fetch: (sessionId, n) => invoke("fetch", { sessionId: sessionId, n }),
     closeCursor: (sessionId) => invoke("close_cursor", { sessionId: sessionId }),
     cancel: (sessionId) => invoke("cancel", { sessionId: sessionId }),
@@ -156,6 +161,8 @@ function tauriBackend(): Backend {
     addHistory: (entry) => invoke("add_history", { entry }),
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
     clearHistory: () => invoke("clear_history"),
+    setHistoryRetention: (max, days) => invoke("set_history_retention", { max, days }),
+    desktopNotify: (title, body) => invoke("desktop_notify", { title, body }),
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),

@@ -284,10 +284,30 @@ Gib vive en una sola ventana: la que estás usando.
 
 ## Personalizar
 
-*Ajustes* (Ctrl+Alt+S):
+*Ajustes* (Ctrl+Alt+S). Arriba a la izquierda, **Buscar un ajuste** encuentra cualquiera por su nombre (sin importar
+tildes ni mayúsculas) y lleva hasta él. Cada sección tiene **Restablecer sección**, que deja sus ajustes como venían
+(con *Deshacer* en el aviso), y abajo están **Exportar ajustes…** e **Importar ajustes…**: un fichero JSON para llevar
+tus ajustes a otro equipo (no incluye favoritas ni recientes, que dependen de las conexiones de cada equipo). Al
+importar, lo que Celer no entiende se ignora y se dice cuál.
 
 - **Apariencia**: ocho temas, color de acento, densidad, tamaño de la interfaz, Gib y animaciones.
-- **Editor y resultados**: tamaño del editor, filas por página, filas alternas y parámetros.
+- **Editor**: tamaño y tipo de letra, tabulador (2, 4 u 8; con espacios o tabuladores), ajuste de línea, números de
+  línea, autocompletado al escribir y su retardo (Ctrl+Espacio abre la lista siempre), mayúsculas o minúsculas en las
+  palabras clave (sugerencias y *Formatear SQL*) y pedir el valor de los parámetros. Se aplica al momento a todas las
+  consolas abiertas.
+- **Resultados**: filas por página, filas alternas, el texto de NULL, fechas como llegan o día/mes/año, números con
+  separador de miles, cuántos caracteres de un valor se dibujan en la celda y qué copia Ctrl+C (texto con tabuladores,
+  con cabeceras, CSV, Markdown o JSON). Los formatos solo cambian cómo se ve: al copiar, exportar o editar se usa el
+  valor tal como lo da el servidor.
+- **Ejecución**: **tiempo máximo de una consulta** (en segundos; 0 es sin límite). Pasado ese tiempo Celer cancela la
+  sentencia de la consola igual que el botón Detener, en cualquier motor, y el error lo dice. Y el modo de transacción
+  con el que empiezan las consolas nuevas: automático o manual (Commit / Rollback).
+- **Ventana y pestañas**: restaurar o no las pestañas y ventanas de la última sesión al iniciar, y si abrir una tabla
+  que ya está abierta va a su pestaña o abre otra.
+- **Historial**: cuántas consultas y cuántos días se guardan (al bajarlo se borra en el acto lo que sobra) y *Vaciar
+  historial*.
+- **Avisos**: cuánto duran los avisos (los de error, el doble) y una **notificación del escritorio** cuando una consulta
+  que tarda más de N segundos termina mientras estás en otra ventana.
 - **Plantillas**: las tuyas, junto a las de serie.
 - **Atajos de teclado**: pulsa **+** junto a una acción y después la combinación. Si ya la usa otra acción, Celer
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.

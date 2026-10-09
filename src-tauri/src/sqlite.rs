@@ -930,6 +930,20 @@ mod tests {
         SqliteDriver::connect(cfg).unwrap()
     }
 
+    /// Ajustes › Ejecución › tiempo máximo: the core's deadline interrupts SQLite and the connection answers again.
+    #[test]
+    fn query_timeout_interrupts() {
+        let mut d = mem();
+        let t0 = std::time::Instant::now();
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || {
+            d.execute("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 2000000000) SELECT COUNT(*) FROM c", 10)
+        });
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10), "{:?}", t0.elapsed());
+        assert_eq!(d.execute("SELECT 3", 10).unwrap().results[0].rows.len(), 1);
+    }
+
     #[test]
     fn runs_the_startup_script() {
         let mut cfg = ConnConfig::default();

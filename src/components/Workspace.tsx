@@ -489,6 +489,16 @@ function SqlPane(props: { tab: SqlTab }) {
           tables={completionTables(props.tab)}
           snippets={allSnippets(kindOf(props.tab.connId), state.settings.snippets)}
           keymap={state.settings.keymap}
+          prefs={{
+            font: state.settings.editorFont,
+            tabSize: state.settings.tabSize,
+            indentSpaces: state.settings.indentSpaces,
+            wordWrap: state.settings.wordWrap,
+            lineNumbers: state.settings.lineNumbers,
+            autocomplete: state.settings.autocomplete,
+            autocompleteDelay: state.settings.autocompleteDelay,
+            keywordCase: state.settings.keywordCase,
+          }}
           defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
           onOpenTable={(table) => openTableFromSql(props.tab, table)}
           fontSize={state.settings.editorFontSize}

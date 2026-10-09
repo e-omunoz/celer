@@ -36,10 +36,16 @@ engine_env() {
   export CELER_MSSQL_TEST="host=localhost port=1433 user=sa password=$MSSQL_PASSWORD"
   export CELER_INFORMIX_TEST="host=localhost port=9089 user=informix password=in4mix database=celer"
   export CELER_INFORMIX_JDBC_TEST="host=$ifx_ip port=9088 user=informix password=in4mix database=celer server=informix proxied=localhost"
-  export CELER_IBM_LIB="$D/clidriver/lib/libdb2.so" LD_LIBRARY_PATH="$D/clidriver/lib"
+  # $D/compat: libraries the IBM CLI needs that a newer distro no longer ships (Ubuntu 26.04 has libxml2.so.16, the CLI
+  # wants libxml2.so.2: `docker cp celer-ifx:/usr/lib64/libxml2.so.2.9.7 $D/compat/libxml2.so.2`).
+  export CELER_IBM_LIB="$D/clidriver/lib/libdb2.so" LD_LIBRARY_PATH="$D/compat:$D/clidriver/lib"
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"
   export CELER_JDBC_JARS="$D/jdbc/jdbc-15.0.1.4.jar:$D/jdbc/bson-3.8.0.jar"
   export CELER_REQUIRE_BRIDGE=1 CELER_NODE=node CELER_INFORMIX_CONTAINER=celer-ifx
+  # Generic ODBC: PostgreSQL through unixODBC and psqlODBC (apt: unixodbc odbc-postgresql), when installed.
+  if odbcinst -q -d 2>/dev/null | grep -q 'PostgreSQL Unicode'; then
+    export CELER_ODBC_TEST="Driver={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer;"
+  fi
 }
 
 case "${1:-status}" in

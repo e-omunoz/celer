@@ -6,6 +6,32 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Settings reviewed and extended** (#106). Ajustes has a search box that finds any setting by name and takes you to it,
+  «Restablecer sección» on every section (with undo), and «Exportar ajustes…» / «Importar ajustes…» as JSON (an import
+  applies only the keys it understands, with valid values, and lists the rest). New settings, all applied without a
+  restart:
+  - Editor: font family, tab size and spaces or tabs, word wrap, line numbers, autocomplete on/off and its delay, and
+    keyword case (completion and «Formatear SQL»).
+  - Resultados: NULL text, dates as sent or day/month/year, numbers with a thousands separator, characters drawn per
+    cell and what Ctrl+C copies (TSV, TSV with headers, CSV, Markdown, JSON). Display only: copies, exports and edits
+    keep the server's value.
+  - Ejecución: a default query timeout, enforced by the core through each driver's own cancel (the «Detener» path), so
+    it works the same on PostgreSQL, MySQL, MariaDB, SQL Server, Informix (DRDA and JDBC), SQLite and ODBC; and the
+    transaction mode new consoles start in.
+  - Ventana y pestañas: restore the last session's tabs and windows on start (or not), and whether opening a table
+    already open goes to its tab or opens another.
+  - Historial: queries and days kept (applied by the core, the file is trimmed at once) and «Vaciar historial».
+  - Avisos: how long notices stay, and a desktop notification when a query longer than N seconds ends while Celer is in
+    the background.
+  Settings files from earlier versions load unchanged; new keys take their defaults, which keep today's behaviour.
+
+### Changed
+- The settings dialog is split into one component per section (`src/components/settings/`), registered in
+  `src/settingsSections.ts`, so new sections plug in without touching the dialog. «Editor y resultados» is now two
+  sections, «Editor» and «Resultados».
+- Esc in a confirmation shown over another dialog (Ajustes) closes only the confirmation.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

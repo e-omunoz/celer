@@ -528,10 +528,14 @@ async fn execute(
     session_id: String,
     sql: String,
     fetch: usize,
+    timeout_secs: Option<u64>,
 ) -> CmdResult<ExecOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     check_read_only(&state.conn(&h.conn_id)?, &sql)?;
-    h.run(move |d| d.execute(&sql, fetch)).await.map_err(err)
+    // Ajustes › Ejecución: the deadline counts from when the statement starts on the session's thread.
+    let cancel = h.canceller();
+    let secs = timeout_secs.unwrap_or(0);
+    h.run(move |d| Ok(session::with_deadline(cancel, secs, || d.execute(&sql, fetch)))).await.map_err(err)?
 }
 
 /// A read-only connection refuses user SQL that modifies data. Every command that runs user SQL calls this.
@@ -797,6 +801,12 @@ fn get_history(state: State<'_, Arc<AppState>>, filter: String, limit: usize) ->
 #[tauri::command]
 fn clear_history(state: State<'_, Arc<AppState>>) -> CmdResult<()> {
     state.store.clear_history().map_err(err)
+}
+
+/// Ajustes › Historial: how many queries and how many days are kept. Returns how many entries were dropped.
+#[tauri::command(async)]
+fn set_history_retention(state: State<'_, Arc<AppState>>, max: usize, days: u64) -> CmdResult<usize> {
+    state.store.set_history_retention(max, days).map_err(err)
 }
 
 // Off the main thread: a locked file is retried for a moment.
@@ -1177,6 +1187,15 @@ async fn jdbc_check(state: State<'_, Arc<AppState>>) -> CmdResult<String> {
     .map_err(err)?
 }
 
+/// Ajustes › Avisos: a desktop notification (a long query ended while Celer was in the background), and the taskbar
+/// button asks for attention in case notifications are off for Celer.
+#[tauri::command]
+fn desktop_notify(window: tauri::WebviewWindow, title: String, body: String) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = window.app_handle().notification().builder().title(title).body(body).show();
+    let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+}
+
 #[tauri::command]
 fn app_info(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     serde_json::json!({
@@ -1359,6 +1378,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = dev_data_dir().unwrap_or_else(|| {
                 app.path()
@@ -1366,6 +1386,14 @@ pub fn run() {
                     .unwrap_or_else(|_| std::env::temp_dir().join("celer"))
             });
             let store = Store::new(dir.clone());
+            // The history retention of Ajustes › Historial, before any window adds to it.
+            if let Ok(settings) = store.load_json("settings.json") {
+                let max = settings.get("historyMax").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let days = settings.get("historyDays").and_then(|v| v.as_u64()).unwrap_or(0);
+                if max > 0 || days > 0 {
+                    let _ = store.set_history_retention(if max > 0 { max } else { 5000 }, days);
+                }
+            }
             let mut conns = store.load_connections();
             move_inline_passwords(&store, &mut conns);
             let mcp = mcp::McpServer::new(dir, true);
@@ -1426,6 +1454,7 @@ pub fn run() {
             add_history,
             get_history,
             clear_history,
+            set_history_retention,
             load_json,
             save_json,
             read_text_file,
@@ -1440,6 +1469,7 @@ pub fn run() {
             jdbc_prewarm,
             driver_download_cancel,
             app_info,
+            desktop_notify,
             migration_sources,
             migration_dbeaver_credentials,
             update_check,

@@ -269,9 +269,12 @@ export async function restoreWindowLayout(connectionsLoaded: boolean) {
     }
     if (windowLabel === "main") {
       if (layoutError) notify("No se pudieron restaurar las pestañas de la última sesión", "error", layoutError);
+      // Ajustes › Ventana › «Restaurar la sesión al iniciar» off: the panels as they were, without the tabs or the
+      // other windows.
+      const restore = state.settings.restoreSession;
       const [first, ...rest] = readLayout(layoutFile);
-      if (first) applyEntry(first, known);
-      for (const entry of rest) {
+      if (first) applyEntry(first, known, restore);
+      for (const entry of restore ? rest : []) {
         const kind = entry.kind === "panel" ? entry.panel : "full";
         if (!kind) continue;
         void invoke("window_open", { request: { kind, layout: entry, messages: [{ kind: "restore", entry, from: windowLabel }] } }).catch(() => {});
@@ -291,15 +294,15 @@ let demoUnreadable = false;
 async function restoreDemo(known: (id: string | null) => boolean) {
   try {
     const first = readLayout(await api().loadJson("workspace"))[0];
-    if (first) applyEntry(first, known);
+    if (first) applyEntry(first, known, state.settings.restoreSession);
   } catch (err) {
     demoUnreadable = true;
     notify("No se pudieron restaurar las pestañas de la última sesión", "error", errorText(err));
   }
 }
 
-function applyEntry(entry: SavedWindow, known: (id: string | null) => boolean) {
-  restoreTabs(entry.tabs as SavedTab[], entry.activeTabId, known);
+function applyEntry(entry: SavedWindow, known: (id: string | null) => boolean, withTabs = true) {
+  if (withTabs) restoreTabs(entry.tabs as SavedTab[], entry.activeTabId, known);
   const ui: Partial<{ explorerOpen: boolean; inspectorOpen: boolean }> = {};
   if (entry.explorerOpen !== undefined) ui.explorerOpen = entry.explorerOpen;
   if (entry.inspectorOpen !== undefined) ui.inspectorOpen = entry.inspectorOpen;

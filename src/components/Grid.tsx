@@ -5,6 +5,7 @@ import { dropGap, identityOrder, inOrder, inverseOrder, isIdentity, moveColumn, 
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
+import { cellLabel } from "../cellFormat";
 import { copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
@@ -357,6 +358,8 @@ export function DataGrid(props: GridProps) {
     const query = search()?.toLowerCase() || "";
     const deleted = new Set(props.deleted ?? []);
     const zebra = state.settings.zebra;
+    // Ajustes › Resultados: how values read (display only; copies and edits keep the server's value).
+    const display = { nullText: state.settings.nullText, dateFormat: state.settings.dateFormat, numberFormat: state.settings.numberFormat, maxCellChars: state.settings.maxCellChars };
     const fontCell = `12.5px ${p.mono}`;
     const fontItalic = `italic 12.5px ${p.mono}`;
     ctx.textBaseline = "middle";
@@ -394,8 +397,8 @@ export function DataGrid(props: GridProps) {
         }
         const isNull = isNullCell(raw);
         const kind = props.columns[sc]?.kind;
-        let label = isNull ? "NULL" : cellText(raw);
-        if (query && !isNull && label.toLowerCase().includes(query)) {
+        let label = cellLabel(raw, kind, display);
+        if (query && !isNull && cellText(raw).toLowerCase().includes(query)) {
           ctx.fillStyle = p.match;
           ctx.fillRect(x + 1, y + 1, w - 2, RH - 2);
         }
@@ -403,7 +406,6 @@ export function DataGrid(props: GridProps) {
           ctx.fillStyle = p.warning;
           ctx.fillRect(x, y, 2, RH);
         }
-        if (label.length > 400) label = label.slice(0, 400);
         if (label.includes("\n") || label.includes("\r")) label = label.replace(/\r?\n|\r/g, " ↵ ");
         ctx.font = isNull || isDeleted ? fontItalic : fontCell;
         const maxChars = Math.floor((w - 16) / charW);
@@ -1221,7 +1223,7 @@ export function DataGrid(props: GridProps) {
     if (target.type !== "cell" && target.type !== "gutter") return;
     const many = selectedRows().length;
     const items: MenuItem[] = [
-      { label: "Copiar", hint: "Ctrl+C", icon: "copy", run: () => copy("tsv") },
+      { label: "Copiar", hint: "Ctrl+C", icon: "copy", run: () => copy(state.settings.copyFormat) },
       { label: "Copiar con cabeceras", hint: "Ctrl+Shift+C", run: () => copy("tsv-head") },
       { label: "Copiar como CSV", run: () => copy("csv") },
       { label: "Copiar como JSON", run: () => copy("json") },
@@ -1353,7 +1355,8 @@ export function DataGrid(props: GridProps) {
     const key = event.key;
     if (ctrl && key.toLowerCase() === "c") {
       event.preventDefault();
-      copy(event.shiftKey ? "tsv-head" : "tsv");
+      // Ajustes › Resultados › Formato al copiar; Ctrl+Mayús+C always adds the headers.
+      copy(event.shiftKey ? "tsv-head" : state.settings.copyFormat);
       return;
     }
     if (ctrl && key.toLowerCase() === "a") {
@@ -1542,6 +1545,10 @@ export function DataGrid(props: GridProps) {
     search();
     state.settings.zebra;
     state.settings.density;
+    state.settings.nullText;
+    state.settings.dateFormat;
+    state.settings.numberFormat;
+    state.settings.maxCellChars;
     schedule();
   });
 

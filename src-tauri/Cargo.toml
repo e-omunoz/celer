@@ -52,6 +52,8 @@ mysql = { version = "26", default-features = false, features = ["minimal-rust", 
 calamine = { version = "0.36.1", features = ["dates"] }
 # A second launch raises the running Celer instead of writing its files from a stale copy (src/lib.rs run)
 tauri-plugin-single-instance = "2"
+# Desktop notification when a long query ends while Celer is in the background (Ajustes › Avisos, src/lib.rs)
+tauri-plugin-notification = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Proxy of the system's Internet settings for driver downloads (src/drivers.rs)

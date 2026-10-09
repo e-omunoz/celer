@@ -670,6 +670,19 @@ export function createDemoBackend(): Backend {
     async clearHistory() {
       localStorage.removeItem("celer.history");
     },
+    async setHistoryRetention(max, days) {
+      const all = readJson<HistoryEntry[]>("celer.history", []);
+      const cutoff = days > 0 ? Date.now() - days * 86_400_000 : 0;
+      const kept = all.filter((entry) => entry.at >= cutoff).slice(-Math.max(1, max));
+      if (kept.length !== all.length) writeJson("celer.history", kept);
+      return all.length - kept.length;
+    },
+    async desktopNotify(title, body) {
+      // The browser's own notifications, when the page is allowed to show them.
+      if (typeof Notification === "undefined") return;
+      if (Notification.permission === "default") await Notification.requestPermission().catch(() => "denied");
+      if (Notification.permission === "granted") new Notification(title, { body });
+    },
     async loadJson(name) {
       const value = localStorage.getItem(`celer.${name}`);
       return value ? JSON.parse(value) : null;

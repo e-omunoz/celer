@@ -1,26 +1,19 @@
 import { X } from "lucide-solid";
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
-import { isTauri } from "../api";
 import { Mark } from "../brand/Mark";
 import { returnFocus } from "../focus";
-import { themeChoices } from "../commands";
 import {
   answerParams,
   answerPassword,
-  applyTheme,
   dismissConfirm,
   kindOf,
   runPreview,
-  saveSettings,
   setState,
   state,
 } from "../state";
-import { ACCENTS, type ThemeName } from "../types";
 import { CodeView } from "./Editor";
 import { ExportDialog } from "./ExportDialog";
-import { AiSettings } from "./AiSettings";
-import { SnippetSettings } from "./SnippetSettings";
-import { KeymapSettings } from "./KeymapSettings";
+import { SettingsDialog } from "./settings/SettingsDialog";
 import { ErDiagram } from "./ErDiagram";
 import { ActivityView } from "./ActivityView";
 import { SchemaCompareView } from "./SchemaCompareView";
@@ -31,7 +24,7 @@ import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
 import { checkForUpdates, openReleasePage } from "../update";
 import { isDetached, isPanelWindow } from "../windows";
-import { DriversSettings, InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
+import { InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
 import { ConnectionDialog } from "./ConnectionDialog";
 
 export function Modals() {
@@ -135,14 +128,22 @@ function ParamsDialog(props: { ask: NonNullable<typeof state.paramAsk> }) {
   );
 }
 
+/** Dialogs open, newest last: Esc closes only the one on top (a confirmation over Ajustes, not both). */
+const openDialogs: symbol[] = [];
+
 export function Dialog(props: { title: string; onClose: () => void; children: JSX.Element; wide?: boolean; small?: boolean; class?: string }) {
   // Read before the children render (they focus their first field): it gets the focus back on close.
   const opener = document.activeElement;
-  onCleanup(() => returnFocus(opener));
+  const me = Symbol(props.title);
+  openDialogs.push(me);
+  onCleanup(() => {
+    openDialogs.splice(openDialogs.indexOf(me), 1);
+    returnFocus(opener);
+  });
   onMount(() => {
     const key = (event: KeyboardEvent) => {
       // A shortcut being recorded takes Esc for itself (it cancels the recording, not the dialog).
-      if (event.key === "Escape" && !state.capturingKeys) {
+      if (event.key === "Escape" && !state.capturingKeys && openDialogs[openDialogs.length - 1] === me) {
         event.stopPropagation();
         props.onClose();
       }
@@ -161,162 +162,6 @@ export function Dialog(props: { title: string; onClose: () => void; children: JS
         {props.children}
       </div>
     </>
-  );
-}
-
-// ---------------------------------------------------------------- settings
-
-const SECTIONS = [
-  ["appearance", "Apariencia"],
-  ["editor", "Editor y resultados"],
-  ["templates", "Plantillas"],
-  ["keys", "Atajos de teclado"],
-  ["safety", "Seguridad"],
-  ["ai", "IA y MCP"],
-  ["drivers", "Drivers"],
-] as const;
-
-function SettingsDialog() {
-  type Section = (typeof SECTIONS)[number][0];
-  const section = () => (SECTIONS.some(([id]) => id === state.settingsSection) ? state.settingsSection : "appearance") as Section;
-  const setSection = (id: Section) => setState("settingsSection", id);
-  const s = () => state.settings;
-  const close = () => {
-    applyTheme();
-    setState({ settingsOpen: false, settingsSection: "appearance" });
-  };
-  return (
-    <Dialog title="Ajustes" wide class="settings" onClose={close}>
-      <div class="settings-layout">
-        <nav class="settings-nav">
-          <For each={SECTIONS}>{([id, label]) => <button type="button" classList={{ on: section() === id }} onClick={() => setSection(id)}>{label}</button>}</For>
-        </nav>
-        <div class="settings-body">
-          <Show when={section() === "appearance"}>
-            <h4>Tema</h4>
-            <div class="theme-grid">
-              <For each={themeChoices}>
-                {(theme) => (
-                  <button
-                    type="button"
-                    class="theme-card"
-                    classList={{ on: s().theme === theme.id }}
-                    onMouseEnter={() => applyTheme(state.settings, theme.id)}
-                    onMouseLeave={() => applyTheme()}
-                    onClick={() => void saveSettings({ theme: theme.id as ThemeName })}
-                  >
-                    <ThemePreview theme={theme.id} />
-                    <span>{theme.label}</span>
-                  </button>
-                )}
-              </For>
-            </div>
-            <h4>Color de acento</h4>
-            <div class="swatches">
-              <For each={ACCENTS}>
-                {(item) => <button type="button" class="swatch big" classList={{ on: s().accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void saveSettings({ accent: item.value })} />}
-              </For>
-              <label class="swatch big custom" title="Personalizado">
-                <input type="color" value={s().accent} onChange={(event) => void saveSettings({ accent: event.currentTarget.value })} />
-              </label>
-            </div>
-            <div class="form-row">
-              <label class="field">
-                <span>Densidad</span>
-                <div class="seg">
-                  <button type="button" classList={{ on: s().density === "compact" }} onClick={() => void saveSettings({ density: "compact" })}>Compacta</button>
-                  <button type="button" classList={{ on: s().density === "comfortable" }} onClick={() => void saveSettings({ density: "comfortable" })}>Cómoda</button>
-                </div>
-              </label>
-              <label class="field">
-                <span>Tamaño de la interfaz</span>
-                <NumberStepper value={s().fontSize} min={11} max={18} onChange={(value) => void saveSettings({ fontSize: value })} />
-              </label>
-              <label class="field">
-                <span>Compañero (Gib)</span>
-                <select value={s().companion} onChange={(event) => void saveSettings({ companion: event.currentTarget.value as "off" | "quiet" | "normal" })}>
-                  <option value="normal">Normal</option>
-                  <option value="quiet">Silencioso</option>
-                  <option value="off">Apagado</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Animaciones</span>
-                <select value={s().motion} onChange={(event) => void saveSettings({ motion: event.currentTarget.value as "system" | "reduce" | "full" })}>
-                  <option value="system">Como el sistema</option>
-                  <option value="reduce">Reducidas</option>
-                  <option value="full">Todas</option>
-                </select>
-              </label>
-            </div>
-          </Show>
-          <Show when={section() === "editor"}>
-            <div class="form-row">
-              <label class="field">
-                <span>Tamaño del editor</span>
-                <NumberStepper value={s().editorFontSize} min={10} max={24} onChange={(value) => void saveSettings({ editorFontSize: value })} />
-              </label>
-              <label class="field">
-                <span>Filas por página</span>
-                <select value={String(s().pageSize)} onChange={(event) => void saveSettings({ pageSize: Number(event.currentTarget.value) })}>
-                  <For each={[100, 200, 500, 1000, 2000, 5000, 10000]}>{(n) => <option value={n}>{n.toLocaleString()}</option>}</For>
-                </select>
-              </label>
-            </div>
-            <label class="check"><input type="checkbox" checked={s().zebra} onChange={(event) => void saveSettings({ zebra: event.currentTarget.checked })} /> Filas alternas en la tabla de resultados</label>
-            <label class="check"><input type="checkbox" checked={s().askParams} onChange={(event) => void saveSettings({ askParams: event.currentTarget.checked })} /> Pedir el valor de los parámetros (<code>:nombre</code>, <code>?</code>, <code>{"${nombre}"}</code>) antes de ejecutar</label>
-            <p class="settings-note">Los resultados se leen por páginas con un cursor abierto: aunque la consulta devuelva millones de filas, sólo se traen las que ves. «Cargar todo» lee el resto bajo demanda.</p>
-          </Show>
-          <Show when={section() === "templates"}>
-            <SnippetSettings />
-          </Show>
-          <Show when={section() === "keys"}>
-            <KeymapSettings />
-          </Show>
-          <Show when={section() === "safety"}>
-            <label class="check"><input type="checkbox" checked={s().confirmNoWhere} onChange={(event) => void saveSettings({ confirmNoWhere: event.currentTarget.checked })} /> En todas las conexiones, confirmar UPDATE y DELETE sin WHERE (el editor ya los subraya)</label>
-            <label class="check"><input type="checkbox" checked={s().confirmMutations} onChange={(event) => void saveSettings({ confirmMutations: event.currentTarget.checked })} /> En conexiones de producción, confirmar UPDATE/DELETE sin WHERE, DROP, TRUNCATE y ALTER</label>
-            <p class="settings-note">Las conexiones de solo lectura rechazan cualquier sentencia que modifique datos, también desde el núcleo en Rust. Las contraseñas se guardan en el almacén de credenciales del sistema operativo.</p>
-          </Show>
-          <Show when={section() === "ai"}>
-            <AiSettings />
-          </Show>
-          <Show when={section() === "drivers"}>
-            <DriversSettings />
-          </Show>
-          <p class="settings-foot">{isTauri() ? "Aplicación de escritorio" : "Modo navegador: SQLite en memoria (demo)."} · Celer {state.appInfo.version} · {state.appInfo.dataDir}</p>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
-function NumberStepper(props: { value: number; min: number; max: number; onChange: (value: number) => void }) {
-  return (
-    <div class="stepper">
-      <button type="button" disabled={props.value <= props.min} onClick={() => props.onChange(props.value - 1)}>−</button>
-      <span>{props.value}px</span>
-      <button type="button" disabled={props.value >= props.max} onClick={() => props.onChange(props.value + 1)}>+</button>
-    </div>
-  );
-}
-
-/** A miniature of the real workspace rendered with a theme's tokens. */
-function ThemePreview(props: { theme: string }) {
-  const theme = () => (props.theme === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : props.theme);
-  return (
-    <div class="theme-preview" data-theme-preview={theme()}>
-      <div class="tp-side">
-        <i /><i /><i class="t" /><i class="t" /><i />
-      </div>
-      <div class="tp-main">
-        <div class="tp-code">
-          <span class="k">SELECT</span> <span class="n">id</span>, <span class="f">count</span>(*)<br />
-          <span class="k">FROM</span> <span class="t">orders</span> <span class="k">WHERE</span> <span class="s">'ok'</span>
-        </div>
-        <div class="tp-grid"><i /><i /><i /></div>
-      </div>
-    </div>
   );
 }
 
