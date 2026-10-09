@@ -21,7 +21,9 @@ wait_all() {
 
 seed() {
   docker exec -i celer-pg psql -q -U celer -d celer < dev/seed-postgres.sql
-  docker exec -i celer-mysql mysql -uroot -pceler < dev/seed-mysql.sql
+  # The seed is written for MariaDB; MySQL has no UUID type, so that column becomes CHAR(36) there.
+  sed -E 's/\bUUID NULL\b/CHAR(36) NULL/' dev/seed-mysql.sql | docker exec -i celer-mysql mysql -uroot -pceler 2>&1 | grep -v 'Using a password' || true
+  docker exec celer-mysql mysql -uroot -pceler -N -e "SELECT COUNT(*) FROM celer.type_zoo" 2>/dev/null | grep -q 3 || { echo "MySQL seed failed"; exit 1; }
   docker exec -i celer-mariadb mariadb -uroot -pceler < dev/seed-mysql.sql
   docker exec -i celer-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_PASSWORD" -i /dev/stdin < dev/seed-mssql.sql
   docker exec celer-ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster - 2>/dev/null || true"
