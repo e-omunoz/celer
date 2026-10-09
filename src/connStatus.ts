@@ -2,7 +2,7 @@
 // tardó), reconectada sola, perdida. Lo alimentan connect(), las sesiones de las consolas, los errores con código del
 // núcleo (SESSION_LOST, CONN_RESET, CONN_DOWN) y la comprobación al volver de una suspensión.
 import { createStore, produce } from "solid-js/store";
-import { state, type Tab } from "./state";
+import { connectionById, gib, state, type Tab } from "./state";
 
 /**
  * off: sin sesión · connecting: conectando · on: lista · reconnected: se cortó y volvió sola (sin perder nada) ·
@@ -64,11 +64,22 @@ export function tabLink(tab: Tab): LinkInfo {
 export function markConn(connId: string, link: Link, patch: Partial<Omit<LinkInfo, "link" | "at">> = {}) {
   const before = links.conns[connId] ?? EMPTY;
   setLinks("conns", connId, { ...before, ...patch, link, at: Date.now() });
+  tellGib(before.link, link, connId);
 }
 
 export function markTab(tabId: string, link: Link, patch: Partial<Omit<LinkInfo, "link" | "at">> = {}) {
   const before = links.tabs[tabId] ?? EMPTY;
   setLinks("tabs", tabId, { ...before, ...patch, link, at: Date.now() });
+  tellGib(before.link, link, state.tabs.find((tab) => tab.id === tabId)?.connId);
+}
+
+/** A connection that dropped (or came back on its own): Gib reacts (he ignores repeats from several tabs at once). */
+function tellGib(before: Link, link: Link, connId: string | null | undefined) {
+  if (link === before) return;
+  const name = connectionById(connId)?.name ?? "la base de datos";
+  // "down" right after "connecting" is a connection that never opened (that is connect-failed, told elsewhere).
+  if (link === "lost" || (link === "down" && (before === "on" || before === "reconnected"))) gib("conn-lost", { detail: name });
+  else if (link === "reconnected") gib("conn-back", { detail: name });
 }
 
 export function forgetTab(tabId: string) {

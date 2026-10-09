@@ -234,14 +234,6 @@ function SettingsDialog() {
                 <NumberStepper value={s().fontSize} min={11} max={18} onChange={(value) => void saveSettings({ fontSize: value })} />
               </label>
               <label class="field">
-                <span>Compañero (Gib)</span>
-                <select value={s().companion} onChange={(event) => void saveSettings({ companion: event.currentTarget.value as "off" | "quiet" | "normal" })}>
-                  <option value="normal">Normal</option>
-                  <option value="quiet">Silencioso</option>
-                  <option value="off">Apagado</option>
-                </select>
-              </label>
-              <label class="field">
                 <span>Animaciones</span>
                 <select value={s().motion} onChange={(event) => void saveSettings({ motion: event.currentTarget.value as "system" | "reduce" | "full" })}>
                   <option value="system">Como el sistema</option>

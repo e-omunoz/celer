@@ -1,7 +1,8 @@
 // Quick checks for src/gib/advice.ts: node --experimental-strip-types dev/gib-advice-check.ts
 import assert from "node:assert/strict";
 import { nextTip, queryAdvice, SLOW_MS, statementKey, TIPS, type RunInfo } from "../src/gib/advice.ts";
-import { defaultGibLook, gibDisplayName, gibTint, normalizeGibLook } from "../src/gib/prefs.ts";
+import { defaultGibLook, defaultGibPrefs, gibDisplayName, gibShownIn, gibTint, normalizeGibLook, normalizeGibPrefs } from "../src/gib/prefs.ts";
+import { budgetAllows, dayKey, isFridayAfternoon, isLate, LONG_RUN_MS, LONG_SESSION_MS, pickRoutine, REACTIONS_PER_HOUR, reactionFor, spend, type ReactionContext } from "../src/gib/reactions.ts";
 
 const run = (sql: string, extra: Partial<RunInfo> = {}) => queryAdvice({ sql, kind: "postgres", ms: 20, columns: 3, hasMore: false, ...extra })?.id ?? null;
 const slow = (sql: string, extra: Partial<RunInfo> = {}) => run(sql, { ms: SLOW_MS + 1, ...extra });
@@ -101,5 +102,89 @@ assert.equal(gibTint("classic"), null, "classic: the black tie, no tint");
 assert.equal(gibTint("accent"), "var(--accent)");
 assert.equal(gibTint("#14b8a6"), "#14b8a6");
 assert.equal(gibTint("url(x)"), null, "nothing but a colour reaches the CSS");
+
+// Gib's presence (Settings › Apariencia › Gib), and the old "Compañero" setting read into it once.
+assert.deepEqual(normalizeGibPrefs(undefined), defaultGibPrefs, "nothing stored: everything on");
+assert.equal(normalizeGibPrefs(undefined, "quiet").tips, false, "Compañero: silencioso → no volunteered tips");
+assert.equal(normalizeGibPrefs(undefined, "quiet").places.companion, true);
+assert.equal(normalizeGibPrefs(undefined, "off").places.companion, false, "Compañero: apagado → no companion");
+assert.equal(normalizeGibPrefs(undefined, "off").on, true, "…but Gib still appears elsewhere");
+assert.equal(normalizeGibPrefs({ color: "accent" }, "off").places.companion, false, "a look saved before the presence settings: still migrated");
+assert.equal(normalizeGibPrefs({ on: true, places: { companion: true } }, "off").places.companion, true, "once saved, the old setting is ignored");
+assert.equal(normalizeGibPrefs({ on: false }).on, false);
+assert.equal(normalizeGibPrefs({ on: true, frequency: "often" }).frequency, "often");
+assert.equal(normalizeGibPrefs({ on: true, frequency: "always" }).frequency, "normal");
+assert.equal(normalizeGibPrefs({ on: true, eyes: "no" }).eyes, true, "only booleans count");
+assert.equal(normalizeGibPrefs({ on: true, places: { splash: false } }).places.splash, false);
+assert.equal(normalizeGibPrefs({ on: true, places: { splash: false } }).places.empty, true);
+assert.equal(gibShownIn(defaultGibPrefs, "companion"), true);
+assert.equal(gibShownIn({ ...defaultGibPrefs, on: false }, "empty"), false, "off: nowhere");
+assert.equal(gibShownIn({ ...defaultGibPrefs, places: { ...defaultGibPrefs.places, overlays: false } }, "overlays"), false);
+
+// The frequency budget: at most N reactions with words per hour.
+const T0 = Date.UTC(2026, 9, 7, 10);
+let spent: number[] = [];
+for (let i = 0; i < REACTIONS_PER_HOUR.rare; i++) {
+  assert.ok(budgetAllows(spent, T0 + i * 1000, "rare"), `reaction ${i + 1} fits`);
+  spent = spend(spent, T0 + i * 1000);
+}
+assert.equal(budgetAllows(spent, T0 + 10_000, "rare"), false, "budget spent");
+assert.equal(budgetAllows(spent, T0 + 10_000, "often"), true, "a larger budget");
+assert.equal(budgetAllows(spent, T0 + 61 * 60_000, "rare"), true, "an hour later it is back");
+assert.equal(spend(spent, T0 + 61 * 60_000).length, 1, "old entries are dropped");
+assert.ok(REACTIONS_PER_HOUR.rare < REACTIONS_PER_HOUR.normal && REACTIONS_PER_HOUR.normal < REACTIONS_PER_HOUR.often);
+
+// Idle activities: never one of the last few; the coffee break less often than the rest.
+const NAMES = ["yawn", "coffee", "laptop", "doze", "juggle"];
+for (let i = 0; i < 50; i++) assert.ok(!["yawn", "doze"].includes(pickRoutine(NAMES, ["yawn", "doze"])), "recent ones are skipped");
+assert.equal(pickRoutine(NAMES, NAMES, () => 0), "yawn", "all recent: any");
+const counts: Record<string, number> = {};
+for (let i = 0; i < 1000; i++) {
+  const name = pickRoutine(NAMES, [], () => i / 1000);
+  counts[name] = (counts[name] ?? 0) + 1;
+}
+assert.ok(counts.coffee < counts.yawn, "the coffee break is rarer");
+
+// Reactions to real events.
+const wednesday = new Date(2026, 9, 7, 11, 0);
+const ctx = (extra: Partial<ReactionContext> = {}): ReactionContext => ({
+  now: wednesday,
+  name: "Gib",
+  said: new Set(),
+  lastQueryDay: dayKey(wednesday),
+  sessionMs: 10 * 60_000,
+  formatMs: (ms) => `${Math.round(ms / 1000)} s`,
+  ...extra,
+});
+const ok = (extra: object = {}) => ({ type: "query-ok" as const, ms: 40, rows: 3, empty: false, ...extra });
+assert.equal(reactionFor(ok(), ctx()), null, "an ordinary query: nothing to say");
+assert.equal(reactionFor(ok(), ctx({ lastQueryDay: "2026-10-06" }))?.id, "first-today");
+assert.match(reactionFor(ok(), ctx({ lastQueryDay: "" }))!.text!, /Buenos días/);
+assert.equal(reactionFor(ok(), ctx({ lastQueryDay: "2026-10-06", said: new Set(["first:2026-10-07"]) })), null, "said once a day");
+assert.equal(reactionFor(ok({ ms: LONG_RUN_MS }), ctx())?.id, "long-success");
+assert.match(reactionFor(ok({ ms: 25_000 }), ctx())!.text!, /25 s/);
+assert.equal(reactionFor(ok({ empty: true, rows: 0 }), ctx())?.id, "empty");
+assert.equal(reactionFor(ok({ empty: true }), ctx())?.activity, "scratch");
+assert.equal(reactionFor({ type: "query-error", streak: 1 }, ctx())?.text, undefined, "one error: a face, no words");
+assert.equal(reactionFor({ type: "query-error", streak: 3 }, ctx())?.id, "error-streak");
+assert.equal(reactionFor({ type: "export-done", rows: 120, ms: 300 }, ctx())?.text, undefined, "a small export: a nod");
+assert.match(reactionFor({ type: "export-done", rows: 80_000, ms: 4000 }, ctx())!.text!, /80\.000 filas/);
+assert.equal(reactionFor({ type: "export-done", rows: 10, ms: 20_000 }, ctx())?.id, "export-done");
+assert.match(reactionFor({ type: "conn-lost", name: "Ventas" }, ctx())!.text!, /«Ventas»/);
+assert.equal(reactionFor({ type: "conn-lost", name: "Ventas" }, ctx())?.kind, "warn");
+assert.match(reactionFor({ type: "conn-back", name: "Ventas" }, ctx({ name: "Bob" }))!.text!, /Bob/, "his own name");
+const friday = new Date(2026, 9, 9, 16, 30);
+assert.ok(isFridayAfternoon(friday) && !isFridayAfternoon(wednesday) && !isFridayAfternoon(new Date(2026, 9, 9, 10)));
+assert.equal(reactionFor(ok(), ctx({ now: friday, lastQueryDay: dayKey(friday) }))?.id, "friday");
+assert.equal(reactionFor(ok({ production: true }), ctx({ now: friday, lastQueryDay: dayKey(friday) }))?.kind, "warn", "Friday and production: careful");
+assert.equal(reactionFor(ok(), ctx({ now: friday, lastQueryDay: dayKey(friday), said: new Set(["friday:2026-10-09"]) })), null);
+const late = new Date(2026, 9, 8, 1, 15);
+assert.ok(isLate(late) && isLate(new Date(2026, 9, 7, 23)) && !isLate(wednesday));
+assert.equal(reactionFor(ok(), ctx({ now: late, lastQueryDay: dayKey(late) }))?.once, "late:2026-10-07", "after midnight it is still the evening before");
+assert.equal(reactionFor(ok(), ctx({ sessionMs: LONG_SESSION_MS + 1 }))?.id, "long-session");
+assert.equal(reactionFor(ok(), ctx({ sessionMs: LONG_SESSION_MS + 1, said: new Set(["session:1"]) })), null, "once per two hours");
+assert.equal(reactionFor(ok(), ctx({ sessionMs: 2 * LONG_SESSION_MS + 1, said: new Set(["session:1"]) }))?.once, "session:2");
+// Priority: the first query of the day wins over a slow one (the rest wait).
+assert.equal(reactionFor(ok({ ms: LONG_RUN_MS }), ctx({ lastQueryDay: "" }))?.id, "first-today");
 
 console.log("gib-advice-check: all good");

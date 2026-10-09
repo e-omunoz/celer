@@ -35,8 +35,10 @@ import {
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
+import { isLate } from "../gib/reactions";
 import { cellText, isNullCell, rowsLabel, whereHints } from "../sql";
 import {
+  gibShows,
   activeSql,
   canEdit,
   cancelActive,
@@ -634,7 +636,8 @@ function OutputLog(props: { tab: SqlTab }) {
     <div class="output" ref={host}>
       <Show when={!props.tab.output.length}>
         <div class="output-empty">
-          <Gib size={72} mood="idle" />
+          {/* Waiting for you to run something: at his laptop. */}
+          <Show when={gibShows("empty")}><Gib size={72} pose="laptop" mood="idle" /></Show>
           <p>
             <kbd>Ctrl</kbd>+<kbd>Intro</kbd> ejecuta la sentencia bajo el cursor o la selección.
             <br />
@@ -974,11 +977,13 @@ function Welcome() {
     return () => window.clearTimeout(timer);
   });
   const recent = () => state.connections.slice(0, 6);
+  // Late at night he greets you just out of bed (the Monday pose).
+  const lateNight = () => isLate(new Date());
   return (
     <div class="welcome">
       <div class="welcome-inner">
         <div class="welcome-hero">
-          <Gib size={112} mood={mood()} onClick={() => { setMood("love"); window.setTimeout(() => setMood("idle"), 1400); }} />
+          <Show when={gibShows("empty")}><Gib size={112} pose={lateNight() ? "monday" : "poker"} mood={mood()} onClick={() => { setMood("love"); window.setTimeout(() => setMood("idle"), 1400); }} /></Show>
           <div>
             <h1>{greeting()}</h1>
             <p>SQL rápido para cualquier base de datos.</p>

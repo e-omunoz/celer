@@ -7,6 +7,16 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Gib reacts to what happens, and only as much as you want** (#104): a long query that finally works, an error (and
+  a run of them), an empty result (he scratches his head), a big export, a connection that drops or comes back, the
+  first query of the day, two hours without a break, Friday afternoon (careful on production) and late nights. Idle
+  activities only when you are really idle (no typing, nothing running, no dialog, palette or menu), rarer and varied.
+  Every Gib can be petted (the cursor resting on him) and poked (a click; three make him grumpy), and his eyes follow
+  the cursor; empty states have their own Gib (waiting at his laptop in a new console, puzzled by an empty result or a
+  search that finds nothing, greeting you just out of bed late at night) and he thinks along while the AI answers.
+  *Ajustes › Apariencia › Gib* gathers everything: on/off, how often (at most 3, 8 or 16 messages an hour, never a
+  sound or the focus), reactions, idle activities, tips, eye tracking and where he appears (status bar, empty states
+  and AI, start-up, waits and dialogs). The old *Compañero* setting is carried over.
 - **Your own Gib** (#105): *Ajustes › Apariencia › Gib* has a live preview and sets his colour (the classic black tie,
   the accent colour, which follows it, or any colour), accessories (cap, glasses, headphones, scarf: layers on every
   pose that move with his head and leave his eyes alone), the name he uses in his messages and the palette (default
@@ -14,6 +24,8 @@ All notable changes to Celer are documented here. The format follows
   app; the lab takes `acc=` and `tint=` to check the eyes with each accessory.
 
 ### Fixed
+- **Browser preview**: a SELECT that finds no rows shows an empty grid with its columns, as every engine does,
+  instead of «0 filas afectadas».
 - **Gib's eyes, in every pose, mood and activity** (#103): the pupils are clipped to the eye whites and their movement
   is clamped to the room each pose's eyes have, so they never leave the eye (an error face used to shrink them towards
   the corner of the drawing and throw them off the face); the lids are flaps that slide down to close, so a blink

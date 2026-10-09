@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, 
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
 import {
+  gibShows,
   collapseAll,
   connColor,
   connect,
@@ -961,13 +962,14 @@ export function Sidebar() {
         </div>
         <Show when={state.connections.length && !rows().length}>
           <div class="tree-empty small">
+            <Show when={gibShows("empty")}><Gib size={46} mood="think" /></Show>
             <p>Ninguna conexión coincide.</p>
             <button type="button" class="btn" onClick={closeFilter}>Quitar la búsqueda</button>
           </div>
         </Show>
         <Show when={!state.connections.length && state.ready}>
           <div class="tree-empty">
-            <Gib size={84} mood="wave" />
+            <Show when={gibShows("empty")}><Gib size={84} mood="wave" /></Show>
             <p>Aún no hay conexiones.</p>
             <button type="button" class="btn primary" onClick={() => openConnDialog()}>Añadir conexión</button>
             <small>Ctrl+Alt+N</small>

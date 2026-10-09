@@ -34,7 +34,7 @@ import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
-import { gibDisplayName, gibTint, normalizeGibLook } from "./gib/prefs";
+import { gibDisplayName, gibShownIn, gibTint, normalizeGibPrefs, type GibPlace, type GibPrefs } from "./gib/prefs";
 import type { ColumnOrder } from "./columnOrder";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
@@ -355,7 +355,7 @@ export const [resolvedTheme, setResolvedTheme] = createSignal<Exclude<ThemeName,
 
 /** Things Gib reacts to. The companion decides how (mood, tip, nothing). */
 export interface GibEvent {
-  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off";
+  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off" | "export-done" | "conn-lost" | "conn-back";
   at: number;
   ms?: number;
   detail?: string;
@@ -364,6 +364,10 @@ export interface GibEvent {
   /** query-ok: columns of the first result with a grid, and the engine (for Gib's advice about the statement). */
   columns?: number;
   kind?: string;
+  /** query-ok: the first grid came back without rows. */
+  empty?: boolean;
+  /** export-done: rows written. */
+  rows?: number;
 }
 export const [gibEvent, setGibEvent] = createSignal<GibEvent | null>(null);
 export function gib(type: GibEvent["type"], extra: Omit<GibEvent, "type" | "at"> = {}) {
@@ -480,6 +484,8 @@ export function applyTheme(settings: Settings = state.settings, preview?: ThemeN
     delete root.dataset.gibTint;
   }
   root.dataset.gibAcc = look.accessories.join(" ");
+  // Read by every Gib at each pointer move (Gib.tsx): his eyes follow the cursor, or look ahead.
+  root.dataset.gibEyes = look.eyes ? "on" : "off";
   // White on Clay, Ember, Teal or Green is below 4.5:1: those buttons get a black label.
   root.style.setProperty("--accent-fg", labelColorOn(settings.accent));
   root.style.fontSize = `${settings.fontSize}px`;
@@ -715,7 +721,19 @@ export async function saveSettings(patch: Partial<Settings>) {
 
 /** Settings as stored, completed with the defaults (and Gib's, which may be missing, old or edited by hand, made valid). */
 function withDefaults(value: Partial<Settings>): Settings {
-  return { ...defaultSettings, ...value, gib: normalizeGibLook(value.gib) };
+  // "companion" is the old Compañero setting (normal / quiet / off), read once into Gib's preferences.
+  const { companion, ...rest } = value as Partial<Settings> & { companion?: unknown };
+  return { ...defaultSettings, ...rest, gib: normalizeGibPrefs(value.gib, companion) };
+}
+
+/** Gib appears in that place (Settings › Apariencia › Gib: on, and the place not switched off). */
+export function gibShows(place: GibPlace): boolean {
+  return gibShownIn(state.settings.gib, place);
+}
+
+/** Changes some of Gib's preferences (the rest stay). */
+export function saveGib(patch: Partial<GibPrefs>) {
+  return saveSettings({ gib: { ...state.settings.gib, ...patch } });
 }
 
 /** Gib's name for his messages (Settings › Apariencia › Gib), «Gib» unless the user named him. */
@@ -1770,12 +1788,16 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       error: "",
     });
     const summary = describeResults(output.results, output.elapsedMs);
+    const grid = output.results.find((result) => result.columns.length);
     gib("query-ok", {
       ms: output.elapsedMs,
       hasMore: output.results.some((result) => result.hasMore),
       detail: sql,
-      columns: output.results.find((result) => result.columns.length)?.columns.length ?? 0,
+      columns: grid?.columns.length ?? 0,
       kind: conn?.kind,
+      // A query that returned a grid without a single row (and no more on the server): Gib wonders about the filter.
+      empty: Boolean(grid && !grid.rows.length && !grid.hasMore),
+      production: conn?.production,
     });
     pushOutput(tab.id, { at: Date.now(), sql, ok: true, text: [summary, ...output.messages].join("\n"), elapsedMs: output.elapsedMs });
     // Statements of a script that wait behind a paged result, or that were dropped with one (the core's notes).
@@ -3071,7 +3093,8 @@ export async function runExport() {
     setState({ exportRows: rows, exportRunning: false, exportOpen: false, exportId: "" });
     const target = path;
     notify(`Exportadas ${rows.toLocaleString()} filas en ${formatMs(performance.now() - started)}`, "success", target || undefined, target && isTauri() ? { label: "Mostrar en la carpeta", run: () => void revealPath(target) } : undefined);
-    gib("saved");
+    // Gib nods at an export, and cheers a big one.
+    gib("export-done", { rows, ms: performance.now() - started });
   } catch (err) {
     const cancelled = !state.exportRunning || /cancelada/i.test(errorText(err));
     setState({ exportRunning: false, exportId: "" });

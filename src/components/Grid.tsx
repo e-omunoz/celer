@@ -5,7 +5,8 @@ import { dropGap, identityOrder, inOrder, inverseOrder, isIdentity, moveColumn, 
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
-import { copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
+import { Gib } from "../gib/Gib";
+import { gibShows, copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
 
@@ -1787,7 +1788,11 @@ export function DataGrid(props: GridProps) {
         </div>
       </Show>
       <Show when={!props.rows.length && !props.loading}>
-        <div class="grid-empty">Sin filas</div>
+        <div class="grid-empty">
+          {/* An empty result: Gib wonders where the rows went (a picture, the grid stays clickable through it). */}
+          <Show when={gibShows("empty")}><Gib size={56} mood="think" still /></Show>
+          <span>Sin filas</span>
+        </div>
       </Show>
       <Show when={props.busyKey}>{(key) => <BusyOverlay tabId={key()} />}</Show>
     </div>

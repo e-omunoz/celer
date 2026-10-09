@@ -47,3 +47,70 @@ export function gibTint(color: string): string | null {
   if (color === "accent") return "var(--accent)";
   return HEX.test(color) ? color : null;
 }
+
+// ---------------------------------------------------------------- presence (#104)
+
+export type GibFrequency = "rare" | "normal" | "often";
+/** Where Gib may appear: the status bar companion, empty states (and the AI panel), the start-up splash, overlays and dialogs. */
+export const GIB_PLACES = ["companion", "empty", "splash", "overlays"] as const;
+export type GibPlace = (typeof GIB_PLACES)[number];
+
+export interface GibPrefs extends GibLook {
+  /** Gib at all: off, he appears nowhere and reacts to nothing. */
+  on: boolean;
+  /** How often he speaks up and plays (reactions per hour, gap between idle activities: reactions.ts). */
+  frequency: GibFrequency;
+  /** Reacts to what happens (queries, errors, exports, connections, the time of day). */
+  reactions: boolean;
+  /** Plays on his own when you are idle. */
+  idle: boolean;
+  /** Volunteers tips (a click on him still gives one; warnings about a statement are always given). */
+  tips: boolean;
+  /** His eyes follow the cursor. */
+  eyes: boolean;
+  places: Record<GibPlace, boolean>;
+}
+
+export const defaultGibPrefs: GibPrefs = {
+  ...defaultGibLook,
+  on: true,
+  frequency: "normal",
+  reactions: true,
+  idle: true,
+  tips: true,
+  eyes: true,
+  places: { companion: true, empty: true, splash: true, overlays: true },
+};
+
+/**
+ * Whatever was stored as valid preferences. `legacyCompanion` is the old "Compañero" setting (normal / quiet / off):
+ * when there are no preferences yet, quiet means no volunteered tips and off means no companion.
+ */
+export function normalizeGibPrefs(raw: unknown, legacyCompanion?: unknown): GibPrefs {
+  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  const fresh = !value || !("on" in value);
+  const flag = (key: string, fallback: boolean) => (value && typeof value[key] === "boolean" ? (value[key] as boolean) : fallback);
+  const stored = value?.places && typeof value.places === "object" ? (value.places as Record<string, unknown>) : null;
+  const places = Object.fromEntries(
+    GIB_PLACES.map((place) => {
+      const fallback = place === "companion" && fresh ? legacyCompanion !== "off" : true;
+      return [place, typeof stored?.[place] === "boolean" ? (stored[place] as boolean) : fallback];
+    }),
+  ) as Record<GibPlace, boolean>;
+  const frequency = value && ["rare", "normal", "often"].includes(value.frequency as string) ? (value.frequency as GibFrequency) : "normal";
+  return {
+    ...normalizeGibLook(raw),
+    on: flag("on", true),
+    frequency,
+    reactions: flag("reactions", true),
+    idle: flag("idle", true),
+    tips: flag("tips", fresh ? legacyCompanion !== "quiet" : true),
+    eyes: flag("eyes", true),
+    places,
+  };
+}
+
+/** Gib shown in that place: on, and the place not switched off. */
+export function gibShownIn(prefs: Pick<GibPrefs, "on" | "places"> | undefined, place: GibPlace): boolean {
+  return Boolean(prefs?.on && prefs.places?.[place]);
+}

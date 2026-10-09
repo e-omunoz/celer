@@ -1,5 +1,6 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { busy, cancelBusy } from "../busy";
+import { gibShows } from "../state";
 import { Gib } from "../gib/Gib";
 
 const SHOW_AFTER_MS = 300;
@@ -27,7 +28,7 @@ export function BusyOverlay(props: { tabId: string }) {
     <Show when={visible()}>
       <div class="busy-overlay" role="status" aria-live="polite">
         <div class="busy-card">
-          <Gib size={84} pose="laptop" mood="busy" plain />
+          <Show when={gibShows("overlays")}><Gib size={84} pose="laptop" mood="busy" plain /></Show>
           <div class="busy-body">
             <b>{info()!.title}</b>
             <span class="busy-detail">

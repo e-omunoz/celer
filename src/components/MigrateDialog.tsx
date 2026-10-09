@@ -1,5 +1,6 @@
 import { KeyRound } from "lucide-solid";
 import { createMemo, For, Show } from "solid-js";
+import { gibShows } from "../state";
 import { Gib } from "../gib/Gib";
 import { EngineIcon } from "../icons";
 import { migration, runMigration, setMigration, toolLabel, type Candidate } from "../migrate";
@@ -35,7 +36,7 @@ export function MigrateDialog() {
         when={!migration.loading && migration.candidates.length}
         fallback={
           <div class="mig-empty">
-            <Gib size={84} pose="poker" mood={migration.loading ? "think" : "idle"} />
+            <Show when={gibShows("overlays")}><Gib size={84} pose={migration.loading ? "laptop" : "poker"} mood={migration.loading ? "busy" : "think"} /></Show>
             <div>
               <h3>{migration.loading ? "Buscando DBeaver y DbVisualizer…" : "No hay nada que importar"}</h3>
               <p class="muted">

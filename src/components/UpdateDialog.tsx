@@ -1,7 +1,7 @@
 import { ArrowDownToLine, CircleAlert, ExternalLink, RefreshCw, RotateCcw, ShieldCheck } from "lucide-solid";
 import { Match, Show, Switch } from "solid-js";
 import { Gib, type GibMood } from "../gib/Gib";
-import { saveSettings, state } from "../state";
+import { gibShows, saveSettings, state } from "../state";
 import { checkForUpdates, downloadUpdate, formatMb, installLater, installUpdate, openReleasePage, setUpdate, skipVersion, update } from "../update";
 import { updateNotes } from "../updateNotes";
 import { Dialog } from "./Modals";
@@ -42,7 +42,7 @@ export function UpdateDialog() {
   return (
     <Dialog title="Actualizaciones" class="update-dialog" onClose={close}>
       <div class="upd-head">
-        <Gib size={76} pose="poker" mood={mood()} />
+        <Show when={gibShows("overlays")}><Gib size={76} pose="poker" mood={mood()} /></Show>
         <div class="upd-title">
           <Switch>
             <Match when={update.status === "checking"}>

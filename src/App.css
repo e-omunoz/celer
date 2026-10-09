@@ -490,6 +490,15 @@ kbd {
 .gib-chip { height: 26px; padding: 0 11px; border-radius: 13px; border: 1px solid var(--border-strong); color: var(--text-muted); font-size: 12px; transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast); }
 .gib-chip:hover { color: var(--text); background: var(--hover); }
 .gib-chip.on { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
+.gib-presence { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.gib-check { align-items: flex-start; }
+.gib-check input { margin-top: 2px; flex: none; }
+.gib-check small { font-weight: 400; }
+.gib-presence .check.strong { font-weight: 600; }
+.gib-presence-body { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.gib-presence-body:disabled { opacity: 0.5; }
+.gib-presence-body .field { gap: 6px; }
+.ai-empty > .gib { margin-bottom: 8px; }
 @media (max-width: 720px) { .gib-settings { flex-direction: column; align-items: stretch; } .gib-preview { width: auto; } }
 
 .stepper { display: inline-flex; align-items: center; height: 30px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; width: fit-content; }
@@ -759,7 +768,7 @@ kbd {
 .grid-scroll { position: absolute; inset: 0; overflow: auto; }
 .grid-sizer { pointer-events: none; }
 .grid:focus-visible { outline: none; }
-.grid-empty { position: absolute; left: 0; right: 0; top: 64px; text-align: center; color: var(--text-faint); pointer-events: none; }
+.grid-empty { position: absolute; left: 0; right: 0; top: 52px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--text-faint); pointer-events: none; }
 
 /* Busy overlay: Gib at work over the grid while a long operation runs; always cancellable when possible */
 .busy-overlay {
@@ -1285,6 +1294,14 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib .lid { transform: translateY(max(calc(var(--lid-top) * -1px), calc((1 - var(--lid, 1)) * var(--lid-shut) * 1px))); transition: transform 160ms var(--ease-out); }
 /* A blink shuts the lids fully (fast, so the 150 ms blink is not over before they meet) and opens them at the usual pace. */
 .gib.is-blink .lid { --lid: 0; transition-duration: 60ms; }
+/* Touching Gib (every Gib without a click of its own, Gib.tsx): petted, poked. */
+.gib.is-pet { --lid: 0.3; }
+.gib.is-pet .blush { opacity: 0.85; }
+.gib.is-pet .g-head { transform: rotate(5deg); }
+.gib.is-pet .mouth { d: path("M92 123q11 11 24 0"); stroke-width: 2.8; }
+.gib.is-poke { --lid: 1.6; --pupil-s: 0.8; }
+.gib.is-poke .g-all { animation: gib-poke 0.5s cubic-bezier(.3, .7, .4, 1) both; }
+@keyframes gib-poke { 0%, 100% { transform: none; } 25% { transform: scale(1.05, 0.9); } 55% { transform: translateY(-6px) scale(0.97, 1.04); } }
 /* Gib: personalisation (Settings › Apariencia › Gib). The root carries the user's choice (state.ts, applyTheme):
    data-gib-acc lists the accessories, --gib-tint the colour (absent: the classic black tie); a Gib with its own
    (the preview, the lab) has .acc-own / .tinted instead. Accessories take the tint, or the accent colour. */
@@ -1592,6 +1609,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .ai-msg.assistant { padding: 2px 2px; }
 .ai-msg.error { color: var(--danger); }
 .ai-thinking { display: inline-flex; gap: 4px; padding: 6px 2px; }
+.ai-wait { display: inline-flex; align-items: center; gap: 8px; }
 .ai-thinking i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); animation: fx-dot 1.1s ease-in-out infinite; }
 .ai-thinking i:nth-child(2) { animation-delay: 0.15s; }
 .ai-thinking i:nth-child(3) { animation-delay: 0.3s; }

@@ -1,4 +1,4 @@
-import { defaultGibLook, type GibLook } from "./gib/prefs.ts";
+import { defaultGibPrefs, type GibPrefs } from "./gib/prefs.ts";
 
 export type Cell = null | boolean | number | string;
 
@@ -189,8 +189,6 @@ export interface ExportOptions {
 
 export type ThemeName = "system" | "light" | "dark" | "darcula" | "contrast" | "contrast-light" | "fjord" | "sand";
 
-export type CompanionMode = "off" | "quiet" | "normal";
-
 export const ACCENTS = [
   { name: "Clay", value: "#D97757" },
   { name: "Ember", value: "#F26B1D" },
@@ -214,7 +212,6 @@ export interface Settings {
   sidebarWidth: number;
   inspectorWidth: number;
   editorRatio: number;
-  companion: CompanionMode;
   density: "compact" | "comfortable";
   zebra: boolean;
   confirmMutations: boolean;
@@ -245,8 +242,8 @@ export interface Settings {
   favoriteConns: string[];
   /** Explorer: the connections connected to last, newest first. */
   recentConns: { id: string; at: number }[];
-  /** Gib as the user made him (Settings › Apariencia › Gib; src/gib/prefs.ts). */
-  gib: GibLook;
+  /** Gib: how he looks and how present he is (Settings › Apariencia › Gib; src/gib/prefs.ts). */
+  gib: GibPrefs;
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -285,7 +282,6 @@ export const defaultSettings: Settings = {
   sidebarWidth: 280,
   inspectorWidth: 320,
   editorRatio: 0.45,
-  companion: "normal",
   density: "compact",
   zebra: true,
   confirmMutations: true,
@@ -303,7 +299,7 @@ export const defaultSettings: Settings = {
   connSort: "manual",
   favoriteConns: [],
   recentConns: [],
-  gib: defaultGibLook,
+  gib: defaultGibPrefs,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

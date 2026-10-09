@@ -527,6 +527,21 @@ export function createDemoBackend(): Backend {
       if (keyword === "BEGIN") session.inTx = true;
       if (keyword === "COMMIT" || keyword === "ROLLBACK" || keyword === "END") session.inTx = false;
       const elapsedMs = Math.max(1, Math.round(performance.now() - started));
+      // sql.js leaves out a query without rows: a SELECT that found nothing still has its columns (an empty grid, as
+      // every real engine returns), not "0 filas afectadas".
+      if (!sets.length && /^(SELECT|WITH|VALUES|PRAGMA)\b/.test(keyword ?? "")) {
+        try {
+          const statement = session.db.prepare(sql);
+          const names = statement.getColumnNames();
+          statement.free();
+          if (names.length) {
+            const columns: ColumnInfo[] = names.map((name) => ({ name, typeName: "text", kind: "text" }));
+            return { results: [{ columns, rows: [], hasMore: false, rowsAffected: null }], messages: [], elapsedMs, inTransaction: session.inTx } satisfies ExecOutput;
+          }
+        } catch {
+          // Not a single statement: as before.
+        }
+      }
       if (!sets.length) {
         const changed = session.db.getRowsModified();
         const output: ExecOutput = {

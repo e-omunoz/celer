@@ -6,6 +6,7 @@ import { SEED } from "../demo";
 import { Gib, type GibMood } from "../gib/Gib";
 import { EngineIcon } from "../icons";
 import {
+  gibShows,
   activeSql,
   applyTheme,
   gibName,
@@ -223,7 +224,7 @@ export function Onboarding() {
               <aside class="onb-stage">
                 <div class="onb-glow" />
                 <div class="onb-brand"><Mark size={18} /><span>Celer</span></div>
-                <div class="onb-gib"><Gib size={120} pose="poker" mood={mood()} /></div>
+                <Show when={gibShows("overlays")}><div class="onb-gib"><Gib size={120} pose="poker" mood={mood()} /></div></Show>
                 <ol class="onb-steps">
                   <For each={STEPS}>
                     {(item, i) => (
@@ -379,7 +380,7 @@ export function Onboarding() {
         />
         <div class="tour-bubble" ref={bubbleRef} style={bubbleStyle()}>
           <div class="tour-head">
-            <Gib size={34} pose="poker" mood="idle" plain />
+            <Show when={gibShows("overlays")}><Gib size={34} pose="poker" mood="idle" plain /></Show>
             <div>
               <small>{spot() + 1} de {TOUR.length}</small>
               <b>{TOUR[spot()].title}</b>

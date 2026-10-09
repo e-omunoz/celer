@@ -89,6 +89,8 @@ export function Gib(props: {
   /** His own accessories and colour (the settings preview, the lab); otherwise those of the settings, from the root. */
   accessories?: GibAccessory[];
   tint?: string | null;
+  /** No petting or poking (a Gib that is only a picture). */
+  still?: boolean;
   /** GibLab only: lids shut (to check that a blink closes them fully), and a fixed gaze in SVG units. */
   blink?: boolean;
   look?: [number, number];
@@ -97,7 +99,15 @@ export function Gib(props: {
   const idPrefix = `gib${++instances}`;
   const [blink, setBlink] = createSignal(false);
   const [side, setSide] = createSignal<"left" | "right">("right");
-  const mood = () => props.mood ?? "idle";
+  /**
+   * Every Gib without a click of its own can be touched: the cursor resting on him is a pet (eyes half closed, a
+   * blush, head tilted), a click is a poke (a jump, eyes wide) and three quick pokes make him grumpy for a moment.
+   */
+  const [touch, setTouch] = createSignal<"pet" | "poke" | "grumpy" | null>(null);
+  const touchable = () => !props.onClick && !props.onHover && !props.still;
+  let touchTimer = 0;
+  let pokes: number[] = [];
+  const mood = () => (touch() === "grumpy" ? "grumpy" : props.mood ?? "idle");
   const activity = () => (mood() === "idle" ? props.activity ?? null : null);
   const pose = (): GibPose => {
     const act = activity();
@@ -149,6 +159,12 @@ export function Gib(props: {
       frame = 0;
       const event = pointer;
       if (!event || !root || props.look || reduce() || mood() === "busy" || mood() === "sleep" || mood() === "think") return;
+      // Settings › Apariencia › Gib: eyes that do not follow the cursor look ahead.
+      if (document.documentElement.dataset.gibEyes === "off") {
+        root.style.removeProperty("--look-x");
+        root.style.removeProperty("--look-y");
+        return;
+      }
       const box = root.getBoundingClientRect();
       if (!box.width) return;
       // The side the cursor is on: an annoyed Gib swats with the arm on that side.
@@ -162,10 +178,22 @@ export function Gib(props: {
     window.addEventListener("pointermove", look);
     onCleanup(() => {
       window.clearTimeout(timer);
+      window.clearTimeout(touchTimer);
       window.cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", look);
     });
   });
+
+  /** A poke: a jump; the third within a couple of seconds makes him grumpy. */
+  function poke() {
+    const at = Date.now();
+    pokes = [...pokes.filter((t) => at - t < 2500), at];
+    window.clearTimeout(touchTimer);
+    const grumpy = pokes.length >= 3;
+    if (grumpy) pokes = [];
+    setTouch(grumpy ? "grumpy" : "poke");
+    touchTimer = window.setTimeout(() => setTouch(null), grumpy ? 1300 : 520);
+  }
 
   return (
     <span
@@ -174,7 +202,7 @@ export function Gib(props: {
         props.ref?.(el);
       }}
       class="gib"
-      classList={{ ...accessoryClasses(props.accessories), tinted: Boolean(props.tint), [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink() || Boolean(props.blink), clickable: Boolean(props.onClick) }}
+      classList={{ ...accessoryClasses(props.accessories), tinted: Boolean(props.tint), [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink() || Boolean(props.blink), clickable: Boolean(props.onClick), "is-pet": touch() === "pet", "is-poke": touch() === "poke" }}
       style={{
         width: `${props.size ?? 96}px`,
         "--gib-size": `${props.size ?? 96}px`,
@@ -184,10 +212,23 @@ export function Gib(props: {
       role={props.onClick ? "button" : "img"}
       tabindex={props.onClick ? 0 : undefined}
       aria-label={props.label ?? "Gib"}
-      onClick={() => props.onClick?.()}
+      onClick={() => {
+        if (props.onClick) props.onClick();
+        else if (touchable()) poke();
+      }}
       onDblClick={() => props.onDblClick?.()}
-      onPointerEnter={() => props.onHover?.(true)}
-      onPointerLeave={() => props.onHover?.(false)}
+      onPointerEnter={() => {
+        props.onHover?.(true);
+        if (!touchable()) return;
+        window.clearTimeout(touchTimer);
+        // A moment on him before it counts as petting (passing over does not).
+        touchTimer = window.setTimeout(() => !touch() && setTouch("pet"), 600);
+      }}
+      onPointerLeave={() => {
+        props.onHover?.(false);
+        if (touch() === "pet") setTouch(null);
+        if (!touch()) window.clearTimeout(touchTimer);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") props.onClick?.();
       }}

@@ -1,6 +1,6 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Mark } from "../brand/Mark";
-import { reducedMotion, setSplashDone, setState, state } from "../state";
+import { gibShows, reducedMotion, setSplashDone, setState, state } from "../state";
 import { Gib, type GibMood } from "./Gib";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -41,8 +41,9 @@ export function Splash() {
   async function run() {
     const started = performance.now();
     while (!state.ready) await sleep(30);
-    // Read once the settings are loaded: "Animaciones: reducidas" in Celer counts, not only the system's.
-    if (reducedMotion() || state.settings.companion === "off") {
+    // Read once the settings are loaded: "Animaciones: reducidas" in Celer counts, not only the system's; without
+    // Gib in the splash (or anywhere) the workspace just fades in.
+    if (reducedMotion() || !gibShows("splash")) {
       await finish(false);
       return;
     }
@@ -93,7 +94,9 @@ export function Splash() {
         <div class="splash-bg" ref={overlay} />
         <div class="splash-center">
           <div class="splash-mover" ref={mover}>
-            <Gib size={150} pose="poker" mood={mood()} />
+            <Show when={gibShows("splash")}>
+              <Gib size={150} pose="poker" mood={mood()} />
+            </Show>
           </div>
           <div class="splash-text">
             <div class="splash-brand"><Mark size={22} /><span>Celer</span></div>

@@ -1,10 +1,11 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 import { shortcutLabel } from "../commands";
 import { saveToLibrary } from "../library";
-import { activeSql, activeTab, formatMs, gibEvent, gibName, notify, openPalette, reducedMotion, runActive, saveSettings, splashDone, state, type GibEvent } from "../state";
+import { activeSql, activeTab, formatMs, gibEvent, gibName, gibShows, notify, openPalette, reducedMotion, runActive, saveGib, splashDone, state, type GibEvent } from "../state";
 import { nextTip, queryAdvice, statementKey, type Advice } from "./advice";
 import { memory, saveMemory, sessionAdvice } from "./memory";
 import { Gib, type GibActivity, type GibMood } from "./Gib";
+import { budgetAllows, dayKey, IDLE_AFTER_MS, IDLE_GAP_MS, pickRoutine as choose, reactionFor, SAME_REACTION_MS, spend, type Reaction, type ReactionEvent } from "./reactions";
 
 /** What Gib grumbles when you keep clicking him (one click is a tip; four in a row is pestering). */
 const GRUMBLES = ["¡Eh! Que no soy un botón.", "Fuera, mosca…", "Ya van unos cuantos clics, ¿eh?"];
@@ -47,10 +48,8 @@ const ROUTINES: Record<string, { step: GibActivity; ms: number }[]> = {
   bug: [{ step: "bug", ms: 6000 }],
 };
 const ROUTINE_NAMES = Object.keys(ROUTINES);
-/** Quiet before the first activity, and the gap between two (random in between). */
-const IDLE_BEFORE_MS = 40_000;
-const GAP_MIN_MS = 25_000;
-const GAP_MAX_MS = 70_000;
+/** A pause longer than this starts the working session again (for "a long session: take a break"). */
+const SESSION_BREAK_MS = 30 * 60_000;
 /**
  * Tips he volunteers: the first a few minutes into the session, then at most one every 15 minutes, only while you
  * pause (no input for 5 s, but back within a minute: nobody reads a bubble in an empty room) and only tips you have
@@ -76,18 +75,38 @@ export function Companion() {
   let lastInput = Date.now();
   let lastTip = Date.now() - TIP_EVERY_MS + TIP_FIRST_MS;
   let lastBubbleAt = 0;
-  let nextActivityAt = Date.now() + IDLE_BEFORE_MS;
+  let nextActivityAt = Date.now() + gap();
+  let sessionStart = Date.now();
+  let errorStreak = 0;
+  /** When he spoke up on his own in the last hour (the frequency budget), and when each kind of reaction last came. */
+  let spent: number[] = [];
+  const lastReaction = new Map<string, number>();
   let recent: string[] = [];
   let routineToken = 0;
   let routineTimer = 0;
+  /** When the current routine started (performance.now()): a key pressed before that does not interrupt it. */
+  let routineStartedAt = 0;
   let reactionTimer = 0;
   let bubbleTimer = 0;
   let mouseRuns = 0;
   let clicks: number[] = [];
   const runs = new Map<string, number>();
 
-  const mode = () => state.settings.companion;
-  const running = () => state.tabs.some((tab) => (tab.kind === "sql" && tab.running) || (tab.kind === "table" && tab.loading));
+  const prefs = () => state.settings.gib;
+  const shown = () => gibShows("companion");
+  // Anything at work: a query, a table loading, or the AI answering (he thinks along).
+  const running = () => state.ai.running || state.tabs.some((tab) => (tab.kind === "sql" && tab.running) || (tab.kind === "table" && tab.loading));
+
+  /** The quiet time before the next idle activity, by the chosen frequency. */
+  function gap() {
+    const [min, max] = IDLE_GAP_MS[state.settings.gib.frequency];
+    return min + Math.random() * (max - min);
+  }
+
+  /** A face for something that happened: only with reactions on (Settings › Apariencia › Gib). */
+  function feel(mood: GibMood, ms = 1600) {
+    if (prefs().reactions) react(mood, ms);
+  }
 
   function react(mood: GibMood, ms = 1600) {
     window.clearTimeout(reactionTimer);
@@ -103,12 +122,61 @@ export function Companion() {
     if (!next.sticky) bubbleTimer = window.setTimeout(() => setBubble(null), ms);
   }
 
-  /** Gib speaking on his own: nothing when he is off, and only warnings and news (no tips) when he is quiet. */
-  function say(next: Bubble, ms = 6500): boolean {
-    if (mode() === "off") return false;
-    if (mode() !== "normal" && next.kind === "tip") return false;
+  /**
+   * Gib speaking on his own: nothing when he is not shown, no tips with tips off, and never over a bubble you are
+   * reading. Everything he volunteers counts against the frequency budget (Settings › Apariencia › Gib), except the
+   * warnings about the statement you just ran.
+   */
+  function say(next: Bubble, ms = 6500, budgeted = next.kind !== "warn"): boolean {
+    if (!shown()) return false;
+    if (next.kind === "tip" && !prefs().tips) return false;
+    if (bubble()?.sticky) return false;
+    const now = Date.now();
+    if (budgeted && !budgetAllows(spent, now, prefs().frequency)) return false;
+    if (budgeted) spent = spend(spent, now);
     show(next, ms);
     return true;
+  }
+
+  /**
+   * A reaction to an event (reactions.ts): the face, or a short activity when he is free, and a few words when the
+   * budget allows and nothing else is being said. Returns whether he said something.
+   */
+  function respond(event: ReactionEvent): boolean {
+    if (!prefs().reactions) return false;
+    const now = new Date();
+    const reaction = reactionFor(event, {
+      now,
+      name: gibName(),
+      said: new Set(memory.said),
+      lastQueryDay: memory.lastQueryDay,
+      sessionMs: now.getTime() - sessionStart,
+      formatMs,
+    });
+    if (event.type === "query-ok" && memory.lastQueryDay !== dayKey(now)) {
+      memory.lastQueryDay = dayKey(now);
+      saveMemory();
+    }
+    if (!reaction) return false;
+    if (now.getTime() - (lastReaction.get(reaction.id) ?? 0) < SAME_REACTION_MS) return false;
+    lastReaction.set(reaction.id, now.getTime());
+    act(reaction);
+    if (!reaction.text || bubble()) return false;
+    if (!say({ text: reaction.text, kind: reaction.kind ?? "info" }, Math.max(4000, reaction.text.length * 70), true)) return false;
+    if (reaction.once) {
+      memory.said = [...memory.said.filter((key) => key !== reaction.once), reaction.once].slice(-40);
+      saveMemory();
+    }
+    return true;
+  }
+
+  /** The face of a reaction, or its little activity (scratching his head at an empty result) when he is free for it. */
+  function act(reaction: Reaction) {
+    if (reaction.activity && prefs().idle && !reducedMotion() && !running() && !hover() && ROUTINES[reaction.activity]) {
+      window.clearTimeout(reactionTimer);
+      setReaction(null);
+      play(reaction.activity, false);
+    } else react(reaction.mood, reaction.ms);
   }
 
   /** Advice with a memory: warnings once per session, the rest at most ADVICE_REPEAT times ever. */
@@ -127,7 +195,7 @@ export function Companion() {
    * ones. False when there was nothing to say.
    */
   function showTip(proactive: boolean): boolean {
-    if (mode() === "off") return false;
+    if (!shown()) return false;
     const picked = nextTip(tipCursor, new Set(memory.seen), proactive);
     if (!picked) return false;
     const next: Bubble = { text: picked.tip.text(shortcutLabel), kind: "tip", tipId: picked.tip.id, proactive };
@@ -142,18 +210,19 @@ export function Companion() {
   }
 
   // ------------------------------------------------------------ idle activities
-  /** Plays a routine step by step; a newer routine or stopRoutine() cancels it. */
-  function play(name: string) {
+  /** Plays a routine step by step; a newer routine or stopRoutine() cancels it. Idle ones are remembered, to vary. */
+  function play(name: string, idle = true) {
     const steps = ROUTINES[name];
     if (!steps) return;
     const token = ++routineToken;
-    recent = [name, ...recent].slice(0, 3);
+    if (idle) recent = [name, ...recent].slice(0, 4);
+    routineStartedAt = performance.now();
     let index = 0;
     const next = () => {
       if (token !== routineToken) return;
       if (index >= steps.length) {
         setActivity(null);
-        nextActivityAt = Date.now() + GAP_MIN_MS + Math.random() * (GAP_MAX_MS - GAP_MIN_MS);
+        nextActivityAt = Date.now() + gap();
         return;
       }
       const { step, ms } = steps[index++];
@@ -168,21 +237,21 @@ export function Companion() {
     window.clearTimeout(routineTimer);
     if (activity()) {
       setActivity(null);
-      nextActivityAt = Date.now() + GAP_MIN_MS + Math.random() * (GAP_MAX_MS - GAP_MIN_MS);
+      nextActivityAt = Date.now() + gap();
     }
   }
 
   function pickRoutine() {
-    const options = ROUTINE_NAMES.filter((name) => !recent.includes(name));
-    return options[Math.floor(Math.random() * options.length)] ?? "yawn";
+    return choose(ROUTINE_NAMES, recent);
   }
 
-  /** Nothing in front of him: no dialog, guide or palette open. */
-  const unobstructed = () => !document.querySelector(".onboarding, .tour-spot, .modal-backdrop, .scrim");
+  /** Nothing in front of him: no dialog, guide, palette or menu open. */
+  const unobstructed = () => !state.paletteOpen && !state.menu && !document.querySelector(".onboarding, .tour-spot, .modal-backdrop, .scrim, .dialog");
 
   /** Activities only while Gib would otherwise just stand there (and someone may be looking). */
   const free = () =>
-    mode() === "normal" &&
+    shown() &&
+    prefs().idle &&
     splashDone() &&
     !reducedMotion() &&
     !document.hidden &&
@@ -206,31 +275,33 @@ export function Companion() {
   });
 
   /** What to say after a statement ran fine: a likely mistake, a faster way, or a habit worth having. */
-  function afterQuery(event: GibEvent) {
+  /** Advice about the statement that ran; true when something was said. */
+  function afterQuery(event: GibEvent): boolean {
     const ms = event.ms ?? 0;
     const sql = event.detail ?? "";
     const plan = { label: "Ver plan", run: () => void runActive("explain") };
     const advice = queryAdvice({ sql, kind: event.kind, ms, columns: event.columns ?? 0, hasMore: Boolean(event.hasMore) });
-    if (advice && advise(advice.id, advice.kind, { text: advice.text, kind: advice.kind === "warn" ? "warn" : "tip", action: advice.plan ? plan : undefined })) return;
+    if (advice && advise(advice.id, advice.kind, { text: advice.text, kind: advice.kind === "warn" ? "warn" : "tip", action: advice.plan ? plan : undefined })) return true;
     if (ms > 5000) {
       const keys = shortcutLabel("explain");
-      if (advise("slow", "tip", { text: `Esta consulta tarda. El plan de ejecución${keys ? ` (${keys})` : ""} te enseña dónde se va el tiempo.`, kind: "tip", action: plan })) return;
+      if (advise("slow", "tip", { text: `Esta consulta tarda. El plan de ejecución${keys ? ` (${keys})` : ""} te enseña dónde se va el tiempo.`, kind: "tip", action: plan })) return true;
     } else if (event.hasMore) {
-      if (advise("paging", "tip", { text: "Hay más filas en el servidor: desplázate hacia abajo o pulsa «Cargar todo». Solo se traen las que ves.", kind: "tip" })) return;
+      if (advise("paging", "tip", { text: "Hay más filas en el servidor: desplázate hacia abajo o pulsa «Cargar todo». Solo se traen las que ves.", kind: "tip" })) return true;
     }
     // The same statement again and again, typed each time: the library keeps it.
     const key = statementKey(sql);
-    if (key.length < 12) return;
+    if (key.length < 12) return false;
     const count = (runs.get(key) ?? 0) + 1;
     runs.set(key, count);
     if (count >= REPEAT_RUNS && !activeSql()?.libraryId) {
       const keys = shortcutLabel("save-library");
-      advise("repeat-library", "tip", {
+      return advise("repeat-library", "tip", {
         text: `Ya has lanzado esta consulta ${count} veces. Guárdala en la biblioteca${keys ? ` (${keys})` : ""} y la tendrás a mano.`,
         kind: "tip",
         action: { label: "Guardar", run: () => void saveToLibrary() },
       });
     }
+    return false;
   }
 
   createEffect(
@@ -240,15 +311,20 @@ export function Companion() {
       switch (event.type) {
         case "query-ok": {
           const ms = event.ms ?? 0;
-          if (ms > 1500) {
-            react("idea", 2200);
-            say({ text: `Listo en ${formatMs(ms)}.`, kind: "ok" }, 3500);
-          } else react("happy", 1300);
-          afterQuery(event);
+          errorStreak = 0;
+          // Advice about the statement first (a likely mistake matters more), then his own reaction.
+          const advised = afterQuery(event);
+          const reacted = respond({ type: "query-ok", ms, rows: null, empty: Boolean(event.empty), production: event.production });
+          if (!reacted && !reaction() && !activity()) {
+            if (ms > 1500) {
+              feel("idea", 2200);
+              if (!advised && prefs().reactions) say({ text: `Listo en ${formatMs(ms)}.`, kind: "ok" }, 3500);
+            } else feel("happy", 1300);
+          }
           break;
         }
         case "query-error": {
-          react("error", 2600);
+          errorStreak++;
           const msg = (event.detail ?? "").toLowerCase();
           const tables = shortcutLabel("go-table");
           if (/does not exist|doesn't exist|no such table|invalid object name|unknown table/.test(msg) && !/column/.test(msg)) {
@@ -260,21 +336,31 @@ export function Companion() {
           } else if (/permission denied|access denied|read only|solo lectura/.test(msg)) {
             advise("err-permission", "warn", { text: "Sin permiso para esa operación con este usuario o conexión.", kind: "warn" });
           }
+          respond({ type: "query-error", streak: errorStreak });
           break;
         }
+        case "export-done":
+          respond({ type: "export-done", rows: event.rows ?? 0, ms: event.ms ?? 0 });
+          break;
+        case "conn-lost":
+          respond({ type: "conn-lost", name: event.detail ?? "" });
+          break;
+        case "conn-back":
+          respond({ type: "conn-back", name: event.detail ?? "" });
+          break;
         case "connected":
-          react("wave", 1800);
+          feel("wave", 1800);
           if (event.production) advise(`production:${event.detail}`, "warn", { text: `«${event.detail}» es de producción: te pediré confirmación antes de cambios peligrosos.`, kind: "warn" }, 7000);
           break;
         case "connect-failed":
-          react("error", 2400);
+          feel("error", 2400);
           break;
         case "commit":
         case "saved":
-          react("ok", 1600);
+          feel("ok", 1600);
           break;
         case "rollback":
-          react("wave", 1200);
+          feel("wave", 1200);
           break;
         case "mouse-run": {
           mouseRuns++;
@@ -316,6 +402,8 @@ export function Companion() {
 
   onMount(() => {
     const mark = (event: Event) => {
+      // Back after a long pause: a new working session (for the "take a break" hint).
+      if (Date.now() - lastInput > SESSION_BREAK_MS) sessionStart = Date.now();
       lastInput = Date.now();
       if (asleep()) {
         setAsleep(false);
@@ -323,7 +411,9 @@ export function Companion() {
       }
       const onGib = event.target instanceof Element && event.target.closest(".companion");
       // Typing or clicking elsewhere ends an activity: Gib pays attention again. Clicks on Gib are his own business.
-      if (activity() && !onGib) stopRoutine();
+      // (Only one that started before this event: the key that ran a query may reach this listener after the query has
+      // finished and Gib has started reacting to it.)
+      if (activity() && !onGib && event.timeStamp > routineStartedAt) stopRoutine();
       // A tip he volunteered gets out of the way as soon as you type.
       if (event.type === "keydown" && !onGib && bubble()?.proactive) setBubble(null);
     };
@@ -335,7 +425,8 @@ export function Companion() {
       if (idleFor > 10 * 60 * 1000 && !running() && !activity()) setAsleep(true);
       const pause = idleFor > TIP_PAUSE_MIN_MS && idleFor < TIP_PAUSE_MAX_MS;
       if (
-        mode() === "normal" &&
+        shown() &&
+        prefs().tips &&
         pause &&
         now - lastTip > TIP_EVERY_MS &&
         now - lastBubbleAt > 60_000 &&
@@ -350,7 +441,8 @@ export function Companion() {
         lastTip = now;
         showTip(true);
       }
-      if (!activity() && idleFor > IDLE_BEFORE_MS && now > nextActivityAt && free()) play(pickRoutine());
+      // Idle activities only when you are genuinely idle: no input for a while, nothing running, nothing open.
+      if (!activity() && idleFor > IDLE_AFTER_MS[prefs().frequency] && now > nextActivityAt && free()) play(pickRoutine());
     }, 2000);
     onCleanup(() => {
       window.removeEventListener("pointerdown", mark);
@@ -382,7 +474,7 @@ export function Companion() {
       react("grumpy", 1400);
       const step = clicks.length - PESTER_CLICKS;
       if (step >= GRUMBLES.length - 1) clicks = [];
-      if (mode() !== "off") show({ text: GRUMBLES[Math.min(step, GRUMBLES.length - 1)], kind: "ok", grumble: true }, 2200);
+      show({ text: GRUMBLES[Math.min(step, GRUMBLES.length - 1)], kind: "ok", grumble: true }, 2200);
       return;
     }
     if (bubble() && !bubble()!.grumble) {
@@ -410,7 +502,7 @@ export function Companion() {
   };
 
   return (
-    <Show when={mode() !== "off"}>
+    <Show when={shown()}>
       <div class="companion" classList={{ landed: splashDone() }}>
         <Show when={bubble()}>
           {(b) => (
@@ -434,8 +526,8 @@ export function Companion() {
                     title={`${gibName()} deja de ofrecer consejos por su cuenta (Ajustes › Apariencia › Gib)`}
                     onClick={() => {
                       closeBubble();
-                      void saveSettings({ companion: "quiet" });
-                      notify(`${gibName()} ya no dará consejos por su cuenta`, "info", "Haz clic en él para pedir uno, o vuelve a «Normal» en Ajustes › Apariencia › Gib.");
+                      void saveGib({ tips: false });
+                      notify(`${gibName()} ya no dará consejos por su cuenta`, "info", "Haz clic en él para pedir uno, o vuelve a activarlos en Ajustes › Apariencia › Gib.");
                     }}
                   >
                     No más consejos

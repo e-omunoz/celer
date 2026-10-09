@@ -303,7 +303,7 @@ le persigues con el ratón mientras espera, aparta el cursor como a una mosca.
   los que no has visto.
 - **Por su cuenta**: unos minutos después de empezar y como mucho uno cada 15 minutos, solo cuando haces una pausa,
   nunca con una consulta en marcha ni en una conexión de producción, y solo consejos que no has visto. Se cierra solo,
-  al escribir o con *Cerrar*; *No más consejos* lo pone en silencio.
+  al escribir o con *Cerrar*; *No más consejos* los desactiva.
 - **Sobre la consulta que acabas de lanzar**: avisa de `= NULL` (que nunca es cierto), de `NOT IN (SELECT …)` con
   nulos y de tablas separadas por comas sin `WHERE`; si la consulta tardó, de `LIKE '%…'`, de funciones sobre columnas
   en el `WHERE`, de `UNION` frente a `UNION ALL` y de `ORDER BY` sin límite. Si repites una consulta, propone guardarla
@@ -320,9 +320,21 @@ le persigues con el ratón mientras espera, aparta el cursor como a una mosca.
 
 El aspecto se aplica a todos los Gib de Celer: la barra de estado, el arranque, los estados vacíos y los diálogos.
 
-En *Ajustes › Apariencia* se puede poner en silencio (solo avisos, sin consejos por su cuenta) o apagar. Con
-*Animaciones: reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de
-animarse.
+**Reacciona a lo que pasa**: celebra una consulta que tardó mucho y salió bien, pone cara de error, se rasca la cabeza
+ante un resultado vacío, aplaude una exportación grande, se entristece si se corta la conexión y saluda cuando vuelve,
+te da los buenos días con la primera consulta del día, te sugiere un descanso tras dos horas seguidas y comenta el
+viernes por la tarde (con cuidado si es producción) y las horas tardías. Solo se entretiene cuando de verdad no haces
+nada: nunca mientras escribes, corre una consulta o hay un diálogo, la paleta o un menú abiertos.
+
+**Se deja tocar**: con el cursor encima un rato, cierra los ojos a gusto; un clic le da un toque (salta) y tres
+seguidos le enfadan. Sus ojos siguen al cursor. En la barra de estado, un clic sigue siendo un consejo.
+
+**Cuánto se hace notar** (*Ajustes › Apariencia › Gib*): mostrarlo o no (apagado no aparece en ningún sitio), poco,
+normal o a menudo (como mucho 3, 8 o 16 mensajes suyos por hora, sin sonido y sin quitarte el foco), y por separado
+si reacciona a lo que pasa, si se entretiene, si da consejos por su cuenta, si sus ojos siguen al cursor y dónde
+aparece: la barra de estado, los estados vacíos y el asistente de IA, el arranque, y las esperas, la guía y los
+diálogos. Los avisos sobre la sentencia que acabas de lanzar no cuentan para ese límite. Con *Animaciones:
+reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de animarse.
 
 ## Drivers de Informix
 

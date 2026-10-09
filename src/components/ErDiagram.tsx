@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Sh
 import { api, isTauri } from "../api";
 import { columnY, edgePath, ER, erHidden, erNeighbours, layoutEr, type ErBox, type ErTable } from "../erLayout";
 import { Gib } from "../gib/Gib";
-import { closeErDiagram, focusErTable, notify, openTable, showWholeEr, state, widenErDiagram } from "../state";
+import { gibShows, closeErDiagram, focusErTable, notify, openTable, showWholeEr, state, widenErDiagram } from "../state";
 import { detachPanel, isPanelWindow } from "../windows";
 
 /**
@@ -229,13 +229,13 @@ export function ErDiagram() {
       </Show>
       <div class="er-canvas" ref={host} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel} onDblClick={onDblClick}>
         <Show when={er().error}>
-          <div class="er-empty"><Gib size={84} mood="error" /><p>{er().error}</p></div>
+          <div class="er-empty"><Show when={gibShows("empty")}><Gib size={84} mood="error" /></Show><p>{er().error}</p></div>
         </Show>
         <Show when={!er().error && !er().loading && !er().tables.length}>
-          <div class="er-empty"><Gib size={84} mood="think" /><p>Este esquema no tiene tablas.</p></div>
+          <div class="er-empty"><Show when={gibShows("empty")}><Gib size={84} mood="think" /></Show><p>Este esquema no tiene tablas.</p></div>
         </Show>
         <Show when={er().loading && !er().tables.length && !er().error}>
-          <div class="er-empty"><Gib size={84} mood="busy" pose="laptop" /><p>{focusName() ? `Buscando las relaciones de ${focusName()}…` : "Leyendo tablas y claves…"} {er().done}/{er().total || "?"}</p></div>
+          <div class="er-empty"><Show when={gibShows("overlays")}><Gib size={84} mood="busy" pose="laptop" /></Show><p>{focusName() ? `Buscando las relaciones de ${focusName()}…` : "Leyendo tablas y claves…"} {er().done}/{er().total || "?"}</p></div>
         </Show>
         <svg ref={svg} class="er-svg" width="100%" height="100%">
           <defs>
