@@ -6,6 +6,13 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Moving a result column lifts the whole column** (#109): dragging a header picks up the column with its visible
+  cells as a semi-transparent ghost with a shadow, and the other columns slide aside live to open the gap where it will
+  land (no drop line any more). Near the edges the grid scrolls by itself; dropping lets the column settle into its
+  place and Esc flies it back where it was. With "Animaciones: Reducidas" (or the system's reduced motion) the columns
+  jump instead of sliding. Only the rows on screen are drawn, so it stays smooth on wide, long results.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

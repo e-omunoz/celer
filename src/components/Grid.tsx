@@ -1,11 +1,11 @@
 import { CalendarDays } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
 import { raw } from "../raw";
-import { dropGap, identityOrder, inOrder, inverseOrder, isIdentity, moveColumn, type ColumnOrder } from "../columnOrder";
+import { easeTowards, identityOrder, inOrder, inverseOrder, isIdentity, layoutByColumn, moveColumn, slideGap, type ColumnOrder } from "../columnOrder";
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
-import { copyText, openMenu, setState, state, type GridStats, type MenuItem } from "../state";
+import { copyText, openMenu, reducedMotion, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
 
@@ -203,6 +203,14 @@ export function DataGrid(props: GridProps) {
   let headerPress: { col: number; startX: number; grab: number } | null = null;
   let moveClientX = 0;
   let edgeFrame = 0;
+  /**
+   * While a column is moved, and until it has settled: where each column is drawn (content x, by query column),
+   * easing towards the layout of the order being previewed. Null when the columns are at rest.
+   */
+  let slide: Float64Array | null = null;
+  let slideAt = 0;
+  /** The query column drawn lifted above the others (dragged, or flying back into its place); -1: none. */
+  let lifted = -1;
   let selecting: "cells" | "rows" | "cols" | null = null;
 
   const rowH = () => (state.settings.density === "comfortable" ? 28 : 24);
@@ -361,80 +369,96 @@ export function DataGrid(props: GridProps) {
     const fontItalic = `italic 12.5px ${p.mono}`;
     ctx.textBaseline = "middle";
 
-    // first visible column
-    let c0 = 0;
-    while (c0 < cols.length && xs[c0 + 1] - view.x < G) c0++;
+    // Columns slide while one is dragged (and while it settles): each is drawn where the slide has it.
+    const sliding = advanceSlide(width);
+    const slid = slide;
+    const at = (col: number) => (slid ? slid[order[col] ?? col] : xs[col]) - view.x;
+    // The screen columns drawn in the flow, left to right; the lifted one is drawn last, above the others.
+    const shown: number[] = [];
+    if (slid) {
+      for (let col = 0; col < cols.length; col++) {
+        if ((order[col] ?? col) === lifted) continue;
+        const x = at(col);
+        if (x + cols[col] > G && x <= width) shown.push(col);
+      }
+    } else {
+      let c0 = 0;
+      while (c0 < cols.length && xs[c0 + 1] - view.x < G) c0++;
+      for (let col = c0; col < cols.length && xs[col] - view.x <= width; col++) shown.push(col);
+    }
+
+    const rowBgOf = (vr: number, source: number) => {
+      if (deleted.has(source)) return p.deleted;
+      if (props.insertStart !== undefined && source >= props.insertStart) return p.inserted;
+      return zebra && vr % 2 === 1 ? p.alt : p.bg;
+    };
+
+    /** One cell of screen column `col` at `x` (its row's background is already there). */
+    const drawCell = (col: number, x: number, y: number, vr: number, source: number) => {
+      const w = cols[col];
+      const isDeleted = deleted.has(source);
+      const inside = s && vr >= s.r1 && vr <= s.r2 && col >= s.c1 && col <= s.c2;
+      const sc = order[col] ?? col;
+      const raw = data[source]?.[sc];
+      const edited = props.edits && Object.prototype.hasOwnProperty.call(props.edits, `${source}:${sc}`);
+      if (edited) {
+        ctx.fillStyle = p.modified;
+        ctx.fillRect(x, y, w, RH);
+      }
+      if (inside) {
+        ctx.fillStyle = p.sel;
+        ctx.fillRect(x, y, w, RH);
+      }
+      const isNull = isNullCell(raw);
+      const kind = props.columns[sc]?.kind;
+      let label = isNull ? "NULL" : cellText(raw);
+      if (query && !isNull && label.toLowerCase().includes(query)) {
+        ctx.fillStyle = p.match;
+        ctx.fillRect(x + 1, y + 1, w - 2, RH - 2);
+      }
+      if (edited) {
+        ctx.fillStyle = p.warning;
+        ctx.fillRect(x, y, 2, RH);
+      }
+      if (label.length > 400) label = label.slice(0, 400);
+      if (label.includes("\n") || label.includes("\r")) label = label.replace(/\r?\n|\r/g, " ↵ ");
+      ctx.font = isNull || isDeleted ? fontItalic : fontCell;
+      const maxChars = Math.floor((w - 16) / charW);
+      // Counting characters assumes one monospace cell each; CJK, emoji and the like are measured instead.
+      let labelW: number;
+      if (WIDE_CHARS.test(label)) [label, labelW] = fitText(ctx, label, w - 16);
+      else {
+        if (label.length > maxChars) label = maxChars > 1 ? `${label.slice(0, maxChars - 1)}…` : "…";
+        labelW = label.length * charW;
+      }
+      if (kind === "bool" && !isNull) {
+        const on = raw === true || raw === 1 || /^(true|t|1|yes|y)$/i.test(String(raw));
+        ctx.fillStyle = on ? p.success : p.faint;
+        ctx.fillText(on ? "✓ true" : "✗ false", x + 8, y + RH / 2 + 0.5);
+      } else {
+        const right = kind === "number" && !isNull;
+        ctx.fillStyle = isNull ? p.faint : right ? p.number : p.fg;
+        const tx = right ? x + w - 8 - labelW : x + 8;
+        ctx.fillText(label, tx, y + RH / 2 + 0.5);
+        if (isDeleted) {
+          ctx.strokeStyle = p.danger;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(tx, y + RH / 2 + 0.5);
+          ctx.lineTo(tx + labelW, y + RH / 2 + 0.5);
+          ctx.stroke();
+        }
+      }
+      ctx.fillStyle = p.line;
+      ctx.fillRect(x + w - 1, y, 1, RH);
+    };
 
     for (let vr = start; vr < end; vr++) {
       const source = rows[vr];
       const y = HEAD_H + vr * RH - view.y;
-      const isDeleted = deleted.has(source);
-      const isInserted = props.insertStart !== undefined && source >= props.insertStart;
-      let rowBg = zebra && vr % 2 === 1 ? p.alt : p.bg;
-      if (isDeleted) rowBg = p.deleted;
-      else if (isInserted) rowBg = p.inserted;
-      ctx.fillStyle = rowBg;
+      ctx.fillStyle = rowBgOf(vr, source);
       ctx.fillRect(G, y, width - G, RH);
-      const rowSelected = s && vr >= s.r1 && vr <= s.r2;
-      for (let col = c0; col < cols.length; col++) {
-        const x = xs[col] - view.x;
-        const w = cols[col];
-        if (x > width) break;
-        const inside = rowSelected && col >= s!.c1 && col <= s!.c2;
-        const sc = order[col] ?? col;
-        const raw = data[source]?.[sc];
-        const edited = props.edits && Object.prototype.hasOwnProperty.call(props.edits, `${source}:${sc}`);
-        if (edited) {
-          ctx.fillStyle = p.modified;
-          ctx.fillRect(x, y, w, RH);
-        }
-        if (inside) {
-          ctx.fillStyle = p.sel;
-          ctx.fillRect(x, y, w, RH);
-        }
-        const isNull = isNullCell(raw);
-        const kind = props.columns[sc]?.kind;
-        let label = isNull ? "NULL" : cellText(raw);
-        if (query && !isNull && label.toLowerCase().includes(query)) {
-          ctx.fillStyle = p.match;
-          ctx.fillRect(x + 1, y + 1, w - 2, RH - 2);
-        }
-        if (edited) {
-          ctx.fillStyle = p.warning;
-          ctx.fillRect(x, y, 2, RH);
-        }
-        if (label.length > 400) label = label.slice(0, 400);
-        if (label.includes("\n") || label.includes("\r")) label = label.replace(/\r?\n|\r/g, " ↵ ");
-        ctx.font = isNull || isDeleted ? fontItalic : fontCell;
-        const maxChars = Math.floor((w - 16) / charW);
-        // Counting characters assumes one monospace cell each; CJK, emoji and the like are measured instead.
-        let labelW: number;
-        if (WIDE_CHARS.test(label)) [label, labelW] = fitText(ctx, label, w - 16);
-        else {
-          if (label.length > maxChars) label = maxChars > 1 ? `${label.slice(0, maxChars - 1)}…` : "…";
-          labelW = label.length * charW;
-        }
-        if (kind === "bool" && !isNull) {
-          const on = raw === true || raw === 1 || /^(true|t|1|yes|y)$/i.test(String(raw));
-          ctx.fillStyle = on ? p.success : p.faint;
-          ctx.fillText(on ? "✓ true" : "✗ false", x + 8, y + RH / 2 + 0.5);
-        } else {
-          const right = kind === "number" && !isNull;
-          ctx.fillStyle = isNull ? p.faint : right ? p.number : p.fg;
-          const tx = right ? x + w - 8 - labelW : x + 8;
-          ctx.fillText(label, tx, y + RH / 2 + 0.5);
-          if (isDeleted) {
-            ctx.strokeStyle = p.danger;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(tx, y + RH / 2 + 0.5);
-            ctx.lineTo(tx + labelW, y + RH / 2 + 0.5);
-            ctx.stroke();
-          }
-        }
-        ctx.fillStyle = p.line;
-        ctx.fillRect(x + w - 1, y, 1, RH);
-      }
+      for (const col of shown) drawCell(col, at(col), y, vr, source);
       ctx.fillStyle = p.line;
       ctx.fillRect(G, y + RH - 1, width - G, 1);
     }
@@ -452,9 +476,9 @@ export function DataGrid(props: GridProps) {
     }
 
     // active cell outline
-    if (f) {
+    if (f && (order[f.col] ?? f.col) !== lifted) {
       const y = HEAD_H + f.row * RH - view.y;
-      const x = (xs[f.col] ?? 0) - view.x;
+      const x = f.col < cols.length ? at(f.col) : -view.x;
       if (y + RH > HEAD_H && x + (cols[f.col] ?? 0) > G) {
         ctx.save();
         ctx.beginPath();
@@ -468,14 +492,11 @@ export function DataGrid(props: GridProps) {
     }
 
     // header
-    ctx.fillStyle = p.head;
-    ctx.fillRect(0, 0, width, HEAD_H);
     const pk = new Set(props.pkCols ?? []);
     const links = new Set(props.linkCols ?? []);
-    for (let col = c0; col < cols.length; col++) {
-      const x = xs[col] - view.x;
+    /** The header of screen column `col` at `x` (on the header background). */
+    const drawHeader = (col: number, x: number) => {
       const w = cols[col];
-      if (x > width) break;
       const sc = order[col] ?? col;
       const colSelected = s && col >= s.c1 && col <= s.c2;
       if (colSelected) {
@@ -517,9 +538,9 @@ export function DataGrid(props: GridProps) {
         ctx.fillText(type.toLowerCase(), tx + nameW + 6, HEAD_H / 2 + 0.5);
       }
       const sorted = sort()?.col === sc;
-      if (sorted || hoverCol() === col) {
+      if (sorted || (hoverCol() === col && !slid)) {
         const ax = x + w - 16;
-        ctx.fillStyle = p.head;
+        ctx.fillStyle = colSelected ? p.sel : p.head;
         ctx.fillRect(ax - 4, 0, 20, HEAD_H - 1);
         ctx.fillStyle = sorted ? p.accent : p.faint;
         ctx.beginPath();
@@ -539,7 +560,10 @@ export function DataGrid(props: GridProps) {
       ctx.restore();
       ctx.fillStyle = p.line;
       ctx.fillRect(x + w - 1, 6, 1, HEAD_H - 12);
-    }
+    };
+    ctx.fillStyle = p.head;
+    ctx.fillRect(0, 0, width, HEAD_H);
+    for (const col of shown) drawHeader(col, at(col));
     ctx.fillStyle = p.line;
     ctx.fillRect(0, HEAD_H - 1, width, 1);
 
@@ -567,34 +591,46 @@ export function DataGrid(props: GridProps) {
     ctx.fillRect(G - 1, 0, 1, height);
     ctx.fillRect(0, HEAD_H - 1, G, 1);
 
-    // a header being dragged: where it would land, and the header itself under the pointer
-    const moving = colMove();
-    if (moving && moving.col < cols.length) {
-      if (moving.gap !== moving.col && moving.gap !== moving.col + 1) {
-        const lx = Math.round(xs[moving.gap] - view.x);
-        if (lx >= G - 1 && lx <= width + 1) {
-          ctx.fillStyle = p.accent;
-          ctx.fillRect(lx - 1, 0, 2, height);
-        }
-      }
-      const w = cols[moving.col];
-      const gx = Math.max(G, Math.min(width - w, moving.x - moving.grab));
+    // The column being moved (or settling into its place): header and visible cells lifted above the others, a
+    // little transparent and with a shadow. Only the rows on screen are drawn, however long the result.
+    const liftedAt = slid && lifted >= 0 ? order.indexOf(lifted) : -1;
+    if (slid && liftedAt >= 0) {
+      const w = cols[liftedAt];
+      const gx = slid[lifted] - view.x;
+      const ghostH = Math.max(HEAD_H, Math.min(height, HEAD_H + end * RH - view.y));
       ctx.save();
-      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.rect(G, 0, width - G, height);
+      ctx.clip();
+      ctx.globalAlpha = 0.86;
+      ctx.shadowColor = "rgba(0, 0, 0, 0.28)";
+      ctx.shadowBlur = 16;
+      ctx.shadowOffsetY = 4;
+      ctx.fillStyle = p.bg;
+      ctx.fillRect(gx, 0, w, ghostH);
+      ctx.shadowColor = "transparent";
+      ctx.beginPath();
+      ctx.rect(gx, 0, w, ghostH);
+      ctx.clip();
+      for (let vr = start; vr < end; vr++) {
+        const source = rows[vr];
+        const y = HEAD_H + vr * RH - view.y;
+        ctx.fillStyle = rowBgOf(vr, source);
+        ctx.fillRect(gx, y, w, RH);
+        drawCell(liftedAt, gx, y, vr, source);
+        ctx.fillStyle = p.line;
+        ctx.fillRect(gx, y + RH - 1, w, 1);
+      }
       ctx.fillStyle = p.head;
       ctx.fillRect(gx, 0, w, HEAD_H);
+      drawHeader(liftedAt, gx);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = p.accent;
       ctx.lineWidth = 1;
-      ctx.strokeRect(gx + 0.5, 0.5, w - 1, HEAD_H - 1);
-      ctx.beginPath();
-      ctx.rect(gx, 0, w - 1, HEAD_H);
-      ctx.clip();
-      ctx.font = `600 12px ${p.sans}`;
-      ctx.fillStyle = p.headFg;
-      ctx.fillText(props.columns[order[moving.col] ?? moving.col]?.name ?? "", gx + 8, HEAD_H / 2 + 0.5);
+      ctx.strokeRect(gx + 0.5, 0.5, w - 1, ghostH - 1);
       ctx.restore();
     }
+    if (sliding) schedule();
   }
 
   // ------------------------------------------------------------ geometry
@@ -742,7 +778,8 @@ export function DataGrid(props: GridProps) {
     if (!scroller) return;
     if (headerPress && !colMove() && event.buttons & 1 && Math.abs(event.clientX - headerPress.startX) >= MOVE_THRESHOLD) {
       selecting = null;
-      setColMove({ col: headerPress.col, gap: headerPress.col, x: 0, grab: headerPress.grab });
+      startSlide(headerPress.col);
+      setColMove({ col: headerPress.col, gap: headerPress.col, x: event.clientX - scroller.getBoundingClientRect().left, grab: headerPress.grab });
     }
     if (colMove()) {
       moveClientX = event.clientX;
@@ -788,13 +825,66 @@ export function DataGrid(props: GridProps) {
 
   // ---- moving a column by its header
 
-  /** The gap under the pointer and the dragged header's place follow the mouse (and the grid scrolled under it). */
+  /** Left edge (on screen) of the dragged column's ghost: under the pointer where it was grabbed, inside the grid. */
+  function ghostLeft(moving: { col: number; x: number; grab: number }, width: number) {
+    const w = shownWidths()[moving.col] ?? 0;
+    return Math.max(gutter(), Math.min(width - w, moving.x - moving.grab));
+  }
+
+  /**
+   * The ghost follows the mouse (and the grid scrolled under it); the gap it would drop at is where the other
+   * columns slide apart.
+   */
   function trackMove() {
     const moving = colMove();
     if (!moving || !scroller) return;
     const x = moveClientX - scroller.getBoundingClientRect().left;
-    const gap = dropGap(colX(), x + scroller.scrollLeft);
+    const left = ghostLeft({ ...moving, x }, scroller.clientWidth) + scroller.scrollLeft;
+    const gap = slideGap(shownWidths(), moving.col, left, gutter());
     if (gap !== moving.gap || x !== moving.x) setColMove({ ...moving, gap, x });
+  }
+
+  /** The columns start sliding from where they are now; the one at screen position `col` is lifted. */
+  function startSlide(col: number) {
+    const w = widths();
+    if (!slide) slide = layoutByColumn(colOrder(), (c) => w[c] ?? MIN_W, gutter());
+    slideAt = 0;
+    lifted = colOrder()[col] ?? col;
+  }
+
+  /**
+   * One frame of the slide: the columns ease towards the order being previewed (the current one once the move has
+   * ended or was cancelled), the lifted one stays under the pointer while dragged. True while anything still moves.
+   */
+  function advanceSlide(width: number): boolean {
+    if (!slide) return false;
+    const now = performance.now();
+    const dt = slideAt ? Math.min(64, now - slideAt) : 16;
+    slideAt = now;
+    const moving = colMove();
+    const w = widths();
+    const order = moving ? moveColumn(colOrder(), moving.col, moving.gap) : colOrder();
+    if (slide.length !== order.length) {
+      slide = null;
+      lifted = -1;
+      return false;
+    }
+    const target = layoutByColumn(order, (c) => w[c] ?? MIN_W, gutter());
+    if (moving && lifted >= 0) target[lifted] = ghostLeft(moving, width) + scroll().x;
+    const still = easeTowards(slide, target, dt, 45, reducedMotion());
+    if (moving && lifted >= 0) slide[lifted] = target[lifted];
+    if (!still && !moving) {
+      slide = null;
+      lifted = -1;
+      slideAt = 0;
+    }
+    return still;
+  }
+
+  function stopSlide() {
+    slide = null;
+    lifted = -1;
+    slideAt = 0;
   }
 
   /** Near the left or right edge, a column being moved scrolls the grid, faster the closer it gets. */
@@ -1494,6 +1584,7 @@ export function DataGrid(props: GridProps) {
         // A new result shows its columns in the query's order, like it gets its own widths.
         headerPress = null;
         if (colMove()) endMove();
+        stopSlide();
         setColOrder(identityOrder(props.columns.length));
         if (scroller) {
           scroller.scrollTop = 0;

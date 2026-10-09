@@ -163,9 +163,11 @@ las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
 - **Fijar un resultado** lo conserva al volver a ejecutar; **Comparar** lo enfrenta al resultado actual y marca las
   celdas cambiadas, las filas nuevas y las que desaparecen.
 - **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
-- **Mover columnas**: arrastra la cabecera de una columna y suéltala donde quieras; una línea marca dónde caerá y, cerca
-  del borde, la rejilla se desplaza sola. Esc durante el arrastre la deja donde estaba. Un clic en la cabecera sigue
-  seleccionando la columna y Mayús+clic (o Mayús y arrastrar) selecciona varias.
+- **Mover columnas**: arrastra la cabecera de una columna y la columna entera se levanta (semitransparente, con
+  sombra); las demás se apartan para abrirle hueco donde caerá y, cerca del borde, la rejilla se desplaza sola. Al
+  soltarla se acomoda en su sitio; Esc durante el arrastre la devuelve a donde estaba. Con *Animaciones: Reducidas*
+  las columnas saltan en lugar de deslizarse. Un clic en la cabecera sigue seleccionando la columna y Mayús+clic (o
+  Mayús y arrastrar) selecciona varias.
   - Todo sigue el orden de la pantalla: la selección, las flechas y Tab, **Copiar** (con cabeceras y en todos los
     formatos), la búsqueda, el panel de registro y **Exportar**, que escribe las columnas en ese orden aunque vuelva a
     leer la consulta del servidor.
