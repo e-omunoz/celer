@@ -764,6 +764,9 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     let ddl_of = |d: &mut dyn Driver, name: &str| d.ddl(&ObjectRef { database: "celer".into(), schema: owner.clone(), name: name.into(), kind: "table".into() }).unwrap();
     let p_ddl = ddl_of(d, "ddl_p");
     assert!(p_ddl.contains("PRIMARY KEY (b, a)"), "{p_ddl}");
+    d.execute("DROP TABLE IF EXISTS ddl_iv; CREATE TABLE ddl_iv (d INTERVAL DAY(5) TO HOUR, m INTERVAL MINUTE TO FRACTION(3))", 10).unwrap();
+    let iv_ddl = ddl_of(d, "ddl_iv");
+    assert!(iv_ddl.contains("d INTERVAL DAY(5) TO HOUR") && iv_ddl.contains("m INTERVAL MINUTE TO FRACTION(3)"), "{iv_ddl}");
     let c_ddl = ddl_of(d, "ddl_c");
     assert!(c_ddl.contains("UNIQUE (code)") && c_ddl.contains(&format!("FOREIGN KEY (pb, pa) REFERENCES {owner}.ddl_p (b, a) ON DELETE CASCADE")), "{c_ddl}");
 

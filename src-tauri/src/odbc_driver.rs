@@ -848,7 +848,18 @@ pub fn ifx_type(coltype: i64, len: i64, extended_id: i64) -> String {
                 format!("{name}({max})")
             }
         }
-        14 => format!("INTERVAL {}", qual_range(len)),
+        14 => {
+            // The first field can have more digits (DAY(5)): collength / 256 counts every digit of the qualifier.
+            let (first, last) = ((len % 256) / 16, len % 16);
+            let trailing: i64 = [2, 4, 6, 8, 10].iter().filter(|&&f| f > first && f <= last.min(10)).map(|_| 2).sum::<i64>() + (last - 10).max(0);
+            let leading = len / 256 - trailing;
+            let default = if first == 0 { 4 } else { 2 };
+            if first < 11 && leading > 0 && leading != default {
+                format!("INTERVAL {}({leading}) TO {}", q(first), q(last))
+            } else {
+                format!("INTERVAL {}", qual_range(len))
+            }
+        }
         15 => format!("NCHAR({len})"),
         17 => "INT8".into(),
         18 => "SERIAL8".into(),
@@ -1504,5 +1515,14 @@ mod tests {
             "DATETIME YEAR TO FRACTION(3)"
         );
         assert_eq!(ifx_type(41, 1, 5), "BOOLEAN");
+        // INTERVAL: collength / 256 is every digit, so the leading field's precision is what the others leave.
+        assert_eq!(ifx_type(14, 7 * 256 + 0x46, 0), "INTERVAL DAY(5) TO HOUR");
+        assert_eq!(ifx_type(14, 4 * 256 + 0x46, 0), "INTERVAL DAY TO HOUR");
+        assert_eq!(ifx_type(14, 5 * 256 + 0x44, 0), "INTERVAL DAY(5) TO DAY");
+        assert_eq!(ifx_type(14, 6 * 256 + 0x02, 0), "INTERVAL YEAR TO MONTH");
+        assert_eq!(ifx_type(14, 8 * 256 + 0x02, 0), "INTERVAL YEAR(6) TO MONTH");
+        assert_eq!(ifx_type(14, 6 * 256 + 0x6A, 0), "INTERVAL HOUR TO SECOND");
+        assert_eq!(ifx_type(14, 8 * 256 + 0x8D, 0), "INTERVAL MINUTE(3) TO FRACTION(3)");
+        assert_eq!(ifx_type(14, 3 * 256 + 0xBD, 0), "INTERVAL FRACTION TO FRACTION(3)");
     }
 }
