@@ -33,7 +33,8 @@ import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows,
 import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
-import { labelColorOn } from "./contrast";
+import { labelColorOn, parseColor, toHex } from "./contrast";
+import { readCustomThemes, resolveTheme, themeVars, type BuiltinTheme, type CustomTheme } from "./themes";
 import type { ColumnOrder } from "./columnOrder";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
@@ -458,18 +459,56 @@ export function connColor(conn: ConnSummary | undefined) {
 
 const LIGHT_THEMES = new Set(["light", "sand", "contrast-light"]);
 
-export function applyTheme(settings: Settings = state.settings, preview?: ThemeName) {
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const chosen = preview ?? settings.theme;
-  const theme = chosen === "system" ? (dark ? "dark" : "light") : chosen;
+/**
+ * The theme open in Ajustes › Editor de tema: the whole interface shows it live until it is saved or discarded
+ * (src/components/ThemeEditor.tsx).
+ */
+export const [themeDraft, setThemeDraft] = createSignal<CustomTheme | null>(null);
+
+/** Properties the last applied custom theme set on <html> (cleared before the next one). */
+let themeProps: string[] = [];
+
+/** The theme a choice comes to now (system mode, custom themes): its built-in base and the custom theme, if any. */
+export function currentTheme(settings: Settings = state.settings, choice: string = settings.theme) {
+  return resolveTheme(choice, {
+    systemDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+    lightChoice: settings.systemLight ?? "light",
+    darkChoice: settings.systemDark ?? "dark",
+    themes: settings.customThemes ?? [],
+  });
+}
+
+/** Rows of the explorer and the grid: the theme's row height, or the density's. */
+export function rowHeight(): number {
+  const custom = themeDraft() ?? currentTheme().custom;
+  return custom?.rowHeight ?? (state.settings.density === "comfortable" ? 28 : 24);
+}
+
+/** A readable label on a fill written in any CSS colour the browser computes (white when it cannot tell). */
+function labelOn(fill: string): string {
+  const parsed = parseColor(fill);
+  return parsed ? labelColorOn(toHex(parsed)) : labelColorOn(fill);
+}
+
+export function applyTheme(settings: Settings = state.settings, preview?: string) {
+  const resolved = currentTheme(settings, preview);
+  // The theme being edited shows instead of the chosen one, except while a theme card is hovered (a preview).
+  const custom = preview === undefined ? themeDraft() ?? resolved.custom : resolved.custom;
+  const theme: BuiltinTheme = custom?.base ?? resolved.base;
   setResolvedTheme(theme);
   const root = document.documentElement;
   root.dataset.theme = theme;
   root.dataset.density = settings.density;
   root.dataset.motion = reducedMotion(settings) ? "reduce" : "full";
-  root.style.setProperty("--accent", settings.accent);
+  root.dataset.customTheme = custom ? custom.id : "";
+  for (const name of themeProps) root.style.removeProperty(name);
+  const vars = custom ? themeVars(custom) : {};
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  themeProps = Object.keys(vars);
+  const accent = vars["--accent"] ?? settings.accent;
+  root.style.setProperty("--accent", accent);
   // White on Clay, Ember, Teal or Green is below 4.5:1: those buttons get a black label.
-  root.style.setProperty("--accent-fg", labelColorOn(settings.accent));
+  root.style.setProperty("--accent-fg", vars["--accent-fg"] ?? labelOn(accent));
   root.style.fontSize = `${settings.fontSize}px`;
   if (isTauri()) {
     import("@tauri-apps/api/window")
@@ -495,7 +534,7 @@ export async function boot() {
   try {
     const loaded = await api().loadJson("settings");
     if (loaded && typeof loaded === "object") {
-      setState("settings", { ...defaultSettings, ...(loaded as Settings) });
+      setState("settings", withThemes({ ...defaultSettings, ...(loaded as Settings) }));
     }
   } catch (err) {
     // Defaults this time (a damaged file was set aside, or it could not be read: the message says which). One
@@ -685,6 +724,11 @@ export async function beforeClose(): Promise<boolean> {
   return true;
 }
 
+/** Settings with their custom themes checked (a hand-edited or damaged entry is left out, never applied). */
+function withThemes(settings: Settings): Settings {
+  return { ...settings, customThemes: readCustomThemes(settings.customThemes) };
+}
+
 /** settings.json could not be read at start-up but is still there: changes apply only to this session. */
 let settingsUnreadable = false;
 
@@ -703,7 +747,7 @@ export async function saveSettings(patch: Partial<Settings>) {
 
 /** Settings changed by another window (the core sends the whole file). */
 export function applySharedSettings(value: Partial<Settings>) {
-  setState("settings", { ...defaultSettings, ...value });
+  setState("settings", withThemes({ ...defaultSettings, ...value } as Settings));
   applyTheme();
 }
 

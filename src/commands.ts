@@ -120,6 +120,7 @@ export function commands(): Command[] {
     { id: "er-table", label: "Diagrama de relaciones de la tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void openErDiagram(tab.connId, erSchemaPath(tab.connId, tab.obj, tab.database), tab.obj); }, enabled: () => { const tab = activeTab(); return tab?.kind === "table" && tab.obj.kind === "table"; } },
     { id: "reload-table", label: "Recargar tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void reloadTableSafe(tab.id); }, enabled: () => activeTab()?.kind === "table" },
     { id: "settings", label: "Ajustes…", group: "Preferencias", run: () => setState("settingsOpen", true) },
+    { id: "theme-editor", label: "Editor de tema…", group: "Tema", run: () => setState({ settingsOpen: true, settingsSection: "theme-editor" }) },
     { id: "zebra", label: "Filas alternas en la tabla de resultados", group: "Preferencias", run: () => void saveSettings({ zebra: !state.settings.zebra }) },
     { id: "density", label: "Densidad: compacta / cómoda", group: "Preferencias", run: () => void saveSettings({ density: state.settings.density === "compact" ? "comfortable" : "compact" }) },
     { id: "font-up", label: "Aumentar tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.min(24, state.settings.editorFontSize + 1) }) },
@@ -133,6 +134,9 @@ export function commands(): Command[] {
   ];
   for (const theme of THEMES) {
     list.push({ id: `theme-${theme.id}`, label: `Tema: ${theme.label}`, group: "Tema", run: () => void saveSettings({ theme: theme.id }) });
+  }
+  for (const theme of state.settings.customThemes) {
+    list.push({ id: `theme-custom-${theme.id}`, label: `Tema: ${theme.name}`, hint: "Tema propio", group: "Tema", run: () => void saveSettings({ theme: `custom:${theme.id}` }) });
   }
   // The other windows open now ("window:" commands are not offered for shortcuts: the windows come and go).
   for (const w of otherFullWindows()) {

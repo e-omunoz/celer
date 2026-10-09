@@ -286,12 +286,33 @@ Gib vive en una sola ventana: la que estás usando.
 
 *Ajustes* (Ctrl+Alt+S):
 
-- **Apariencia**: ocho temas, color de acento, densidad, tamaño de la interfaz, Gib y animaciones.
+- **Apariencia**: ocho temas y los tuyos, color de acento, densidad, tamaño de la interfaz, Gib y animaciones. Con
+  *Seguir al sistema* eliges qué tema usar cuando el sistema está en modo claro y cuál en modo oscuro (también temas
+  propios).
 - **Editor y resultados**: tamaño del editor, filas por página, filas alternas y parámetros.
 - **Plantillas**: las tuyas, junto a las de serie.
 - **Atajos de teclado**: pulsa **+** junto a una acción y después la combinación. Si ya la usa otra acción, Celer
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.
 - **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción.
+
+### Editor de tema
+
+*Ajustes › Apariencia › Editor de tema* (o *Editor de tema…* en la paleta) crea un tema propio a partir de cualquiera
+de serie. Mientras lo editas, toda la interfaz lo muestra en vivo; la muestra de la derecha reúne explorador,
+pestañas, editor, resultados, un diálogo y a Gib para verlo de un vistazo.
+
+- **General**: el tema base (lo que no cambies se toma de él, y decide si es claro u oscuro), la fuente de la
+  interfaz y la del editor (cualquier fuente instalada), el radio de las esquinas, la altura de las filas de
+  resultados, las sombras y la velocidad de las animaciones.
+- **Colores**, por grupos: superficies, texto, bordes, acento, estados, tabla de resultados, editor y sintaxis,
+  explorador y Gib. Cada color se elige con el selector o se escribe (`#1e1f22`, `rgb(0 0 0 / 0.4)`…); el botón de la
+  flecha vuelve al del tema base.
+- **Contraste**: cada par de texto y fondo muestra su relación de contraste y avisa de los que no llegan a AA.
+- *Guardar*, *Guardar y usar*, *Descartar cambios*; arriba, tema nuevo, duplicar, importar, exportar y borrar. El
+  nombre se cambia en su campo.
+
+Un tema exportado es un fichero `.celer-theme.json`: al importarlo en otro equipo se ve igual (lleva su color de
+acento). Los temas propios aparecen junto a los de serie, en la paleta (*Tema: …*) y en las ventanas separadas.
 
 ## Gib
 

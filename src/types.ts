@@ -1,3 +1,5 @@
+import type { CustomTheme } from "./themes";
+
 export type Cell = null | boolean | number | string;
 
 export type ColKind = "number" | "text" | "bool" | "date" | "binary" | "other";
@@ -186,6 +188,8 @@ export interface ExportOptions {
 }
 
 export type ThemeName = "system" | "light" | "dark" | "darcula" | "contrast" | "contrast-light" | "fjord" | "sand";
+/** A built-in theme, "system", or a custom theme ("custom:<id>", src/themes.ts). */
+export type ThemeChoice = ThemeName | `custom:${string}`;
 
 export type CompanionMode = "off" | "quiet" | "normal";
 
@@ -199,7 +203,12 @@ export const ACCENTS = [
 ] as const;
 
 export interface Settings {
-  theme: ThemeName;
+  theme: ThemeChoice;
+  /** With the theme "Seguir al sistema": the theme for the system's light mode and for its dark mode. */
+  systemLight: ThemeChoice;
+  systemDark: ThemeChoice;
+  /** The user's own themes (Ajustes › Apariencia › Editor de tema). */
+  customThemes: CustomTheme[];
   accent: string;
   fontSize: number;
   editorFontSize: number;
@@ -271,6 +280,9 @@ export interface UpdateInfo {
 
 export const defaultSettings: Settings = {
   theme: "dark",
+  systemLight: "light",
+  systemDark: "dark",
+  customThemes: [],
   accent: "#D97757",
   fontSize: 13,
   editorFontSize: 13,

@@ -15,7 +15,11 @@ import {
   setState,
   state,
 } from "../state";
-import { ACCENTS, type ThemeName } from "../types";
+import { ACCENTS, type ThemeChoice } from "../types";
+import { ThemeEditor } from "./ThemeEditor";
+import { choiceOf, setAccent } from "../themeStore";
+import { themeVars, type CustomTheme } from "../themes";
+import { Pencil, Plus } from "lucide-solid";
 import { CodeView } from "./Editor";
 import { ExportDialog } from "./ExportDialog";
 import { AiSettings } from "./AiSettings";
@@ -181,19 +185,33 @@ function SettingsDialog() {
   const section = () => (SECTIONS.some(([id]) => id === state.settingsSection) ? state.settingsSection : "appearance") as Section;
   const setSection = (id: Section) => setState("settingsSection", id);
   const s = () => state.settings;
+  /** The theme editor in place of the appearance section: the id of the theme it opens with ("" the one in use). */
+  const [editing, setEditing] = createSignal<string | null>(state.settingsSection === "theme-editor" ? "" : null);
+  const themeEditing = () => editing() !== null && section() === "appearance";
   const close = () => {
     applyTheme();
     setState({ settingsOpen: false, settingsSection: "appearance" });
   };
+  const choices = () => [
+    ...themeChoices.filter((theme) => theme.id !== "system").map((theme) => ({ id: theme.id as string, label: theme.label })),
+    ...s().customThemes.map((theme) => ({ id: choiceOf(theme) as string, label: theme.name })),
+  ];
   return (
-    <Dialog title="Ajustes" wide class="settings" onClose={close}>
+    <Dialog title={themeEditing() ? "Ajustes › Editor de tema" : "Ajustes"} wide class="settings" onClose={close}>
       <div class="settings-layout">
         <nav class="settings-nav">
           <For each={SECTIONS}>{([id, label]) => <button type="button" classList={{ on: section() === id }} onClick={() => setSection(id)}>{label}</button>}</For>
         </nav>
         <div class="settings-body">
-          <Show when={section() === "appearance"}>
-            <h4>Tema</h4>
+          <Show when={themeEditing()}>
+            <ThemeEditor edit={editing() || undefined} onBack={() => setEditing(null)} />
+          </Show>
+          <Show when={section() === "appearance" && !themeEditing()}>
+            <div class="settings-title-row">
+              <h4>Tema</h4>
+              <span class="spacer" />
+              <button type="button" class="btn tiny" onClick={() => setEditing("")}><Pencil size={12} /> Editor de tema</button>
+            </div>
             <div class="theme-grid">
               <For each={themeChoices}>
                 {(theme) => (
@@ -203,21 +221,57 @@ function SettingsDialog() {
                     classList={{ on: s().theme === theme.id }}
                     onMouseEnter={() => applyTheme(state.settings, theme.id)}
                     onMouseLeave={() => applyTheme()}
-                    onClick={() => void saveSettings({ theme: theme.id as ThemeName })}
+                    onClick={() => void saveSettings({ theme: theme.id as ThemeChoice })}
                   >
                     <ThemePreview theme={theme.id} />
                     <span>{theme.label}</span>
                   </button>
                 )}
               </For>
+              <For each={s().customThemes}>
+                {(theme) => (
+                  <div class="theme-card custom" classList={{ on: s().theme === choiceOf(theme) }}>
+                    <button
+                      type="button"
+                      class="theme-card-pick"
+                      onMouseEnter={() => applyTheme(state.settings, choiceOf(theme))}
+                      onMouseLeave={() => applyTheme()}
+                      onClick={() => void saveSettings({ theme: choiceOf(theme) })}
+                    >
+                      <ThemePreview theme={theme.base} custom={theme} />
+                      <span>{theme.name}</span>
+                    </button>
+                    <button type="button" class="icon-btn tiny theme-card-edit" title={`Editar «${theme.name}»`} onClick={() => setEditing(theme.id)}><Pencil size={11} /></button>
+                  </div>
+                )}
+              </For>
+              <button type="button" class="theme-card new" onClick={() => setEditing("new")}>
+                <span class="theme-new-icon"><Plus size={18} /></span>
+                <span>Nuevo tema…</span>
+              </button>
             </div>
+            <div class="form-row system-themes">
+              <label class="field">
+                <span>Con el sistema en modo claro</span>
+                <select value={s().systemLight} onChange={(event) => void saveSettings({ systemLight: event.currentTarget.value as ThemeChoice })}>
+                  <For each={choices()}>{(item) => <option value={item.id}>{item.label}</option>}</For>
+                </select>
+              </label>
+              <label class="field">
+                <span>Con el sistema en modo oscuro</span>
+                <select value={s().systemDark} onChange={(event) => void saveSettings({ systemDark: event.currentTarget.value as ThemeChoice })}>
+                  <For each={choices()}>{(item) => <option value={item.id}>{item.label}</option>}</For>
+                </select>
+              </label>
+            </div>
+            <p class="settings-note">«Seguir al sistema» usa estos dos; también pueden ser temas propios.</p>
             <h4>Color de acento</h4>
             <div class="swatches">
               <For each={ACCENTS}>
-                {(item) => <button type="button" class="swatch big" classList={{ on: s().accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void saveSettings({ accent: item.value })} />}
+                {(item) => <button type="button" class="swatch big" classList={{ on: s().accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void setAccent(item.value)} />}
               </For>
               <label class="swatch big custom" title="Personalizado">
-                <input type="color" value={s().accent} onChange={(event) => void saveSettings({ accent: event.currentTarget.value })} />
+                <input type="color" value={s().accent} onChange={(event) => void setAccent(event.currentTarget.value)} />
               </label>
             </div>
             <div class="form-row">
@@ -301,11 +355,16 @@ function NumberStepper(props: { value: number; min: number; max: number; onChang
   );
 }
 
-/** A miniature of the real workspace rendered with a theme's tokens. */
-function ThemePreview(props: { theme: string }) {
+/**
+ * A miniature of the real workspace rendered with a theme's tokens (and a custom theme's own on top). The dark
+ * tokens go first, as every theme starts from them, so a theme that redefines only some never borrows the others
+ * from the theme in use.
+ */
+function ThemePreview(props: { theme: string; custom?: CustomTheme }) {
   const theme = () => (props.theme === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : props.theme);
   return (
-    <div class="theme-preview" data-theme-preview={theme()}>
+    <div class="theme-preview-base" data-theme-preview="dark">
+    <div class="theme-preview" data-theme-preview={theme()} style={props.custom ? themeVars(props.custom) : undefined}>
       <div class="tp-side">
         <i /><i /><i class="t" /><i class="t" /><i />
       </div>
@@ -316,6 +375,7 @@ function ThemePreview(props: { theme: string }) {
         </div>
         <div class="tp-grid"><i /><i /><i /></div>
       </div>
+    </div>
     </div>
   );
 }

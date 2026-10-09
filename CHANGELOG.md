@@ -6,6 +6,17 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Theme editor** (#107): *Ajustes › Apariencia › Editor de tema* (also *Editor de tema…* in the palette) makes a
+  custom theme from any built-in one. Every token can be changed, grouped (surfaces, text, borders, accent, states,
+  results grid, editor and syntax, explorer, Gib), with the UI and editor fonts, corner radius, results row height,
+  shadows and animation speed; the whole interface shows it live, next to a sample of the explorer, tabs, editor,
+  grid, a dialog and Gib. A contrast checker measures each text/background pair and warns below WCAG AA. Themes are
+  saved, duplicated, renamed, deleted, exported to and imported from a `.celer-theme.json` file (it carries its
+  accent, so it looks the same on another machine), show next to the built-in ones and in the palette, and tear-off
+  windows follow them. *Seguir al sistema* now lets you pick the theme for the system's light mode and for its dark
+  mode, custom themes included.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added
