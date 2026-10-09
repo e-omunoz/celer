@@ -3,7 +3,9 @@
 //!
 //! The bridge and its protocol know nothing of any engine: the driver class, its jars, the URL and the properties
 //! come with each connection, so any JDBC driver can be added (see docs/DRIVERS.md). What is Informix's (URL,
-//! properties such as FET_BUF_SIZE, the dialect above) lives here and in odbc_driver.rs.
+//! properties such as FET_BUF_SIZE, the dialect above) lives here and in odbc_driver.rs. The one exception is
+//! LO_READ, which reads an Informix smart large object descriptor through the driver's own class (found by
+//! reflection): the CDC API hands its change records over that way (rowhistory.rs).
 //!
 //! Celer's bridge (`bridge/CelerBridge.java`, embedded by build.rs) runs in one JVM shared by the whole app: a child
 //! process that talks to Celer only through its stdin and stdout, never a network port. It starts once (the first
@@ -19,6 +21,8 @@
 //!   vendor code. The bridge's first frame, unasked, is its hello: name, protocol version, Java version and vendor.
 //! - Values: unsigned LEB128 varints, zigzag varints for signed numbers, strings as a varint length plus UTF-8,
 //!   doubles as 8 little-endian bytes.
+//! - LO_READ: body varint descriptor and varint maximum; reply the bytes read (varint length + bytes), which may be
+//!   none. It waits as long as the descriptor's owner says (a CDC session's timeout).
 //! - Rows travel in batches: u32 row count, u8 "more rows remain", and for each row a null bitmap (bit i % 8 of byte
 //!   i / 8 for column i) followed by the values that are not null, as the column's wire type says: bool (u8), int
 //!   (zigzag), double, text (string) or bytes (varint length + bytes).
@@ -54,6 +58,7 @@ const OP_COMMIT: u8 = 7;
 const OP_ROLLBACK: u8 = 8;
 const OP_CANCEL: u8 = 9;
 const OP_CLOSE: u8 = 10;
+const OP_LO_READ: u8 = 11;
 
 const W_BOOL: u8 = 1;
 const W_INT: u8 = 2;
@@ -730,6 +735,15 @@ impl JdbcConn {
         b.u8(self.page_fetch as u8);
         let reply = noting_reset(&self.reset, self.bridge.call(self.session, OP_EXEC, &b.0, None))?;
         JdbcStmt::from_exec(self.bridge.clone(), self.session, self.page_fetch, self.reset.clone(), &reply)
+    }
+
+    /// Up to `max` bytes of an Informix smart large object descriptor open on this connection (a CDC session).
+    pub fn lo_read(&self, fd: i32, max: usize) -> Result<Vec<u8>> {
+        let mut b = Out::default();
+        b.varint(fd as u32 as u64);
+        b.varint(max as u64);
+        let reply = noting_reset(&self.reset, self.bridge.call(self.session, OP_LO_READ, &b.0, None))?;
+        Ok(In::new(&reply).bytes()?.to_vec())
     }
 
     fn simple(&self, op: u8, body: &[u8]) -> Result<()> {

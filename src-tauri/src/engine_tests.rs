@@ -1107,3 +1107,98 @@ fn informix_jdbc_reconnects() {
     let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
     informix_reconnect_suite("JDBC", &connect, &mut admin);
 }
+
+/// «Historial de la fila» over JDBC (rowhistory.rs): a row inserted and updated three times, another inserted and
+/// deleted, read back from the logical logs through the CDC API, with full row logging turned on only for the read.
+/// The preconditions that stop it (no log, RAW table, no key, read-only) answer with their reason.
+#[test]
+fn informix_jdbc_row_history() {
+    use crate::rowhistory::{self, KeyPart, Request};
+    use std::sync::atomic::AtomicBool;
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let _guard = watchdog("historial de la fila", 240);
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    let db = d.current_database().unwrap();
+    // A run cut short (the watchdog) may have left full row logging on, which forbids the DROP.
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.rh_t', 0)", cfg.user), 10);
+    for sql in [
+        "DROP TABLE IF EXISTS rh_t",
+        "CREATE TABLE rh_t (id INT PRIMARY KEY, nombre VARCHAR(40), qty INT, precio DECIMAL(10,2), momento DATETIME YEAR TO SECOND, notas TEXT)",
+        "INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES (1, 'alfa', 10, 1.50, DATETIME(2024-03-15 10:20:30) YEAR TO SECOND)",
+        "INSERT INTO rh_t (id, nombre, qty, precio) VALUES (2, 'beta', 20, 2.50)",
+        "UPDATE rh_t SET qty = 11 WHERE id = 1",
+        "UPDATE rh_t SET nombre = 'alfa-2', precio = 1.75 WHERE id = 1",
+        "UPDATE rh_t SET qty = 12, momento = NULL WHERE id = 1",
+        "DELETE FROM rh_t WHERE id = 2",
+        "DROP TABLE IF EXISTS rh_raw",
+        "CREATE RAW TABLE rh_raw (id INT)",
+    ] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    let conn = crate::jdbc::JdbcConn::connect(&cfg, rt, crate::jdbc::informix_params).expect("conexión para el historial");
+    let stop = AtomicBool::new(false);
+    let request = |database: &str, table: &str, id: Option<&str>, enable: bool| Request {
+        database: database.into(),
+        owner: String::new(),
+        table: table.into(),
+        key: id.map(|v| vec![KeyPart { column: "id".into(), value: v.into() }]).unwrap_or_default(),
+        enable_full_row_logging: enable,
+    };
+    let ask = |table: &str, id: &str, enable: bool| rowhistory::run(&conn, &request(&db, table, Some(id), enable), false, &cfg.user, &stop).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
+    let raw = ask("rh_raw", "1", true);
+    assert!(raw.status == "unavailable" && raw.reason.contains("RAW"), "{raw:?}");
+    let no_key = rowhistory::run(&conn, &request(&db, "rh_t", None, true), false, &cfg.user, &stop).unwrap();
+    assert!(no_key.reason.contains("clave primaria"), "{no_key:?}");
+
+    let first = ask("rh_t", "1", false);
+    if first.status == "unavailable" && first.reason.contains("syscdcv1") {
+        println!("Historial de la fila: el servidor no tiene syscdcv1 ({}): solo se comprueba que lo dice", first.reason);
+        return;
+    }
+    assert_eq!(first.status, "needsFullRowLogging", "{first:?}");
+    assert!(first.reason.contains("full row logging"), "{}", first.reason);
+    // A read-only connection does not change the server.
+    let ro = rowhistory::run(&conn, &request(&db, "rh_t", Some("1"), true), true, &cfg.user, &stop).unwrap();
+    assert!(ro.status == "unavailable" && ro.reason.contains("solo lectura"), "{ro:?}");
+
+    let t0 = Instant::now();
+    let h = ask("rh_t", "1", true);
+    println!(
+        "Historial de la fila 1 en {:?}: {:?}\n  rango {:?}\n  parcial {:?}\n  notas {:?}",
+        t0.elapsed(),
+        h.events.iter().map(|e| (e.op, &e.lsn, e.time, &e.user, &e.after)).collect::<Vec<_>>(),
+        h.range,
+        h.partial,
+        h.notes
+    );
+    assert_eq!(h.status, "ok", "{h:?}");
+    assert_eq!(h.columns, vec!["id", "qty", "precio", "momento", "nombre"], "fixed-length columns first, as CDC sends them");
+    assert_eq!(h.skipped, vec!["notas"], "TEXT is not captured");
+    let s = |v: &[&str]| v.iter().map(|x| if *x == "NULL" { None } else { Some(x.to_string()) }).collect::<Vec<_>>();
+    assert_eq!(h.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update", "update", "update"]);
+    assert_eq!(h.events[0].after, Some(s(&["1", "10", "1.50", "2024-03-15 10:20:30", "alfa"])));
+    assert_eq!(h.events[1].before, h.events[0].after);
+    assert_eq!(h.events[1].after, Some(s(&["1", "11", "1.50", "2024-03-15 10:20:30", "alfa"])));
+    assert_eq!(h.events[2].after, Some(s(&["1", "11", "1.75", "2024-03-15 10:20:30", "alfa-2"])));
+    assert_eq!(h.events[3].after, Some(s(&["1", "12", "1.75", "NULL", "alfa-2"])));
+    assert!(h.events.iter().all(|e| e.user.as_deref() == Some(cfg.user.as_str())), "the user of each change");
+    assert!(h.partial.is_empty(), "inserted inside the logs on disk: complete ({:?})", h.partial);
+    assert!(h.notes.iter().any(|n| n.contains("full row logging")), "{:?}", h.notes);
+    let range = h.range.as_ref().expect("the log range");
+    assert!(range.first_log > 0 && range.current_log >= range.first_log, "{range:?}");
+    // Full row logging is off again: the next read asks for it once more.
+    assert_eq!(ask("rh_t", "1", false).status, "needsFullRowLogging");
+
+    let gone = ask("rh_t", "2", true);
+    assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"]);
+    assert_eq!(gone.events[1].before, Some(s(&["2", "20", "2.50", "NULL", "beta"])));
+    // A key with no change in the logs: nothing invented, and said to be partial.
+    let none = ask("rh_t", "99", true);
+    assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");
+
+    // A database without log (creating it moves the connection there: the RAW table goes first).
+    d.execute("DROP TABLE rh_raw", 10).unwrap();
+    let _ = d.execute("CREATE DATABASE celer_nolog", 10);
+    let nolog = rowhistory::run(&conn, &request("celer_nolog", "x", Some("1"), true), false, &cfg.user, &stop).unwrap();
+    assert!(nolog.status == "unavailable" && nolog.reason.contains("no tiene log"), "{nolog:?}");
+}

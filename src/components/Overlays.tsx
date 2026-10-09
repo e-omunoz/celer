@@ -89,7 +89,10 @@ export function ContextMenu() {
                   item.run?.();
                 }}
               >
-                <span class="menu-label">{item.label}</span>
+                <span class="menu-label" title={item.note}>
+                  {item.label}
+                  <Show when={item.note}><small class="menu-note">{item.note}</small></Show>
+                </span>
                 <Show when={item.hint}><kbd>{item.hint}</kbd></Show>
               </button>
             )

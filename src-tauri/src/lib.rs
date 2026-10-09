@@ -13,6 +13,7 @@ mod odbc;
 mod odbc_driver;
 mod postgres;
 mod probe;
+mod rowhistory;
 mod session;
 mod sheets;
 mod sqlite;
@@ -783,6 +784,42 @@ async fn run_export(
     .await
 }
 
+/// «Historial de la fila» (rowhistory.rs): the row's past values from Informix's logical logs, on a connection of its
+/// own. `history_id` registers it for `cancel`, which stops the read between two reads of the CDC session. Engines
+/// and protocols without it answer «unavailable» with the reason, never an error.
+#[tauri::command]
+async fn row_history(
+    state: State<'_, Arc<AppState>>,
+    conn_id: String,
+    password: Option<String>,
+    history_id: String,
+    request: rowhistory::Request,
+) -> CmdResult<rowhistory::History> {
+    let mut cfg = state.conn(&conn_id)?;
+    let mode = if cfg.kind == DbKind::Informix { informix_mode(&cfg) } else { "" };
+    if let Some(reason) = rowhistory::unavailable(cfg.kind, mode) {
+        return Ok(rowhistory::History::unavailable(reason));
+    }
+    if password.as_deref().is_some_and(|p| !p.is_empty()) {
+        cfg.password = password;
+    } else if !cfg.integrated_auth {
+        cfg.password = state.store.get_password(&cfg.id).or(cfg.password);
+    }
+    let (rt, _) = jdbc_runtime(&state.store)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    state.exports.lock().insert(history_id.clone(), stop.clone());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let spawned = std::thread::Builder::new().name("celer-row-history".into()).spawn(move || {
+        let _ = tx.send(rowhistory::read(cfg, rt, request, &stop));
+    });
+    let res = match spawned {
+        Ok(_) => rx.await.map_err(|_| "La lectura del historial terminó inesperadamente".to_string()).and_then(|r| r.map_err(err)),
+        Err(e) => Err(err(e)),
+    };
+    state.exports.lock().remove(&history_id);
+    res
+}
+
 // Off the main thread: both read history.jsonl, and adding may compact it.
 #[tauri::command(async)]
 fn add_history(state: State<'_, Arc<AppState>>, entry: HistoryEntry) -> CmdResult<()> {
@@ -1423,6 +1460,7 @@ pub fn run() {
             object_sql,
             quote_idents,
             export_query,
+            row_history,
             add_history,
             get_history,
             clear_history,

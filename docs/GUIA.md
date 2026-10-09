@@ -192,6 +192,17 @@ Doble clic en una tabla del explorador la abre.
   ese orden.
 - **Importar datos** (menú de la tabla): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con mapeo de columnas y
   todo en una transacción.
+- **Historial de la fila** (Informix, menú de una fila): los cambios de esa fila que quedan en los logs lógicos del
+  servidor, del más reciente al más antiguo, con la hora, la transacción, el usuario y cada columna antes → después
+  («Ver la fila en este momento» enseña la fila entera tras ese cambio). Se lee con la API CDC de Informix, así que:
+  - Hace falta la conexión por **JDBC** (por DRDA o por el Client SDK no se puede), una base de datos **con log**, la
+    base `syscdcv1` (un administrador la crea una vez con `dbaccess - $INFORMIXDIR/etc/syscdcv1.sql`) y un usuario que
+    pueda usar la API CDC (el usuario `informix`).
+  - La API exige *full row logging* en la tabla. Si no lo tiene, Celer lo dice y ofrece activarlo **solo durante la
+    lectura** y desactivarlo al terminar; los cambios anteriores se siguen leyendo enteros.
+  - Solo llega hasta el log más antiguo que queda en disco: el historial dice qué logs cubre y, si la fila ya existía
+    antes o su clave cambió, lo marca como **parcial**. Nunca se rellena un valor que el log no tenga.
+  - En los demás motores la opción aparece desactivada con «No disponible en …».
 
 Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,
 UPSERT/MERGE, DELETE, DROP y su DDL.

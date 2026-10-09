@@ -29,6 +29,8 @@ import { DataCompareView } from "./DataCompareView";
 import { dataCompare } from "../dataCompareRun";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
+import { rowHistory } from "../rowHistory";
+import { RowHistoryDialog } from "./RowHistory";
 import { checkForUpdates, openReleasePage } from "../update";
 import { isDetached, isPanelWindow } from "../windows";
 import { DriversSettings, InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
@@ -41,6 +43,7 @@ export function Modals() {
       <Show when={state.settingsOpen}><SettingsDialog /></Show>
       <Show when={state.exportOpen}><ExportDialog /></Show>
       <Show when={importer.open}><ImportDialog /></Show>
+      <Show when={rowHistory.open}><RowHistoryDialog /></Show>
       <Show when={state.aboutOpen}><AboutDialog /></Show>
       <Show when={state.previewSql}>
         <Dialog title="Revisar cambios antes de guardar" wide onClose={() => setState({ previewSql: "", previewRun: null })}>

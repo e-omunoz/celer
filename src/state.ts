@@ -228,6 +228,8 @@ export type SavedTab = SavedSqlTab | SavedTableTab;
 export interface MenuItem {
   label?: string;
   hint?: string;
+  /** A line under the label (why the entry is disabled…). */
+  note?: string;
   icon?: string;
   danger?: boolean;
   disabled?: boolean;

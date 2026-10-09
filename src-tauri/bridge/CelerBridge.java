@@ -16,6 +16,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -49,7 +52,7 @@ public final class CelerBridge {
     static final int PROTOCOL = 1;
 
     static final int OP_LOAD = 1, OP_CONNECT = 2, OP_EXEC = 3, OP_FETCH = 4, OP_CLOSE_CURSOR = 5, OP_AUTOCOMMIT = 6,
-            OP_COMMIT = 7, OP_ROLLBACK = 8, OP_CANCEL = 9, OP_CLOSE = 10;
+            OP_COMMIT = 7, OP_ROLLBACK = 8, OP_CANCEL = 9, OP_CLOSE = 10, OP_LO_READ = 11;
 
     // How a value travels: the row format is a null bitmap plus these values (see jdbc.rs).
     static final int W_BOOL = 1, W_INT = 2, W_DOUBLE = 3, W_TEXT = 4, W_BYTES = 5;
@@ -257,6 +260,9 @@ public final class CelerBridge {
         volatile Req current;
         /** Cut off by a cancel that did not stop: the thread ends when the driver gives it back. */
         volatile boolean dead;
+        /** The driver's smart large object reader for this connection (Informix only, see `loRead`). */
+        Object smartBlob;
+        Method loReadMethod;
 
         Session(int id) {
             super("celer-session-" + id);
@@ -382,6 +388,11 @@ public final class CelerBridge {
                 case OP_CLOSE:
                     closeAll();
                     return new Buf();
+                case OP_LO_READ: {
+                    int fd = (int) in.varint();
+                    int max = (int) Math.min(in.varint(), 1 << 20);
+                    return loRead(fd, max);
+                }
                 default:
                     throw new SQLException("Operación desconocida: " + r.op);
             }
@@ -443,7 +454,49 @@ public final class CelerBridge {
             }
         }
 
+        /**
+         * Reads up to `max` bytes of an open smart large object descriptor of this connection. The one operation that
+         * knows an engine: Informix's CDC API hands its change records over as a smart large object whose descriptor
+         * is the CDC session (src-tauri/src/rowhistory.rs). The driver's IfxSmartBlob is found by reflection, so the
+         * bridge still compiles and runs with no driver at all; the call waits as long as the CDC session's timeout.
+         */
+        Buf loRead(int fd, int max) throws Exception {
+            Connection c = conn();
+            if (smartBlob == null) {
+                Class<?> cls;
+                try {
+                    cls = Class.forName("com.informix.jdbc.IfxSmartBlob", true, c.getClass().getClassLoader());
+                } catch (ClassNotFoundException e) {
+                    throw new SQLException("El driver de esta conexión no lee objetos grandes de Informix (IfxSmartBlob)");
+                }
+                Object reader = null;
+                for (Constructor<?> k : cls.getConstructors()) {
+                    if (k.getParameterCount() == 1 && k.getParameterTypes()[0].isInstance(c)) {
+                        reader = k.newInstance(c);
+                        break;
+                    }
+                }
+                if (reader == null) throw new SQLException("IfxSmartBlob no acepta esta conexión");
+                loReadMethod = cls.getMethod("IfxLoRead", int.class, byte[].class, int.class);
+                smartBlob = reader;
+            }
+            byte[] data = new byte[max];
+            int n;
+            try {
+                n = (Integer) loReadMethod.invoke(smartBlob, fd, data, max);
+            } catch (InvocationTargetException e) {
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                if (cause instanceof Exception) throw (Exception) cause;
+                throw new SQLException(cause.toString(), cause);
+            }
+            Buf b = new Buf();
+            b.bytes(data, Math.max(0, n));
+            return b;
+        }
+
         void closeAll() {
+            smartBlob = null;
+            loReadMethod = null;
             for (Cursor c : cursors.values()) c.finish();
             cursors.clear();
             if (conn != null) {

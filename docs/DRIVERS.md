@@ -153,7 +153,9 @@ with the Java it found.
   inside the answer to the query and a 4 MB cap per batch. The protocol is described at the top of `jdbc.rs`.
 - **Nothing engine-specific in the bridge or its protocol**: the driver class, its jars, the URL and the properties
   come with each connection, and the driver is loaded in a class loader of its own. The password travels in those
-  properties, through the pipe: never on a command line, in the environment or in a log.
+  properties, through the pipe: never on a command line, in the environment or in a log. The one exception is
+  `LO_READ`, which reads an Informix smart large object descriptor through the driver's `IfxSmartBlob`, found by
+  reflection (the bridge still has no compile-time dependency): the CDC API hands its records over that way (below).
 - Java is started directly (no shell in between) with fixed arguments and without a console window
   (`CREATE_NO_WINDOW`), from the bridge's folder; it writes nothing outside Celer's data folder (`-XX:-UsePerfData`,
   `java.io.tmpdir` there, and on JDK 19+ a class-data archive next to the jar that speeds up the next start).
@@ -165,6 +167,40 @@ properties (`FET_BUF_SIZE=262144`, the fastest in the engine tests' 200,000-row 
 `CLIENT_LOCALE` from the environment unless given) and the
 user's "Parámetros extra", which win over Celer's. `DELIMIDENT` is not set: Celer writes Informix names unquoted, as
 on the other protocols.
+
+### Row history from the logical logs (CDC)
+
+«Historial de la fila» (`rowhistory.rs`, issue #123) reads a row's past values from Informix's logical logs through the
+CDC API (`syscdcv1`), on a JDBC connection of its own. Measured on Informix 15 (the spike report is on the issue):
+
+- `onlog` has every before and after image, but it runs on the server host and prints raw rows by rowid: not usable
+  from a client.
+- A CDC session (`cdc_opensess`, `cdc_startcapture` for the table's capturable columns, `cdc_activatesess` from the
+  start of the oldest log on disk) returns committed inserts, update before/after pairs and deletes with full values,
+  also for changes made **before** full row logging was turned on (Informix logged whole rows for every update
+  tested, up to rows spanning pages). The records are read as a smart large object whose descriptor is the session id,
+  which only SQLI offers: JDBC (the bridge's `LO_READ`) yes, DRDA no; the Client SDK path is not wired.
+- `cdc_startcapture` refuses a table without full row logging (-83706). Its state is bit `0x04000000` of
+  `sysmaster:sysptnhdr.flags`. Celer never turns it on by itself: the user may allow it for one read, and Celer turns
+  it off again after (a read-only connection refuses).
+- An ordinary user (CONNECT only) gets -674 on the CDC routines: `informix` was the user that could run them.
+- An LSN in a log no longer on disk gives -83713; the read then starts at the next log. Logs only in a backup are out
+  of reach.
+- A dropped table can leave records under the same partnum. The read starts at the log where the table was created
+  (the first one that filled after `sysptnhdr.created`), changes committed before that time are left out and counted,
+  and when the API cannot read such records (-83790, `CDC_E_INTERNAL`, measured with a partnum reused by dozens of
+  test tables) Celer bisects to the first position from which it reads cleanly (to within 32 bytes) and goes on from
+  there, which it notes. Across an in-place `ALTER TABLE` the server returns old rows in the new layout (added columns
+  NULL), which the history notes.
+- An LSN offset is the log page number shifted 12 bits plus the byte in the page. The read is complete when the
+  session has nothing more to give (a timeout) at or past the page being written when the read began. The API only
+  hands over what its log reader has reached: when it waits 10 s without progress, the history says the latest changes
+  are not available yet (partial). On the test server a log reader stuck after sessions were killed mid-test stopped
+  at one position for minutes until Informix was restarted.
+- Values are decoded in Rust from the CDC format (big-endian integers, Informix packed decimals for DECIMAL, MONEY,
+  DATETIME and INTERVAL, length-prefixed VARCHAR/LVARCHAR, text in the database's code set); the size Celer computes for
+  each column must add up to the size the server announces, or the table is refused. TEXT, BYTE, BLOB, CLOB and user
+  types are not captured and are listed as left out.
 
 ### Adding another engine over JDBC
 

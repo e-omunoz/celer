@@ -27,6 +27,8 @@ seed() {
   docker exec -i celer-mariadb mariadb -uroot -pceler < dev/seed-mysql.sql
   docker exec -i celer-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_PASSWORD" -i /dev/stdin < dev/seed-mssql.sql
   docker exec celer-ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster - 2>/dev/null || true"
+  # The CDC API's database (row history, src-tauri/src/rowhistory.rs), as a DBA creates it once.
+  docker exec celer-ifx bash -lc "echo 'SELECT 1 FROM sysmaster:sysdatabases WHERE name = \"syscdcv1\"' | dbaccess sysmaster - 2>/dev/null | grep -q '1 row' || dbaccess - \$INFORMIXDIR/etc/syscdcv1.sql >/dev/null 2>&1"
   docker exec -i celer-ifx bash -lc "dbaccess - -" < dev/seed-informix.sql
 }
 

@@ -10,6 +10,8 @@ import type {
   MetaNode,
   ObjectRef,
   OpenSessionOptions,
+  RowHistory,
+  RowHistoryRequest,
   SessionHealth,
   SessionInfo,
   TableColumn,
@@ -56,6 +58,11 @@ export interface Backend {
   objectSql(sessionId: string, obj: ObjectRef): Promise<{ qualified: string; select: string }>;
   quoteIdents(sessionId: string, names: string[]): Promise<string[]>;
   exportQuery(connId: string, database: string, sql: string, exportId: string, options: ExportOptions): Promise<number>;
+  /**
+   * «Historial de la fila»: the row's past values from Informix's logical logs (CDC API), on a connection of its own.
+   * `historyId` is what `cancel` takes to stop it. Engines without it answer "unavailable" with the reason.
+   */
+  rowHistory(connId: string, password: string | undefined, historyId: string, request: RowHistoryRequest): Promise<RowHistory>;
   addHistory(entry: HistoryEntry): Promise<void>;
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
@@ -153,6 +160,7 @@ function tauriBackend(): Backend {
     quoteIdents: (sessionId, names) => invoke("quote_idents", { sessionId: sessionId, names }),
     exportQuery: (connId, database, sql, exportId, options) =>
       invoke("export_query", { connId: connId, database, sql, exportId: exportId, options }),
+    rowHistory: (connId, password, historyId, request) => invoke("row_history", { connId, password: password ?? null, historyId, request }),
     addHistory: (entry) => invoke("add_history", { entry }),
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
     clearHistory: () => invoke("clear_history"),

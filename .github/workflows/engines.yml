@@ -80,6 +80,8 @@ jobs:
             sleep 5
           done
           docker exec ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster -"
+          # The CDC API's database, as a DBA creates it once: the row history test reads the logs through it.
+          docker exec ifx bash -lc "dbaccess - \$INFORMIXDIR/etc/syscdcv1.sql" >/dev/null
           docker exec ifx bash -lc "cat \$INFORMIXDIR/etc/\$ONCONFIG | grep -E '^(DBSERVERNAME|DBSERVERALIASES)'; cat \$INFORMIXSQLHOSTS" || true
           # JDBC goes to the container's own address: Informix's cancel is TCP urgent data, which Docker's port proxy
           # (localhost) may drop. The cancel test also goes through localhost on purpose, to try Celer's fallback.

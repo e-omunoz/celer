@@ -3,6 +3,7 @@ import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import type { Backend } from "./api";
 import { quoteIdent, resultToText } from "./sql";
 import { inOrder, isPermutation } from "./columnOrder";
+import { rowHistoryBlocked } from "./rowHistoryView";
 import type {
   Cell,
   ColKind,
@@ -635,6 +636,12 @@ export function createDemoBackend(): Backend {
     },
     async quoteIdents(_sessionId, names) {
       return names.map(quoteIdent);
+    },
+    async rowHistory(connId) {
+      // The preview only has SQLite: no logical logs to read.
+      const cfg = loadConns().find((item) => item.id === connId);
+      const reason = rowHistoryBlocked(cfg?.kind ?? "sqlite", cfg?.informixMode ?? "") ?? "No disponible en la vista previa del navegador";
+      return { status: "unavailable", reason, columns: [], skipped: [], events: [], range: null, partial: [], notes: [] };
     },
     async exportQuery(connId, _database, sql, _exportId, options) {
       const cfg = loadConns().find((item) => item.id === connId);

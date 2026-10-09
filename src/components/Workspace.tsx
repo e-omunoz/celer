@@ -119,6 +119,7 @@ import { TabLink } from "./LinkDot";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
+import { openRowHistory, resultHistoryBlocked, tableHistoryBlocked } from "../rowHistory";
 import { withShortcut } from "../commands";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
@@ -617,6 +618,7 @@ function SqlPane(props: { tab: SqlTab }) {
               dialect={kindOf(props.tab.connId)}
               onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
               onExport={exportShown}
+              rowHistory={{ blocked: resultHistoryBlocked(props.tab.connId), open: () => {} }}
               onActivate={() => openInspector("value")}
               onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
             />
@@ -866,6 +868,11 @@ function TablePane(props: { tab: TableTab }) {
             onSortChange={(sort) => setTableSort(props.tab.id, sort)}
             onFilter={(quick) => upsertTableFilter(props.tab.id, { ...newFilter(props.tab, props.tab.gridCols[quick.col]?.name, quick.op, quick.value), enabled: true })}
             onExport={() => startTableExport(props.tab.id)}
+            rowHistory={{
+              blocked: tableHistoryBlocked(props.tab),
+              rowBlocked: (row) => (row >= props.tab.rows.length ? "Fila nueva: todavía no está en la base de datos" : null),
+              open: (row) => openRowHistory(props.tab, row),
+            }}
             onSave={() => void saveTable(props.tab.id)}
             onColumnFilter={(col) => openFilter(newFilter(props.tab, props.tab.gridCols[col]?.name, "in"))}
             onActivate={() => openInspector("value")}

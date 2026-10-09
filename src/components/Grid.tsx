@@ -64,6 +64,11 @@ export interface GridProps {
   sortState?: { col: number; dir: 1 | -1 } | null;
   onSortChange?: (sort: { col: number; dir: 1 | -1 } | null) => void;
   onExport?: () => void;
+  /**
+   * «Historial de la fila» in the row menu: `blocked` disables it with the reason (engine, protocol, no key), and
+   * `rowBlocked` for one row (a new one); `open` gets the row's index in `rows`.
+   */
+  rowHistory?: { blocked: string | null; rowBlocked?: (row: number) => string | null; open: (row: number) => void };
   /** Shift+Enter or a double click on a read-only cell: the grid has put the cell and its row (in screen order) in the inspector state. */
   onActivate?: (row: number, col: number) => void;
   /** The column order changed (headers dragged): null when it is the query's own again. */
@@ -1233,6 +1238,13 @@ export function DataGrid(props: GridProps) {
       { separator: true },
       { label: "Ver valor", hint: "Mayús+Intro", icon: "eye", run: () => activate() },
     ];
+    const history = props.rowHistory;
+    if (history) {
+      const at = focus();
+      const source = at ? ordered()[at.row] : undefined;
+      const why = history.blocked ?? (source === undefined ? "Ninguna fila elegida" : (history.rowBlocked?.(source) ?? null));
+      items.push({ label: "Historial de la fila", icon: "history", disabled: Boolean(why), note: why ?? undefined, run: () => source !== undefined && history.open(source) });
+    }
     const f = focus();
     const fc = f ? src(f.col) : -1;
     if (f && props.onFollow && props.linkCols?.includes(fc)) {

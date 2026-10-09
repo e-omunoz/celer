@@ -6,6 +6,16 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Row history on Informix, from the logical logs** (#123): «Historial de la fila» in a table row's menu lists the
+  row's changes still in the logs on disk (time, transaction, user, operation, and each column before → after, or the
+  whole row at that moment), read through Informix's CDC API over a JDBC connection. Nothing is guessed: what stops it
+  is said as «No se puede reconstruir: …» (database without log, RAW table, no `syscdcv1`, a user who may not use the
+  CDC API, no primary key, DRDA or Client SDK connection), and a history that may miss something is labelled partial
+  with the reason (the row existed before the oldest log, its key changed, the read was stopped…), with the logs it
+  covers. When the table has no full row logging, which the CDC API requires, Celer offers to turn it on only for the
+  read and off again (never on a read-only connection). Other engines show the entry disabled with «No disponible en …».
+
 ## [2.2.0] - 2026-10-09
 
 ### Added
