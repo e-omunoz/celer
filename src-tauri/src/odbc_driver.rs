@@ -599,23 +599,87 @@ impl<L: Link> LinkDriver<L> {
 }
 
 /// The statements of a batch as the server must get them: Informix (over DRDA) runs one statement per call, so
-/// a script is split (`;` outside strings and comments); a routine definition (its body has `;`) goes whole.
-/// Other ODBC sources get the text as it is.
+/// a script is split (`;` outside strings and comments); an SPL routine (its body has `;`) goes whole, from
+/// CREATE [DBA] PROCEDURE/FUNCTION to its END PROCEDURE/END FUNCTION. Other ODBC sources get the text as it is.
 fn split_batch(sql: &str, dialect: Dialect) -> Vec<String> {
     if dialect != Dialect::Informix {
         return vec![sql.to_string()];
     }
-    let words = sql.to_uppercase().split_whitespace().collect::<Vec<_>>().join(" ");
-    let routine = ["CREATE PROCEDURE", "CREATE FUNCTION", "CREATE DBA PROCEDURE", "CREATE DBA FUNCTION", "CREATE TRIGGER"].iter().any(|k| words.contains(k));
-    if routine {
-        return vec![sql.to_string()];
-    }
     let parts = crate::startup::split(sql, DbKind::Informix);
     if parts.is_empty() {
-        vec![sql.to_string()]
-    } else {
-        parts
+        return vec![sql.to_string()];
     }
+    let mut out: Vec<String> = Vec::new();
+    // Inside a routine: its pieces go back together (a line break before each `;`, so a `--` comment that ended a
+    // piece does not swallow it).
+    let mut routine: Option<String> = None;
+    for part in parts {
+        let words = code_words(&part);
+        if let Some(body) = routine.as_mut() {
+            body.push_str("\n;\n");
+            body.push_str(&part);
+        } else {
+            let w = |i: usize| words.get(i).map(String::as_str).unwrap_or("");
+            let at = if w(1) == "DBA" { 2 } else { 1 };
+            if w(0) == "CREATE" && matches!(w(at), "PROCEDURE" | "FUNCTION") && w(at + 1) != "FROM" && !ends_routine(&words) {
+                routine = Some(part);
+                continue;
+            }
+            out.push(part);
+            continue;
+        }
+        if ends_routine(&words) {
+            out.extend(routine.take());
+        }
+    }
+    out.extend(routine);
+    out
+}
+
+/// Whether the words of a piece close an SPL routine (END PROCEDURE, END FUNCTION).
+fn ends_routine(words: &[String]) -> bool {
+    words.windows(2).any(|p| p[0] == "END" && matches!(p[1].as_str(), "PROCEDURE" | "FUNCTION"))
+}
+
+/// The words of Informix SQL in upper case, without comments (`--`, `/* */`, `{ }`) or strings.
+fn code_words(sql: &str) -> Vec<String> {
+    let c: Vec<char> = sql.chars().collect();
+    let mut code = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        let next = c.get(i + 1).copied();
+        let skip_to = |from: usize, end: &str| -> usize {
+            let rest: String = c[from..].iter().collect();
+            rest.find(end).map_or(c.len(), |p| from + rest[..p].chars().count() + end.chars().count())
+        };
+        match c[i] {
+            '-' if next == Some('-') => {
+                i = skip_to(i, "\n");
+                code.push(' ');
+            }
+            '/' if next == Some('*') => {
+                i = skip_to(i + 2, "*/");
+                code.push(' ');
+            }
+            '{' => {
+                i = skip_to(i, "}");
+                code.push(' ');
+            }
+            q @ ('\'' | '"') => {
+                let mut k = i + 1;
+                while k < c.len() && !(c[k] == q && c.get(k + 1) != Some(&q)) {
+                    k += if c[k] == q { 2 } else { 1 };
+                }
+                i = k + 1;
+                code.push(' ');
+            }
+            ch => {
+                code.push(ch);
+                i += 1;
+            }
+        }
+    }
+    code.to_uppercase().split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).filter(|w| !w.is_empty()).map(str::to_string).collect()
 }
 
 /// El script de inicio de la conexión, en cada conexión nueva (todavía en autocommit).
@@ -1378,6 +1442,19 @@ mod tests {
         // A routine's body keeps its semicolons; other ODBC sources get the text as it is.
         assert_eq!(split_batch("CREATE PROCEDURE p() LET x = 1; END PROCEDURE;", Dialect::Informix).len(), 1);
         assert_eq!(split_batch("SELECT 1; SELECT 2", Dialect::Generic).len(), 1);
+        // A routine mentioned in a comment or a string does not keep the script whole.
+        let parts = split_batch("-- after this: CREATE PROCEDURE later\nCREATE TABLE a (x INT);\nCREATE TABLE b (y INT);\nINSERT INTO a VALUES ('CREATE FUNCTION f');", Dialect::Informix);
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        // dbschema output: tables and one SPL routine (kept whole, with its semicolons), then more statements.
+        let script = "CREATE TABLE a (x INT);\n{ routine }\nCREATE DBA PROCEDURE p(n INT) RETURNING INT;\n  DEFINE i INT; -- a ; comment\n  LET i = n + 1;\n  RETURN i;\nEND PROCEDURE\n  DOCUMENT 'uno; dos';\nCREATE FUNCTION f() RETURNING INT; RETURN 1; END FUNCTION;\nGRANT EXECUTE ON p TO public;";
+        let parts = split_batch(script, Dialect::Informix);
+        assert_eq!(parts.len(), 4, "{parts:#?}");
+        assert!(parts[1].starts_with("{ routine }\nCREATE DBA PROCEDURE p") && parts[1].ends_with("DOCUMENT 'uno; dos'"), "{}", parts[1]);
+        assert!(parts[1].contains("-- a ; comment\n  LET i = n + 1\n;\nRETURN i\n;\nEND PROCEDURE"), "{}", parts[1]);
+        assert!(parts[2].starts_with("CREATE FUNCTION f()") && parts[2].ends_with("END FUNCTION"), "{}", parts[2]);
+        assert_eq!(parts[3], "GRANT EXECUTE ON p TO public");
+        // A routine read from a file is one statement.
+        assert_eq!(split_batch("CREATE PROCEDURE FROM 'p.sql'; SELECT 1 FROM systables", Dialect::Informix).len(), 2);
     }
 
     use super::*;
