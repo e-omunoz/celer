@@ -33,6 +33,7 @@ import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows,
 import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
+import { labelColorOn } from "./contrast";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
 
@@ -466,6 +467,8 @@ export function applyTheme(settings: Settings = state.settings, preview?: ThemeN
   root.dataset.density = settings.density;
   root.dataset.motion = reducedMotion(settings) ? "reduce" : "full";
   root.style.setProperty("--accent", settings.accent);
+  // White on Clay, Ember, Teal or Green is below 4.5:1: those buttons get a black label.
+  root.style.setProperty("--accent-fg", labelColorOn(settings.accent));
   root.style.fontSize = `${settings.fontSize}px`;
   if (isTauri()) {
     import("@tauri-apps/api/window")

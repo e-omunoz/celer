@@ -164,6 +164,7 @@ All notable changes to Celer are documented here. The format follows
 - **Faint syntax and object colours in "Alto contraste claro" and Sand**: type names, parameters, punctuation and the explorer/E-R object icons kept the dark theme's pale colours, about 2:1 on white. Both themes now have their own dark values (4.5:1 or better in Alto contraste claro, 3:1 or better for Sand's icons).
 - **Hard-to-read "Ejecutar" button**: its white label on the green button was 1.5:1 in "Alto contraste oscuro" and below 4.5:1 in every theme but "Alto contraste claro". The dark themes now use a black label, and Celer Claro and Sand a slightly darker green.
 - **Japanese, Chinese or emoji text spilled into the next columns** of a result: cells were cut by character count, as if every character were as wide as a Latin one. Text with such characters is now measured and ends in "…" inside its own column, and the column's automatic width uses the measured width.
+- **White labels on the accent and on red buttons were hard to read**: "Guardar y conectar", "Empezar" and the other main buttons were white on the default accent (3.1:1), and "Eliminar"-style buttons and the PROD tag white on red, also in both high-contrast themes. The label is now black or white, whichever reaches 4.5:1 on the chosen accent, and each theme's red has its own label colour.
 
 ## [2.0.1] - 2026-10-08
 
