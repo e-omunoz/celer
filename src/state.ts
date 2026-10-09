@@ -340,7 +340,7 @@ export const [state, setState] = createStore({
   /** "Probar conexión": every step with its time, the way it connected and, if it failed, what to do. */
   testReport: null as ConnTestReport | null,
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
-  passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
+  passwordAsk: null as { name: string; label?: string; resolve: (value: string | null) => void } | null,
   /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
   paramAsk: null as ParamAsk | null,
   /** The entity-relationship diagram on show (a schema's tables and their foreign keys). */
@@ -716,8 +716,8 @@ export function applySharedSettings(value: Partial<Settings>) {
 
 // ---------------------------------------------------------------- connections
 
-export function askPassword(name: string) {
-  return new Promise<string | null>((resolve) => setState("passwordAsk", { name, resolve }));
+export function askPassword(name: string, label = "Contraseña") {
+  return new Promise<string | null>((resolve) => setState("passwordAsk", { name, label, resolve }));
 }
 
 export interface ErState {
@@ -1071,8 +1071,21 @@ export function answerPassword(value: string | null) {
   setState("passwordAsk", null);
 }
 
+/** ODBC takes its password from the connection string unless it names a user and carries none (an import). */
+function odbcNeedsPassword(conn: ConnSummary) {
+  return conn.kind === "odbc" && !!conn.user.trim() && !/\b(pwd|password)\s*=/i.test(`${conn.odbcConnStr};${conn.extra}`);
+}
+
 function needsPassword(conn: ConnSummary) {
-  return !conn.integratedAuth && conn.kind !== "sqlite" && conn.kind !== "odbc" && !conn.hasPassword && !state.passwords[conn.id];
+  const network = conn.kind !== "sqlite" && (conn.kind !== "odbc" || odbcNeedsPassword(conn));
+  return !conn.integratedAuth && network && !conn.hasPassword && !state.passwords[conn.id];
+}
+
+/** The tunnel logs in with a password nobody saved (an import): asked once per run. */
+const sshAsked = new Set<string>();
+function needsSshPassword(conn: ConnSummary) {
+  const ssh = conn.ssh;
+  return !!ssh?.enabled && ssh.auth === "password" && !conn.sshSaved?.password && !sshAsked.has(conn.id);
 }
 
 export async function refreshConnections() {
@@ -1249,6 +1262,12 @@ export async function connect(connId: string, password?: string) {
     const typed = await askPassword(conn.name);
     if (!typed) return;
     setState("passwords", connId, typed);
+  }
+  if (needsSshPassword(conn)) {
+    const typed = await askPassword(conn.name, `Contraseña SSH (${conn.ssh?.user || "túnel"}@${conn.ssh?.host})`);
+    if (!typed) return;
+    await api().setSessionSshPassword(connId, typed);
+    sshAsked.add(connId);
   }
   const pwd = state.passwords[connId];
   const generation = connectGeneration(connId);
@@ -1567,7 +1586,7 @@ export function warmSqlSession(tabId: string) {
   if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId) return;
   const conn = connectionById(tab.connId);
   if (!state.sessions[tab.connId]) {
-    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
+    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && !needsSshPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
     return;
   }
   void ensureSqlSession(tab).catch(() => {});

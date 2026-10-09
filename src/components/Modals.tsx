@@ -104,7 +104,7 @@ export function Modals() {
           <Dialog title={`Conectar a ${ask().name}`} onClose={() => answerPassword(null)} small>
             <form onSubmit={(event) => { event.preventDefault(); answerPassword(String(new FormData(event.currentTarget).get("password") ?? "")); }}>
               <label class="field">
-                <span>Contraseña</span>
+                <span>{ask().label ?? "Contraseña"}</span>
                 <input name="password" type="password" ref={(el) => queueMicrotask(() => el.focus())} />
               </label>
               <footer>

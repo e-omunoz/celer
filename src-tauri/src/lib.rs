@@ -503,6 +503,12 @@ fn ssh_trust_host_key(state: State<'_, Arc<AppState>>, token: String) -> CmdResu
     ssh::trust(&state.store.dir, &token).map_err(err)
 }
 
+/// The SSH password typed in the connect prompt: kept in memory for this run, for the next sessions of the connection.
+#[tauri::command]
+fn set_session_ssh_password(state: State<'_, Arc<AppState>>, conn_id: String, password: String) {
+    state.store.set_session_secret(&ssh_account(&conn_id, "ssh-password"), &password);
+}
+
 /// One connection of an export «con contraseñas»: its id and the secret entries the interface took out of its
 /// "Parámetros extra" / ODBC string.
 #[derive(serde::Deserialize)]
@@ -1540,6 +1546,7 @@ pub fn run() {
             test_connection,
             ssh_host_key,
             ssh_trust_host_key,
+            set_session_ssh_password,
             export_secrets,
             open_secrets,
             open_session,

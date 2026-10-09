@@ -431,6 +431,7 @@ export function createDemoBackend(): Backend {
     async sshHostKey() {
       return null;
     },
+    async setSessionSshPassword() {},
     async sshTrustHostKey() {
       throw new Error("En el navegador no hay túneles SSH.");
     },

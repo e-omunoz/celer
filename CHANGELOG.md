@@ -26,6 +26,7 @@ All notable changes to Celer are documented here. The format follows
   before.
 
 ### Fixed
+- Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
 - **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
   «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
   `jdbc:informix-sqli` without a port, SQL Server URLs with nothing after `//` (`serverName`, `instanceName`,

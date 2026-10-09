@@ -104,6 +104,8 @@ pub struct Store {
     conns_file: parking_lot::Mutex<ConnsFile>,
     /// One writer of history.jsonl at a time (windows append from their own threads).
     history_lock: parking_lot::Mutex<()>,
+    /// Secrets typed at connect time and kept only in memory (an imported SSH password that was never saved).
+    session_secrets: parking_lot::Mutex<std::collections::HashMap<String, String>>,
 }
 
 /// What the last read of connections.json left behind.
@@ -133,7 +135,7 @@ pub struct HistoryEntry {
 impl Store {
     pub fn new(dir: PathBuf) -> Store {
         let _ = fs::create_dir_all(&dir);
-        Store { dir, conns_file: Default::default(), history_lock: Default::default() }
+        Store { dir, conns_file: Default::default(), history_lock: Default::default(), session_secrets: Default::default() }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -236,6 +238,9 @@ impl Store {
     /// El almacén del sistema es la vía principal. Si no hay servicio de secretos
     /// (sesión sin llavero), se guarda en `secrets.json` con permisos restringidos.
     pub fn get_password(&self, id: &str) -> Option<String> {
+        if let Some(p) = self.session_secrets.lock().get(id) {
+            return Some(p.clone());
+        }
         if let Some(p) = keyring_get(id) {
             // A long secret kept in parts (`keyring_set`): all of them, or (a part missing) as if there were none.
             match parts_of(&p) {
@@ -248,6 +253,11 @@ impl Store {
             }
         }
         self.secrets().get(id).cloned()
+    }
+
+    /// Keeps a secret for this run only (never written anywhere).
+    pub fn set_session_secret(&self, id: &str, value: &str) {
+        self.session_secrets.lock().insert(id.to_string(), value.to_string());
     }
 
     pub fn set_password(&self, id: &str, pwd: &str) -> Result<()> {
