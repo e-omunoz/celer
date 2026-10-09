@@ -910,6 +910,196 @@ pub fn check_write_statement(sql: &str, kind: DbKind) -> Result<(), String> {
     Ok(())
 }
 
+/// Columns whose values are hidden from assistants, and the tables that have them (lowercase).
+#[derive(Debug, Clone, Default)]
+struct Sensitive {
+    columns: HashSet<String>,
+    tables: HashSet<String>,
+}
+
+fn tok_name(t: Option<&Tok>) -> Option<String> {
+    match t {
+        Some(Tok::Word(w)) | Some(Tok::Ident(w)) => Some(w.to_lowercase()),
+        _ => None,
+    }
+}
+
+/// Words after which a name in a FROM clause is not a table alias.
+const NOT_ALIAS: &[&str] = &[
+    "WHERE", "JOIN", "ON", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "OUTER", "GROUP", "ORDER",
+    "LIMIT", "OFFSET", "FETCH", "UNION", "INTERSECT", "EXCEPT", "USING", "WINDOW", "HAVING", "FOR", "TABLESAMPLE",
+    "WITH", "LATERAL", "AS", "SET", "RETURNING", "QUALIFY", "STRAIGHT_JOIN", "PARTITION", "USE", "FORCE", "IGNORE",
+    "PIVOT", "UNPIVOT", "APPLY", "INTO",
+];
+
+/// Names written before a '.' (database, schema or table qualifiers), lowercase, under every quoting variant.
+fn qualifiers(sql: &str, kind: DbKind) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for d in dialects(kind) {
+        if let Ok(stmts) = lex(sql, *d) {
+            for t in stmts {
+                for w in t.windows(2) {
+                    if w[1] == Tok::P('.') {
+                        if let Some(n) = tok_name(Some(&w[0])) {
+                            out.insert(n);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Ways to read a protected column without naming it, refused in a query that reads a table that has one:
+/// a whole row as a value (`SELECT t FROM users t`, `row_to_json(t.*)`), column alias lists that rename columns
+/// (`WITH s(a, b) AS …`, `FROM users AS u(a, b)`) and set operations (`SELECT 1, 2 WHERE false UNION SELECT * FROM
+/// users`), whose column names come from the first branch. Masking is still best-effort (views, for instance).
+fn masking_bypass(t: &[Tok], sens: &Sensitive) -> Option<String> {
+    if !t.iter().any(|x| tok_name(Some(x)).is_some_and(|n| sens.tables.contains(&n))) {
+        return None;
+    }
+    let refuse = |what: &str| {
+        Some(format!(
+            "La consulta lee una tabla con columnas protegidas y usa {what}: así sus valores no se pueden ocultar. Nombra las columnas que necesitas (las protegidas aparecen como \"{REDACTED}\" con SELECT *)."
+        ))
+    };
+    let word = |k: usize| match t.get(k) {
+        Some(Tok::Word(w)) => w.as_str(),
+        _ => "",
+    };
+    // Relations the query declares (tables, aliases, CTEs, derived tables) and the positions that declare them.
+    let mut relations: HashSet<String> = HashSet::new();
+    let mut declared: HashSet<usize> = HashSet::new();
+    let mut in_from = vec![false];
+    for k in 0..t.len() {
+        match &t[k] {
+            Tok::P('(') => in_from.push(false),
+            Tok::P(')') => {
+                in_from.pop();
+                if in_from.is_empty() {
+                    in_from.push(false);
+                }
+                // A derived table's alias: `(SELECT …) [AS] x`, maybe with a column list.
+                if *in_from.last().unwrap_or(&false) {
+                    let a = if word(k + 1) == "AS" { k + 2 } else { k + 1 };
+                    if let Some(n) = tok_name(t.get(a)) {
+                        if !NOT_ALIAS.contains(&word(a)) {
+                            if t.get(a + 1) == Some(&Tok::P('(')) {
+                                return refuse("una lista de alias de columnas");
+                            }
+                            relations.insert(n);
+                            declared.insert(a);
+                        }
+                    }
+                }
+            }
+            Tok::Word(w) if matches!(w.as_str(), "UNION" | "INTERSECT" | "EXCEPT" | "MINUS") => {
+                return refuse(w.as_str());
+            }
+            Tok::Word(w) if matches!(w.as_str(), "FROM" | "JOIN") => {
+                if let Some(top) = in_from.last_mut() {
+                    *top = true;
+                }
+            }
+            Tok::Word(w)
+                if matches!(
+                    w.as_str(),
+                    "WHERE" | "GROUP" | "ORDER" | "HAVING" | "LIMIT" | "SELECT" | "ON" | "USING" | "WINDOW"
+                        | "QUALIFY" | "OFFSET" | "FETCH" | "FOR" | "RETURNING"
+                ) =>
+            {
+                if let Some(top) = in_from.last_mut() {
+                    *top = false;
+                }
+            }
+            _ => {}
+        }
+        let Some(name) = tok_name(t.get(k)) else { continue };
+        // CTE: `name AS [NOT] [MATERIALIZED] (` or, with a column list, `name (…) AS (`.
+        let mut a = k + 1;
+        if word(a) == "AS" {
+            a += 1;
+            while matches!(word(a), "NOT" | "MATERIALIZED") {
+                a += 1;
+            }
+            if t.get(a) == Some(&Tok::P('(')) && !matches!(&t[k], Tok::Word(w) if w == "AS") {
+                relations.insert(name);
+                declared.insert(k);
+                continue;
+            }
+        }
+        if t.get(k + 1) == Some(&Tok::P('(')) && matches!(word(k.wrapping_sub(1)), "WITH" | "RECURSIVE")
+            || (t.get(k + 1) == Some(&Tok::P('(')) && t.get(k.wrapping_sub(1)) == Some(&Tok::P(',')) && {
+                // `, name (a, b) AS (`: find the list's end.
+                let mut depth = 0;
+                let mut j = k + 1;
+                while j < t.len() {
+                    match t[j] {
+                        Tok::P('(') => depth += 1,
+                        Tok::P(')') => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                word(j + 1) == "AS" && t.get(j + 2) == Some(&Tok::P('('))
+            })
+        {
+            return refuse("una lista de alias de columnas en un WITH");
+        }
+        // A table in a FROM clause (after FROM, JOIN or a comma there, maybe qualified), and its alias.
+        if t.get(k + 1) == Some(&Tok::P('.')) {
+            continue;
+        }
+        let mut p = k.wrapping_sub(1);
+        while t.get(p) == Some(&Tok::P('.')) {
+            p = p.wrapping_sub(2);
+        }
+        let from_slot = matches!(word(p), "FROM" | "JOIN" | "TABLE" | "STRAIGHT_JOIN")
+            || (t.get(p) == Some(&Tok::P(',')) && *in_from.last().unwrap_or(&false));
+        if !from_slot || t.get(k + 1) == Some(&Tok::P('(')) {
+            continue;
+        }
+        relations.insert(name);
+        declared.insert(k);
+        let a = if word(k + 1) == "AS" { k + 2 } else { k + 1 };
+        if let Some(alias) = tok_name(t.get(a)) {
+            if !NOT_ALIAS.contains(&word(a)) {
+                if t.get(a + 1) == Some(&Tok::P('(')) {
+                    return refuse("una lista de alias de columnas");
+                }
+                relations.insert(alias);
+                declared.insert(a);
+            }
+        }
+    }
+    // A relation used as a value: `SELECT t …`, `to_json(t)`, `f(t.*)`.
+    for k in 0..t.len() {
+        let Some(name) = tok_name(t.get(k)) else { continue };
+        if declared.contains(&k) || !relations.contains(&name) || k > 0 && t.get(k - 1) == Some(&Tok::P('.')) {
+            continue;
+        }
+        match t.get(k + 1) {
+            Some(Tok::P('.')) => {
+                let star = t.get(k + 2) == Some(&Tok::P('*'));
+                let wrapped = k > 0 && t.get(k - 1) == Some(&Tok::P('(')) || t.get(k + 3) == Some(&Tok::P(')'));
+                if star && wrapped {
+                    return refuse(&format!("la fila entera de «{name}» como valor"));
+                }
+            }
+            // A function or type of that name, or a CTE being defined.
+            Some(Tok::P('(')) => {}
+            _ => return refuse(&format!("la fila entera de «{name}» como valor")),
+        }
+    }
+    None
+}
+
 /// Identificadores (en minúsculas) que aparecen en la consulta fuera de cadenas y comentarios.
 fn query_identifiers(sql: &str, kind: DbKind) -> HashSet<String> {
     let mut out = HashSet::new();
@@ -1215,7 +1405,7 @@ pub struct McpServer {
     store: Store,
     sessions: Mutex<HashMap<String, Cached>>,
     /// Columnas sensibles por (conexión, base de datos): (momento, patrón, nombres).
-    sensitive: Mutex<HashMap<String, (Instant, String, Arc<HashSet<String>>)>>,
+    sensitive: Mutex<HashMap<String, (Instant, String, Arc<Sensitive>)>>,
     /// Vista previa desde la interfaz: ignora `enabled` y no se audita.
     preview: bool,
 }
@@ -1306,34 +1496,37 @@ impl McpServer {
         }
     }
 
+    /// The protected columns of the database the session is on (`want_db`), or of `other` (MySQL and SQL Server
+    /// reach other databases with `otherdb.table`), read without leaving the session's database.
     async fn sensitive_columns(
         &self,
         conn: &ConnConfig,
         cfg: &McpConfig,
         want_db: &str,
-    ) -> Result<Arc<HashSet<String>>, String> {
+        other: Option<String>,
+    ) -> Result<Arc<Sensitive>, String> {
         let red = Redactor::new(&cfg.redact_pattern);
         if !red.active() {
-            return Ok(Arc::new(HashSet::new()));
+            return Ok(Arc::new(Sensitive::default()));
         }
-        let key = format!("{}\u{1}{}", conn.id, want_db);
+        let key = format!("{}\u{1}{}\u{1}{}", conn.id, want_db, other.as_deref().unwrap_or(""));
         if let Some((t, p, set)) = self.sensitive.lock().get(&key) {
             if t.elapsed() < SENSITIVE_TTL && *p == cfg.redact_pattern {
                 return Ok(set.clone());
             }
         }
         let comp = self
-            .run(conn, cfg.timeout_secs, want_db.to_string(), |d, db| {
-                d.completion(&db)
+            .run(conn, cfg.timeout_secs, want_db.to_string(), move |d, db| {
+                d.completion(other.as_deref().unwrap_or(&db))
             })
             .await?;
-        let set: HashSet<String> = comp
-            .tables
-            .iter()
-            .flat_map(|t| t.columns.iter())
-            .filter(|c| red.matches(c))
-            .map(|c| c.to_lowercase())
-            .collect();
+        let mut set = Sensitive::default();
+        for t in &comp.tables {
+            for c in t.columns.iter().filter(|c| red.matches(c)) {
+                set.columns.insert(c.to_lowercase());
+                set.tables.insert(t.name.to_lowercase());
+            }
+        }
         let set = Arc::new(set);
         self.sensitive.lock().insert(
             key,
@@ -1634,10 +1827,30 @@ impl McpServer {
             "run_query" => {
                 let sql = arg_str(args, "sql");
                 check_read_query(&sql, kind)?;
-                let sens = self.sensitive_columns(&conn, cfg, &db).await?;
-                if !sens.is_empty() {
+                let mut sens = (*self.sensitive_columns(&conn, cfg, &db, None).await?).clone();
+                // MySQL and SQL Server read other databases by name (`otherdb.users`): their protected columns count.
+                if red.active() && matches!(kind, DbKind::Mysql | DbKind::Mssql) {
+                    let quals = qualifiers(&sql, kind);
+                    if !quals.is_empty() {
+                        let dbs = self
+                            .run(&conn, timeout, db.clone(), |d, _| d.databases())
+                            .await
+                            .unwrap_or_default();
+                        for other in dbs.into_iter().filter(|n| quals.contains(&n.to_lowercase())) {
+                            let more = self.sensitive_columns(&conn, cfg, &db, Some(other)).await?;
+                            sens.columns.extend(more.columns.iter().cloned());
+                            sens.tables.extend(more.tables.iter().cloned());
+                        }
+                    }
+                }
+                if !sens.columns.is_empty() {
+                    for t in single_statement(&sql, kind)? {
+                        if let Some(e) = masking_bypass(&t, &sens) {
+                            return Err(e);
+                        }
+                    }
                     let ids = query_identifiers(&sql, kind);
-                    let mut hit: Vec<&String> = ids.iter().filter(|i| sens.contains(*i)).collect();
+                    let mut hit: Vec<&String> = ids.iter().filter(|i| sens.columns.contains(*i)).collect();
                     hit.sort();
                     if let Some(h) = hit.first() {
                         return Err(format!(
@@ -2573,6 +2786,52 @@ mod tests {
     }
 
     #[test]
+    fn masking_bypasses_are_refused() {
+        let sens = Sensitive {
+            columns: ["password_hash".to_string()].into(),
+            tables: ["users".to_string()].into(),
+        };
+        let bad = |sql: &str, kind: DbKind| {
+            let refused = single_statement(sql, kind).unwrap().iter().any(|t| masking_bypass(t, &sens).is_some());
+            assert!(refused, "should be refused ({kind:?}): {sql}");
+        };
+        let ok = |sql: &str, kind: DbKind| {
+            for t in single_statement(sql, kind).unwrap() {
+                if let Some(e) = masking_bypass(&t, &sens) {
+                    panic!("should pass ({kind:?}): {sql}\n  → {e}");
+                }
+            }
+        };
+        use DbKind::*;
+        bad("SELECT t FROM users t", Postgres);
+        bad("SELECT users FROM users", Postgres);
+        bad("SELECT row_to_json(u) FROM public.users AS u", Postgres);
+        bad("SELECT to_jsonb(x.*) FROM users x", Postgres);
+        bad("SELECT json_agg(s) FROM (SELECT * FROM users) s", Postgres);
+        bad("WITH s(a, b, c) AS (SELECT * FROM users) SELECT * FROM s", Postgres);
+        bad("WITH x AS (SELECT 1), s (a, b) AS (SELECT * FROM users) SELECT * FROM s", Postgres);
+        bad("WITH s AS (SELECT * FROM users) SELECT s FROM s", Postgres);
+        bad("SELECT * FROM users AS u(a, b, c)", Postgres);
+        bad("SELECT * FROM users u (a, b, c)", Postgres);
+        bad("SELECT * FROM (SELECT * FROM users) AS d(a, b)", Postgres);
+        bad("SELECT 1, 2, 3 WHERE false UNION ALL SELECT * FROM users", Postgres);
+        bad("SELECT 1 AS a FROM dual UNION SELECT * FROM `users`", Mysql);
+        ok("SELECT * FROM users", Postgres);
+        ok("SELECT u.* FROM users u WHERE u.id = 1", Postgres);
+        ok("SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id ORDER BY u.id LIMIT 5", Postgres);
+        ok("SELECT count(*) FROM users, orders WHERE users.id = orders.user_id", Postgres);
+        ok("WITH s AS (SELECT id FROM users) SELECT s.id FROM s", Postgres);
+        ok("SELECT * FROM (SELECT id FROM users) d WHERE d.id > 1", Postgres);
+        ok("SELECT TOP (5) * FROM dbo.users WITH (NOLOCK)", Mssql);
+        ok("SELECT * FROM users u USE INDEX (ix) WHERE u.id = 1", Mysql);
+        // Queries that do not read a protected table are left alone.
+        ok("SELECT o FROM orders o UNION SELECT 1", Postgres);
+        // Another database's protected columns count on MySQL and SQL Server.
+        assert!(qualifiers("SELECT password AS x FROM otherdb.users", Mysql).contains("otherdb"));
+        assert!(qualifiers("SELECT 1 FROM [Other DB].dbo.users", Mssql).contains("other db"));
+    }
+
+    #[test]
     fn audit_keeps_the_executed_sql() {
         let pad = "x".repeat(6000);
         assert_eq!(audit_sql(&format!("/* {pad} */ SELECT password FROM users -- {pad}"), DbKind::Postgres), "SELECT password FROM users");
@@ -2673,6 +2932,21 @@ mod tests {
         assert!(r.is_err(), "la escritura debería fallar en una transacción de solo lectura");
         let n = c.ok("run_query", json!({"connId": "my", "sql": "SELECT count(*) FROM mcp_ro_probe WHERE x = 9"}));
         assert_eq!(n["rows"][0][0], 0);
+        c.err("run_query", json!({"connId": "my", "sql": "SELECT `get_lock`('celer', 0)"}));
+        c.err("run_query", json!({"connId": "my", "sql": "SELECT 1, 2 FROM dual WHERE false UNION SELECT * FROM mcp_ro_probe"}));
+        // Another database's protected column, renamed: refused by name.
+        let setup = |c: &mut Client, sql: &'static str| {
+            c.rt.block_on(async {
+                let conn = c.server.store.load_connections()[0].clone();
+                c.server.run(&conn, 10, String::new(), move |d, _| d.execute(sql, 10)).await
+            })
+            .unwrap();
+        };
+        setup(&mut c, "CREATE DATABASE IF NOT EXISTS mcp_other");
+        setup(&mut c, "CREATE TABLE IF NOT EXISTS mcp_other.users (id INT, password VARCHAR(20))");
+        c.err("run_query", json!({"connId": "my", "sql": "SELECT password AS x FROM mcp_other.users"}));
+        c.err("run_query", json!({"connId": "my", "sql": "SELECT `PASSWORD` AS x FROM `mcp_other`.users"}));
+        setup(&mut c, "DROP DATABASE mcp_other");
         c.ok("execute_statement", json!({"connId": "my", "sql": "DROP TABLE mcp_ro_probe"}));
         drop(c);
         let _ = fs::remove_dir_all(dir);
@@ -2749,6 +3023,30 @@ mod tests {
         assert!(e.contains("read-only") || e.contains("solo lectura"), "{e}");
         // Tras el error la sesión vuelve a funcionar.
         c.ok("run_query", json!({"connId": "pg", "sql": "SELECT 1"}));
+        // Quoted names of forbidden functions, and ways around the masking.
+        c.err("run_query", json!({"connId": "pg", "sql": "SELECT \"pg_read_file\"('postgresql.conf')"}));
+        c.err("run_query", json!({"connId": "pg", "sql": "SELECT \"pg_terminate_backend\"(pid) FROM pg_stat_activity WHERE false"}));
+        let setup = |c: &mut Client, sql: &'static str| {
+            c.rt.block_on(async {
+                let conn = c.server.store.load_connections()[0].clone();
+                c.server.run(&conn, 10, String::new(), move |d, _| d.execute(sql, 10)).await
+            })
+            .unwrap();
+        };
+        setup(&mut c, "CREATE TABLE IF NOT EXISTS mcp_secret_probe (id int, password_hash text)");
+        setup(&mut c, "INSERT INTO mcp_secret_probe VALUES (1, 'h1')");
+        c.server.sensitive.lock().clear();
+        let q = c.ok("run_query", json!({"connId": "pg", "sql": "SELECT * FROM mcp_secret_probe"}));
+        assert_eq!(q["rows"][0], json!([1, "[oculto]"]));
+        for sql in [
+            "SELECT t FROM mcp_secret_probe t",
+            "SELECT row_to_json(t) FROM mcp_secret_probe t",
+            "WITH s(a, b) AS (SELECT * FROM mcp_secret_probe) SELECT * FROM s",
+            "SELECT 1, 'x' WHERE false UNION ALL SELECT * FROM mcp_secret_probe",
+        ] {
+            c.err("run_query", json!({"connId": "pg", "sql": sql}));
+        }
+        setup(&mut c, "DROP TABLE mcp_secret_probe");
         drop(c);
         let _ = fs::remove_dir_all(dir);
     }

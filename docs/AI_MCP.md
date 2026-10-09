@@ -39,7 +39,12 @@ Defences: one statement per call; read queries are lexed under every quoting var
 they contain writes, `SELECT … INTO`, `FOR UPDATE`, DML CTEs or dangerous functions; then they run inside a read-only
 transaction (PostgreSQL / MySQL) or `PRAGMA query_only` (SQLite) and are rolled back. Rows are capped (global and per
 connection, hard cap 5000), queries time out, and columns matching the sensitive-name pattern are returned as
-`[oculto]`. Every call is written to `mcp-audit.jsonl` and shown in the settings.
+`[oculto]`. A query that names a protected column (also of another database on MySQL / SQL Server) is refused, and so
+is one that reads a table with protected columns through a whole row (`SELECT t FROM users t`, `row_to_json(t)`),
+column alias lists (`WITH s(a, b) AS …`, `AS u(a, b)`) or `UNION` / `INTERSECT` / `EXCEPT`. Masking is best-effort:
+it works on names, so a view or function that renames a protected column is not caught; give assistants an account
+without access to secrets when that matters. Every call is written to `mcp-audit.jsonl` (the SQL without its comments)
+and shown in the settings.
 
 ### Connecting a client
 
