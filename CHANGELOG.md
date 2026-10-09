@@ -30,7 +30,7 @@ All notable changes to Celer are documented here. The format follows
   - palette entries for all of the above.
 - **Gib's advice about the statement you just ran**: `= NULL`, `NOT IN (SELECT …)`, comma joins without `WHERE`, and, when it was slow, `LIKE '%…'`, functions on columns in `WHERE`, `UNION` vs `UNION ALL` and `ORDER BY` without a limit. A query run again and again gets a nudge to save it in the library.
 - **Connections reconnect on their own** (every engine): a session idle for more than a minute is checked with a cheap round trip before use, and every open session is checked when the computer wakes up or the network comes back.
-  - With nothing to lose, the statement goes on in the new connection and the output says so; a statement that writes is never repeated (it is not known whether it ran).
+  - With nothing to lose, the statement goes on in the new connection and the output says so; a statement that writes is never repeated (it is not known whether it ran), and neither is a read the server ended while it ran (an administrator's `KILL` or `pg_terminate_backend`, a server restart): Celer reconnects and says the statement was not run again.
   - **Never in silence with a transaction, #temp tables or `SET` of the session**: the statement does not run and the console says what was lost; a pending COMMIT fails instead of pretending it saved.
   - Transient failures when connecting (network coming back, a server starting, Azure's transient errors) are retried with a wait.
   - TCP keepalive on SQL Server, PostgreSQL and MySQL connections, so firewalls and NAT do not drop them while idle.
