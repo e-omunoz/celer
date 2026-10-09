@@ -265,7 +265,7 @@ function SettingsDialog() {
             </div>
             <label class="check"><input type="checkbox" checked={s().zebra} onChange={(event) => void saveSettings({ zebra: event.currentTarget.checked })} /> Filas alternas en la tabla de resultados</label>
             <label class="check"><input type="checkbox" checked={s().askParams} onChange={(event) => void saveSettings({ askParams: event.currentTarget.checked })} /> Pedir el valor de los parámetros (<code>:nombre</code>, <code>?</code>, <code>{"${nombre}"}</code>) antes de ejecutar</label>
-            <p class="settings-note">Los resultados se leen por páginas con un cursor abierto: aunque la consulta devuelva millones de filas, sólo se traen las que ves. «Cargar todo» lee el resto bajo demanda.</p>
+            <p class="settings-note">Los resultados llegan por páginas: solo se traen las filas que ves. «Cargar todo» lee el resto.</p>
           </Show>
           <Show when={section() === "templates"}>
             <SnippetSettings />
@@ -274,9 +274,9 @@ function SettingsDialog() {
             <KeymapSettings />
           </Show>
           <Show when={section() === "safety"}>
-            <label class="check"><input type="checkbox" checked={s().confirmNoWhere} onChange={(event) => void saveSettings({ confirmNoWhere: event.currentTarget.checked })} /> En todas las conexiones, confirmar UPDATE y DELETE sin WHERE (el editor ya los subraya)</label>
+            <label class="check"><input type="checkbox" checked={s().confirmNoWhere} onChange={(event) => void saveSettings({ confirmNoWhere: event.currentTarget.checked })} /> Confirmar UPDATE y DELETE sin WHERE en todas las conexiones</label>
             <label class="check"><input type="checkbox" checked={s().confirmMutations} onChange={(event) => void saveSettings({ confirmMutations: event.currentTarget.checked })} /> En conexiones de producción, confirmar UPDATE/DELETE sin WHERE, DROP, TRUNCATE y ALTER</label>
-            <p class="settings-note">Las conexiones de solo lectura rechazan cualquier sentencia que modifique datos, también desde el núcleo en Rust. Las contraseñas se guardan en el almacén de credenciales del sistema operativo.</p>
+            <p class="settings-note">Las conexiones de solo lectura rechazan cualquier escritura. Las contraseñas van al almacén de credenciales del sistema.</p>
           </Show>
           <Show when={section() === "ai"}>
             <AiSettings />

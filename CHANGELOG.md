@@ -6,6 +6,14 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Shorter texts in Settings** (Editor y resultados, Seguridad, IA y MCP, Drivers) and a tighter user guide: the
+  explorer's multi-selection, quick connect, reconnection and column moving read in half the words; the guide gains
+  *Historial* and *Exportar e importar* sections and names the *IA y MCP* and *Drivers* settings (#111).
+- **Docs**: what each area of the app is for (`docs/ARCHITECTURE.md › Areas`), `STATUS.md` and `docs/ROADMAP.md`
+  rewritten from what exists today and from the open issues, and the README lists several windows, connection
+  organisation and every download Celer can make (#111, #121).
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

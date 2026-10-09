@@ -13,8 +13,8 @@ La ventana tiene tres zonas:
 
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
 - **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
-- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
-  (Alt+8) y el asistente de IA.
+- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial (Ctrl+Alt+E), la
+  biblioteca de scripts (Alt+8) y el asistente de IA (Ctrl+Alt+I).
 
 ## Conexiones
 
@@ -24,8 +24,8 @@ y cualquier otra base de datos entra por ODBC.
 
 - **Producción** pide confirmación antes de un UPDATE/DELETE sin WHERE, DROP, TRUNCATE o ALTER.
 - **Solo lectura** rechaza en el núcleo cualquier sentencia que modifique datos.
-- **Avanzado › Script de inicio**: sentencias que se ejecutan en cada conexión que abre Celer, también al reconectar
-  (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
+- **Opciones avanzadas › Script al conectar**: sentencias que se ejecutan en cada conexión que abre Celer, también al
+  reconectar (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
 - Las contraseñas se guardan en el almacén de credenciales del sistema operativo, nunca en un fichero.
 
 ### El formulario
@@ -74,20 +74,15 @@ En el explorador:
 - **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
 - **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON sin contraseñas, para compartirlas o
   llevarlas a otro equipo; al importar no se repiten las que ya existen.
-- **Varias a la vez**: Ctrl+clic (⌘+clic en macOS) añade o quita una fila, Mayús+clic selecciona un rango tal como se
-  ve en el árbol y Ctrl+Mayús+clic lo añade a lo que ya había; con el teclado, Mayús+flechas (y Mayús+Inicio/Fin)
-  amplían la selección y Ctrl+A selecciona todas las filas visibles del mismo tipo que la que tiene el foco (todas las
-  conexiones, todas las carpetas, todas las tablas…). Esc deja solo la fila con el foco. El menú contextual, Supr,
-  Ctrl+C y Ctrl+Mayús+F actúan entonces sobre toda la selección y dicen cuántas son («Eliminar 3 conexiones»).
-  - Conexiones y carpetas se seleccionan juntas: conectar, desconectar, favoritas, exportar, copiar nombres, moverlas
-    (arrastrando la selección o con «Mover a…» del menú), crear una carpeta con ellas y eliminarlas con una sola
-    confirmación y un solo *Deshacer*. Conectar, desconectar y exportar incluyen lo que hay dentro de las carpetas
-    seleccionadas.
-  - Los accesos de **Favoritas** van aparte: Supr los quita de favoritas, nunca borra las conexiones.
-  - Los objetos de la base (tablas, vistas…) también van aparte: copiar sus nombres y generar un SELECT o un
-    SELECT COUNT(*) de cada tabla; arrastrarlos al editor escribe sus nombres.
-  - Si haces Ctrl+clic en una fila de otro grupo (un objeto con conexiones seleccionadas, por ejemplo), la selección
-    empieza de nuevo en ella.
+- **Varias a la vez**: Ctrl+clic (⌘+clic en macOS) añade o quita una fila, Mayús+clic selecciona un rango y
+  Ctrl+Mayús+clic lo añade; con el teclado, Mayús+flechas amplían la selección, Ctrl+A coge todas las filas visibles
+  del mismo tipo y Esc deja solo la que tiene el foco. El menú, Supr, Ctrl+C y Ctrl+Mayús+F actúan sobre toda la
+  selección y dicen cuántas son («Eliminar 3 conexiones»).
+  - Conexiones y carpetas van juntas: conectar, desconectar, favoritas, exportar, copiar, mover, agruparlas en una
+    carpeta nueva y eliminarlas con una sola confirmación y un solo *Deshacer*. Lo que hay dentro de una carpeta
+    seleccionada cuenta también.
+  - Las **Favoritas** van aparte: Supr las quita de favoritas, nunca borra las conexiones.
+  - Los objetos de la base van aparte: copiar sus nombres y generar un SELECT o un SELECT COUNT(*) de cada uno.
 - Todo está en el menú contextual (también con la tecla Menú o Mayús+F10), con su atajo al lado.
 
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas
@@ -98,34 +93,27 @@ el resto de propiedades de la URL (van a *Parámetros extra*).
 
 ### Conectar rápido
 
-- Una consola conecta **en segundo plano** en cuanto se abre o se muestra: la primera ejecución no espera al login.
-  Si su conexión no está conectada y no pide contraseña, también se conecta sola.
-- Cada sesión entra **directamente en su base de datos y con su modo de transacción**, sin `USE` ni idas y vueltas
-  después (en PostgreSQL, sin abrir una segunda conexión).
-- Las conexiones de las sesiones que se cierran sin nada propio (una tabla, un recuento) quedan **libres unos minutos**
-  para la siguiente de la misma configuración, que se ahorra el login. Nunca una con transacción, tablas temporales o
-  `SET` propios; al desconectar o editar la conexión se cierran.
-- El tiempo de conexión aparece en el tooltip de la conexión y de la pestaña, y en la salida de la primera sentencia
-  de una consola que tuvo que conectar.
+- Una consola conecta **en segundo plano** en cuanto se abre: la primera ejecución no espera al login. Si la conexión
+  no pide contraseña, también se conecta sola.
+- Cada sesión entra **directamente en su base de datos y con su modo de transacción**, sin `USE` después.
+- Las conexiones de sesiones cerradas sin nada propio (una tabla, un recuento) quedan **libres unos minutos** para la
+  siguiente con la misma configuración. Nunca una con transacción, tablas temporales o `SET` propios.
+- El tiempo de conexión sale en el tooltip de la conexión y de la pestaña.
 
 ### Reconexión
 
 Una conexión puede caerse con el equipo suspendido, un corte de VPN o un servidor que cierra las sesiones paradas.
 Celer lo detecta y vuelve a conectar solo:
 
-- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse; además, el sistema
-  mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con keepalive de TCP.
-- Al volver de una suspensión o de un corte de red, Celer comprueba todas las sesiones abiertas.
-- Si se cortó y no había nada que perder, la consulta sigue en la conexión nueva y la salida lo dice («Conexión
-  recuperada…»). Una sentencia que modifica datos no se repite nunca, porque no se sabe si llegó a ejecutarse: Celer
-  vuelve a conectar y te lo dice.
-- **Si había una transacción abierta, tablas temporales o `SET` de la sesión, no se reconecta en silencio**: la
-  sentencia no se ejecuta, la consola avisa de lo que se ha perdido (el servidor ya ha deshecho la transacción) y un
-  COMMIT pendiente da error en lugar de fingir que guardó.
-- Los fallos pasajeros al conectar (red que vuelve, servidor arrancando, errores transitorios de Azure) se reintentan
-  con espera.
-- El punto de la conexión en el explorador y en la pestaña dice el estado: ámbar que late mientras conecta, ámbar
-  fijo si se reconectó, rojo si se perdió estado o no hay conexión; el tooltip lo explica.
+- Una sesión parada más de un minuto se comprueba antes de usarse, y todas al volver de una suspensión o un corte de
+  red.
+- Si se cortó y no había nada que perder, la consulta sigue en la conexión nueva y la salida lo dice. Una sentencia
+  que modifica datos no se repite nunca: Celer vuelve a conectar y te lo dice.
+- **Con una transacción abierta, tablas temporales o `SET` de la sesión no se reconecta en silencio**: la consola
+  avisa de lo que se ha perdido y un COMMIT pendiente da error en lugar de fingir que guardó.
+- Los fallos pasajeros al conectar se reintentan con espera.
+- El punto de la conexión dice el estado: ámbar que late mientras conecta, ámbar fijo si se reconectó, rojo si se
+  perdió estado o no hay conexión.
 
 **Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta, cambios sin guardar
 en una tabla o una exportación en curso, lo pregunta antes.
@@ -163,14 +151,9 @@ las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
 - **Fijar un resultado** lo conserva al volver a ejecutar; **Comparar** lo enfrenta al resultado actual y marca las
   celdas cambiadas, las filas nuevas y las que desaparecen.
 - **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
-- **Mover columnas**: arrastra la cabecera de una columna y suéltala donde quieras; una línea marca dónde caerá y, cerca
-  del borde, la rejilla se desplaza sola. Esc durante el arrastre la deja donde estaba. Un clic en la cabecera sigue
-  seleccionando la columna y Mayús+clic (o Mayús y arrastrar) selecciona varias.
-  - Todo sigue el orden de la pantalla: la selección, las flechas y Tab, **Copiar** (con cabeceras y en todos los
-    formatos), la búsqueda, el panel de registro y **Exportar**, que escribe las columnas en ese orden aunque vuelva a
-    leer la consulta del servidor.
-  - *Restablecer orden de columnas*, en el menú de la cabecera, vuelve al orden de la consulta. Un resultado nuevo, o
-    volver a ejecutar, empieza también con el orden de la consulta (igual que los anchos).
+- **Mover columnas**: arrastra la cabecera y suéltala donde quieras (Esc lo cancela). Un clic la selecciona y
+  Mayús+clic selecciona varias. Copiar, buscar, el registro y Exportar siguen el orden de la pantalla.
+  *Restablecer orden de columnas* (menú de la cabecera) vuelve al de la consulta, igual que volver a ejecutar.
 - El panel derecho muestra el valor completo de una celda (JSON y XML se ven indentados) o la fila como formulario.
 
 ## Tablas
@@ -245,6 +228,19 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
 
 La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas.
 
+## Historial
+
+**Ctrl+Alt+E** abre en el panel derecho todo lo que has ejecutado, con su conexión, cuándo, cuánto tardó y cuántas
+filas devolvió (o si dio error). El cuadro de arriba busca en el SQL. Clic pega la consulta en la consola; doble clic
+la abre en una consola nueva. La papelera lo vacía. Para guardar SQL con nombre, usa la biblioteca.
+
+## Exportar e importar
+
+- **Exportar** (botón de la rejilla, menú de una tabla o de un objeto): CSV (con el separador que elijas), TSV,
+  Excel, JSON, XML, SQL INSERT, Markdown o HTML. Escribe en disco sobre la marcha, con progreso y *Cancelar*; desde
+  una tabla respeta sus filtros.
+- **Importar** (menú de una tabla): ver *Tablas*.
+
 ## Asistente de IA y servidor MCP
 
 El asistente (Ctrl+Alt+I) escribe, explica, corrige y optimiza SQL con Claude usando la estructura de tu base de
@@ -292,6 +288,8 @@ Gib vive en una sola ventana: la que estás usando.
 - **Atajos de teclado**: pulsa **+** junto a una acción y después la combinación. Si ya la usa otra acción, Celer
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.
 - **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción.
+- **IA y MCP**: modelo y clave del asistente, permisos del servidor MCP por conexión y su registro.
+- **Drivers**: qué ha encontrado Celer para Informix (Java, JDBC, IBM CLI) y las descargas.
 
 ## Gib
 

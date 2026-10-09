@@ -95,8 +95,8 @@ export function DriversSettings() {
   return (
     <>
       <p class="settings-note">
-        PostgreSQL, MySQL/MariaDB, SQL Server y SQLite son nativos: no hace falta instalar nada. Informix se conecta por SQLI, su protocolo de siempre, con el driver JDBC de
-        IBM o con el Client SDK, o por DRDA con el driver IBM CLI. Celer no incluye nada de IBM: usa lo que ya tienes (también lo de DBeaver) y descarga el resto cuando se lo pides.
+        Solo Informix necesita drivers: por SQLI con JDBC o el Client SDK, o por DRDA con IBM CLI. Celer usa lo que ya tienes (también lo de DBeaver) y descarga el
+        resto cuando se lo pides.
       </p>
       <div class="driver-actions">
         <button type="button" class="btn tiny" onClick={() => openInformixGuide()}><BookOpen size={13} /> Guía de drivers de Informix</button>

@@ -60,7 +60,7 @@ export function AiSettings() {
   return (
     <>
       <h4>Asistente integrado</h4>
-      <p class="settings-note">El panel de IA (Ctrl+Alt+I) genera, explica y corrige SQL con Claude. Envía el esquema y el SQL del editor, nunca filas de datos.</p>
+      <p class="settings-note">Escribe, explica y corrige SQL con Claude. Envía el esquema y el SQL del editor, nunca filas.</p>
       <div class="form-row">
         <label class="field">
           <span>Modelo</span>
@@ -81,8 +81,7 @@ export function AiSettings() {
 
       <h4>Servidor MCP para asistentes externos</h4>
       <p class="settings-note">
-        Permite que Claude Desktop, Claude Code u otro cliente MCP consulten tus bases de datos a través de Celer, solo con los permisos que fijes aquí.
-        Cada petición queda registrada abajo.
+        Claude Desktop, Claude Code y otros clientes MCP usan tus conexiones con los permisos que fijes aquí. Cada petición queda registrada abajo.
       </p>
       <Show when={isTauri()} fallback={<p class="settings-note">Disponible en la aplicación de escritorio.</p>}>
         <Show when={config()} fallback={<p class="settings-note">Cargando configuración…</p>}>
