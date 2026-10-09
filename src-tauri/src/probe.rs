@@ -446,10 +446,75 @@ pub fn explain(cfg: &ConnConfig, error: &str) -> String {
     if has(&["starting up", "57p03", "40613", "is not currently available"]) {
         return "El servidor está arrancando o no está disponible ahora: espera unos segundos y prueba otra vez.".into();
     }
+    if cfg.kind == DbKind::Odbc && has(&["im014", "architecture mismatch"]) {
+        return "El DSN usa un driver de 32 bits y Celer es de 64 bits: crea el DSN con «Orígenes de datos ODBC (64 bits)», con la versión de 64 bits del driver.".into();
+    }
     if cfg.kind == DbKind::Odbc && has(&["im002", "data source name not found"]) {
+        if let Some(hint) = odbc_name(&cfg.odbc_conn_str).and_then(|(what, name)| bitness_hint(what, &name, odbc_installed(what, &name))) {
+            return hint;
+        }
         return "No existe ese origen de datos (DSN) ni ese driver ODBC en este equipo: revisa la cadena de conexión.".into();
     }
     String::new()
+}
+
+/// Lo que nombra una cadena ODBC: un driver (`DRIVER={…}`) o un DSN (`DSN=…`), con su nombre.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum OdbcName {
+    Driver,
+    Dsn,
+}
+
+fn odbc_name(conn: &str) -> Option<(OdbcName, String)> {
+    let mut dsn = None;
+    for part in conn.split(';') {
+        let Some((key, value)) = part.split_once('=') else { continue };
+        let value = value.trim().trim_start_matches('{').trim_end_matches('}').trim().to_string();
+        match key.trim().to_ascii_uppercase().as_str() {
+            "DRIVER" if !value.is_empty() => return Some((OdbcName::Driver, value)),
+            "DSN" if !value.is_empty() => dsn = Some((OdbcName::Dsn, value)),
+            _ => {}
+        }
+    }
+    dsn
+}
+
+/// Dónde está registrado un driver o DSN en este Windows: (en 64 bits, solo para 32 bits). Los DSN de usuario son
+/// de las dos vistas del registro: cuentan como de 64 bits (el error dice entonces que su driver no lo es).
+#[cfg(windows)]
+fn odbc_installed(what: OdbcName, name: &str) -> (bool, bool) {
+    use winreg::{enums::*, RegKey};
+    let ini = match what {
+        OdbcName::Driver => "ODBCINST.INI",
+        OdbcName::Dsn => "ODBC.INI",
+    };
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let found = |root: &RegKey, path: String| root.open_subkey_with_flags(path, KEY_READ | KEY_WOW64_64KEY).is_ok();
+    let native = found(&hklm, format!(r"SOFTWARE\ODBC\{ini}\{name}"))
+        || (what == OdbcName::Dsn && found(&RegKey::predef(HKEY_CURRENT_USER), format!(r"SOFTWARE\ODBC\ODBC.INI\{name}")));
+    let wow = found(&hklm, format!(r"SOFTWARE\WOW6432Node\ODBC\{ini}\{name}"));
+    (native, wow)
+}
+
+#[cfg(not(windows))]
+fn odbc_installed(_: OdbcName, _: &str) -> (bool, bool) {
+    (false, false)
+}
+
+/// Un driver o DSN que solo está en la parte de 32 bits del registro (o un DSN cuyo driver no es de 64 bits).
+fn bitness_hint(what: OdbcName, name: &str, (native, wow): (bool, bool)) -> Option<String> {
+    match (what, native, wow) {
+        (OdbcName::Driver, false, true) => Some(format!(
+            "El driver «{name}» solo está instalado en 32 bits (HKLM\\SOFTWARE\\WOW6432Node\\ODBC): Celer es de 64 bits y necesita la versión de 64 bits del driver."
+        )),
+        (OdbcName::Dsn, false, true) => Some(format!(
+            "El DSN «{name}» solo existe en 32 bits (se creó con «Orígenes de datos ODBC (32 bits)»): Celer es de 64 bits; créalo en «Orígenes de datos ODBC (64 bits)», con la versión de 64 bits de su driver."
+        )),
+        (OdbcName::Dsn, true, _) => Some(format!(
+            "El DSN «{name}» existe, pero su driver no está instalado en 64 bits: Celer es de 64 bits y necesita la versión de 64 bits del driver."
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -492,6 +557,23 @@ mod tests {
         assert_eq!(ids, vec!["resolve", "tcp"], "{:?}", r.steps);
         assert_eq!(r.steps[1].status, "failed");
         assert!(r.hint.contains("nadie escucha"), "{}", r.hint);
+    }
+
+    #[test]
+    fn odbc_drivers_of_32_bits() {
+        assert_eq!(odbc_name("DRIVER={Microsoft Access Driver (*.mdb)};DBQ=C:\\x.mdb"), Some((OdbcName::Driver, "Microsoft Access Driver (*.mdb)".into())));
+        assert_eq!(odbc_name(" dsn = Ventas ; UID=u"), Some((OdbcName::Dsn, "Ventas".into())));
+        assert_eq!(odbc_name("FILEDSN=c:\\x.dsn"), None);
+        let hint = |what, native, wow| bitness_hint(what, "X", (native, wow)).unwrap_or_default();
+        assert!(hint(OdbcName::Driver, false, true).contains("solo está instalado en 32 bits"));
+        assert!(hint(OdbcName::Dsn, false, true).contains("solo existe en 32 bits"));
+        assert!(hint(OdbcName::Dsn, true, false).contains("no está instalado en 64 bits"));
+        assert_eq!(hint(OdbcName::Driver, false, false), "", "not installed at all: the usual message");
+        assert_eq!(hint(OdbcName::Driver, true, true), "");
+        let mut odbc = cfg(DbKind::Odbc);
+        odbc.odbc_conn_str = "DRIVER={Celer driver that does not exist};".into();
+        assert!(explain(&odbc, "[IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified").starts_with("No existe ese origen"));
+        assert!(explain(&odbc, "[IM014] [Microsoft][ODBC Driver Manager] The specified DSN contains an architecture mismatch between the Driver and Application").contains("64 bits"));
     }
 
     #[test]
