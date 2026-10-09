@@ -1,6 +1,7 @@
 // Quick checks for src/snippets.ts: node --experimental-strip-types dev/snippets-check.ts
 import assert from "node:assert/strict";
 import { allSnippets, bindParams, builtinSnippets, findParams, hasUnfilteredWrite, paramLiteral, paramNames, unfilteredWrites } from "../src/snippets.ts";
+import { firstKeyword, needsProductionConfirm } from "../src/sql.ts";
 
 const names = (sql: string, dialect?: string) => findParams(sql, dialect).map((p) => p.name);
 
@@ -69,6 +70,23 @@ assert.equal(hasUnfilteredWrite("WITH d AS (DELETE FROM t RETURNING *) SELECT co
 assert.equal(hasUnfilteredWrite("WITH d AS MATERIALIZED (UPDATE t SET a = 1 RETURNING id) SELECT * FROM d", "postgres"), true);
 assert.equal(hasUnfilteredWrite("WITH d AS (DELETE FROM t WHERE id = 1 RETURNING *) SELECT * FROM d", "postgres"), false);
 assert.equal(hasUnfilteredWrite("WITH a AS (SELECT CAST(x AS int) FROM u), d AS (SELECT (DELETE)) SELECT 1", "postgres"), false, "only CTE bodies that start with the write");
+assert.equal(hasUnfilteredWrite("# purge\nDELETE FROM t", "mysql"), true, "a MySQL # comment does not hide a DELETE");
+assert.equal(hasUnfilteredWrite("EXPLAIN ANALYZE DELETE FROM t", "postgres"), true, "EXPLAIN ANALYZE runs the DELETE");
+assert.equal(hasUnfilteredWrite("explain (analyze, buffers) update t set a = 1", "postgres"), true);
+assert.equal(hasUnfilteredWrite("EXPLAIN ANALYZE DELETE FROM t WHERE id = 1", "postgres"), false);
+assert.equal(hasUnfilteredWrite("EXPLAIN DELETE FROM t", "postgres"), false, "plain EXPLAIN does not run it");
+
+// Production confirmation.
+assert.equal(needsProductionConfirm("# old table\nDROP TABLE x", "mysql"), true, "a # comment does not hide a DROP");
+assert.equal(needsProductionConfirm("#a\n  # b\nDELETE FROM x", "mysql"), true);
+assert.equal(needsProductionConfirm("-- c\nDROP TABLE x", "mysql"), true);
+assert.equal(needsProductionConfirm("# c\nSELECT 1", "mysql"), false);
+assert.equal(needsProductionConfirm("EXPLAIN ANALYZE DELETE FROM x", "postgres"), true, "EXPLAIN ANALYZE runs the DELETE");
+assert.equal(needsProductionConfirm("EXPLAIN (ANALYZE, VERBOSE) UPDATE x SET a = 1", "postgres"), true);
+assert.equal(needsProductionConfirm("ANALYZE DELETE FROM x", "mysql"), true, "MariaDB ANALYZE runs the DELETE");
+assert.equal(needsProductionConfirm("EXPLAIN ANALYZE SELECT * FROM x FOR UPDATE", "postgres"), false);
+assert.equal(needsProductionConfirm("EXPLAIN DELETE FROM x", "postgres"), false);
+assert.equal(firstKeyword("# c\n/* d */ (SELECT 1)", "mysql"), "SELECT");
 {
   const sql = "WITH a AS (SELECT 1), d AS (\n  DELETE FROM t RETURNING *) SELECT * FROM d";
   const [cte] = unfilteredWrites(sql, "postgres");

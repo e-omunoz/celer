@@ -110,7 +110,9 @@ export function statementAt(sql: string, pos: number, dialect?: string): string 
   return chosen.sql;
 }
 
-export function firstKeyword(sql: string): string {
+export function firstKeyword(sql: string, dialect?: string): string {
+  // MySQL's "#" comments are not in the pattern below: blank them (and the rest) out first.
+  if (dialect === "mysql" && /^[\s(]*(--|\/\*|#)/.test(sql)) sql = codeOnly(sql, dialect);
   const m = sql.replace(/^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\{[^}]*\}|\s|\()*/, "").match(/^([A-Za-z_]+)/);
   return (m?.[1] ?? "").toUpperCase();
 }
@@ -119,7 +121,7 @@ const MUTATING = ["INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE", "CREATE", "
 
 export function isMutating(sql: string, dialect?: string): boolean {
   return splitSql(sql, dialect).some((s) => {
-    const kw = firstKeyword(s.sql);
+    const kw = firstKeyword(s.sql, dialect);
     if (MUTATING.includes(kw)) return true;
     // WITH x AS (DELETE … RETURNING …) SELECT … also writes.
     return kw === "WITH" && /\b(insert|update|delete|merge)\b/i.test(codeOnly(s.sql, dialect));
@@ -129,13 +131,27 @@ export function isMutating(sql: string, dialect?: string): boolean {
 /** Statements that deserve a confirmation on production connections. */
 export function needsProductionConfirm(sql: string, dialect?: string): boolean {
   return splitSql(sql, dialect).some((s) => {
-    const code = codeOnly(s.sql, dialect);
-    const kw = firstKeyword(s.sql);
+    let code = codeOnly(s.sql, dialect);
+    let kw = firstKeyword(s.sql, dialect);
+    // EXPLAIN ANALYZE (PostgreSQL) and ANALYZE <statement> (MariaDB) run the statement they explain.
+    const explained = analyzedStatement(kw, code);
+    if (explained) ({ kw, code } = explained);
     if (kw === "DROP" || kw === "TRUNCATE" || kw === "ALTER" || kw === "MERGE") return true;
     if (kw === "DELETE" || kw === "UPDATE") return !/\bwhere\b/i.test(code);
     if (kw === "WITH") return /\b(delete|update)\b/i.test(code) && !/\bwhere\b/i.test(code);
     return false;
   });
+}
+
+/**
+ * For `EXPLAIN ANALYZE <dml>`, `EXPLAIN (ANALYZE, …) <dml>` or MariaDB's `ANALYZE <dml>` (which run the statement),
+ * the explained statement's keyword and code from there on. Null for anything else.
+ */
+export function analyzedStatement(kw: string, code: string): { kw: string; code: string } | null {
+  if (!/^(EXPLAIN|ANALYZE|ANALYSE)$/.test(kw) || !/\banaly[sz]e\b/i.test(code)) return null;
+  const m = /^[\s(]*(?:(?:explain|analy[sz]e|verbose|format\s*=\s*\w+)\b\s*|\([^)]*\)\s*)*([A-Za-z_]+)/i.exec(code);
+  if (!m || !/^(delete|update|insert|merge|with)$/i.test(m[1])) return null;
+  return { kw: m[1].toUpperCase(), code: code.slice(m[0].length - m[1].length) };
 }
 
 const READS = ["SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "DESC"];

@@ -1,6 +1,6 @@
 // Live templates for the SQL editor, query parameters (:name, ?, ${name}) and the "no WHERE" check.
 // Pure functions: the editor and the run path use them; dev/snippets-check.ts tests them.
-import { codeOnly, firstKeyword, splitSql } from "./sql.ts";
+import { analyzedStatement, codeOnly, firstKeyword, splitSql } from "./sql.ts";
 import type { DbKind, Snippet } from "./types";
 
 export type { Snippet };
@@ -144,7 +144,13 @@ export function unfilteredWrites(sql: string, dialect?: string): UnfilteredWrite
   for (const part of splitSql(sql, dialect)) {
     const code = codeOnly(part.sql, dialect);
     let top = topLevel(code);
-    let kw = firstKeyword(part.sql);
+    let kw = firstKeyword(part.sql, dialect);
+    // EXPLAIN ANALYZE DELETE … runs the DELETE.
+    const explained = analyzedStatement(kw, code);
+    if (explained) {
+      kw = explained.kw;
+      top = top.slice(code.length - explained.code.length);
+    }
     if (kw === "WITH") {
       // PostgreSQL: WITH d AS (DELETE FROM t RETURNING *) SELECT … deletes too.
       for (const write of cteWrites(codeOnly(sql.slice(part.start, part.end), dialect))) out.push({ keyword: write.keyword, from: part.start + write.at, to: part.start + write.at + write.keyword.length });
