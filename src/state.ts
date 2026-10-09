@@ -1945,6 +1945,8 @@ export async function fetchMore(tabId: string, n = state.settings.pageSize): Pro
       results[resultIndex] = { ...result, rows: concatRows(result.rows, more.rows), hasMore: more.hasMore };
       if (!more.hasMore) results.push(...more.extra);
       patchTab(tab.id, { results, running: false });
+      // Messages that came while reading on (SQL Server PRINT after a result), under the statement that sent them.
+      if (more.messages?.length) pushOutput(tab.id, { at: Date.now(), sql: fresh.output[fresh.output.length - 1]?.sql ?? "", ok: true, text: more.messages.join("\n"), elapsedMs: null });
       if (completionAfterResult.has(tabId)) refreshCompletion(tabId, results);
       return true;
     } catch (err) {

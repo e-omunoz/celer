@@ -328,6 +328,7 @@ impl SqliteDriver {
                     rows,
                     has_more: true,
                     extra: vec![],
+                    messages: vec![],
                 });
             } else if rc == rusqlite::ffi::SQLITE_DONE {
                 done = true;
@@ -346,6 +347,7 @@ impl SqliteDriver {
                 rows,
                 has_more,
                 extra: vec![],
+                messages: vec![],
             });
         }
         let rest = self
@@ -363,6 +365,7 @@ impl SqliteDriver {
             rows,
             has_more: self.cursor.is_some(),
             extra,
+            messages: vec![],
         })
     }
 

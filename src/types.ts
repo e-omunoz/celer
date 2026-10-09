@@ -26,6 +26,8 @@ export interface FetchOutput {
   rows: Cell[][];
   hasMore: boolean;
   extra: ResultSet[];
+  /** Server messages that came with these rows (SQL Server: PRINT between two results). */
+  messages?: string[];
 }
 
 export type DbKind = "postgres" | "mysql" | "mssql" | "sqlite" | "informix" | "odbc";

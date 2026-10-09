@@ -54,6 +54,19 @@ enum Item {
     Row(Vec<Cell>),
     Count(i64),
     Error(String),
+    /// A message of the server that is not an error: PRINT, RAISERROR with severity 10 or less, warnings.
+    Info(String),
+}
+
+/// The server's informational message as the Output area shows it: PRINT as it is, the others with their number
+/// (like SSMS). "Changed database context / language setting" (5701, 5703) are left out: they only echo a USE or a
+/// SET LANGUAGE.
+fn info_text(m: &tiberius::ServerMessage) -> Option<String> {
+    match m.number {
+        5701 | 5703 => None,
+        0 => Some(m.message.clone()),
+        n => Some(format!("Msg {n}, nivel {}: {}", m.class, m.message)),
+    }
 }
 
 struct Cursor {
@@ -557,6 +570,8 @@ pub struct MssqlDriver {
     notes: Vec<String>,
     /// Lo que se supo después en segundo plano (cómo se cortó la conexión que se dejó): sale en la sentencia siguiente.
     late: Arc<Mutex<Vec<String>>>,
+    /// The batch being read sent an error (its messages may be PRINT output only).
+    errored: bool,
     /// La conexión de reserva de la sesión, abriéndose o abierta, para seguir al momento si se deja un resultado.
     reserve: Option<oneshot::Receiver<Option<Idle>>>,
     /// Mientras se lee el resto de un resultado para conservar la sesión, para `progress`.
@@ -591,6 +606,7 @@ impl MssqlDriver {
             info: String::new(),
             notes: Vec::new(),
             late: Arc::new(Mutex::new(Vec::new())),
+            errored: false,
             reserve: None,
             drain: Arc::new(Mutex::new(None)),
             batches: VecDeque::new(),
@@ -860,7 +876,11 @@ impl MssqlDriver {
                     }
                     results.push(ResultSet::count(n));
                 }
-                Some(Item::Error(m)) => messages.push(m),
+                Some(Item::Error(m)) => {
+                    self.errored = true;
+                    messages.push(m);
+                }
+                Some(Item::Info(m)) => messages.push(m),
                 None => {
                     if let Some(rs) = current.take() {
                         results.push(rs);
@@ -1614,6 +1634,9 @@ async fn stream_query(
     if dml {
         return match client.execute(sql, &[]).await {
             Ok(r) => {
+                for m in r.messages().iter().filter_map(info_text) {
+                    let _ = tx.send(Item::Info(m)).await;
+                }
                 let _ = tx.send(Item::Count(r.total() as i64)).await;
                 Outcome::Ok(None)
             }
@@ -1650,6 +1673,10 @@ async fn stream_query(
                 tx.send(Item::Meta(cols)).await.is_ok()
             }
             Ok(Some(QueryItem::Row(r))) => tx.send(Item::Row(row_to_cells(r))).await.is_ok(),
+            Ok(Some(QueryItem::Info(m))) => match info_text(&m) {
+                Some(text) => tx.send(Item::Info(text)).await.is_ok(),
+                None => true,
+            },
             Ok(None) => return Outcome::Ok(None),
             Err(e) => {
                 let fatal = is_fatal(&e);
@@ -1979,8 +2006,10 @@ impl MssqlDriver {
         }
         let first_ms = sent.elapsed().as_millis();
         let mut out = ExecOutput::default();
+        self.errored = false;
         out.results = self.pump(fetch.max(1), &mut out.messages);
-        if out.results.is_empty() && !out.messages.is_empty() && self.cursor.is_none() {
+        // Only errors make the batch fail: PRINT and other messages alone are its output.
+        if out.results.is_empty() && self.errored && self.cursor.is_none() {
             let msg = out.messages.join("\n");
             self.refresh_tx_state();
             bail!(msg);
@@ -2046,11 +2075,12 @@ impl MssqlDriver {
                     self.close_cursor()?;
                     bail!(m);
                 }
+                // PRINT while the rows are read (between two results, or from a procedure): told with this page.
+                Some(Item::Info(m)) => out.messages.push(m),
                 Some(other) => {
                     // Empieza otro resultado del mismo lote.
                     self.peek_back(other);
-                    let mut msgs = Vec::new();
-                    out.extra = self.pump(n, &mut msgs);
+                    out.extra = self.pump(n, &mut out.messages);
                     return Ok(out);
                 }
                 None => {

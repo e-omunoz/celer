@@ -4974,8 +4974,6 @@ dependencies = [
 [[package]]
 name = "tiberius"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e07324791de2bdaed058af4aa433a0b5ec5c0beac407a9797419c19805df2415"
 dependencies = [
  "async-native-tls",
  "async-trait",

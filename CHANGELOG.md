@@ -6,6 +6,13 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **SQL Server `PRINT` and low-severity `RAISERROR` messages are shown** (#67): `PRINT 'hola'; SELECT 1` shows «hola»
+  in the Output area next to the result, as SSMS does, and so do `RAISERROR('…', 0, 1) WITH NOWAIT` from a procedure,
+  a trigger's `PRINT` after an `INSERT`, and a message sent after a result read in pages. Severity 11 and up still
+  fails the batch as before. Celer now builds with a patched copy of `tiberius` that hands those messages over
+  (`src-tauri/vendor/tiberius/PATCHES.md`).
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

@@ -53,6 +53,10 @@ calamine = { version = "0.36.1", features = ["dates"] }
 # A second launch raises the running Celer instead of writing its files from a stale copy (src/lib.rs run)
 tauri-plugin-single-instance = "2"
 
+# tiberius with the server's INFO messages (PRINT, low-severity RAISERROR) exposed: vendor/tiberius/PATCHES.md
+[patch.crates-io]
+tiberius = { path = "vendor/tiberius" }
+
 [target.'cfg(windows)'.dependencies]
 # Proxy of the system's Internet settings for driver downloads (src/drivers.rs)
 winreg = "0.56"

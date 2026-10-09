@@ -135,6 +135,8 @@ pub struct FetchOutput {
     #[serde(rename = "hasMore")]
     pub has_more: bool,
     pub extra: Vec<ResultSet>,
+    /// Messages of the server that came with these rows (SQL Server: PRINT between two results).
+    pub messages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

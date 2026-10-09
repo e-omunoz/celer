@@ -153,6 +153,8 @@ en una tabla o una exportación en curso, lo pregunta antes.
   (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R).
 - **Ficheros**: Ctrl+O abre un `.sql`, Ctrl+S lo guarda en su sitio con la misma codificación y saltos de línea, y
   Ctrl+Mayús+S guarda como.
+- **Mensajes del servidor** en la pestaña *Salida*: los `NOTICE` de PostgreSQL, los avisos de MySQL y, en SQL Server,
+  `PRINT` y `RAISERROR` de gravedad 10 o menor (también `WITH NOWAIT` desde un procedimiento), en orden, como en SSMS.
 
 ### Resultados
 

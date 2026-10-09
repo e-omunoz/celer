@@ -100,13 +100,22 @@ Each driver declares what it supports so the UI only shows what works:
 | Informix Client SDK, other ODBC drivers | Installed by the user | Vendor licences |
 | SQLite, DuckDB | Bundled (compiled in) | Public domain / MIT |
 
+## SQL Server: the patched `tiberius`
+
+Celer builds against its own copy of `tiberius` 0.13.0 in `src-tauri/vendor/tiberius` (MIT / Apache-2.0, licences
+kept), wired in with `[patch.crates-io]` in `src-tauri/Cargo.toml`. Upstream reads the TDS `INFO` tokens and only
+logs them; the patch hands them to the caller as `QueryItem::Info` on the query stream and as
+`ExecuteResult::messages()` (#67). So `PRINT`, `RAISERROR` with severity 10 or less (`WITH NOWAIT` too) and server
+warnings appear in the Output area, in order, as in SSMS: `PRINT` text as it is, the rest as `Msg n, nivel c: …`.
+"Changed database context" and "Changed language setting" (5701, 5703) are left out: they only echo a `USE` or a
+`SET LANGUAGE`. A message that arrives while the rows of a result are read in pages comes with that page
+(`FetchOutput.messages`). Errors (severity 11 and up) still fail the batch with their `Msg` number. What changed and
+how to move to a newer `tiberius` is in `vendor/tiberius/PATCHES.md`; the engine test `mssql_engine` checks it.
+
 ## SQL Server: known limits
 
-- `PRINT` and `RAISERROR` messages of severity 10 or less are not shown: `tiberius` reads the TDS `INFO` tokens
-  that carry them but does not hand them to the caller. Errors (severity 11 and up) are shown with their `Msg` number.
-  Showing them needs a patched `tiberius` that exposes `INFO` tokens on the query stream (#67).
-- For the same reason a batch of several statements run as a query reports no row counts; a batch of a single
-  `INSERT`/`UPDATE`/`DELETE`/`MERGE` reports its count.
+- A batch of several statements run as a query reports no row counts (`tiberius` keeps the TDS `DONE` tokens to
+  itself); a batch of a single `INSERT`/`UPDATE`/`DELETE`/`MERGE` reports its count.
 - `money` is shown exact with its 4 decimals up to ±450,359,962,737 (2^52 ten-thousandths): `tiberius` decodes it
   to an `f64`, from which Celer takes the integer back. Beyond that the last digit may already be rounded (#68).
 - Scripts are split on `GO` lines (`GO n` repeats a batch), as SSMS and sqlcmd do; other sqlcmd commands (`:r`,

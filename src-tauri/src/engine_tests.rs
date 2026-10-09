@@ -325,6 +325,43 @@ fn mssql_engine() {
     let err = d.execute("SELECT nope FROM dbo.celer_t", 10).unwrap_err().to_string();
     assert!(err.contains("Msg 207"), "{err}");
 
+    // PRINT and RAISERROR below severity 11 reach the Output area (the patched tiberius, #67); 11 and above fail.
+    let out = d.execute("PRINT 'hola'; SELECT 1 AS uno", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m == "hola"), "{:?}", out.messages);
+    assert_eq!(out.results.len(), 1);
+    assert_eq!(txt(&out.results[0].rows[0][0]), "1");
+    let out = d.execute("PRINT 'solo un mensaje'", 10).unwrap();
+    assert!(out.results.is_empty() && out.messages.iter().any(|m| m == "solo un mensaje"), "{:?}", out.messages);
+    d.execute("CREATE OR ALTER PROCEDURE dbo.celer_progreso AS BEGIN RAISERROR('progreso', 0, 1) WITH NOWAIT; SELECT 2 AS dos; PRINT 'fin del procedimiento'; END", 10).unwrap();
+    let out = d.execute("EXEC dbo.celer_progreso", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m == "Msg 50000, nivel 0: progreso"), "{:?}", out.messages);
+    assert!(out.messages.iter().any(|m| m == "fin del procedimiento"), "{:?}", out.messages);
+    assert_eq!(txt(&out.results[0].rows[0][0]), "2");
+    let err = d.execute("RAISERROR('fallo', 16, 1)", 10).unwrap_err().to_string();
+    assert!(err.contains("fallo") && err.contains("Msg 50000"), "{err}");
+    // USE's "Changed database context" is left out: it only echoes the USE.
+    let out = d.execute("USE celer_test; SELECT MAX(alta) FROM dbo.celer_t", 10).unwrap();
+    assert!(!out.messages.iter().any(|m| m.contains("5701") || m.contains("database context")), "{:?}", out.messages);
+    // A single INSERT goes as DML (a row count): a trigger's PRINT is still told.
+    d.execute("IF OBJECT_ID('dbo.celer_msg') IS NOT NULL DROP TABLE dbo.celer_msg; CREATE TABLE dbo.celer_msg (a int)", 10).unwrap();
+    d.execute("CREATE TRIGGER dbo.celer_msg_ins ON dbo.celer_msg AFTER INSERT AS PRINT 'fila insertada'", 10).unwrap();
+    let out = d.execute("INSERT INTO dbo.celer_msg VALUES (1)", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m == "fila insertada"), "{:?}", out.messages);
+    assert_eq!(out.results[0].rows_affected, Some(1));
+    // A PRINT after a result read in pages comes with the page that reaches it.
+    let out = d.execute("SELECT TOP 50 a.object_id FROM sys.all_objects a; PRINT 'tras el resultado'", 10).unwrap();
+    assert!(out.results[0].has_more);
+    let mut later = Vec::new();
+    loop {
+        let f = d.fetch(10).unwrap();
+        later.extend(f.messages);
+        if !f.has_more {
+            break;
+        }
+    }
+    assert!(later.iter().any(|m| m == "tras el resultado"), "{later:?}");
+    d.execute("DROP TABLE dbo.celer_msg; DROP PROCEDURE dbo.celer_progreso", 10).unwrap();
+
     // Dates: what the grid shows must be accepted back as it is (datetime is .003 precision).
     d.execute("IF OBJECT_ID('dbo.dt') IS NOT NULL DROP TABLE dbo.dt; CREATE TABLE dbo.dt (id int PRIMARY KEY, a datetime, b datetime2(7), c time(7), e smalldatetime, f datetimeoffset(7), g date);
                INSERT INTO dbo.dt VALUES (1, '2024-03-15 10:20:30.003', '2024-03-15 10:20:30.1234567', '08:30:00.5', '2024-03-15 10:20', '2024-03-15 10:20:30.25 +02:00', '2024-03-15'),

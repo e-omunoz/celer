@@ -414,6 +414,7 @@ impl PostgresDriver {
                 rows,
                 has_more: true,
                 extra: vec![],
+                messages: vec![],
             });
         }
         // Agotado: cerrar y continuar con el resto del lote.
@@ -433,6 +434,7 @@ impl PostgresDriver {
             rows,
             has_more: self.cursor.is_some(),
             extra,
+            messages: vec![],
         })
     }
 
