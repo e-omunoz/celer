@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-09
+
 ### Added
 - **E-R diagram of one table and its relations**: "Diagrama de relaciones" in a table's menu, in its "Claves" tab and
   in the palette shows the table and the tables its foreign keys link it with, both ways (what it points to and what
@@ -406,7 +408,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/e-omunoz/celer/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/e-omunoz/celer/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/e-omunoz/celer/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/e-omunoz/celer/compare/v2.0.0...v2.0.1
