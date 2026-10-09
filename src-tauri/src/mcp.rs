@@ -525,6 +525,14 @@ fn lex(sql: &str, o: Lex) -> Result<Vec<Vec<Tok>>, String> {
                 i += 1;
             }
             let w: String = c[st..i].iter().collect();
+            if o.dollar
+                && (w == "U" || w == "u")
+                && c.get(i) == Some(&'&')
+                && c.get(i + 1) == Some(&'"')
+            {
+                // U&"d\0061ta" names an object through escapes the filters cannot see.
+                return Err("No se permiten identificadores U&\"…\"".into());
+            }
             if o.dollar && (w == "E" || w == "e") && c.get(i) == Some(&'\'') {
                 i = read_quoted(&c, i, '\'', true)?;
                 cur.push(Tok::Str);
@@ -656,9 +664,19 @@ fn check_read_tokens(t: &[Tok]) -> Result<(), String> {
         return check_pragma(t);
     }
     for (k, tok) in t.iter().enumerate() {
-        let Tok::Word(w) = tok else { continue };
+        let call = t.get(k + 1) == Some(&Tok::P('('));
+        let w = match tok {
+            Tok::Word(w) => w,
+            // A quoted name calls the same function: "pg_read_file"(…), `get_lock`(…), [xp_cmdshell].
+            Tok::Ident(w) => {
+                if (call && denied_function(w, true)) || w.to_lowercase().starts_with("xp_") {
+                    return Err(format!("{} no está permitido", w.to_lowercase()));
+                }
+                continue;
+            }
+            _ => continue,
+        };
         let next = t.get(k + 1);
-        let call = next == Some(&Tok::P('('));
         match w.as_str() {
             "INTO" => {
                 return Err("SELECT … INTO no está permitido: crea o modifica objetos".into())
@@ -701,7 +719,17 @@ fn check_write_tokens(t: &[Tok]) -> Result<(), String> {
         ));
     }
     for (k, tok) in t.iter().enumerate() {
-        let Tok::Word(w) = tok else { continue };
+        let w = match tok {
+            Tok::Word(w) => w,
+            Tok::Ident(w) => {
+                let call = t.get(k + 1) == Some(&Tok::P('('));
+                if (call && denied_function(w, false)) || w.to_lowercase().starts_with("xp_") {
+                    return Err(format!("{} no está permitido", w.to_lowercase()));
+                }
+                continue;
+            }
+            _ => continue,
+        };
         let next = match t.get(k + 1) {
             Some(Tok::Word(n)) => n.as_str(),
             _ => "",
@@ -2048,6 +2076,17 @@ mod tests {
         bad_read("PRAGMA writable_schema", Sqlite);
         bad_read("SELECT * FROM OPENROWSET('SQLNCLI', 'x', 'SELECT 1')", Mssql);
         bad_read("SELECT 1 xp_cmdshell 'dir'", Mssql);
+        // Quoted or schema-qualified names call the same function.
+        bad_read("SELECT \"pg_read_file\"('postgresql.conf')", Postgres);
+        bad_read("SELECT \"PG_TERMINATE_BACKEND\"(pid) FROM pg_stat_activity", Postgres);
+        bad_read("SELECT pg_catalog.\"pg_cancel_backend\" (1)", Postgres);
+        bad_read("SELECT \"set_config\"('a', 'b', false)", Postgres);
+        bad_read("SELECT * FROM \"dblink_exec\"('x', 'y')", Postgres);
+        bad_read("SELECT U&\"pg_r\\0065ad_file\"('x')", Postgres);
+        bad_read("SELECT `get_lock`('x', 10)", Mysql);
+        bad_read("SELECT `load_file`('/etc/passwd')", Mysql);
+        bad_read("SELECT 1 FROM [xp_cmdshell]", Mssql);
+        ok_read("SELECT \"pg_read_file\" FROM t", Postgres);
     }
 
     #[test]
@@ -2072,6 +2111,9 @@ mod tests {
         assert!(check_write_statement("COPY t FROM PROGRAM 'rm -rf /'", Postgres).is_err());
         assert!(check_write_statement("SELECT * FROM t INTO OUTFILE '/tmp/x'", Mysql).is_err());
         assert!(check_write_statement("EXEC xp_cmdshell 'dir'", Mssql).is_err());
+        assert!(check_write_statement("EXEC [master].[dbo].[xp_cmdshell] 'dir'", Mssql).is_err());
+        assert!(check_write_statement("SELECT \"lo_export\"(1, '/tmp/x')", Postgres).is_err());
+        assert!(check_write_statement("DO `sys_exec`('x')", Mysql).is_err());
         assert!(check_write_statement("ATTACH DATABASE 'x' AS y", Sqlite).is_err());
     }
 
