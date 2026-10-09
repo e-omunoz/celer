@@ -313,6 +313,19 @@ importar, lo que Celer no entiende se ignora y se dice cuál.
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.
 - **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción.
 
+## Si algo falla
+
+### Registro de errores
+
+*Ayuda › Registro de errores* (el botón **?** de la barra de la izquierda, o la paleta) muestra lo que ha fallado en
+este equipo: errores de los drivers de cada motor, errores de la interfaz, llamadas al núcleo que fallaron y cierres
+inesperados del núcleo, con la hora, la versión, dónde pasó y, si la hay, la pila. **Copiar** lo pone en el
+portapapeles, **Abrir carpeta** muestra el fichero y **Vaciar** lo borra.
+
+Antes de guardar cada entrada Celer le quita el texto SQL, los valores entre comillas, las contraseñas, las cadenas de
+conexión, los servidores y las IP, y las rutas con tu nombre de usuario. El registro ocupa como mucho medio megabyte
+(al llenarse, se aparta el anterior y se empieza otro) y **no se envía a ningún sitio**.
+
 ## Gib
 
 Gib piensa mientras corren las consultas, tiene una idea cuando termina una larga y te da consejos. Cuando no haces
@@ -434,6 +447,7 @@ mientras se ejecuta; lo quita la siguiente instalación, o puedes borrarlo a man
 | Ajustes, conexiones, historial, biblioteca | `%APPDATA%\es.celer.app` | `~/Library/Application Support/es.celer.app` | `~/.local/share/es.celer.app` (o `$XDG_DATA_HOME`) |
 | Contraseñas | Administrador de credenciales | Llavero | Secret Service (GNOME Keyring, KWallet) |
 | Drivers descargados (IBM CLI, JDBC, Java) y el puente JDBC | `…\es.celer.app\drivers` | `…/es.celer.app/drivers` | `…/es.celer.app/drivers` |
+| Registro de errores | `…\es.celer.app\logs` | `…/es.celer.app/logs` | `…/es.celer.app/logs` |
 | Actualización descargada (Celer Setup) | `%LOCALAPPDATA%\es.celer.app\updates` | — | — |
 
 Si uno de esos ficheros se daña, Celer lo aparta con el sufijo `.unreadable-…` y avisa, en lugar de sobrescribirlo.

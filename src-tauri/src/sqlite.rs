@@ -944,6 +944,15 @@ mod tests {
         assert_eq!(d.execute("SELECT 3", 10).unwrap().results[0].rows.len(), 1);
     }
 
+    /// Ayuda › Registro de errores: SQLite quotes a CHECK constraint (with its literal) in the error; the entry does not.
+    #[test]
+    fn error_log_entry_is_scrubbed() {
+        let mut d = mem();
+        d.execute("CREATE TABLE c (x TEXT CHECK (x <> 'celer-secret-42'))", 10).unwrap();
+        let e = d.execute("INSERT INTO c VALUES ('celer-secret-42')", 10).expect_err("CHECK").to_string();
+        crate::errlog::assert_scrubbed("SQLite", &e, "celer-secret-42");
+    }
+
     #[test]
     fn runs_the_startup_script() {
         let mut cfg = ConnConfig::default();

@@ -1,6 +1,7 @@
 mod drivers;
 #[cfg(test)]
 mod engine_tests;
+mod errlog;
 mod export;
 mod guard;
 mod jdbc;
@@ -38,6 +39,23 @@ type CmdResult<T> = Result<T, String>;
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+/// The area of a connection's errors in the local error log: the engine, and for Informix the protocol it uses.
+fn driver_area(cfg: &ConnConfig) -> String {
+    match cfg.kind {
+        DbKind::Informix => format!("driver:informix-{}", informix_mode(cfg)),
+        kind => format!("driver:{}", serde_json::to_value(kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
+    }
+}
+
+/// A driver error goes to the local error log (errlog.rs, scrubbed there) and on to the window as it was.
+fn log_driver<T>(app: &AppState, conn_id: &str, r: CmdResult<T>) -> CmdResult<T> {
+    if let Err(e) = &r {
+        let area = app.conn(conn_id).map(|cfg| driver_area(&cfg)).unwrap_or_else(|_| "driver".into());
+        errlog::record(&area, e, "");
+    }
+    r
 }
 
 struct AppState {
@@ -388,6 +406,7 @@ fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState
 #[tauri::command]
 async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<probe::Report> {
     let app = state.inner().clone();
+    let area = driver_area(&cfg);
     let (tx, rx) = tokio::sync::oneshot::channel();
     // En un hilo propio: resolver nombres, abrir sockets y los drivers bloquean (y algunos llevan su propio runtime).
     std::thread::Builder::new()
@@ -397,7 +416,14 @@ async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> Cm
             let _ = tx.send(report);
         })
         .map_err(err)?;
-    rx.await.map_err(|_| "La prueba de conexión terminó inesperadamente".to_string())?
+    let r: CmdResult<probe::Report> = rx.await.map_err(|_| "La prueba de conexión terminó inesperadamente".to_string())?;
+    // A failed test goes to the local error log too (what the driver said, scrubbed).
+    match &r {
+        Ok(report) if !report.ok && !report.error.is_empty() => errlog::record(&area, &report.error, ""),
+        Err(e) => errlog::record(&area, e, ""),
+        _ => {}
+    }
+    r
 }
 
 /// An Informix connection over JDBC is about to open: Java starts now, while the user types the password.
@@ -459,13 +485,17 @@ async fn open_session(
     let connector = prepared.connector;
     let timing = Arc::new(Mutex::new((0u64, false)));
     let seen = timing.clone();
+    let area = driver_area(&state.conn(&conn_id)?);
     let h = SessionHandle::open(conn_id, move || {
         let g = guard::Guarded::open(connector, opts)?;
         *seen.lock() = (g.connect_ms, g.reused);
         Ok(Box::new(g) as Box<dyn Driver>)
     })
     .await
-    .map_err(err)?;
+    .map_err(|e| {
+        errlog::record(&area, &e.to_string(), "");
+        err(e)
+    })?;
     let (database, server_info) = h
         .run(|d| {
             Ok((
@@ -535,7 +565,8 @@ async fn execute(
     // Ajustes › Ejecución: the deadline counts from when the statement starts on the session's thread.
     let cancel = h.canceller();
     let secs = timeout_secs.unwrap_or(0);
-    h.run(move |d| Ok(session::with_deadline(cancel, secs, || d.execute(&sql, fetch)))).await.map_err(err)?
+    let r = h.run(move |d| Ok(session::with_deadline(cancel, secs, || d.execute(&sql, fetch)))).await.map_err(err)?;
+    log_driver(&state, &h.conn_id, r)
 }
 
 /// A read-only connection refuses user SQL that modifies data. Every command that runs user SQL calls this.
@@ -556,7 +587,7 @@ async fn fetch(
     n: usize,
 ) -> CmdResult<FetchOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.fetch(n)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.fetch(n)).await.map_err(err))
 }
 
 #[tauri::command]
@@ -594,19 +625,19 @@ async fn set_autocommit(
     on: bool,
 ) -> CmdResult<bool> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.set_autocommit(on)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.set_autocommit(on)).await.map_err(err))
 }
 
 #[tauri::command]
 async fn commit(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<bool> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(|d| d.commit()).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(|d| d.commit()).await.map_err(err))
 }
 
 #[tauri::command]
 async fn rollback(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<bool> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(|d| d.rollback()).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(|d| d.rollback()).await.map_err(err))
 }
 
 #[tauri::command]
@@ -616,7 +647,7 @@ async fn meta_children(
     path: Vec<String>,
 ) -> CmdResult<Vec<MetaNode>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.children(&path)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.children(&path)).await.map_err(err))
 }
 
 #[tauri::command]
@@ -626,7 +657,7 @@ async fn table_columns(
     obj: ObjectRef,
 ) -> CmdResult<Vec<TableColumn>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.table_columns(&obj)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.table_columns(&obj)).await.map_err(err))
 }
 
 #[tauri::command]
@@ -636,7 +667,7 @@ async fn object_ddl(
     obj: ObjectRef,
 ) -> CmdResult<String> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.ddl(&obj)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.ddl(&obj)).await.map_err(err))
 }
 
 #[tauri::command]
@@ -655,7 +686,7 @@ async fn list_databases(
     session_id: String,
 ) -> CmdResult<Vec<String>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(|d| d.databases()).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(|d| d.databases()).await.map_err(err))
 }
 
 #[tauri::command]
@@ -1196,6 +1227,37 @@ fn desktop_notify(window: tauri::WebviewWindow, title: String, body: String) {
     let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
 }
 
+// ───────────── Registro de errores (errlog.rs) ─────────────
+
+/// An unhandled error of the interface, or a call to the core that failed, for the local error log.
+#[tauri::command]
+fn error_log_add(area: String, message: String, stack: Option<String>) {
+    errlog::record(&area, &message, stack.as_deref().unwrap_or(""));
+}
+
+/// Ayuda › Registro de errores: the newest entries first.
+#[tauri::command(async)]
+fn error_log_list(limit: usize) -> Vec<errlog::Entry> {
+    errlog::entries(limit)
+}
+
+#[tauri::command(async)]
+fn error_log_clear() -> CmdResult<()> {
+    errlog::clear().map_err(err)
+}
+
+/// The log file (for «Abrir carpeta», which shows it selected in its folder).
+#[tauri::command]
+fn error_log_path() -> CmdResult<String> {
+    let dir = errlog::folder().ok_or("El registro de errores no está disponible")?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let file = dir.join("errors.log");
+    if !file.exists() {
+        std::fs::write(&file, "").map_err(err)?;
+    }
+    Ok(file.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn app_info(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     serde_json::json!({
@@ -1385,6 +1447,8 @@ pub fn run() {
                     .app_data_dir()
                     .unwrap_or_else(|_| std::env::temp_dir().join("celer"))
             });
+            // Panics and errors from here on go to <data>/logs (Ayuda › Registro de errores).
+            errlog::init(&dir);
             let store = Store::new(dir.clone());
             // The history retention of Ajustes › Historial, before any window adds to it.
             if let Ok(settings) = store.load_json("settings.json") {
@@ -1470,6 +1534,10 @@ pub fn run() {
             driver_download_cancel,
             app_info,
             desktop_notify,
+            error_log_add,
+            error_log_list,
+            error_log_clear,
+            error_log_path,
             migration_sources,
             migration_dbeaver_credentials,
             update_check,

@@ -1875,6 +1875,14 @@ mod tests {
         assert_eq!(cell_i64(&out.results[0].rows[0][0]), 5);
     }
 
+    /// Ayuda › Registro de errores (MySQL and MariaDB): the syntax error quotes the statement; its entry does not.
+    #[test]
+    fn it_scrubs_error_log_entries() {
+        let Some(mut d) = connect() else { return };
+        let e = d.execute("SELECT nombre FROMM clientes WHERE pwd = 'celer-secret-42'", 10).expect_err("error de sintaxis").to_string();
+        crate::errlog::assert_scrubbed("MySQL/MariaDB", &e, "celer-secret-42");
+    }
+
     #[test]
     fn it_pages_large_results() {
         let Some(mut d) = connect() else { return };

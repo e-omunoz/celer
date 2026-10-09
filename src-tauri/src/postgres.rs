@@ -2133,6 +2133,14 @@ mod tests {
         assert_eq!(txt(&d.execute("SELECT 7", 10).unwrap().results[0].rows[0][0]), "7");
     }
 
+    /// Ayuda › Registro de errores: a PostgreSQL error with a value in it is logged without the value.
+    #[test]
+    fn pg_error_log_entry_is_scrubbed() {
+        let Some(mut d) = driver() else { return };
+        let e = d.execute("SELECT 'celer-secret-42'::int", 10).expect_err("valor no numérico").to_string();
+        crate::errlog::assert_scrubbed("PostgreSQL", &e, "celer-secret-42");
+    }
+
     #[test]
     fn pg_read_only_enforced_by_server() {
         let Some(mut cfg) = test_cfg() else { return };

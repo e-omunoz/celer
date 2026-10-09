@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
 import type { MigrationSource } from "./migrate";
+import type { ErrorEntry } from "./errorLogText";
 import { createDemoBackend } from "./demo";
 
 export interface Backend {
@@ -64,6 +65,12 @@ export interface Backend {
   setHistoryRetention(max: number, days: number): Promise<number>;
   /** A desktop notification (and the taskbar button asks for attention). */
   desktopNotify(title: string, body: string): Promise<void>;
+  /** Local error log (Ayuda › Registro de errores): the core scrubs every entry before writing it. */
+  errorLogAdd(area: string, message: string, stack?: string): Promise<void>;
+  errorLogList(limit: number): Promise<ErrorEntry[]>;
+  errorLogClear(): Promise<void>;
+  /** The log file, to show it in its folder. */
+  errorLogPath(): Promise<string>;
   loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
   /**
    * Writes a shared file through the core, which tells the other windows. `merge`: `value` holds only some top-level
@@ -120,9 +127,43 @@ export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * Commands whose failures the core already writes to the error log (driver errors, with the engine), and the log's
+ * own commands: the rest are logged by the window when they fail (src/errorLog.ts).
+ */
+const LOGGED_BY_CORE = new Set([
+  "open_session",
+  "execute",
+  "fetch",
+  "set_autocommit",
+  "commit",
+  "rollback",
+  "meta_children",
+  "table_columns",
+  "object_ddl",
+  "list_databases",
+  "test_connection",
+  "error_log_add",
+  "error_log_list",
+  "error_log_clear",
+  "error_log_path",
+]);
+
+let failedCall: ((cmd: string, err: unknown) => void) | null = null;
+
+/** Called with every call to the core that fails and the core did not log itself. */
+export function onFailedCall(cb: (cmd: string, err: unknown) => void) {
+  failedCall = cb;
+}
+
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const mod = await import("@tauri-apps/api/core");
-  return mod.invoke<T>(cmd, args);
+  try {
+    return await mod.invoke<T>(cmd, args);
+  } catch (err) {
+    if (!LOGGED_BY_CORE.has(cmd)) failedCall?.(cmd, err);
+    throw err;
+  }
 }
 
 function tauriBackend(): Backend {
@@ -163,6 +204,10 @@ function tauriBackend(): Backend {
     clearHistory: () => invoke("clear_history"),
     setHistoryRetention: (max, days) => invoke("set_history_retention", { max, days }),
     desktopNotify: (title, body) => invoke("desktop_notify", { title, body }),
+    errorLogAdd: (area, message, stack) => invoke("error_log_add", { area, message, stack: stack ?? null }),
+    errorLogList: (limit) => invoke("error_log_list", { limit }),
+    errorLogClear: () => invoke("error_log_clear"),
+    errorLogPath: () => invoke("error_log_path"),
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),

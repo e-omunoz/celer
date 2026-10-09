@@ -8,6 +8,10 @@ import "@fontsource/source-serif-4/500.css";
 import { render } from "solid-js/web";
 import App from "./App";
 import "./App.css";
+import { installErrorCapture } from "./errorLog";
+
+// Unhandled errors and failed calls to the core go to the local error log (Ayuda › Registro de errores).
+installErrorCapture();
 
 const root = document.getElementById("root") as HTMLElement;
 if (import.meta.env.DEV && location.hash.startsWith("#giblab")) {

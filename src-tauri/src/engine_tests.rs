@@ -399,6 +399,8 @@ fn mssql_engine() {
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "4");
 
     // Cancel a running statement.
+    let e = d.execute("SELECT * FROM celer_secret_42 WHERE x = 'celer-secret-42'", 10).expect_err("tabla inexistente").to_string();
+    crate::errlog::assert_scrubbed("SQL Server", &e, "celer_secret_42");
     assert_cancel(d, "WAITFOR DELAY '00:00:30'");
     assert_timeout(d, "WAITFOR DELAY '00:00:30'");
 
@@ -835,6 +837,8 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     let dt_obj = ObjectRef { database: "celer".into(), schema: obj.schema.clone(), name: "dt".into(), kind: "table".into() };
 
     // Cancel a long statement.
+    let e = d.execute("SELECT * FROM celer_secret_42", 10).expect_err("tabla inexistente").to_string();
+    crate::errlog::assert_scrubbed(&format!("Informix {via}"), &e, "celer_secret_42");
     assert_cancel(d, "SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e");
     assert_timeout(d, "SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e");
 

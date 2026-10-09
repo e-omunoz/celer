@@ -1,8 +1,9 @@
-import { ArrowDownToLine, BookMarked, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
+import { ArrowDownToLine, BookMarked, CircleHelp, Database, History, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
 import { createEffect, onCleanup, onMount, Show, untrack } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
-import { handleGlobalKey, withShortcut } from "./commands";
+import { handleGlobalKey, shortcutLabel, withShortcut } from "./commands";
+import { openErrorLog } from "./errorLog";
 import { trackAltGr } from "./keymap";
 import { Inspector } from "./components/Inspector";
 import { Modals } from "./components/Modals";
@@ -34,12 +35,13 @@ import {
   setState,
   state,
   toggleInspector,
+  type MenuItem,
 } from "./state";
 import { engineOf } from "./types";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { MigrateDialog } from "./components/MigrateDialog";
 import { migration, openMigration } from "./migrate";
-import { setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
+import { checkForUpdates, setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
 
 export default function App() {
   // A panel in a window of its own (library, assistant, plan, diagram, comparison).
@@ -124,6 +126,9 @@ export default function App() {
             <Sparkles size={17} />
           </button>
           <span class="spacer" />
+          <button type="button" class="stripe-btn" title="Ayuda" onClick={(event) => openMenu(event, helpMenu())}>
+            <CircleHelp size={17} />
+          </button>
           <button type="button" class="stripe-btn" title={withShortcut("Ajustes", "settings")} onClick={() => setState("settingsOpen", true)}>
             <Settings2 size={17} />
           </button>
@@ -150,6 +155,19 @@ export default function App() {
       <Show when={state.onboardingOpen}><Onboarding /></Show>
     </div>
   );
+}
+
+/** Ayuda: the guide, shortcuts, the error log, updates and «Acerca de». */
+export function helpMenu(): MenuItem[] {
+  return [
+    { label: "Guía de inicio", run: () => setState("onboardingOpen", true) },
+    { label: "Atajos de teclado…", hint: shortcutLabel("shortcuts"), run: () => setState({ settingsOpen: true, settingsSection: "keys" }) },
+    { separator: true },
+    { label: "Registro de errores", hint: shortcutLabel("error-log"), run: () => void openErrorLog() },
+    { separator: true },
+    { label: "Buscar actualizaciones", run: () => void checkForUpdates(true) },
+    { label: "Acerca de Celer", run: () => setState("aboutOpen", true) },
+  ];
 }
 
 function TopBar() {

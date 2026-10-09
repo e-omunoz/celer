@@ -3,6 +3,8 @@ import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import type { Backend } from "./api";
 import { quoteIdent, resultToText } from "./sql";
 import { inOrder, isPermutation } from "./columnOrder";
+import { scrubStack, scrubText } from "./scrub";
+import type { ErrorEntry } from "./errorLogText";
 import type {
   Cell,
   ColKind,
@@ -676,6 +678,21 @@ export function createDemoBackend(): Backend {
       const kept = all.filter((entry) => entry.at >= cutoff).slice(-Math.max(1, max));
       if (kept.length !== all.length) writeJson("celer.history", kept);
       return all.length - kept.length;
+    },
+    // The browser demo keeps its error log in localStorage, scrubbed like the core's.
+    async errorLogAdd(area, message, stack) {
+      const all = readJson<ErrorEntry[]>("celer.errors", []);
+      all.push({ at: Date.now(), version: "dev", area: area.replace(/[^\w:-]/g, "").slice(0, 48) || "?", message: scrubText(message).slice(0, 2000), stack: scrubStack(stack ?? "").slice(0, 8000) });
+      writeJson("celer.errors", all.slice(-200));
+    },
+    async errorLogList(limit) {
+      return readJson<ErrorEntry[]>("celer.errors", []).reverse().slice(0, limit);
+    },
+    async errorLogClear() {
+      localStorage.removeItem("celer.errors");
+    },
+    async errorLogPath() {
+      throw new Error("En el navegador el registro está en el almacenamiento de la página");
     },
     async desktopNotify(title, body) {
       // The browser's own notifications, when the page is allowed to show them.

@@ -14,6 +14,8 @@ import {
 import { CodeView } from "./Editor";
 import { ExportDialog } from "./ExportDialog";
 import { SettingsDialog } from "./settings/SettingsDialog";
+import { ErrorLogView } from "./ErrorLogView";
+import { errorLog } from "../errorLog";
 import { ErDiagram } from "./ErDiagram";
 import { ActivityView } from "./ActivityView";
 import { SchemaCompareView } from "./SchemaCompareView";
@@ -35,6 +37,7 @@ export function Modals() {
       <Show when={state.exportOpen}><ExportDialog /></Show>
       <Show when={importer.open}><ImportDialog /></Show>
       <Show when={state.aboutOpen}><AboutDialog /></Show>
+      <Show when={errorLog.open}><ErrorLogView /></Show>
       <Show when={state.previewSql}>
         <Dialog title="Revisar cambios antes de guardar" wide onClose={() => setState({ previewSql: "", previewRun: null })}>
           <p class="dialog-lead">Se ejecutarán estas sentencias en una sola operación.</p>

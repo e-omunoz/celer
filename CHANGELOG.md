@@ -25,6 +25,12 @@ All notable changes to Celer are documented here. The format follows
   - Avisos: how long notices stay, and a desktop notification when a query longer than N seconds ends while Celer is in
     the background.
   Settings files from earlier versions load unchanged; new keys take their defaults, which keep today's behaviour.
+- **Local error log** (#122): Ayuda › Registro de errores (a new **?** button in the left bar, and the palette) lists
+  Rust panics, driver errors of every engine, unhandled interface errors and failed calls to the core, with time,
+  version, area and stack, and can copy them, show the file in its folder and clear them. Entries are scrubbed before
+  they are written (SQL text, quoted values, passwords, connection strings, hosts and IPs, paths with the user name);
+  the file (`<data>/logs/errors.log`) rotates at 256 KB. Nothing is sent anywhere. An unexpected interface error now
+  shows a notice that points to the log.
 
 ### Changed
 - The settings dialog is split into one component per section (`src/components/settings/`), registered in

@@ -1494,6 +1494,15 @@ mod tests {
         assert_eq!(out.results[0].rows.len(), 1);
     }
 
+    /// Ayuda › Registro de errores over ODBC: the driver's error with a value in it is logged without the value.
+    #[test]
+    fn odbc_error_log_entry_is_scrubbed() {
+        let Some(mut d) = odbc_test_driver() else { return };
+        let bad = std::env::var("CELER_ODBC_BAD").unwrap_or_else(|_| "SELECT 'celer-secret-42'::int".into());
+        let e = d.execute(&bad, 10).expect_err("valor no numérico").to_string();
+        crate::errlog::assert_scrubbed("ODBC", &e, "celer-secret-42");
+    }
+
     #[test]
     fn empty_database_is_left_out() {
         let mut cfg = ConnConfig { kind: DbKind::Informix, host: "db".into(), user: "u".into(), password: Some("p;w".into()), ..Default::default() };

@@ -39,6 +39,7 @@ import { resetGibTips } from "./gib/memory";
 import { isTauri } from "./api";
 import { detachablePanel, detachPanel, openNewWindow, otherFullWindows, quitCeler, raiseWindow, sendTab } from "./windows";
 import { windowName } from "./windowModel";
+import { openErrorLog } from "./errorLog";
 
 export interface Command {
   id: string;
@@ -128,6 +129,7 @@ export function commands(): Command[] {
     { id: "gib-tip", label: "Gib: un consejo", group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
     { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
     { id: "gib-reset", label: "Gib: volver a contar los consejos desde el principio", group: "Ayuda", run: () => { resetGibTips(); notify("Gib volverá a darte sus consejos", "success", "Los que ya viste cuentan como nuevos."); } },
+    { id: "error-log", label: "Registro de errores", hint: "Lo que ha fallado en este equipo, sin datos ni contraseñas. No se envía a ningún sitio.", group: "Ayuda", run: () => void openErrorLog() },
     { id: "about", label: "Acerca de Celer", group: "Ayuda", run: () => setState("aboutOpen", true) },
     { id: "update", label: "Buscar actualizaciones", group: "Ayuda", run: () => void checkForUpdates(true) },
   ];
