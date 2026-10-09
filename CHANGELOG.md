@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-09
+
 ### Added
 - **Several windows** (desktop app):
   - **Ctrl+Shift+N** opens a new window, with its own explorer and tabs, connected to what the first one is;
@@ -354,7 +356,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/e-omunoz/celer/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/e-omunoz/celer/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/e-omunoz/celer/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/e-omunoz/celer/compare/v1.3.0...v1.3.1
