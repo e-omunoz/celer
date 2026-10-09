@@ -326,11 +326,6 @@ export function SqlEditor(props: {
       ".cm-tooltip-autocomplete > ul > li[aria-selected]": { background: "var(--selection)", color: "var(--text)" },
       ".cm-completionDetail": { color: "var(--text-faint)", fontStyle: "normal", marginLeft: "8px" },
       ".cm-completionIcon": { opacity: "0.75", width: "1.2em" },
-      ".cm-panels": { background: "var(--panel)", color: "var(--text)", borderColor: "var(--border)" },
-      ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
-      ".cm-panel.cm-search": { padding: "6px 8px", fontFamily: "var(--sans)", fontSize: "12px" },
-      ".cm-panel.cm-search input, .cm-panel.cm-search button": { fontFamily: "var(--sans)", fontSize: "12px", borderRadius: "5px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", padding: "2px 6px" },
-      ".cm-panel.cm-search label": { fontSize: "12px" },
       ".cm-stmt": { background: "var(--editor-stmt)" },
       ".cm-table-link": { textDecoration: "underline", textUnderlineOffset: "3px", color: "var(--accent)", cursor: "pointer" },
       ".cm-unfiltered": { textDecoration: "underline wavy var(--warning)", textUnderlineOffset: "3px", textDecorationSkipInk: "none" },
@@ -405,6 +400,7 @@ export function SqlEditor(props: {
           unfilteredWarning(() => props.kind),
           linkField,
           theme.of(themeExtension()),
+          panelTheme,
           // Before the built-in bindings: a user's shortcut wins over the editor's own (not over the completion
           // list's keys, which CodeMirror puts above everything).
           userKeys.of(commandKeys()),
@@ -545,6 +541,48 @@ const spanishPhrases = EditorState.phrases.of({
   Completions: "Sugerencias",
 });
 
+/**
+ * The find/replace panel (Ctrl+F / Ctrl+H) in Celer's look, in every theme. CodeMirror's base theme stacks panels at
+ * z-index 300 and tooltips at 500, over the scrim (60) and the dialogs: here they stay above the editor, the grid and
+ * the status bar, but under every dialog and menu. Selectors repeat the base theme's (`.cm-panel.cm-search …`) so
+ * these win over it.
+ */
+const panelTheme = EditorView.theme({
+  ".cm-panels": { background: "var(--panel)", color: "var(--text)", zIndex: "1" },
+  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+  ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--border)" },
+  ".cm-tooltip": { zIndex: "50" },
+  ".cm-panel.cm-search": { padding: "5px 40px 5px 8px", fontFamily: "var(--sans)", fontSize: "12px", lineHeight: "1" },
+  ".cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label": { margin: "2px 6px 2px 0", verticalAlign: "middle" },
+  ".cm-panel.cm-search .cm-textfield": {
+    width: "220px", height: "26px", padding: "0 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-strong)",
+    background: "var(--surface)", color: "var(--text)", fontFamily: "var(--sans)", fontSize: "12.5px",
+    transition: "border-color var(--dur-fast), box-shadow var(--dur-fast)",
+  },
+  ".cm-panel.cm-search .cm-textfield:focus, .cm-panel.cm-search .cm-textfield:focus-visible": { outline: "none", borderColor: "var(--accent)", boxShadow: "0 0 0 3px var(--accent-soft)" },
+  ".cm-panel.cm-search .cm-textfield::placeholder": { color: "var(--text-faint)" },
+  ".cm-panel.cm-search .cm-button": {
+    height: "26px", padding: "0 10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-strong)", background: "var(--surface)",
+    color: "var(--text)", fontFamily: "var(--sans)", fontSize: "12px", fontWeight: "500", cursor: "pointer", transition: "background var(--dur-fast)",
+  },
+  ".cm-panel.cm-search .cm-button:hover": { background: "color-mix(in srgb, var(--text) 5%, var(--surface))" },
+  ".cm-panel.cm-search .cm-button:active": { backgroundImage: "none", transform: "translateY(0.5px)" },
+  // mayúsculas / regexp / palabra completa: toggles that light up in the accent colour when on.
+  ".cm-panel.cm-search label": {
+    display: "inline-flex", alignItems: "center", gap: "5px", height: "26px", padding: "0 8px", borderRadius: "var(--radius-sm)",
+    border: "1px solid transparent", color: "var(--text-muted)", fontSize: "12px", whiteSpace: "nowrap", cursor: "pointer", userSelect: "none",
+    transition: "background var(--dur-fast), color var(--dur-fast)",
+  },
+  ".cm-panel.cm-search label:hover": { background: "var(--hover)", color: "var(--text)" },
+  ".cm-panel.cm-search label:has(input:checked)": { background: "var(--accent-soft)", borderColor: "color-mix(in srgb, var(--accent) 35%, transparent)", color: "var(--accent-text)" },
+  ".cm-panel.cm-search input[type=checkbox]": { width: "13px", height: "13px", margin: "0", accentColor: "var(--accent)", cursor: "pointer" },
+  ".cm-panel.cm-search [name=close]": {
+    top: "6px", right: "8px", width: "24px", height: "24px", margin: "0", display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)",
+    color: "var(--text-muted)", fontSize: "17px", lineHeight: "1", cursor: "pointer", transition: "background var(--dur-fast), color var(--dur-fast)",
+  },
+  ".cm-panel.cm-search [name=close]:hover": { background: "var(--hover)", color: "var(--text)" },
+});
+
 /** Read-only, syntax-highlighted SQL (DDL, definitions). */
 export function CodeView(props: { doc: string; kind: DbKind }) {
   let host: HTMLDivElement | undefined;
@@ -563,6 +601,7 @@ export function CodeView(props: { doc: string; kind: DbKind }) {
           EditorState.readOnly.of(true),
           EditorView.editable.of(false),
           spanishPhrases,
+          panelTheme,
           keymap.of([...searchKeymap, ...defaultKeymap]),
           EditorView.theme({
             "&": { height: "100%", fontSize: "13px", background: "var(--editor-bg)", color: "var(--text)" },

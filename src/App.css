@@ -1231,8 +1231,9 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .upd-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .upd-meta span { display: inline-flex; align-items: center; gap: 5px; }
 .upd-fine { margin: 0 0 4px; font-size: 12px; color: var(--text-faint); line-height: 1.5; }
-.update-dialog footer { display: flex; align-items: center; gap: 8px; }
-.update-dialog footer .spacer { flex: 1; }
+.update-dialog footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 10px 12px; }
+.upd-aside, .upd-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.upd-actions { margin-left: auto; justify-content: flex-end; }
 .toggle-line { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-muted); cursor: pointer; }
 
 /* ============================================================================
@@ -1548,6 +1549,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .md p.md-h { font-weight: 600; margin-top: 4px; }
 .md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
 .md li { margin: 2px 0; }
+.md hr { height: 0; margin: 10px 0; border: 0; border-top: 1px solid var(--border); }
 .md code { font-size: 12px; padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); }
 .md-code { padding: 8px 10px; border-radius: 8px; background: var(--surface-alt); font-size: 12px; overflow-x: auto; margin: 0 0 8px; }
 .ai-code { margin: 4px 0 10px; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--editor-bg); }

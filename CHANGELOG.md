@@ -7,6 +7,13 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
+  closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
+  *mayúsculas / regexp / palabra completa* toggles, which light up when on (#88).
+- **The update dialog** showed the release's download table as raw Markdown (`---`, pipes and links) and its buttons
+  stuck out past the dialog's edges. The notes now end where the download section starts (the dialog already
+  downloads the right package), a `---` rule draws as a line, and the buttons wrap to a second row when they do not
+  fit (#89).
 - **Result grid as one flat colour with reduced animations** (Settings › Animaciones "Reducidas", or "Como el sistema"
   on a Windows set for best performance): the grid read the theme's colours while they were in a transition and got
   each one shifted, so background, text and headers came out wrong. It now reads them without a transition.
