@@ -6,6 +6,14 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **E-R diagram of one table and its relations**: "Diagrama de relaciones" in a table's menu, in its "Claves" tab and
+  in the palette shows the table and the tables its foreign keys link it with, both ways (what it points to and what
+  points to it), with the table's name in the title. "Ampliar un nivel" adds the tables related to all those on show,
+  "+N" on a table adds only its own, a button on each card centres the diagram on that table (in the whole-schema
+  diagram too, without reading it again), and "Todo el esquema" goes back to every table. To find what points to a
+  table the keys of every table of its schema are read, but the columns only of the tables on show.
+
 ### Fixed
 - **E-R diagram: double click on a table** did nothing, although the hint said it opens it: the press already
   started panning and took the pointer, so the double click went to the canvas instead of the table. Panning now

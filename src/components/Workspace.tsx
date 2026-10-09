@@ -83,6 +83,8 @@ import {
   completionTables,
   openTableFromSql,
   followForeignKey,
+  erSchemaPath,
+  openErDiagram,
   foreignKeyOf,
   foreignKeys,
   selectTab,
@@ -913,6 +915,14 @@ function TablePane(props: { tab: TableTab }) {
         </Match>
         <Match when={props.tab.section === "indexes" || props.tab.section === "keys"}>
           <div class="meta-scroll">
+            {/* What points to the table is not in its keys: the diagram shows both ways. */}
+            <Show when={props.tab.section === "keys" && props.tab.obj.kind === "table"}>
+              <div class="keys-actions">
+                <button type="button" class="btn tiny" title="La tabla y las tablas que enlazan sus claves foráneas, en los dos sentidos" onClick={() => void openErDiagram(props.tab.connId, erSchemaPath(props.tab.connId, props.tab.obj, props.tab.database), props.tab.obj)}>
+                  Diagrama de relaciones
+                </button>
+              </div>
+            </Show>
             <Show when={(props.tab.section === "indexes" ? props.tab.indexes : props.tab.keys).length} fallback={<p class="meta-empty">{props.tab.section === "indexes" ? "Sin índices" : "Sin claves foráneas"}</p>}>
               <table class="meta">
                 <thead><tr><th>Nombre</th><th>Definición</th><Show when={props.tab.section === "keys"}><th /></Show></tr></thead>

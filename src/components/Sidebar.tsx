@@ -9,6 +9,7 @@ import {
   copySchemaForAi,
   copyText,
   disconnect,
+  erSchemaPath,
   generateSql,
   kindOf,
   openActivity,
@@ -551,6 +552,8 @@ export function Sidebar() {
         { label: "Abrir datos", hint: "F4", icon: "table", run: () => void openTable(connId, obj) },
         { label: "Abrir estructura", run: () => void openTable(connId, obj, "columns") },
         { label: "Ver DDL", icon: "code", run: () => void openTable(connId, obj, "ddl") },
+        // The table and the tables its foreign keys link it with, both ways.
+        ...(obj.kind === "table" ? [{ label: "Diagrama de relaciones", icon: "diagram", run: () => void openErDiagram(connId, erSchemaPath(connId, obj, node.path[0]), obj) }] : []),
         { separator: true },
         { label: "Generar SELECT", run: () => void generateSql(connId, obj, "select") },
         { label: "Generar SELECT con JOIN de sus claves foráneas", run: () => void generateSql(connId, obj, "select-join") },
