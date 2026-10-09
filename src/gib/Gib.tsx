@@ -51,6 +51,9 @@ export function Gib(props: {
   onDblClick?: () => void;
   onHover?: (inside: boolean) => void;
   ref?: (el: HTMLSpanElement) => void;
+  /** GibLab only: lids shut (to check that a blink closes them fully), and a fixed gaze in SVG units. */
+  blink?: boolean;
+  look?: [number, number];
 }) {
   let root: HTMLSpanElement | undefined;
   const idPrefix = `gib${++instances}`;
@@ -59,7 +62,10 @@ export function Gib(props: {
   const mood = () => props.mood ?? "idle";
   const activity = () => (mood() === "idle" ? props.activity ?? null : null);
   const pose = (): GibPose => {
-    if (activity() === "laptop") return "laptop";
+    const act = activity();
+    if (act === "laptop") return "laptop";
+    // The other activities need the poker rig (arms, the mug, the book): a Gib in another pose plays them standing.
+    if (act) return "poker";
     if (props.pose) return props.pose;
     if (mood() === "busy") return "laptop";
     if (mood() === "sleep") return "monday";
@@ -79,13 +85,14 @@ export function Gib(props: {
       timer = window.setTimeout(() => {
         // Nobody is looking (another window has the focus, or it is minimised): no blinks either.
         if (!reduce() && !document.hidden && document.hasFocus() && mood() !== "sleep" && mood() !== "think") {
+          // 150 ms shut: the lids close in 60 ms (App.css), so they always meet before opening again.
           setBlink(true);
-          window.setTimeout(() => setBlink(false), 120);
+          window.setTimeout(() => setBlink(false), 150);
           if (Math.random() < 0.25) {
             window.setTimeout(() => {
               setBlink(true);
-              window.setTimeout(() => setBlink(false), 120);
-            }, 180);
+              window.setTimeout(() => setBlink(false), 150);
+            }, 260);
           }
         }
         schedule();
@@ -103,15 +110,16 @@ export function Gib(props: {
     const follow = () => {
       frame = 0;
       const event = pointer;
-      if (!event || !root || reduce() || mood() === "busy" || mood() === "sleep" || mood() === "think") return;
+      if (!event || !root || props.look || reduce() || mood() === "busy" || mood() === "sleep" || mood() === "think") return;
       const box = root.getBoundingClientRect();
       if (!box.width) return;
       // The side the cursor is on: an annoyed Gib swats with the arm on that side.
       setSide(event.clientX < box.left + box.width / 2 ? "left" : "right");
-      const dx = (event.clientX - (box.left + box.width / 2)) / 80;
-      const dy = (event.clientY - (box.top + box.height / 2)) / 80;
-      root.style.setProperty("--look-x", `${Math.max(-2.5, Math.min(2.5, dx))}px`);
-      root.style.setProperty("--look-y", `${Math.max(-2.5, Math.min(2.5, dy))}px`);
+      // In SVG units; App.css clamps the sum with the mood's own gaze to the room each pose's eyes have.
+      const dx = (event.clientX - (box.left + box.width / 2)) / 60;
+      const dy = (event.clientY - (box.top + box.height / 2)) / 60;
+      root.style.setProperty("--look-x", `${Math.max(-6, Math.min(6, dx)).toFixed(2)}px`);
+      root.style.setProperty("--look-y", `${Math.max(-6, Math.min(6, dy)).toFixed(2)}px`);
     };
     window.addEventListener("pointermove", look);
     onCleanup(() => {
@@ -128,8 +136,12 @@ export function Gib(props: {
         props.ref?.(el);
       }}
       class="gib"
-      classList={{ [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink(), clickable: Boolean(props.onClick) }}
-      style={{ width: `${props.size ?? 96}px`, "--gib-size": `${props.size ?? 96}px` }}
+      classList={{ [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink() || Boolean(props.blink), clickable: Boolean(props.onClick) }}
+      style={{
+        width: `${props.size ?? 96}px`,
+        "--gib-size": `${props.size ?? 96}px`,
+        ...(props.look ? { "--look-x": `${props.look[0]}px`, "--look-y": `${props.look[1]}px` } : {}),
+      }}
       role={props.onClick ? "button" : "img"}
       tabindex={props.onClick ? 0 : undefined}
       aria-label={props.label ?? "Gib"}

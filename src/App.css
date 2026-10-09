@@ -1254,13 +1254,31 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib .tuft { transform-box: fill-box; transform-origin: center bottom; animation: gib-tuft 3.6s ease-in-out infinite; }
 .gib .tuft:nth-child(2) { animation-delay: -1.1s; }
 .gib .tuft:nth-child(3) { animation-delay: -2.2s; }
-.gib .pupils { transform: translate(var(--look-x, 0), var(--look-y, 0)); transition: transform 220ms var(--ease-out); }
-.gib .lid { transform-box: fill-box; transform-origin: top center; transition: transform 160ms var(--ease-out); }
+/* Eyes (every pose, see docs/brand/mascot): the pupils are clipped to the eye whites in the SVG, and where they look
+   is clamped per pose to the room each eye has (the laptop pose looks down at the keyboard, Monday's pupils sit low
+   and to the left). --look-x/y is the cursor (Gib.tsx), --eye-x/y the mood or activity; --pupil-s scales each pupil
+   on its own centre. The lids are flaps drawn at their resting line that slide down to close: --lid is how open
+   they are (1 rest, 0 shut, above 1 wide open), in units of the pose's own distance from rest to shut (--lid-shut),
+   and never higher than --lid-top so a sliver of lid always stays in view. */
+.gib { --lid-shut: 16; --lid-top: 12; --px0: -5px; --px1: 5px; --py0: -8px; --py1: 3.5px; }
+.gib.pose-laptop { --lid-shut: 19; --lid-top: 9; --py1: 0.5px; }
+.gib.pose-monday { --lid-shut: 12; --lid-top: 16; --px0: -4px; --px1: 6px; --py1: 2.5px; }
+.gib .pupils {
+  transform: translate(clamp(var(--px0), calc(var(--look-x, 0px) + var(--eye-x, 0px)), var(--px1)), clamp(var(--py0), calc(var(--look-y, 0px) + var(--eye-y, 0px)), var(--py1)));
+  transition: transform 220ms var(--ease-out);
+}
+.gib .pupil { transform-box: fill-box; transform-origin: center; transform: scale(var(--pupil-s, 1)); transition: transform 220ms var(--ease-out); }
+.gib .lid { transform: translateY(max(calc(var(--lid-top) * -1px), calc((1 - var(--lid, 1)) * var(--lid-shut) * 1px))); transition: transform 160ms var(--ease-out); }
+/* A blink shuts the lids fully (fast, so the 150 ms blink is not over before they meet) and opens them at the usual pace. */
+.gib.is-blink .lid { --lid: 0; transition-duration: 60ms; }
+/* Not looking at the cursor: thinking, asleep, at work, and while an idle activity directs the eyes. */
+.gib:is(.mood-think, .mood-sleep, .mood-offline, .mood-busy, .mood-idea, .mood-sad, [class*=" act-"]) .pupils { --look-x: 0px; --look-y: 0px; }
 .gib .brow-l, .gib .brow-r { transform-box: fill-box; transform-origin: center; transition: transform 240ms var(--ease-spring); }
 .gib .mouth { transition: d 260ms var(--ease-out), stroke-width 200ms; }
 .gib .blush { transition: opacity 300ms; }
 /* Rig (poker pose): body pivots at the feet, head at the neck, arms at shoulder and elbow (SVG user units). */
 .gib .g-all { transform-origin: 100px 232px; transition: transform 320ms var(--ease-out); }
+.gib:is(.pose-monday, .pose-icon) .g-all { transform-origin: 100px 210px; }
 .gib .g-head { transform-origin: 100px 148px; transition: transform 340ms var(--ease-spring); }
 .gib .ear-l { transform-origin: 36px 94px; }
 .gib .ear-r { transform-origin: 164px 94px; }
@@ -1268,7 +1286,6 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib .fore-r { transform-origin: 140px 196px; transform: rotate(8deg); transition: transform 420ms cubic-bezier(.45, .05, .35, 1); }
 .gib .arm-l { transform-origin: 60px 170px; transform: rotate(14deg); transition: transform 460ms cubic-bezier(.45, .05, .35, 1); }
 .gib .finger { opacity: 0; transition: opacity 120ms; }
-.gib.is-blink .lid { transform: scaleY(2); }
 
 /* wave: the arm rises from the shoulder and waves from the elbow while the body sways, the head
    follows the beat, the ears wiggle and the eyes smile — never just a hand moving on its own */
@@ -1280,7 +1297,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib.mood-wave .ear-l { animation: gib-ear-l 0.56s ease-in-out 260ms 4 alternate both; }
 .gib.mood-wave .ear-r { animation: gib-ear-r 0.56s ease-in-out 260ms 4 alternate both; }
 .gib.mood-wave .brow-l, .gib.mood-wave .brow-r { transform: translateY(-3px); }
-.gib.mood-wave .lid { transform: scaleY(1.2); }
+.gib.mood-wave { --lid: 0.8; }
 .gib.mood-wave .mouth { d: path("M92 123q11 11 24 0"); stroke-width: 2.8; }
 .gib.mood-wave .blush { opacity: 0.65; }
 /* thinking: hand on the chin (tapping), head tilted, eyes up and to the side, one brow raised */
@@ -1288,15 +1305,14 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib.mood-think .g-all { animation: gib-ponder 2.4s ease-in-out infinite; }
 .gib.mood-think .arm-r { transform: rotate(101deg); }
 .gib.mood-think .fore-r { transform: rotate(63deg); animation: gib-tap 1.3s ease-in-out 500ms infinite alternate; }
-.gib.mood-think .pupils { transform: translate(4px, -5px); }
+.gib.mood-think { --eye-x: 4px; --eye-y: -5px; --lid: 0.75; }
 .gib.mood-think .brow-r { transform: translateY(-5px) rotate(-8deg); }
 .gib.mood-think .brow-l { transform: translateY(1px); }
-.gib.mood-think .lid { transform: scaleY(1.25); }
 .gib.mood-think .mouth { d: path("M97 128q4-3 8-1t7 0"); }
 /* idea and happiness: wide eyes, brows up, a real smile */
-.gib.mood-idea .lid, .gib.mood-ok .lid, .gib.mood-happy .lid { transform: scaleY(0.35); }
+.gib:is(.mood-idea, .mood-ok, .mood-happy) { --lid: 1.65; }
 .gib.mood-idea .brow-l, .gib.mood-idea .brow-r { transform: translateY(-6px); }
-.gib.mood-idea .pupils { transform: translate(0, -3px) scale(1.05); }
+.gib.mood-idea { --eye-y: -3px; --pupil-s: 1.05; }
 .gib.mood-idea .g-all { animation: gib-hop 0.62s cubic-bezier(.3, .7, .4, 1) both; }
 .gib.mood-idea .arm-r { transform: rotate(-164deg); transition-duration: 300ms; }
 .gib.mood-idea .fore-r { transform: rotate(-10deg); transition-duration: 300ms; }
@@ -1317,8 +1333,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib.mood-sad .g-all { animation: gib-sigh 3.2s ease-in-out infinite; }
 .gib.mood-sad .brow-l { transform: translateY(2px) rotate(-14deg); }
 .gib.mood-sad .brow-r { transform: translateY(5px) rotate(16deg); }
-.gib.mood-sad .lid { transform: scaleY(1.45); }
-.gib.mood-sad .pupils { transform: translate(-1px, 3px); }
+.gib.mood-sad { --lid: 0.55; --eye-x: -1px; --eye-y: 3px; }
 .gib.mood-sad .mouth { d: path("M93 132q11-8 22 0"); stroke-width: 2.4; }
 .gib.mood-sad .blush { opacity: 0.12; }
 .gib.mood-sad .arm-r { transform: rotate(4deg); }
@@ -1344,14 +1359,14 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib.mood-ok .brow-l, .gib.mood-ok .brow-r, .gib.mood-happy .brow-l, .gib.mood-happy .brow-r { transform: translateY(-3px); }
 .gib.mood-ok .blush, .gib.mood-happy .blush, .gib.mood-idea .blush { opacity: 0.6; }
 .gib.mood-love .blush { opacity: 0.85; }
-.gib.mood-love .lid { transform: scaleY(1.7); }
+.gib.mood-love { --lid: 0.3; }
 .gib.mood-love .brow-l, .gib.mood-love .brow-r { transform: translateY(-4px); }
 /* error: surprised, not sad */
-.gib.mood-error .pupils { transform: translate(var(--look-x, 0), var(--look-y, 0)) scale(0.7); }
+.gib.mood-error { --pupil-s: 0.7; }
 .gib.mood-error .brow-l, .gib.mood-error .brow-r { transform: translateY(-6px); }
 .gib.mood-error .mouth { d: path("M99 128q5-4 10 0"); }
 .gib.mood-sleep .mug, .gib.mood-offline .mug { display: none; }
-.gib.mood-sleep .lid, .gib.mood-offline .lid { transform: scaleY(1.85); }
+.gib:is(.mood-sleep, .mood-offline) { --lid: 0.15; }
 
 .gib-fx { position: absolute; inset: 0; pointer-events: none; font-size: var(--fx); }
 .fx-thought { position: absolute; right: -2.6em; top: -3.4em; }

@@ -22,6 +22,7 @@
     </radialGradient>
     <clipPath id="laptop-eye-l"><ellipse cx="79" cy="84" rx="15" ry="16"/></clipPath>
     <clipPath id="laptop-eye-r"><ellipse cx="121" cy="84" rx="15" ry="16"/></clipPath>
+    <clipPath id="laptop-eye-whites"><ellipse cx="79" cy="84" rx="15" ry="16"/><ellipse cx="121" cy="84" rx="15" ry="16"/></clipPath>
     <clipPath id="laptop-lenses"><circle cx="79" cy="85" r="16"/><circle cx="121" cy="85" r="16"/></clipPath>
   </defs>
   <!-- Typing at the laptop: arms reach behind the lid to the keyboard; the face is lit by the screen. -->
@@ -87,26 +88,36 @@
       <ellipse class="blush" cx="138" cy="108" rx="11" ry="6" fill="#F4A6A0" opacity=".35"/>
       <!-- Light from the screen on the lower face. -->
       <ellipse class="screen-glow" cx="100" cy="128" rx="32" ry="14" fill="url(#laptop-glow)"/>
-      <ellipse cx="79" cy="84" rx="15" ry="16" fill="#fff"/>
-      <ellipse cx="121" cy="84" rx="15" ry="16" fill="#fff"/>
-      <g class="pupils">
-        <circle cx="79" cy="93" r="6.4" fill="#24170F"/>
-        <circle cx="121" cy="93" r="6.4" fill="#24170F"/>
-        <circle cx="81.4" cy="90.6" r="2" fill="#fff"/>
-        <circle cx="123.4" cy="90.6" r="2" fill="#fff"/>
+      <g class="eyes">
+        <ellipse class="eye-white" cx="79" cy="84" rx="15" ry="16" fill="#fff"/>
+        <ellipse class="eye-white" cx="121" cy="84" rx="15" ry="16" fill="#fff"/>
+        <!-- Pupils: clipped to the eye whites (they can look anywhere and never leave the eye). .pupils follows the
+             cursor and the mood (clamped per pose in CSS), .gaze plays the activities, .pupil scales on its own centre. -->
+        <g clip-path="url(#laptop-eye-whites)">
+          <g class="pupils">
+            <g class="gaze">
+              <g class="pupil"><circle cx="79" cy="93" r="6.4" fill="#24170F"/><circle cx="81.4" cy="90.6" r="2" fill="#fff"/></g>
+              <g class="pupil"><circle cx="121" cy="93" r="6.4" fill="#24170F"/><circle cx="123.4" cy="90.6" r="2" fill="#fff"/></g>
+            </g>
+          </g>
+        </g>
+        <g class="lids" clip-path="url(#laptop-eye-l)">
+          <g class="lid">
+            <path d="M60 40H98V81H93Q79 85 65 81H60Z" fill="#E7BE96"/>
+            <path d="M65 81q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
+          </g>
+        </g>
+        <g class="lids" clip-path="url(#laptop-eye-r)">
+          <g class="lid">
+            <path d="M102 40H140V81H135Q121 85 107 81H102Z" fill="#E7BE96"/>
+            <path d="M107 81q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
+          </g>
       </g>
-      <g clip-path="url(#laptop-eye-l)">
-        <rect class="lid" x="62" y="68" width="34" height="13" fill="#E7BE96"/>
-        <path d="M65 81q14 3 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
-      </g>
-      <g clip-path="url(#laptop-eye-r)">
-        <rect class="lid" x="104" y="68" width="34" height="13" fill="#E7BE96"/>
-        <path d="M107 81q14 3 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
       </g>
       <!-- Focused, not cross: brows level, slightly lowered towards the middle. -->
       <g class="brows" stroke="#56392A" stroke-width="5" stroke-linecap="round">
-        <path d="M65 64c8-2 17-1 25 2"/>
-        <path d="M110 66c8-3 17-4 25-2"/>
+        <path class="brow-l" d="M65 64c8-2 17-1 25 2"/>
+        <path class="brow-r" d="M110 66c8-3 17-4 25-2"/>
       </g>
       <g class="glasses">
         <circle cx="79" cy="85" r="16.5" fill="#BFE0FF" fill-opacity=".14" stroke="#2A2B30" stroke-width="2.6"/>

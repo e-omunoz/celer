@@ -46,16 +46,27 @@ export async function connect(port) {
   return { send, on, js, shot, close: () => ws.close() };
 }
 
-/** Starts a headless Edge (or Chrome) with a throwaway profile and returns its DevTools port. */
+/** Starts a headless Edge (or Chrome/Chromium) with a throwaway profile and returns its DevTools port. */
 export async function headlessBrowser({ port = 9444, width = 1440, height = 900 } = {}) {
+  const { existsSync, readdirSync } = await import("node:fs");
+  const { homedir } = await import("node:os");
+  // Linux (WSL): a system Chromium/Chrome, or the one `npx playwright install chromium` downloads.
+  const playwright = join(homedir(), ".cache", "ms-playwright");
+  const downloaded = existsSync(playwright)
+    ? readdirSync(playwright).filter((d) => d.startsWith("chromium-")).sort().reverse().map((d) => join(playwright, d, "chrome-linux", "chrome"))
+    : [];
   const candidates = [
+    process.env.CELER_CHROME,
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  ];
-  const { existsSync } = await import("node:fs");
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+    ...downloaded,
+  ].filter(Boolean);
   const exe = candidates.find((p) => existsSync(p));
-  if (!exe) throw new Error("Edge/Chrome not found");
+  if (!exe) throw new Error("Edge/Chrome not found (on Linux: npx playwright install chromium, or set CELER_CHROME)");
   const profile = mkdtempSync(join(tmpdir(), "celer-shot-"));
   const child = spawn(exe, [`--headless=new`, `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, `--window-size=${width},${height}`, "--hide-scrollbars", "--force-device-scale-factor=1", "about:blank"], { stdio: "ignore" });
   return { port, kill: () => child.kill() };

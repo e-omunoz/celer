@@ -29,7 +29,7 @@
 @keyframes act-yawn-arm-r { 0%, 100% { transform: rotate(-14deg); } 28%, 60% { transform: rotate(-158deg); } 44% { transform: rotate(-164deg); } }
 @keyframes act-yawn-fore-r { 0%, 100% { transform: rotate(8deg); } 28%, 60% { transform: rotate(-22deg); } }
 @keyframes act-yawn-arm-l { 0%, 100% { transform: rotate(14deg); } 28%, 60% { transform: rotate(158deg); } 44% { transform: rotate(164deg); } }
-@keyframes act-yawn-lid { 0%, 12%, 80%, 100% { transform: scaleY(1); } 24%, 64% { transform: scaleY(1.85); } }
+@keyframes act-yawn-lid { 0%, 12%, 80%, 100% { transform: none; } 24%, 64% { transform: translateY(calc(0.85 * var(--lid-shut) * 1px)); } }
 @keyframes act-yawn-brow { 0%, 100% { transform: none; } 24%, 64% { transform: translateY(-4px); } }
 @keyframes act-yawn-mouth {
   0%, 14%, 74%, 100% { d: path("M96 127h16"); fill: transparent; }
@@ -43,8 +43,8 @@
 .gib.act-coffee-out .arm-r { animation: act-swing-r 0.8s ease-in-out 2 both; }
 .gib.act-coffee-out .arm-l,
 .gib.act-coffee-in .arm-l { animation: act-swing-l 0.8s ease-in-out 2 both; }
-.gib.act-coffee-out .pupils { transform: translate(-3.5px, 0); }
-.gib.act-coffee-in .pupils { transform: translate(3px, 0); }
+.gib.act-coffee-out { --eye-x: -3.5px; }
+.gib.act-coffee-in { --eye-x: 3px; }
 .gib.act-coffee-away .g-all { opacity: 0; transform: translateX(-130px); transition: none; }
 @keyframes act-walk-out {
   0% { transform: none; opacity: 1; }
@@ -86,7 +86,7 @@
 @keyframes act-sip-fore { 0%, 22%, 72%, 100% { transform: rotate(75deg); } 38%, 58% { transform: rotate(63deg); } }
 @keyframes act-sip-mug { 0%, 22%, 72%, 100% { transform: rotate(-100deg); } 38% { transform: rotate(-164deg); } 58% { transform: rotate(-150deg); } }
 @keyframes act-sip-head { 0%, 22%, 76%, 100% { transform: none; } 40%, 58% { transform: rotate(-5deg) translateY(-1px); } }
-@keyframes act-sip-lid { 0%, 30%, 70%, 100% { transform: scaleY(1); } 40%, 62% { transform: scaleY(1.85); } }
+@keyframes act-sip-lid { 0%, 30%, 70%, 100% { transform: none; } 40%, 62% { transform: translateY(calc(0.85 * var(--lid-shut) * 1px)); } }
 @keyframes act-sip-mouth { 0%, 64%, 100% { d: path("M96 127h16"); } 74%, 92% { d: path("M92 123q11 11 24 0"); } }
 /* putting the mug down: the arm goes back to rest and the mug is left below, out of sight */
 .gib.act-coffee-done .arm-r { animation: act-done-arm 1.2s cubic-bezier(.45, .05, .35, 1) both; }
@@ -105,7 +105,8 @@
 .gib.act-doze .g-head { animation: act-doze-head 5.5s ease-in-out both; }
 .gib.act-doze .g-all { animation: act-doze-body 5.5s ease-in-out both; }
 .gib.act-doze .lid { animation: act-doze-lid 5.5s ease-in-out both; }
-.gib.act-doze .pupils { animation: act-doze-pupils 5.5s ease-in-out both; }
+.gib.act-doze .gaze { animation: act-doze-gaze 5.5s ease-in-out both; }
+.gib.act-doze .pupil { animation: act-doze-pupil 5.5s ease-in-out both; }
 .gib.act-doze .brow-l, .gib.act-doze .brow-r { animation: act-doze-brow 5.5s ease-in-out both; }
 .gib.act-doze .arm-r { animation: act-doze-arm-r 5.5s ease-in-out both; }
 .gib.act-doze .arm-l { animation: act-doze-arm-l 5.5s ease-in-out both; }
@@ -120,8 +121,9 @@
   88% { transform: rotate(4deg); }
 }
 @keyframes act-doze-body { 0%, 100% { transform: none; } 58%, 63% { transform: translateY(2px) scale(1.01, 0.98); } 66% { transform: translateY(-4px); } 72% { transform: none; } }
-@keyframes act-doze-lid { 0%, 8% { transform: scaleY(1); } 50%, 63% { transform: scaleY(1.85); } 66%, 74% { transform: scaleY(0.6); } 90%, 100% { transform: scaleY(1); } }
-@keyframes act-doze-pupils { 0%, 64% { transform: none; } 67% { transform: scale(0.7); } 80% { transform: translate(-3.5px, 0) scale(0.85); } 88% { transform: translate(3.5px, 0) scale(0.85); } 100% { transform: none; } }
+@keyframes act-doze-lid { 0%, 8% { transform: none; } 50%, 63% { transform: translateY(calc(0.85 * var(--lid-shut) * 1px)); } 66%, 74% { transform: translateY(calc(-0.4 * var(--lid-shut) * 1px)); } 90%, 100% { transform: none; } }
+@keyframes act-doze-gaze { 0%, 67% { transform: none; } 80% { transform: translate(-3.5px, 0); } 88% { transform: translate(3.5px, 0); } 100% { transform: none; } }
+@keyframes act-doze-pupil { 0%, 64%, 100% { transform: none; } 67% { transform: scale(0.7); } 80%, 88% { transform: scale(0.85); } }
 @keyframes act-doze-brow { 0%, 64%, 100% { transform: none; } 67%, 78% { transform: translateY(-6px); } }
 @keyframes act-doze-arm-r { 0%, 100% { transform: rotate(-14deg); } 58%, 63% { transform: rotate(-4deg); } 67% { transform: rotate(-48deg); } 76% { transform: rotate(-14deg); } }
 @keyframes act-doze-arm-l { 0%, 100% { transform: rotate(14deg); } 58%, 63% { transform: rotate(4deg); } 67% { transform: rotate(48deg); } 76% { transform: rotate(14deg); } }
@@ -133,7 +135,7 @@
 /* an even number of alternate iterations ends on the rest angle (16 × 0.35 s = 5.6 s, the routine's length) */
 .gib.act-juggle .arm-r { animation: act-juggle-r 0.35s ease-in-out 16 alternate both; }
 .gib.act-juggle .arm-l { animation: act-juggle-l 0.35s ease-in-out 0.175s 14 alternate both; }
-.gib.act-juggle .pupils { animation: act-juggle-eyes 1.05s ease-in-out 5 both; }
+.gib.act-juggle .gaze { animation: act-juggle-eyes 1.05s ease-in-out 5 both; }
 .gib.act-juggle .brow-l, .gib.act-juggle .brow-r { transform: translateY(-3px); }
 .gib.act-juggle .mouth { d: path("M97 126q7 5 14 0"); }
 @keyframes act-juggle-r { from { transform: rotate(-14deg); } to { transform: rotate(-52deg); } }
@@ -159,8 +161,8 @@
 .gib.act-read .fore-r { transform: rotate(0deg); }
 .gib.act-read .arm-l { transform: rotate(-25deg); }
 .gib.act-read .g-head { transform: rotate(2deg) translateY(2px); }
-.gib.act-read .lid { transform: scaleY(1.3); }
-.gib.act-read .pupils { animation: act-read-eyes 1.6s ease-in-out 5 both; }
+.gib.act-read { --lid: 0.7; }
+.gib.act-read .gaze { animation: act-read-eyes 1.6s ease-in-out 5 both; }
 .gib.act-read .page { transform-origin: 100px 198px; animation: act-page 4s ease-in-out 2 both; }
 .gib.act-read .brow-r { animation: act-read-brow 8s ease-in-out both; }
 @keyframes act-read-eyes { 0% { transform: translate(-3px, 3px); } 70% { transform: translate(3px, 3px); } 80% { transform: translate(3px, 4px); } 100% { transform: translate(-3px, 3px); } }
@@ -173,7 +175,7 @@
 .gib.act-dance .arm-r { animation: act-dance-r 1.2s ease-in-out 4 both; }
 .gib.act-dance .fore-r { animation: act-dance-fore 1.2s ease-in-out 4 both; }
 .gib.act-dance .arm-l { animation: act-dance-l 1.2s ease-in-out 4 both; }
-.gib.act-dance .lid { transform: scaleY(0.35); }
+.gib.act-dance { --lid: 1.65; }
 .gib.act-dance .mouth { d: path("M92 123q11 11 24 0"); stroke-width: 2.8; }
 .gib.act-dance .blush { opacity: 0.6; }
 @keyframes act-dance-body { 0%, 100% { transform: none; } 25% { transform: translateY(-4px) rotate(-4deg); } 50% { transform: translateY(0) rotate(0); } 75% { transform: translateY(-4px) rotate(4deg); } }
@@ -191,7 +193,7 @@
 .gib.act-scratch .arm-r { animation: act-scratch-arm 3.6s cubic-bezier(.45, .05, .35, 1) both; }
 .gib.act-scratch .fore-r { animation: act-scratch-fore 3.6s ease-in-out both; }
 .gib.act-scratch .g-head { animation: act-scratch-head 3.6s ease-in-out both; }
-.gib.act-scratch .pupils { transform: translate(-3px, -3.5px); }
+.gib.act-scratch { --eye-x: -3px; --eye-y: -3.5px; }
 .gib.act-scratch .brow-r { transform: translateY(-5px) rotate(-8deg); }
 .gib.act-scratch .mouth { d: path("M97 128q4-3 8-1t7 0"); }
 @keyframes act-scratch-arm { 0%, 100% { transform: rotate(-14deg); } 18%, 82% { transform: rotate(-160deg); } }
@@ -207,7 +209,8 @@
 @keyframes act-question { 0%, 15% { opacity: 0; transform: scale(0.3); } 22% { opacity: 1; transform: scale(1.15); } 28%, 70% { opacity: 1; transform: scale(1) translateY(0); } 50% { transform: translateY(-0.2em) rotate(-8deg); } 80%, 100% { opacity: 0; transform: scale(0.8); } }
 
 /* ---------------------------------------------------------------- bug hunt: a bug crawls in, Gib spots it and squashes it (6 s) */
-.gib.act-bug .pupils { animation: act-bug-eyes 6s ease-in-out both; }
+.gib.act-bug .gaze { animation: act-bug-eyes 6s ease-in-out both; }
+.gib.act-bug .pupil { animation: act-bug-pupil 6s ease-in-out both; }
 .gib.act-bug .g-head { animation: act-bug-head 6s ease-in-out both; }
 .gib.act-bug .arm-l { animation: act-bug-arm-l 6s cubic-bezier(.5, 0, .5, 1) both; }
 .gib.act-bug .arm-r { animation: act-bug-arm-r 6s cubic-bezier(.45, .05, .35, 1) both; }
@@ -217,14 +220,15 @@
 .gib.act-bug .lid { animation: act-bug-lid 6s ease-in-out both; }
 .gib.act-bug .mouth { animation: act-bug-mouth 6s ease-in-out both; }
 .gib.act-bug .fx-sparkle { --late: 3.7s; }
-@keyframes act-bug-eyes { 0%, 6% { transform: none; } 14% { transform: translate(-4px, 4px); } 44% { transform: translate(-2px, 4.5px); } 56% { transform: translate(-2px, 4.5px) scale(0.85); } 66%, 100% { transform: none; } }
+@keyframes act-bug-eyes { 0%, 6% { transform: none; } 14% { transform: translate(-4px, 4px); } 44%, 56% { transform: translate(-2px, 4.5px); } 66%, 100% { transform: none; } }
+@keyframes act-bug-pupil { 0%, 44%, 66%, 100% { transform: none; } 56% { transform: scale(0.85); } }
 @keyframes act-bug-head { 0%, 6%, 100% { transform: none; } 14%, 44% { transform: rotate(-5deg) translateY(2px); } 52% { transform: rotate(-2deg); } 60% { transform: rotate(-6deg) translateY(3px); } 68% { transform: none; } }
 @keyframes act-bug-arm-l { 0%, 40%, 100% { transform: rotate(14deg); } 50% { transform: rotate(150deg); } 54% { transform: rotate(150deg); } 58% { transform: rotate(6deg); } 64% { transform: rotate(10deg); } 74% { transform: rotate(14deg); } }
 @keyframes act-bug-arm-r { 0%, 64%, 100% { transform: rotate(-14deg); } 72%, 88% { transform: rotate(-150deg); } }
 @keyframes act-bug-fore-r { 0%, 64%, 100% { transform: rotate(8deg); } 72%, 88% { transform: rotate(-24deg); } }
 @keyframes act-bug-body { 0%, 52%, 100% { transform: none; } 58% { transform: translateY(2px) scale(1.02, 0.95); } 64% { transform: none; } 72% { transform: translateY(-5px); } 78% { transform: none; } }
 @keyframes act-bug-brow { 0%, 8%, 100% { transform: none; } 14%, 44% { transform: translateY(2px); } 50%, 58% { transform: translateY(3px) rotate(4deg); } 66%, 90% { transform: translateY(-4px); } }
-@keyframes act-bug-lid { 0%, 8%, 100% { transform: scaleY(1); } 14%, 56% { transform: scaleY(1.35); } 66%, 90% { transform: scaleY(0.35); } }
+@keyframes act-bug-lid { 0%, 8%, 100% { transform: none; } 14%, 56% { transform: translateY(calc(0.35 * var(--lid-shut) * 1px)); } 66%, 90% { transform: translateY(calc(-0.65 * var(--lid-shut) * 1px)); } }
 @keyframes act-bug-mouth { 0%, 62%, 94%, 100% { d: path("M96 127h16"); } 68%, 90% { d: path("M92 123q11 11 24 0"); } }
 .fx-bug { position: absolute; bottom: -0.3em; width: 2.6em; margin-left: -1.3em; left: -150%; animation: act-bug-crawl 6s linear both; }
 .fx-bug svg { display: block; width: 100%; transform: rotate(90deg); animation: act-bug-legs 0.18s steps(2) 20 both; }
@@ -266,7 +270,7 @@
    ========================================================================== */
 .gib.mood-annoyed .brow-l, .gib.mood-grumpy .brow-l { transform: translateY(3px) rotate(14deg); }
 .gib.mood-annoyed .brow-r, .gib.mood-grumpy .brow-r { transform: translateY(6px) rotate(-14deg); }
-.gib.mood-annoyed .lid, .gib.mood-grumpy .lid { transform: scaleY(1.45); }
+.gib:is(.mood-annoyed, .mood-grumpy) { --lid: 0.55; }
 .gib.mood-annoyed .mouth { d: path("M96 130q8-5 16 0"); stroke-width: 2.4; }
 .gib.mood-grumpy .mouth { d: path("M95 129h18"); stroke-width: 3.2; }
 .gib.mood-grumpy .blush { opacity: 0.9; }

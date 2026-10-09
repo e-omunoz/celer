@@ -2,57 +2,73 @@
   <defs>
     <clipPath id="icon-eye-l"><ellipse cx="79" cy="84" rx="15" ry="16"/></clipPath>
     <clipPath id="icon-eye-r"><ellipse cx="121" cy="84" rx="15" ry="16"/></clipPath>
+    <clipPath id="icon-eye-whites"><ellipse cx="79" cy="84" rx="15" ry="16"/><ellipse cx="121" cy="84" rx="15" ry="16"/></clipPath>
   </defs>
-  <g id="icon-body">
-    <path fill="#F7F7F4" d="M50 210c0-34 14-52 32-56h36c18 4 32 22 32 56H50z"/>
-    <ellipse cx="100" cy="150" rx="19" ry="8" fill="#6E4B33"/>
-    <path fill="#F7F7F4" d="M100 157 85 147 80 166z"/>
-    <path fill="#F7F7F4" d="M100 157 115 147 120 166z"/>
-    <g class="tie">
-      <path fill="#16171B" d="M95 158h10l2 8.5H93z"/>
-      <path fill="#16171B" d="M93 166.5h14L110 197 100 206 90 197z"/>
+  <!-- Rig as in gib-poker.svg: .g-all (whole body) > body, .g-head (everything that moves with the head). -->
+  <g class="g-all">
+    <g id="icon-body">
+      <path fill="#F7F7F4" d="M50 210c0-34 14-52 32-56h36c18 4 32 22 32 56H50z"/>
+      <ellipse cx="100" cy="150" rx="19" ry="8" fill="#6E4B33"/>
+      <path fill="#F7F7F4" d="M100 157 85 147 80 166z"/>
+      <path fill="#F7F7F4" d="M100 157 115 147 120 166z"/>
+      <g class="tie">
+        <path fill="#16171B" d="M95 158h10l2 8.5H93z"/>
+        <path fill="#16171B" d="M93 166.5h14L110 197 100 206 90 197z"/>
+      </g>
+    </g>
+    <g class="g-head">
+      <g id="icon-ears">
+        <circle cx="36" cy="94" r="22" fill="#6E4B33"/>
+        <circle cx="164" cy="94" r="22" fill="#6E4B33"/>
+        <circle cx="44" cy="96" r="13.5" fill="#E2B38B"/>
+        <circle cx="156" cy="96" r="13.5" fill="#E2B38B"/>
+      </g>
+      <ellipse cx="100" cy="88" rx="64" ry="58" fill="#6E4B33"/>
+      <g class="tufts" fill="#6E4B33">
+        <path class="tuft" d="M76 50c-6-18 8-30 16-12-4 6-10 12-16 12z"/>
+        <path class="tuft" d="M94 42c2-22 18-24 20-2-6 4-14 6-20 2z"/>
+        <path class="tuft" d="M124 50c8-20 22-14 12 2-6 2-12 2-12-2z"/>
+      </g>
+      <g fill="#F2D0AC">
+        <circle cx="79" cy="86" r="27"/>
+        <circle cx="121" cy="86" r="27"/>
+        <ellipse cx="100" cy="118" rx="37" ry="25"/>
+      </g>
+      <g class="eyes">
+        <ellipse class="eye-white" cx="79" cy="84" rx="15" ry="16" fill="#fff"/>
+        <ellipse class="eye-white" cx="121" cy="84" rx="15" ry="16" fill="#fff"/>
+        <!-- Pupils: clipped to the eye whites (they can look anywhere and never leave the eye). .pupils follows the
+             cursor and the mood (clamped per pose in CSS), .gaze plays the activities, .pupil scales on its own centre. -->
+        <g clip-path="url(#icon-eye-whites)">
+          <g class="pupils">
+            <g class="gaze">
+              <g class="pupil"><circle cx="79" cy="89" r="6.6" fill="#24170F"/><circle cx="81.6" cy="86.4" r="2.1" fill="#fff"/></g>
+              <g class="pupil"><circle cx="121" cy="89" r="6.6" fill="#24170F"/><circle cx="123.6" cy="86.4" r="2.1" fill="#fff"/></g>
+            </g>
+          </g>
+        </g>
+        <g class="lids" clip-path="url(#icon-eye-l)">
+          <g class="lid">
+            <path d="M60 40H98V84H93Q79 88 65 84H60Z" fill="#E7BE96"/>
+            <path d="M65 84q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
+          </g>
+        </g>
+        <g class="lids" clip-path="url(#icon-eye-r)">
+          <g class="lid">
+            <path d="M102 40H140V84H135Q121 88 107 84H102Z" fill="#E7BE96"/>
+            <path d="M107 84q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
+          </g>
+        </g>
+      </g>
+      <g class="brows" stroke="#56392A" stroke-width="5" stroke-linecap="round">
+        <path class="brow-l" d="M66 68c8-2 16-2 24 1"/>
+        <path class="brow-r" d="M110 60c8-6 18-4 26 2"/>
+      </g>
+      <g fill="#9A6A49">
+        <ellipse cx="94" cy="111" rx="2.2" ry="1.5"/>
+        <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
+      </g>
+      <path class="mouth" d="M96 127h16" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
     </g>
   </g>
-  <g id="icon-ears">
-    <circle cx="36" cy="94" r="22" fill="#6E4B33"/>
-    <circle cx="164" cy="94" r="22" fill="#6E4B33"/>
-    <circle cx="44" cy="96" r="13.5" fill="#E2B38B"/>
-    <circle cx="156" cy="96" r="13.5" fill="#E2B38B"/>
-  </g>
-  <ellipse cx="100" cy="88" rx="64" ry="58" fill="#6E4B33"/>
-  <g class="tufts" fill="#6E4B33">
-    <path class="tuft" d="M76 50c-6-18 8-30 16-12-4 6-10 12-16 12z"/>
-    <path class="tuft" d="M94 42c2-22 18-24 20-2-6 4-14 6-20 2z"/>
-    <path class="tuft" d="M124 50c8-20 22-14 12 2-6 2-12 2-12-2z"/>
-  </g>
-  <g fill="#F2D0AC">
-    <circle cx="79" cy="86" r="27"/>
-    <circle cx="121" cy="86" r="27"/>
-    <ellipse cx="100" cy="118" rx="37" ry="25"/>
-  </g>
-  <ellipse cx="79" cy="84" rx="15" ry="16" fill="#fff"/>
-  <ellipse cx="121" cy="84" rx="15" ry="16" fill="#fff"/>
-  <g class="pupils">
-    <circle cx="79" cy="89" r="6.6" fill="#24170F"/>
-    <circle cx="121" cy="89" r="6.6" fill="#24170F"/>
-    <circle cx="81.6" cy="86.4" r="2.1" fill="#fff"/>
-    <circle cx="123.6" cy="86.4" r="2.1" fill="#fff"/>
-  </g>
-  <g class="lids" clip-path="url(#icon-eye-l)">
-    <rect class="lid" x="62" y="68" width="34" height="16" fill="#E7BE96"/>
-    <path d="M65 84q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
-  </g>
-  <g class="lids" clip-path="url(#icon-eye-r)">
-    <rect class="lid" x="104" y="68" width="34" height="16" fill="#E7BE96"/>
-    <path d="M107 84q14 4 28 0" stroke="#9A6A49" stroke-width="1.5" stroke-linecap="round"/>
-  </g>
-  <g class="brows" stroke="#56392A" stroke-width="5" stroke-linecap="round">
-    <path class="brow-l" d="M66 68c8-2 16-2 24 1"/>
-    <path class="brow-r" d="M110 60c8-6 18-4 26 2"/>
-  </g>
-  <g fill="#9A6A49">
-    <ellipse cx="94" cy="111" rx="2.2" ry="1.5"/>
-    <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
-  </g>
-  <path class="mouth" d="M96 127h16" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
 </svg>

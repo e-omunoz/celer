@@ -6,6 +6,15 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Gib's eyes, in every pose, mood and activity** (#103): the pupils are clipped to the eye whites and their movement
+  is clamped to the room each pose's eyes have, so they never leave the eye (an error face used to shrink them towards
+  the corner of the drawing and throw them off the face); the lids are flaps that slide down to close, so a blink
+  always shuts the eye completely and a wide-open or happy face keeps a sliver of lid instead of losing it; every pose
+  (standing, laptop, Monday, head only) now has lids, and its eyes and lids sit in the head group, so they move with the
+  head. The animation lab (`#giblab?grid` in the dev server) shows every pose × mood × activity at once, at every size
+  and theme, and `dev/gib-lab-shots.mjs --grid` captures it and checks the eyes' geometry.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added
