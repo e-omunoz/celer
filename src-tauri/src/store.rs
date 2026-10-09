@@ -237,11 +237,15 @@ impl Store {
     /// (sesión sin llavero), se guarda en `secrets.json` con permisos restringidos.
     pub fn get_password(&self, id: &str) -> Option<String> {
         if let Some(p) = keyring_get(id) {
-            // A long secret kept in parts (`keyring_set`): all of them, or none.
-            if let Some(n) = parts_of(&p) {
-                return (1..=n).map(|i| keyring_get(&part_account(id, i))).collect::<Option<String>>();
+            // A long secret kept in parts (`keyring_set`): all of them, or (a part missing) as if there were none.
+            match parts_of(&p) {
+                Some(n) => {
+                    if let Some(whole) = (1..=n).map(|i| keyring_get(&part_account(id, i))).collect::<Option<String>>() {
+                        return Some(whole);
+                    }
+                }
+                None => return Some(p),
             }
-            return Some(p);
         }
         self.secrets().get(id).cloned()
     }
@@ -464,6 +468,38 @@ mod tests {
         assert!(store.load_connections().is_empty());
         assert!(store.connections_problem().is_some());
         assert!(store.save_connections(&[]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_secrets_are_kept_in_parts() {
+        // A 4 KB RSA key does not fit in one Windows credential (2.5 KB): it goes in parts and comes back whole.
+        let dir = std::env::temp_dir().join(format!("celer-store-parts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let id = format!("celer-test-parts-{}#ssh-key", std::process::id());
+        let key: String = (0..3300).map(|i| char::from(b'A' + (i % 26) as u8)).chain("€ñ".chars()).collect();
+        store.set_password(&id, &key).unwrap();
+        assert_eq!(store.get_password(&id).as_deref(), Some(key.as_str()));
+        let in_keyring = keyring::Entry::new(super::keyring_service(), &id).and_then(|e| e.get_password()).ok();
+        if let Some(head) = in_keyring {
+            // The system store took it: a header, and four parts of at most 1000 characters.
+            assert_eq!(head, format!("{}4", super::PARTS_MARK));
+            let part = keyring::Entry::new(super::keyring_service(), &super::part_account(&id, 4)).unwrap().get_password().unwrap();
+            assert_eq!(part.chars().count(), 302);
+            // A short one replaces it and its parts go.
+            store.set_password(&id, "corta").unwrap();
+            assert_eq!(store.get_password(&id).as_deref(), Some("corta"));
+            assert!(keyring::Entry::new(super::keyring_service(), &super::part_account(&id, 1)).unwrap().get_password().is_err());
+            store.set_password(&id, &key).unwrap();
+        } else {
+            eprintln!("sin almacén de credenciales del sistema: secrets.json");
+        }
+        store.delete_password(&id);
+        assert!(store.get_password(&id).is_none());
+        if super::keyring_service() == "Celer" {
+            assert!(keyring::Entry::new("Celer", &super::part_account(&id, 2)).unwrap().get_password().is_err(), "parts deleted too");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
