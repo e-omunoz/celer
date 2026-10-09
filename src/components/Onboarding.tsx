@@ -255,7 +255,7 @@ export function Onboarding() {
                         <h2>¿Cómo te gusta?</h2>
                         <p class="onb-lead">Se aplica al momento. Lo puedes cambiar cuando quieras en Ajustes o con el botón ☀ de arriba.</p>
                         <div class="onb-themes">
-                          <For each={themeChoices.filter((t) => ["dark", "light", "darcula", "system"].includes(t.id))}>
+                          <For each={themeChoices.filter((t) => ["dark", "light", "darcula", "contrast", "contrast-light", "system"].includes(t.id))}>
                             {(theme) => (
                               <button type="button" class="theme-card" classList={{ on: state.settings.theme === theme.id }} onClick={() => void saveSettings({ theme: theme.id as ThemeName })}>
                                 <div class="theme-preview" data-theme-preview={theme.id === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme.id}>

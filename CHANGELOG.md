@@ -168,6 +168,7 @@ All notable changes to Celer are documented here. The format follows
 - **The editor's find/replace panel was in English** ("Find", "next", "match case"…), as were its folding and go-to-line texts. They are now in Spanish.
 - **Pale secondary text in Sand**: the top bar's "Nuevo", the settings navigation, the status bar and the explorer counts were at 3.7:1 and 2.3:1. Sand's secondary and faint text are now darker, 4.5:1 or better.
 - **Faint text that carries information was hard to read** in Celer Claro, Celer Oscuro, Darcula and Fjord: explorer row counts, headings such as "EMPEZAR" and the hints under fields were at 2.6–3.9:1. The faint text colour now reaches 4.5:1 on the panels and surfaces in every theme.
+- **The start guide's appearance step left out the high-contrast themes** its welcome card mentions. "Alto contraste oscuro" and "Alto contraste claro" are now offered there too.
 
 ## [2.0.1] - 2026-10-08
 

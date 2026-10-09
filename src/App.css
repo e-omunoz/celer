@@ -1683,7 +1683,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .onb-card small { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .onb-card.action { cursor: pointer; transition: border-color var(--dur-fast), transform var(--dur-fast); }
 .onb-card.action:hover { border-color: var(--accent); transform: translateY(-1px); }
-.onb-themes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.onb-themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .onb-row { display: flex; align-items: center; gap: 14px; }
 .onb-label { width: 72px; font-size: 12.5px; color: var(--text-muted); font-weight: 500; }
 .onb-sample {
