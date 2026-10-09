@@ -1,22 +1,26 @@
 // Checks for src/windowModel.ts: node --experimental-strip-types dev/windows-check.ts
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   cascadeFrom,
   composeLayout,
   dropTarget,
   gibHost,
   insertAt,
+  insertionGap,
   isFullWindow,
   panelOf,
   placeOnScreen,
   primaryMonitor,
   readLayout,
+  reorderTarget,
   riskSummary,
   riskyTabs,
   sortWindows,
   windowKind,
   windowName,
   windowNumber,
+  DROP_OFFSET,
   type Monitor,
   type TabRisk,
   type WindowGeometry,
@@ -149,6 +153,27 @@ assert.deepEqual(dropTarget("main", [100, 1000], rects, null), { kind: "new", x:
 assert.deepEqual(dropTarget("main", [3000, 300], rects, null), { kind: "new", x: 2880, y: 282 });
 assert.deepEqual(dropTarget("main", null, rects, null), { kind: "none" }, "pointer unknown");
 assert.deepEqual(dropTarget("win-2", [100, 100], rects, null), { kind: "window", label: "main", index: null }, "back to the main window");
+
+// Where a dragged tab lands in a tab bar (#108): the line between the tabs it is between.
+const mids = [50, 150, 250]; // three tabs, 100 px wide
+assert.equal(insertionGap(mids, 10), 0, "before the first");
+assert.equal(insertionGap(mids, 60), 1, "past the middle of the first");
+assert.equal(insertionGap(mids, 149), 1);
+assert.equal(insertionGap(mids, 260), 3, "after the last");
+assert.equal(insertionGap([], 500), 0, "an empty bar");
+// …and the reorder it means for a tab of the same bar (moveTab's `to`).
+assert.equal(reorderTarget(0, 0), null, "dropped where it was");
+assert.equal(reorderTarget(0, 1), null, "just after itself: same place");
+assert.equal(reorderTarget(0, 3), 2, "to the end");
+assert.equal(reorderTarget(2, 0), 0, "to the front");
+assert.equal(reorderTarget(1, 3), 2);
+assert.equal(reorderTarget(2, 1), 1);
+// The outline drawn outside the windows sits where the new window opens: the core uses the same offset.
+const rust = readFileSync(new URL("../src-tauri/src/windows.rs", import.meta.url), "utf8");
+assert.match(rust, new RegExp(`GHOST_OFFSET: \\(f64, f64\\) = \\(${DROP_OFFSET.x}\\.0, ${DROP_OFFSET.y}\\.0\\)`), "GHOST_OFFSET in windows.rs follows DROP_OFFSET");
+const ghostPage = readFileSync(new URL("../public/drag-ghost.html", import.meta.url), "utf8");
+assert.ok(ghostPage.includes("Soltar para abrir en una ventana nueva"));
+assert.ok(!/<script[^>]+src=/.test(ghostPage), "the outline page loads nothing");
 
 assert.deepEqual(insertAt(["a", "b", "c"], ["x"], 1), ["a", "x", "b", "c"]);
 assert.deepEqual(insertAt(["a"], ["x", "y"], null), ["a", "x", "y"]);

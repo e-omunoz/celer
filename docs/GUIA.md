@@ -267,10 +267,15 @@ biblioteca, los ajustes, el tema, los atajos y a Gib; cada una tiene sus pestañ
 - **Ventana nueva**: **Ctrl+Mayús+N** (o *Nuevo › Nueva ventana*). Se abre conectada a lo mismo que la ventana desde
   la que la abres. El atajo depende de dónde esté el foco: en el explorador crea una carpeta y en la rejilla de una
   tabla pone NULL en la celda; en el resto de Celer (editor, pestañas, paneles) abre la ventana nueva.
-- **Sacar una pestaña**: arrástrala fuera de la barra de pestañas y suéltala donde quieras: la ventana nueva aparece
-  ahí. También con el botón derecho sobre la pestaña: *Mover a una ventana nueva*.
-- **Llevarla a otra ventana**: arrástrala a la barra de pestañas de otra ventana de Celer (se marca al pasar por
-  encima) o elige *Mover a la ventana…* en el menú de la pestaña o en la paleta.
+- **Sacar una pestaña**: arrástrala fuera de la barra de pestañas. Bajo el puntero va una tarjeta con su título,
+  su conexión y sus primeras líneas; fuera de las ventanas de Celer se convierte en el contorno de la ventana nueva,
+  con *Soltar para abrir en una ventana nueva*. Al soltarla, la ventana nueva aparece justo ahí, con la pestaña donde
+  estaba el puntero. También con el botón derecho sobre la pestaña: *Abrir en ventana nueva*. La primera vez que
+  tienes dos pestañas, Gib (o un aviso, si está apagado) te lo recuerda.
+- **Llevarla a otra ventana**: arrástrala sobre otra ventana de Celer: su barra de pestañas se marca y una línea
+  enseña dónde quedará (al final si la sueltas fuera de la barra). También *Mover a la ventana…* en el menú de la
+  pestaña o en la paleta.
+- **Reordenar**: dentro de su barra, la misma línea marca el hueco donde caerá.
 - **La sesión no se toca**: una consola movida sigue con la misma conexión, la transacción abierta, las filas que
   faltaban por cargar y las tablas `#temp`. Mientras ejecuta o carga no se puede mover; espera o detenla.
 - **Paneles en su propia ventana**: la biblioteca, el asistente de IA, el plan de ejecución, el diagrama E-R y las

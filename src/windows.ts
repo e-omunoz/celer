@@ -240,6 +240,10 @@ export async function prepareWindow(): Promise<void> {
       geometry = readLayout(layoutFile)[0]?.geometry;
     } else {
       startMessages = await invoke<Message[]>("window_inbox").catch(() => [] as Message[]);
+      if (startMessages.some((m) => m.kind === "adopt" && m.drop === true)) {
+        document.documentElement.dataset.arrival = "drop";
+        window.setTimeout(() => delete document.documentElement.dataset.arrival, 3000);
+      }
       const restore = startMessages.find((m) => m.kind === "restore");
       geometry = (restore?.entry as SavedWindow | undefined)?.geometry;
     }
@@ -411,7 +415,8 @@ export async function sendTab(tabId: string, target: string | null, options: { a
   }
   const rows = loadedRows(tab);
   if (rows > 100_000) notify(`Moviendo la pestaña con ${rows.toLocaleString()} filas cargadas: puede tardar unos segundos`, "info");
-  const message = tabMessage([tab], options.index ?? null);
+  // Dropped outside the windows: the new window opens there with a short entrance (App.css, data-arrival).
+  const message = { ...tabMessage([tab], options.index ?? null), ...(options.at ? { drop: true } : {}) };
   let sent: boolean;
   if (target) {
     sent = await post(target, message);
@@ -455,11 +460,42 @@ async function focusSelf() {
 
 let dragging = "";
 
-/** A tab starts to be dragged: the other windows' tab bars get ready to take it. */
-export function startTabDrag(tabId: string, title: string) {
+/** The theme's colours as the browser computed them, for the outline drawn outside the windows (drag-ghost.html). */
+function ghostColors(strip?: string): Record<string, string> {
+  const probe = document.createElement("span");
+  probe.style.cssText = "display:none";
+  document.body.appendChild(probe);
+  const colour = (value: string) => {
+    probe.style.color = "";
+    probe.style.color = value;
+    return getComputedStyle(probe).color;
+  };
+  const font = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const out = {
+    bg: colour("var(--bg)"),
+    text: colour("var(--text)"),
+    muted: colour("var(--text-muted)"),
+    border: colour("var(--border-strong)"),
+    popover: colour("var(--popover)"),
+    accent: colour("var(--accent)"),
+    "accent-fg": colour("var(--accent-fg)"),
+    strip: colour(strip || "var(--accent)"),
+    sans: font("--sans"),
+    mono: font("--mono"),
+  };
+  probe.remove();
+  return out;
+}
+
+/**
+ * A tab starts to be dragged: the other windows' tab bars get ready to take it, and outside every window the
+ * outline of the new window follows the pointer with the tab's title and a preview.
+ */
+export function startTabDrag(tabId: string, title: string, ghost: { preview?: string; color?: string } = {}) {
   if (!isTauri() || panelKind) return;
   dragging = tabId;
-  void invoke("tab_drag_start", { tab: tabId, title }).catch(() => {});
+  const style = { title, preview: ghost.preview ?? "", label: "Soltar para abrir en una ventana nueva", colors: ghostColors(ghost.color), reduce: document.documentElement.dataset.motion === "reduce" };
+  void invoke("tab_drag_start", { tab: tabId, title, ghost: style }).catch(() => {});
 }
 
 /** The tab was dropped on this window's tab bar while it came from another window. */

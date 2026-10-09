@@ -127,6 +127,14 @@ for that claim and calls `tab_drag_end`, which returns the claim, the pointer an
 `dropTarget` (windowModel.ts) decides: the window that claimed it, else the window under the pointer, else a new
 window where the tab was let go, or nothing over its own window.
 
+Feedback while it moves: the drag image is a ghost card (src/dnd.ts) that the system keeps under the pointer in and
+out of the window. With the ghost style it is given (title, preview, the theme's colours), `tab_drag_start` starts a
+thread that polls the pointer: outside every Celer window it shows `drag-ghost`, a transparent, click-through,
+never-focused window (`public/drag-ghost.html`) with the outline of the new window at the very spot it would open
+(`GHOST_OFFSET` = `DROP_OFFSET`); over a window it hides, and that window's tab bar draws the insertion line
+(`insertionGap`). The thread ends and closes it with the drag. The ghost is not a Celer window: it is left out of
+`window_list`, of the frames `tab_drag_end` returns and of the window events.
+
 **Panels in their own window.** The library and the assistant exist once and work with the active console of the
 last focused full window: that window sends them its console (text, connection, database, error, completion) and
 the consoles linked to library scripts, and they ask it to insert, replace, run or open (`forwardFromPanel`). A plan,

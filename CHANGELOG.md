@@ -27,6 +27,12 @@ All notable changes to Celer are documented here. The format follows
   opens, closes or moves, toasts stack and leave smoothly, dialogs, menus and the palette animate on the way out too,
   and buttons share one hover and press feel. Text fields share one focus ring, menus and popovers one surface,
   badges and empty states one style, and the high-contrast themes get stronger focus rings and scrollbars.
+- **Tearing a tab off is obvious** (#108): dragging a tab shows a ghost card (title, connection and the first lines
+  of its SQL or its table) that follows the pointer, also outside the window; outside every Celer window it turns
+  into the outline of the new window with «Soltar para abrir en una ventana nueva», right where the window will open
+  (it then grows into place). Over another Celer window, or within the tab bar, a line shows where the tab will land.
+  The tab menu says «Abrir en ventana nueva», the tab's tooltip mentions dragging, and the first time a window has
+  two tabs Gib (or a notice) says so once. The console keeps its session when it moves, as before.
 - **Drag and drop looks the same everywhere** (#110): tabs, result columns, explorer rows and library scripts dim
   what is dragged, light up where it can be dropped, draw the same insertion line and show the same ghost card under
   the pointer.

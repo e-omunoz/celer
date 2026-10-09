@@ -37,6 +37,7 @@ export const TIPS: Tip[] = [
   { id: "library-folders", text: () => "En la biblioteca puedes crear carpetas, poner etiquetas y arrastrar los scripts de una a otra." },
   { id: "library-drag", text: () => "Arrastra un script de la biblioteca al editor para pegar su SQL donde lo sueltes." },
   { id: "library-run", text: () => "En la biblioteca, Ctrl+Intro sobre un script lo abre y lo ejecuta; F2 lo renombra y Supr lo borra (con deshacer)." },
+  { id: "tear-off", text: () => "Arrastra una pestaña fuera de la ventana para abrirla en una ventana nueva, o suéltala en la barra de pestañas de otra ventana de Celer." },
   { id: "params", text: () => "Escribe :nombre en una consulta y Celer te pedirá su valor al ejecutarla." },
   { id: "pin", text: () => "Fija un resultado con la chincheta y compáralo después con el de la siguiente ejecución." },
 ];

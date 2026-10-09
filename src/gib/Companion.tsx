@@ -286,6 +286,11 @@ export function Companion() {
           setAsleep(false);
           showTip(false);
           break;
+        case "hint":
+          // A one-time word about something easy to miss (hints.ts): said even when he is quiet.
+          setAsleep(false);
+          if (event.detail) say({ text: event.detail, kind: "info" }, 10000);
+          break;
         case "show-off": {
           setAsleep(false);
           setBubble(null);

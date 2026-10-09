@@ -360,7 +360,7 @@ export const [resolvedTheme, setResolvedTheme] = createSignal<Exclude<ThemeName,
 
 /** Things Gib reacts to. The companion decides how (mood, tip, nothing). */
 export interface GibEvent {
-  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off";
+  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off" | "hint";
   at: number;
   ms?: number;
   detail?: string;

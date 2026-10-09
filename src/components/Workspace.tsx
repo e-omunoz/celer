@@ -32,7 +32,7 @@ import {
   Upload,
   X,
 } from "lucide-solid";
-import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
 import { cellText, isNullCell, rowsLabel, whereHints } from "../sql";
@@ -123,7 +123,9 @@ import { withShortcut } from "../commands";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
 import { flipList, leaveOnCleanup } from "../motion";
-import { windowName } from "../windowModel";
+import { previewLines, setDragGhost } from "../dnd";
+import { hintOnce } from "../hints";
+import { insertionGap, reorderTarget, windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 
@@ -157,15 +159,62 @@ function TabBar() {
   /** The tab was dropped on this tab bar (a reorder): it does not go to another window. */
   let droppedHere = false;
   let bar: HTMLDivElement | undefined;
+  /** While a tab is dragged over this bar (or, from another window, over this window): where it would land. */
+  const [gap, setGap] = createSignal<number | null>(null);
+  const tabEls = () => (bar ? [...bar.querySelectorAll<HTMLElement>(":scope > .tab:not([data-leave])")] : []);
   // Tabs glide to their new place when one closes, opens or moves (motion.ts).
-  flipList(() => (bar ? [...bar.querySelectorAll<HTMLElement>(":scope > .tab")] : []), () => state.tabs.map((tab) => tab.id).join());
+  flipList(tabEls, () => state.tabs.map((tab) => tab.id).join());
+
+  /** The gap under the pointer: over the bar, between the tabs it is between; elsewhere in the window, the end. */
+  const gapAt = (event: DragEvent) => {
+    const rect = bar?.getBoundingClientRect();
+    if (!rect || event.clientY < rect.top || event.clientY > rect.bottom) return state.tabs.length;
+    return insertionGap(tabEls().map((el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; }), event.clientX);
+  };
+  /** Where the insertion line goes for a gap (in the bar's scrolled content). */
+  const lineX = (at: number) => {
+    const els = tabEls();
+    if (!els.length) return 0;
+    const el = els[Math.min(at, els.length - 1)];
+    return at < els.length ? el.offsetLeft : el.offsetLeft + el.offsetWidth;
+  };
+
+  // A tab dragged from another window: anywhere over this one it can be let go (at the end, or where the line is).
+  createEffect(() => {
+    if (!incomingDrag()) {
+      setGap(null);
+      return;
+    }
+    const over = (event: DragEvent) => {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      setGap(gapAt(event));
+    };
+    const leave = (event: DragEvent) => !event.relatedTarget && setGap(null);
+    const drop = (event: DragEvent) => {
+      event.preventDefault();
+      claimTabDrop(gapAt(event));
+      setGap(null);
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    onCleanup(() => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+    });
+  });
+
+  // The first time a window has two tabs: a word on tearing them off (once, ever).
+  createEffect(on(() => state.tabs.length >= 2, (two) => two && isTauri() && hintOnce("tab-tearoff", "Arrastra una pestaña fuera de la ventana para abrirla en una ventana nueva (o clic derecho › «Abrir en ventana nueva»).")));
 
   function menu(event: MouseEvent, tab: Tab) {
     // Another window, or a new one: the tab goes on there with its session as it is.
     const windows = isTauri()
       ? [
           { separator: true },
-          { label: "Mover a una ventana nueva", run: () => void sendTab(tab.id, null) },
+          { label: "Abrir en ventana nueva", hint: "o arrástrala fuera", run: () => void sendTab(tab.id, null) },
           ...otherFullWindows().map((w) => ({ label: `Mover a ${windowName(w.label)}${w.title ? ` (${w.title})` : ""}`, run: () => void sendTab(tab.id, w.label) })),
         ]
       : [];
@@ -186,12 +235,23 @@ function TabBar() {
       role="tablist"
       classList={{ "drop-in": Boolean(incomingDrag()) }}
       onDblClick={(event) => event.target === event.currentTarget && openQuery(activeSql()?.connId ?? null)}
-      onDragOver={(event) => incomingDrag() && event.preventDefault()}
-      onDrop={(event) => {
-        // A tab from another window let go after the last tab.
-        if (event.target !== event.currentTarget || !incomingDrag()) return;
+      onDragOver={(event) => {
+        // A tab of this bar being moved (another window's is handled by the window, above).
+        if (dragFrom() < 0) return;
         event.preventDefault();
-        claimTabDrop(state.tabs.length);
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        setGap(gapAt(event));
+      }}
+      onDragLeave={(event) => dragFrom() >= 0 && !bar?.contains(event.relatedTarget as Node | null) && setGap(null)}
+      onDrop={(event) => {
+        if (dragFrom() < 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        droppedHere = true;
+        const to = reorderTarget(dragFrom(), gapAt(event));
+        if (to !== null) moveTab(dragFrom(), to);
+        setGap(null);
+        setDragFrom(-1);
       }}
     >
       <For each={state.tabs}>
@@ -212,21 +272,18 @@ function TabBar() {
                 setDragFrom(index());
                 droppedHere = false;
                 event.dataTransfer?.setData("application/x-celer-tab", tab.id);
+                if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+                // The ghost under the pointer (it follows it out of the window too): the title, where it is connected
+                // and a few lines of what it holds.
+                const preview = tab.kind === "sql" ? tab.sql : `${tab.qualified}\n${tab.rows.length.toLocaleString()} filas cargadas`;
+                const where = [conn()?.name, tab.database].filter(Boolean).join(" · ") || "Sin conexión";
+                setDragGhost(event, { title: tab.title, detail: where, preview, color: tab.connId ? connColor(conn()) : undefined });
                 // Out of the window it goes to another one, or to a new one where it is let go.
-                startTabDrag(tab.id, tab.title);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (dragFrom() >= 0) {
-                  droppedHere = true;
-                  moveTab(dragFrom(), index());
-                } else claimTabDrop(index());
-                setDragFrom(-1);
+                startTabDrag(tab.id, tab.title, { preview: previewLines(preview), color: tab.connId ? connColor(conn()) : undefined });
               }}
               onDragEnd={() => {
                 setDragFrom(-1);
+                setGap(null);
                 void endTabDrag(tab.id, droppedHere);
               }}
               onMouseDown={(event) => {
@@ -237,7 +294,7 @@ function TabBar() {
               }}
               onDblClick={() => tab.kind === "sql" && setRenaming(tab.id)}
               onContextMenu={(event) => menu(event, tab)}
-              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${tab.database ? ` · ${tab.database}` : ""}`}
+              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${tab.database ? ` · ${tab.database}` : ""}${isTauri() ? "\nArrástrala fuera de la ventana para abrirla en una ventana nueva" : ""}`}
             >
               <span class="tab-strip" style={{ background: tab.connId ? connColor(conn()) : "transparent" }} />
               <ObjIcon kind={tab.kind === "table" ? (tab.obj.kind === "view" ? "view" : "table") : tab.title.endsWith(".sql") ? "file" : "console"} size={14} />
@@ -279,6 +336,9 @@ function TabBar() {
           );
         }}
       </For>
+      <Show when={gap() !== null}>
+        <span class="tab-drop-line" style={{ left: `${lineX(gap()!) - 1}px` }} aria-hidden="true" />
+      </Show>
       <button type="button" class="tab-new" title={withShortcut("Nueva consola", "new-console")} onClick={() => openQuery(activeSql()?.connId ?? null)}>
         <Plus size={14} />
       </button>

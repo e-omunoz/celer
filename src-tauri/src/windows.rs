@@ -6,14 +6,16 @@
 //! - lleva un buzón por ventana: una ventana deja un mensaje (una pestaña que se mueve, una acción de un panel) y
 //!   el núcleo avisa a la otra con `celer://inbox`; así una ventana que aún no ha cargado no pierde nada;
 //! - guarda `workspace.json` con la disposición de todas las ventanas (cada una manda la suya: un solo escritor);
-//! - sigue el arrastre de una pestaña fuera de su ventana y dice dónde se soltó;
+//! - sigue el arrastre de una pestaña fuera de su ventana y dice dónde se soltó; fuera de toda ventana de Celer
+//!   muestra bajo el puntero el contorno de la ventana nueva (`drag-ghost`, una ventana transparente que no recibe
+//!   el ratón, con `public/drag-ghost.html`);
 //! - dice qué ventana tiene el foco (`celer://focus`, para que Gib viva solo en una) y cuándo se abre o se cierra
 //!   una (`celer://windows`).
 //!
 //! Las sesiones no son de ninguna ventana: viven en `AppState`, así que mover una pestaña no las toca.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -38,6 +40,8 @@ pub struct Windows {
     /// `workspace.json` no se pudo leer al arrancar (bloqueado…): no se escribe encima en esta sesión.
     frozen: AtomicBool,
     drag: Mutex<Option<Drag>>,
+    /// Cada arrastre tiene su número: el hilo que mueve el contorno de un arrastre termina cuando empieza otro.
+    drag_gen: AtomicU64,
     /// La última ventana completa que tuvo el foco.
     focused: Mutex<String>,
 }
@@ -46,6 +50,14 @@ struct Drag {
     source: String,
     claim: Option<(String, usize)>,
 }
+
+/// El contorno que sigue al puntero mientras una pestaña se arrastra fuera de las ventanas: no es una ventana de
+/// Celer (no tiene pestañas, ni disposición, ni sale en las listas).
+pub const GHOST: &str = "drag-ghost";
+/// Dónde queda el puntero dentro del contorno, en píxeles físicos: lo mismo que `DROP_OFFSET` en windowModel.ts,
+/// así el contorno está justo donde se abrirá la ventana nueva.
+const GHOST_OFFSET: (f64, f64) = (120.0, 18.0);
+const GHOST_SIZE: (f64, f64) = (320.0, 200.0);
 
 /// Una ventana con pestañas (la principal o `win-N`), no un panel.
 fn is_full(label: &str) -> bool {
@@ -113,6 +125,7 @@ pub fn on_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 let _ = app.emit("celer://focus", label);
             }
         }
+        tauri::WindowEvent::Destroyed if window.label() == GHOST => {}
         tauri::WindowEvent::Destroyed => {
             if let Some(windows) = app.try_state::<Windows>() {
                 windows.inbox.lock().remove(window.label());
@@ -246,6 +259,7 @@ pub fn window_list(app: AppHandle, windows: State<'_, Windows>) -> Vec<WindowInf
     let layout = windows.layout.lock();
     app.webview_windows()
         .into_keys()
+        .filter(|label| label != GHOST)
         .map(|label| {
             let title = layout
                 .iter()
@@ -407,12 +421,122 @@ pub fn window_quit(app: AppHandle) {
     app.exit(0);
 }
 
-/// Empieza el arrastre de una pestaña: las otras ventanas preparan su barra de pestañas para recibirla.
+/// Empieza el arrastre de una pestaña: las otras ventanas preparan su barra de pestañas para recibirla y, con
+/// `ghost` (título, vista previa, colores del tema), fuera de las ventanas se ve el contorno de la ventana nueva.
 #[tauri::command]
-pub fn tab_drag_start(app: AppHandle, window: WebviewWindow, windows: State<'_, Windows>, tab: String, title: String) {
+pub fn tab_drag_start(app: AppHandle, window: WebviewWindow, windows: State<'_, Windows>, tab: String, title: String, ghost: Option<Value>) {
     let source = window.label().to_string();
     *windows.drag.lock() = Some(Drag { source: source.clone(), claim: None });
+    let generation = windows.drag_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let _ = app.emit("celer://drag", json!({ "active": true, "source": source, "tab": tab, "title": title }));
+    if let Some(style) = ghost {
+        follow_with_ghost(app, generation, style);
+    }
+}
+
+/// Un rectángulo de ventana en píxeles físicos del escritorio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Area {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn inside(point: (f64, f64), area: &Area) -> bool {
+    point.0 >= area.x && point.0 < area.x + area.width && point.1 >= area.y && point.1 < area.y + area.height
+}
+
+/// La esquina del contorno para el puntero en `cursor`: la de la ventana que se abriría al soltar.
+fn ghost_corner(cursor: (f64, f64)) -> (i32, i32) {
+    ((cursor.0 - GHOST_OFFSET.0).round() as i32, (cursor.1 - GHOST_OFFSET.1).round() as i32)
+}
+
+/// Las ventanas de Celer a la vista (no el contorno, ni las minimizadas u ocultas).
+fn visible_areas(app: &AppHandle) -> Vec<Area> {
+    app.webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label != GHOST)
+        .filter_map(|(_, w)| {
+            if w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(false) {
+                return None;
+            }
+            let p = w.outer_position().ok()?;
+            let s = w.outer_size().ok()?;
+            Some(Area { x: p.x as f64, y: p.y as f64, width: s.width as f64, height: s.height as f64 })
+        })
+        .collect()
+}
+
+/// Mientras dura el arrastre `generation`: fuera de toda ventana de Celer, el contorno sigue al puntero; dentro de
+/// una, se esconde (allí la barra de pestañas enseña dónde caerá). Al terminar, se cierra.
+fn follow_with_ghost(app: AppHandle, generation: u64, style: Value) {
+    std::thread::spawn(move || {
+        let current = |app: &AppHandle| {
+            app.try_state::<Windows>()
+                .map(|w| w.drag_gen.load(Ordering::SeqCst) == generation && w.drag.lock().is_some())
+                .unwrap_or(false)
+        };
+        let data = serde_json::to_string(&style).unwrap_or_else(|_| "{}".into());
+        let ghost = match app.get_webview_window(GHOST) {
+            Some(existing) => {
+                let _ = existing.eval(format!("window.__celerGhostUpdate && window.__celerGhostUpdate({data})"));
+                existing
+            }
+            None => {
+                let built = WebviewWindowBuilder::new(&app, GHOST, WebviewUrl::App("drag-ghost.html".into()))
+                    .title("Celer")
+                    .inner_size(GHOST_SIZE.0, GHOST_SIZE.1)
+                    .decorations(false)
+                    .transparent(true)
+                    .background_color(tauri::window::Color(0, 0, 0, 0))
+                    .shadow(false)
+                    .resizable(false)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .focused(false)
+                    .focusable(false)
+                    .visible(false)
+                    .initialization_script(format!("window.__celerGhost = {data};"))
+                    .build();
+                match built {
+                    Ok(window) => window,
+                    Err(_) => return,
+                }
+            }
+        };
+        let _ = ghost.set_ignore_cursor_events(true);
+        // Las ventanas cambian poco durante un arrastre: se miran unas veces por segundo, el puntero en cada paso.
+        let mut areas = visible_areas(&app);
+        let mut shown = false;
+        let mut tick = 0u32;
+        while current(&app) {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            tick = tick.wrapping_add(1);
+            if tick % 15 == 0 {
+                areas = visible_areas(&app);
+            }
+            let Ok(cursor) = ghost.cursor_position() else { continue };
+            let point = (cursor.x, cursor.y);
+            if areas.iter().any(|area| inside(point, area)) {
+                if shown {
+                    let _ = ghost.hide();
+                    shown = false;
+                }
+                continue;
+            }
+            let (x, y) = ghost_corner(point);
+            let _ = ghost.set_position(tauri::PhysicalPosition::new(x, y));
+            if !shown {
+                let _ = ghost.show();
+                shown = true;
+            }
+        }
+        // Otro arrastre ya pudo empezar y usarlo: solo se cierra si este era el último.
+        if app.try_state::<Windows>().map(|w| w.drag_gen.load(Ordering::SeqCst) == generation).unwrap_or(true) {
+            let _ = ghost.close();
+        }
+    });
 }
 
 /// La pestaña que se arrastra desde otra ventana se ha soltado en la barra de esta, en la posición `index`.
@@ -460,12 +584,16 @@ pub struct DragEnd {
 #[tauri::command]
 pub fn tab_drag_end(app: AppHandle, window: WebviewWindow, windows: State<'_, Windows>) -> DragEnd {
     let drag = windows.drag.lock().take();
+    if let Some(ghost) = app.get_webview_window(GHOST) {
+        let _ = ghost.hide();
+    }
     let _ = app.emit("celer://drag", json!({ "active": false }));
     let claim = drag.and_then(|d| d.claim).map(|(label, index)| DropClaim { label, index });
     let cursor = window.cursor_position().ok().map(|p| [p.x, p.y]);
     let rects = app
         .webview_windows()
         .into_iter()
+        .filter(|(label, _)| label != GHOST)
         .filter_map(|(label, w)| {
             let position = w.outer_position().ok()?;
             let size = w.outer_size().ok()?;
@@ -478,8 +606,25 @@ pub fn tab_drag_end(app: AppHandle, window: WebviewWindow, windows: State<'_, Wi
 
 #[cfg(test)]
 mod tests {
-    use super::compose;
+    use super::{compose, ghost_corner, inside, Area, GHOST_OFFSET};
     use serde_json::json;
+
+    #[test]
+    fn the_ghost_sits_where_the_new_window_will_open() {
+        // The pointer stays on the ghost's tab strip, at the same spot as the new window's (windowModel.ts).
+        assert_eq!(ghost_corner((1000.0, 500.0)), ((1000.0 - GHOST_OFFSET.0) as i32, (500.0 - GHOST_OFFSET.1) as i32));
+        assert_eq!(ghost_corner((10.4, 5.6)), (-110, -12), "near the screen's corner it may start off screen");
+    }
+
+    #[test]
+    fn a_point_is_inside_a_window_up_to_its_last_pixel() {
+        let area = Area { x: 100.0, y: 50.0, width: 800.0, height: 600.0 };
+        assert!(inside((100.0, 50.0), &area));
+        assert!(inside((899.9, 649.9), &area));
+        assert!(!inside((900.0, 300.0), &area), "the right edge belongs to the next pixel");
+        assert!(!inside((99.0, 300.0), &area));
+        assert!(!inside((500.0, 650.0), &area));
+    }
 
     #[test]
     fn the_layout_puts_the_main_window_first_and_its_tabs_on_top() {
