@@ -47,6 +47,59 @@ export function renameFolderPath(folder: string, from: string, to: string): stri
   return joinFolder(to, f.slice(a.length));
 }
 
+/** A folder path after a set of moves (`[from, to]`, none inside another): the first move that contains it applies. */
+export function movedFolderPath(folder: string, moves: [string, string][]): string {
+  const f = normalizeFolder(folder);
+  const move = moves.find(([from]) => isInside(f, from));
+  return move ? renameFolderPath(f, move[0], move[1]) : f;
+}
+
+export interface MovePlan {
+  /** Folders that move, `[from, to]`: only the outermost ones (a folder inside another moved one goes with it). */
+  moves: [string, string][];
+  /** The new folder of every connection that changes folder. */
+  folderOf: Map<string, string>;
+  /** Selected folders that cannot go there: the target itself or one of its ancestors. */
+  blocked: string[];
+}
+
+/**
+ * Moving several connections (`ids`) and folders into `target` at once (a multi-selection dragged or moved from the
+ * menu). Each folder goes inside the target with its contents; a selected connection that is inside a moved folder
+ * travels with that folder instead of being taken out of it.
+ */
+export function planMove(conns: { id: string; folder: string }[], ids: string[], folders: string[], target: string): MovePlan {
+  const to = normalizeFolder(target);
+  const selected = [...new Set(folders.map(normalizeFolder).filter(Boolean))];
+  const blocked = selected.filter((folder) => isInside(to, folder));
+  const movable = selected.filter((folder) => !blocked.includes(folder));
+  const outer = movable.filter((folder) => !movable.some((other) => other !== folder && isInside(folder, other)));
+  const moves = outer.map((folder): [string, string] => [folder, joinFolder(to, folderName(folder))]).filter(([from, dest]) => from !== dest);
+  const folderOf = new Map<string, string>();
+  for (const conn of conns) {
+    const now = normalizeFolder(conn.folder);
+    const carried = outer.some((folder) => isInside(now, folder));
+    const next = carried ? movedFolderPath(now, moves) : ids.includes(conn.id) ? to : now;
+    if (next !== now) folderOf.set(conn.id, next);
+  }
+  return { moves, folderOf, blocked };
+}
+
+/** The connection order with `moving` (in their current order) right before `beforeId`; unchanged if it is one of them. */
+export function placeBefore(order: string[], moving: string[], beforeId: string): string[] {
+  const set = new Set(moving);
+  const rest = order.filter((id) => !set.has(id));
+  const at = rest.indexOf(beforeId);
+  if (at < 0) return order.slice();
+  return [...rest.slice(0, at), ...order.filter((id) => set.has(id)), ...rest.slice(at)];
+}
+
+/** A folder path once the `deleted` folders are gone: what was inside each one goes up a level (deepest first). */
+export function liftDeleted(folder: string, deleted: string[]): string {
+  const ordered = [...new Set(deleted.map(normalizeFolder).filter(Boolean))].sort((a, b) => folderParts(b).length - folderParts(a).length);
+  return ordered.reduce((path, gone) => renameFolderPath(path, gone, parentFolder(gone)), normalizeFolder(folder));
+}
+
 /** Todas las carpetas (con sus antepasadas), en orden de aparición: primero las de las conexiones, luego las creadas. */
 export function allFolders(connFolders: string[], explicit: string[]): string[] {
   const out: string[] = [];
