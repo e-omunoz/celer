@@ -147,6 +147,7 @@ All notable changes to Celer are documented here. The format follows
   - primary and unique keys `NOT ENFORCED` are also read from `sys.key_constraints`, for the DDL, the explorer and the key columns;
   - if the server refuses the manual transaction mode, the console says so and stays in automatic mode.
 - **SQL Server**: the DDL of a table failed on Azure Synapse dedicated SQL pool ("Parse error … Incorrect syntax near 'FOR'", code 103010). Index and key columns are no longer joined with `FOR XML PATH`, which Synapse, PDW and Fabric lack; the explorer's "Índices" and "Claves foráneas" too. Same result on SQL Server.
+- **A console could run on the connection it had before**: changing a console's connection while its session was still opening attached the old connection's session, so statements ran on the wrong server. The old session is now closed when it arrives and the console opens its own on the new connection.
 
 ## [2.0.1] - 2026-10-08
 

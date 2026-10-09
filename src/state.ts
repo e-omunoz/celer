@@ -1332,6 +1332,8 @@ export function setTabConnection(tabId: string, connId: string) {
     serverInfo: session?.serverInfo ?? "",
     title: tab.title === "console" || connectionById(tab.connId)?.name === tab.title ? conn?.name ?? tab.title : tab.title,
   } as Partial<SqlTab>);
+  // A session still opening on the old connection is closed when it arrives (openSqlSession): this one gets its own.
+  openingSql.delete(tabId);
   if (!session) void connect(connId);
   else warmSqlSession(tabId);
   persistSoon();
@@ -1364,7 +1366,8 @@ function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
   if (pending) return pending;
   const job = openSqlSession(tab);
   openingSql.set(tab.id, job);
-  void job.finally(() => openingSql.delete(tab.id)).catch(() => {});
+  // Only its own entry: a console moved to another connection meanwhile has a newer job here.
+  void job.finally(() => openingSql.get(tab.id) === job && openingSql.delete(tab.id)).catch(() => {});
   return job;
 }
 
@@ -1394,21 +1397,33 @@ async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   const fresh = state.tabs[tabIndex(tab.id)];
   if (!fresh || fresh.kind !== "sql") throw new Error("La pestaña ya no existe");
   if (fresh.sessionId) return fresh;
-  const pwd = state.passwords[fresh.connId!];
-  const generation = connectGeneration(fresh.connId!);
+  // Plain values: `fresh` is a live store proxy, and the console may move to another connection while this opens.
+  const connId = fresh.connId!;
+  const database = fresh.database;
+  const pwd = state.passwords[connId];
+  const generation = connectGeneration(connId);
   // Straight into the console's database and transaction mode (a console in Manual mode stays manual on a new
   // session): no USE or extra round trips afterwards. If that database is gone, the connection's own.
   markTab(fresh.id, "connecting");
   const mode = { autocommit: fresh.autocommit };
+  // The console's connection was changed while this session opened: it now has (or is opening) its own.
+  const switched = () => {
+    const now = state.tabs[tabIndex(fresh.id)];
+    return now?.kind === "sql" && (now.connId !== connId || !!now.sessionId);
+  };
   const opened = await api()
-    .openSession(fresh.connId!, pwd, { ...mode, database: fresh.database || undefined })
-    .catch((err: unknown) => (fresh.database ? api().openSession(fresh.connId!, pwd, mode) : Promise.reject(err)))
+    .openSession(connId, pwd, { ...mode, database: database || undefined })
+    .catch((err: unknown) => (database && !switched() ? api().openSession(connId, pwd, mode) : Promise.reject(err)))
     .catch((err: unknown) => {
-      markTab(fresh.id, "down", { note: plainError(errorText(err)) });
+      if (!switched()) markTab(fresh.id, "down", { note: plainError(errorText(err)) });
       throw err;
     });
+  if (switched()) {
+    void api().closeSession(opened.sessionId).catch(() => {});
+    throw new Error("La consola ha cambiado de conexión");
+  }
   // Disconnected meanwhile (even if reconnected since): do not attach a session the core may have closed.
-  if (!state.sessions[fresh.connId!] || connectGeneration(fresh.connId!) !== generation) {
+  if (!state.sessions[connId] || connectGeneration(connId) !== generation) {
     void api().closeSession(opened.sessionId).catch(() => {});
     markTab(fresh.id, "off");
     throw new Error("La conexión se ha cerrado");
