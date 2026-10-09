@@ -6,6 +6,12 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **E-R diagram: double click on a table** did nothing, although the hint said it opens it: the press already
+  started panning and took the pointer, so the double click went to the canvas instead of the table. Panning now
+  starts when the mouse moves, and a double click opens the table (the diagram closes; in a window of its own it
+  stays, and the table opens in its Celer window, brought to the front).
+
 ## [2.1.1] - 2026-10-09
 
 ### Fixed

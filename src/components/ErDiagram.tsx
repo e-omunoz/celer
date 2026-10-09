@@ -87,18 +87,46 @@ export function ErDiagram() {
     onCleanup(() => window.removeEventListener("keydown", key, true));
   });
 
-  // Pan with the mouse; wheel zooms around the cursor.
-  let drag: { x: number; y: number; vx: number; vy: number } | null = null;
+  // Pan with the mouse; wheel zooms around the cursor. The pointer is captured once it moves, not on the press: a
+  // capture from the press sends the click and the double click to the canvas instead of the table under it.
+  let drag: { x: number; y: number; vx: number; vy: number; pointer: number; moved: boolean } | null = null;
   const onDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
-    drag = { x: event.clientX, y: event.clientY, vx: view().x, vy: view().y };
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    drag = { x: event.clientX, y: event.clientY, vx: view().x, vy: view().y, pointer: event.pointerId, moved: false };
   };
   const onMove = (event: PointerEvent) => {
     if (!drag) return;
-    setView({ ...view(), x: drag.vx + event.clientX - drag.x, y: drag.vy + event.clientY - drag.y });
+    // Released outside the canvas before it moved (nothing captured it): no pan left hanging.
+    if (!event.buttons) {
+      drag = null;
+      return;
+    }
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.moved) {
+      if (Math.abs(dx) + Math.abs(dy) < 4) return;
+      drag.moved = true;
+      (event.currentTarget as HTMLElement).setPointerCapture(drag.pointer);
+    }
+    setView({ ...view(), x: drag.vx + dx, y: drag.vy + dy });
   };
   const onUp = () => (drag = null);
+  // Double click on a table opens it: the card under the pointer, also if the event reaches only the canvas.
+  const onDblClick = (event: MouseEvent) => {
+    const target = event.target instanceof Element && event.target.closest(".er-table") ? event.target : document.elementFromPoint(event.clientX, event.clientY);
+    if (!target || target.closest("[data-er-act]")) return;
+    const id = target.closest(".er-table")?.getAttribute("data-er-id");
+    if (id) openFromDiagram(id);
+  };
+
+  function openFromDiagram(id: string) {
+    const obj = er().objects[id];
+    if (!obj) return;
+    const connId = er().connId;
+    // In a window of its own the diagram stays: the table opens in its Celer window, which comes to the front.
+    if (!isPanelWindow()) closeErDiagram();
+    void openTable(connId, obj);
+  }
   const onWheel = (event: WheelEvent) => {
     event.preventDefault();
     const r = host!.getBoundingClientRect();
@@ -164,7 +192,7 @@ export function ErDiagram() {
       <Show when={er().loading}>
         <div class="er-progress"><i style={{ width: `${er().total ? (er().done / er().total) * 100 : 8}%` }} /></div>
       </Show>
-      <div class="er-canvas" ref={host} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel}>
+      <div class="er-canvas" ref={host} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel} onDblClick={onDblClick}>
         <Show when={er().error}>
           <div class="er-empty"><Gib size={84} mood="error" /><p>{er().error}</p></div>
         </Show>
@@ -206,14 +234,7 @@ export function ErDiagram() {
               }}
             </For>
             <For each={er().tables}>
-              {(table) => <TableCard table={table} box={layout().boxes[table.id]} dim={dim(table.id)} hit={Boolean(matches()?.has(table.id))} onHover={setHover} onOpen={() => {
-                const obj = er().objects[table.id];
-                if (!obj) return;
-                const connId = er().connId;
-                // In a window of its own the diagram stays: the table opens in its Celer window.
-                if (!isPanelWindow()) closeErDiagram();
-                void openTable(connId, obj);
-              }} />}
+              {(table) => <TableCard table={table} box={layout().boxes[table.id]} dim={dim(table.id)} hit={Boolean(matches()?.has(table.id))} onHover={setHover} />}
             </For>
           </g>
         </svg>
@@ -223,7 +244,7 @@ export function ErDiagram() {
   );
 }
 
-function TableCard(props: { table: ErTable; box: ErBox | undefined; dim: boolean; hit: boolean; onHover: (id: string | null) => void; onOpen: () => void }) {
+function TableCard(props: { table: ErTable; box: ErBox | undefined; dim: boolean; hit: boolean; onHover: (id: string | null) => void }) {
   const shown = () => props.table.columns.slice(0, ER.maxRows);
   const hidden = () => props.table.columns.length - shown().length;
   return (
@@ -232,13 +253,10 @@ function TableCard(props: { table: ErTable; box: ErBox | undefined; dim: boolean
         <g
           class="er-table"
           classList={{ dim: props.dim, hit: props.hit }}
+          data-er-id={props.table.id}
           transform={`translate(${box().x} ${box().y})`}
           onPointerEnter={() => props.onHover(props.table.id)}
           onPointerLeave={() => props.onHover(null)}
-          onDblClick={(event) => {
-            event.stopPropagation();
-            props.onOpen();
-          }}
         >
           <rect class="er-card" width={box().w} height={box().h} rx="8" />
           <path class="er-card-head" d={`M 0 8 A 8 8 0 0 1 8 0 H ${box().w - 8} A 8 8 0 0 1 ${box().w} 8 V ${ER.header} H 0 Z`} />
