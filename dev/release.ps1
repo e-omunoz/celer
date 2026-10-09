@@ -3,10 +3,12 @@
 #   powershell -ExecutionPolicy Bypass -File dev\release.ps1 -Bump minor        # 1.1.0 -> 1.2.0
 #   powershell -ExecutionPolicy Bypass -File dev\release.ps1 -Version 1.1.0     # release the current version
 #   … -NoPush  (commit and tag locally only; push them yourself later)
+#   … -AllowBranch  (release from a branch other than an up-to-date main; the release is built from that branch)
 param(
   [ValidateSet("", "patch", "minor", "major")][string]$Bump = "",
   [string]$Version = "",
-  [switch]$NoPush
+  [switch]$NoPush,
+  [switch]$AllowBranch
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -16,6 +18,16 @@ Set-Location $root
 
 function Step($text) { Write-Host "`n== $text" -ForegroundColor DarkYellow }
 function Check($ok, $text) { if (-not $ok) { throw $text } }
+
+# ---------------------------------------------------------------- branch
+# Releases come from main as it is on origin: a tag on a feature branch would publish unmerged code and leave main's
+# manifests behind (the next release from main would compute the same version again).
+if (-not $AllowBranch) {
+  $branch = & $git rev-parse --abbrev-ref HEAD
+  Check ($branch -eq "main") "Estás en la rama '$branch': las versiones se publican desde main (o usa -AllowBranch)"
+  & $git fetch -q origin main; Check ($LASTEXITCODE -eq 0) "git fetch origin main falló"
+  Check ((& $git rev-parse HEAD) -eq (& $git rev-parse origin/main)) "main no coincide con origin/main: haz pull (o push) antes de publicar"
+}
 
 # ---------------------------------------------------------------- version
 $current = (Get-Content package.json -Raw | ConvertFrom-Json).version
