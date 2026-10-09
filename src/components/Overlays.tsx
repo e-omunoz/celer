@@ -137,6 +137,8 @@ interface PaletteItem {
   key: string;
   label: string;
   detail?: string;
+  /** More about it, as a tooltip. */
+  hint?: string;
   group: string;
   icon: string;
   keys?: string;
@@ -250,7 +252,7 @@ export function Palette() {
         if (command.enabled && !command.enabled()) continue;
         const score = fuzzy(command.label, q) || fuzzy(`${command.group} ${command.label}`, q) * 0.7;
         if (!score) continue;
-        out.push({ key: `a:${command.id}`, label: command.label, detail: command.group, group: "Acciones", icon: "action", keys: command.keys, run: command.run, score });
+        out.push({ key: `a:${command.id}`, label: command.label, detail: command.group, hint: command.hint, group: "Acciones", icon: "action", keys: command.keys, run: command.run, score });
       }
     }
     out.sort((a, b) => b.score - a.score);
@@ -322,7 +324,7 @@ export function Palette() {
                   <Show when={index() === 0 || items()[index() - 1].group !== item.group}>
                     <div class="pal-group">{item.group}</div>
                   </Show>
-                  <button type="button" class="pal-item" classList={{ active: active() === index() }} onMouseMove={() => setActive(index())} onClick={() => choose(item)}>
+                  <button type="button" class="pal-item" classList={{ active: active() === index() }} title={item.hint} onMouseMove={() => setActive(index())} onClick={() => choose(item)}>
                     <Show when={item.icon !== "action"} fallback={<span class="pal-action-dot" />}>
                       <ObjIcon kind={item.icon} size={15} />
                     </Show>

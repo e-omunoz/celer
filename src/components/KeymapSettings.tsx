@@ -147,7 +147,7 @@ export function KeymapSettings() {
               <For each={items}>
                 {(command) => (
                   <div class="keymap-row" classList={{ changed: changed(command.id), recording: recording() === command.id }}>
-                    <span class="keymap-label">{command.label}</span>
+                    <span class="keymap-label" title={command.hint}>{command.label}</span>
                     <span class="keymap-keys">
                       <For each={keysOf(command.id)}>
                         {(chord) => (
