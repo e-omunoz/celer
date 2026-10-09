@@ -19,9 +19,11 @@ Process and ledger: `docs/review/README.md`.
    labels and milestone if missing and prints the tracking issue number (creates one if none is open).
 5. Baseline: `npx tsc --noEmit -p .`, the `dev/*-check.ts` checks and `cargo test --lib`. Note any failure that
    already exists; it becomes a finding, not a fixer surprise.
-6. Test servers when available: `dev\testdb-postgres.ps1 start`, `dev\testdb-mysql.ps1 start`. Trigger the remote
-   engines run for SQL Server/Informix on the branch so the auditor has fresh logs:
-   `gh workflow run engines.yml --ref <branch>`.
+6. Every database engine (`docs/review/ENGINE_MATRIX.md`): `dev\wsl.ps1 db up` and `dev\wsl.ps1 db seed` start
+   PostgreSQL, MySQL, MariaDB, SQL Server and Informix in WSL; SQLite is embedded. Also trigger the Actions engines
+   run (`gh workflow run engines.yml --ref <branch>`). Without WSL, fall back to `dev\testdb-*.ps1` and say which
+   engines lost live coverage.
+7. To focus on recent work pass `since: "<previous release tag>"` in the workflow args.
 7. Build the debug desktop app once (`dev\run-desktop.ps1`, then close it) so UI auditors start warm.
 
 ## 2. Run the workflow

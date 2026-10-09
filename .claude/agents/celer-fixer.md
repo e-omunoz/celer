@@ -11,7 +11,9 @@ For each issue, in order of severity:
    and skip it.
 2. Make the smallest change that fixes the cause, written like the surrounding code. No drive-by refactors.
 3. Add or extend a check when the logic is testable: `dev/*-check.ts` for pure TS, `#[cfg(test)]` in the Rust module.
-4. Run the checks for what you touched (see CLAUDE.md "Checks"): at least `npx tsc --noEmit -p .` for UI changes and
+4. Anything reachable from a connection is re-tested on every engine in `docs/review/ENGINE_MATRIX.md`
+   (`dev\wsl.ps1 db up`, then `dev\wsl.ps1 test -Ref HEAD` and the app against each engine).
+   Run the checks for what you touched (see CLAUDE.md "Checks"): at least `npx tsc --noEmit -p .` for UI changes and
    `cargo test --lib` (in `src-tauri`) for Rust changes, plus the relevant `dev/*-check.ts`. For visual fixes,
    re-take the screenshot in the same theme/size and compare.
 5. Add a line to `CHANGELOG.md` under `## [Unreleased]` → `### Fixed` when users would notice.

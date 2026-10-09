@@ -9,6 +9,26 @@ Status and feature list: `STATUS.md`; design: `docs/ARCHITECTURE.md`, `docs/DESI
 - Cargo builds go to `$env:CARGO_TARGET_DIR = "D:\celer-target"` (the scripts set it).
 - Java 21 is needed for the JDBC bridge (`src-tauri/bridge`, compiled by `build.rs`).
 
+## Every database type, always
+Any change or test that reaches a connection is tested live on **every engine**: PostgreSQL, MySQL, MariaDB,
+SQL Server, Informix (DRDA and JDBC), SQLite and ODBC — ports, credentials and how in `docs/review/ENGINE_MATRIX.md`.
+Report per engine; an engine not tested is reported as not tested, never assumed to work like another.
+
+## WSL: develop there whenever possible
+`dev\wsl.ps1` drives the WSL distro (the default one, or `$env:CELER_WSL_DISTRO`): `setup` (toolchain, Docker, IBM CLI
+driver, Informix JDBC jars, clone at `~/celer`), `db up|down|status|seed` (all five server engines in Docker, reachable
+from Windows on localhost), `test -Ref <ref>` (logic checks + cargo tests against every engine), `build` (Linux
+packages), `run "<cmd>"`. Each git worktree gets its own WSL checkout and cargo target; database test runs take turns.
+Use WSL for databases, Linux builds and cargo/engine tests; Windows for editing, the Windows build and the desktop app.
+
+Working from inside WSL (Claude Code started in `~/celer`): tools are on PATH (`git`, `gh`, `node`, `cargo`, `java`,
+`docker`); `origin` is GitHub, `win` is the Windows checkout. Engines: `bash dev/wsl/engines.sh up|seed|test|build`
+directly. The Linux app runs through WSLg (`npx tauri dev`). The Windows build and the desktop app on WebView2 still run
+on Windows: push the branch, then `powershell.exe -ExecutionPolicy Bypass -File 'C:\Users\oscar\Projects\celer\dev\run-desktop.ps1'`
+after `git -C /mnt/c/Users/oscar/Projects/celer fetch origin && git -C /mnt/c/Users/oscar/Projects/celer switch <branch>`
+(keep the Windows checkout clean for that). Windows-side commands in this file (`dev\*.ps1`) are run the same way
+through `powershell.exe`.
+
 ## Local testing: everything is allowed
 This is the owner's own Windows development machine, and testing here is fully authorised. Do whatever a check
 needs, without asking:
@@ -28,7 +48,7 @@ real/production database servers.
 - Fast (no app, no DB): `node --experimental-strip-types --no-warnings dev/<name>-check.ts` for each `dev/*-check.ts`; `npx tsc --noEmit -p .`; `npx tsc --noEmit -p installer`; `npm run build`.
 - Rust: `cargo test --lib` in `src-tauri` (live PostgreSQL/MariaDB tests need `CELER_PG_TEST` / `CELER_MYSQL_TEST`; servers: `dev/testdb-postgres.ps1`, `dev/testdb-mysql.ps1`).
 - Everything incl. end-to-end against the desktop app: `powershell -ExecutionPolicy Bypass -File dev\check-all.ps1` (debug build, data in `D:\celer-devdata`, DevTools on port 9333 driven by `dev/cdp-lib.mjs`).
-- SQL Server and Informix run only on GitHub Actions: `gh workflow run engines.yml --ref <branch>`.
+- Every engine, locally: `dev\wsl.ps1 test -Ref <branch>`. On GitHub Actions (SQL Server + Informix): `gh workflow run engines.yml --ref <branch>`.
 - Browser preview of the UI with the in-memory SQLite demo backend (`src/demo.ts`): launch config `celer-web` (port 1420).
 
 ## Conventions
@@ -42,5 +62,9 @@ real/production database servers.
 - The Stop hook runs `dev/autocommit.ps1`, which commits **and pushes the current branch**. Create `.autocommit-pause` (gitignored) to hold it while work is half done; never leave work-in-progress on `main`.
 - Releases: `dev/release.ps1 -Bump patch|minor|major` bumps every manifest, moves the Unreleased notes, tags `vX.Y.Z` and pushes; the tag runs `.github/workflows/release-desktop.yml`, which publishes. A manual run of that workflow only builds artifacts. Releasing needs the user's explicit go-ahead.
 
-## Macro review
-`/macro-review` (`.claude/skills/macro-review/`) runs the multi-agent audit-and-fix pass; ledger and rules in `docs/review/README.md`.
+## Agent skills
+- `/issue-sprint` (`.claude/skills/issue-sprint/`): read all open issues → implement in parallel branches → test live on
+  every engine → integrate into one PR → macro review of the latest implementations → fixes.
+- `/macro-review` (`.claude/skills/macro-review/`): the multi-agent audit-and-fix pass on its own (`since` focuses it on
+  recent work). Ledger and rules in `docs/review/README.md`; engine matrix in `docs/review/ENGINE_MATRIX.md`.
+- Agent roles in `.claude/agents/`: implementer, tester, auditor, verifier, fixer.

@@ -17,7 +17,7 @@ CREATE TABLE pedidos (
   importe FLOAT NOT NULL,
   estado CHAR(1) NOT NULL
 );
-CREATE INDEX ix_pedidos_cliente ON pedidos(cliente_id);
+-- No CREATE INDEX on pedidos(cliente_id): Informix indexes a REFERENCES column itself (a second one fails with -350).
 CREATE PROCEDURE carga()
   DEFINE i INTEGER;
   FOR i = 1 TO 5000

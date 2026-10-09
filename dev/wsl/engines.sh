@@ -21,7 +21,9 @@ wait_all() {
 
 seed() {
   docker exec -i celer-pg psql -q -U celer -d celer < dev/seed-postgres.sql
-  docker exec -i celer-mysql mysql -uroot -pceler < dev/seed-mysql.sql
+  # The seed is written for MariaDB; MySQL has no UUID type, so that column becomes CHAR(36) there.
+  sed -E 's/\bUUID NULL\b/CHAR(36) NULL/' dev/seed-mysql.sql | docker exec -i celer-mysql mysql -uroot -pceler 2>&1 | grep -v 'Using a password' || true
+  docker exec celer-mysql mysql -uroot -pceler -N -e "SELECT COUNT(*) FROM celer.type_zoo" 2>/dev/null | grep -q 3 || { echo "MySQL seed failed"; exit 1; }
   docker exec -i celer-mariadb mariadb -uroot -pceler < dev/seed-mysql.sql
   docker exec -i celer-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_PASSWORD" -i /dev/stdin < dev/seed-mssql.sql
   docker exec celer-ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster - 2>/dev/null || true"
@@ -30,7 +32,7 @@ seed() {
 
 engine_env() {
   local ifx_ip; ifx_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' celer-ifx)
-  export CELER_PG_TEST="host=localhost port=55432 user=celer password=celer dbname=celer"
+  export CELER_PG_TEST="host=localhost port=15432 user=celer password=celer dbname=celer"
   export CELER_MSSQL_TEST="host=localhost port=1433 user=sa password=$MSSQL_PASSWORD"
   export CELER_INFORMIX_TEST="host=localhost port=9089 user=informix password=in4mix database=celer"
   export CELER_INFORMIX_JDBC_TEST="host=$ifx_ip port=9088 user=informix password=in4mix database=celer server=informix proxied=localhost"
@@ -53,6 +55,10 @@ case "${1:-status}" in
     npx tsc --noEmit -p .
     engine_env
     cd src-tauri
+    cargo test --lib --no-run -q   # build outside the lock
+    # The engines are shared by every checkout: integration runs take turns.
+    exec 9>/tmp/celer-engines.lock
+    flock 9
     # MySQL and MariaDB are different engines for Celer: the MySQL tests run against both.
     CELER_MYSQL_TEST="mysql://celer:celer@127.0.0.1:33306/celer" cargo test --lib $filter -- --test-threads=1
     CELER_MYSQL_TEST="mysql://celer:celer@127.0.0.1:33307/celer" cargo test --lib mysql -- --test-threads=1
