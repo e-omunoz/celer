@@ -16,7 +16,8 @@ import { revealWindow, WindowControls } from "./components/WindowControls";
 import { PanelApp, WindowAskDialog } from "./components/Windows";
 import { gibHere, openNewWindow, panelKind, prepareWindow, startWindows, windowLabel } from "./windows";
 import { EngineIcon } from "./icons";
-import { loadLibrary } from "./library";
+import { library, loadLibrary } from "./library";
+import { RunOnDialog } from "./components/RunOnDialog";
 import {
   activeTab,
   boot,
@@ -145,6 +146,7 @@ export default function App() {
       <Modals />
       <Show when={update.dialogOpen}><UpdateDialog /></Show>
       <Show when={migration.open}><MigrateDialog /></Show>
+      <Show when={library.runOn}><RunOnDialog /></Show>
       <WindowAskDialog />
       <Show when={windowLabel === "main"}><Splash /></Show>
       <Show when={state.onboardingOpen}><Onboarding /></Show>

@@ -1,6 +1,45 @@
 // The script library's data, without the app around it: the file format and its migration, folders and tags,
 // search, the tree the panel shows, and the .sql files it imports and exports. Pure functions, tested by
 // dev/library-check.ts; library.ts keeps the state and talks to the disk.
+import { findParams, paramNames } from "./snippets.ts";
+import { codeOnly, splitSql } from "./sql.ts";
+import type { DbKind } from "./types";
+
+/** The engine a script is written for: one of the connection kinds, or "generic" (standard SQL, any engine). */
+export type EngineTag = DbKind | "generic";
+
+export const ENGINE_TAGS: readonly EngineTag[] = ["postgres", "mysql", "mssql", "sqlite", "informix", "odbc", "generic"];
+
+const ENGINE_LABELS: Record<EngineTag, string> = {
+  postgres: "PostgreSQL",
+  mysql: "MySQL / MariaDB",
+  mssql: "SQL Server",
+  sqlite: "SQLite",
+  informix: "Informix",
+  odbc: "ODBC",
+  generic: "Genérico / SQL estándar",
+};
+
+export function engineLabel(tag: EngineTag): string {
+  return ENGINE_LABELS[tag] ?? tag;
+}
+
+/** A parameter the script declares (`:name`, `?`, `${name}` in its SQL): the value offered first and what it is. */
+export interface ScriptParam {
+  name: string;
+  /** Pre-fills the prompt (a value typed before in the same console wins). */
+  default: string;
+  description: string;
+}
+
+/** Where a script ran from «Ejecutar en…»: a connection and, optionally, a database and a schema. */
+export interface RunTarget {
+  connId: string;
+  /** "" for the connection's own database. */
+  database: string;
+  /** PostgreSQL: the schema put first in search_path ("" or absent leaves it as it is). */
+  schema?: string;
+}
 
 export interface LibraryScript {
   id: string;
@@ -15,6 +54,16 @@ export interface LibraryScript {
   updatedAt: number;
   /** Last time it was opened or run from the library. */
   usedAt?: number;
+  /** What it does and when to use it: shown under its name and in the preview. */
+  description?: string;
+  /** The engine it is written for, as the user set it ("generic": standard SQL). */
+  engine?: EngineTag;
+  /** Its parameters with a default value and a description (they pre-fill and document the prompt). */
+  params?: ScriptParam[];
+  /** Pinned in «Favoritos» at the top of the panel. */
+  favorite?: boolean;
+  /** The targets chosen the last time it ran from «Ejecutar en…» (offered again next time). */
+  targets?: RunTarget[];
 }
 
 export interface LibraryData {
@@ -25,9 +74,10 @@ export interface LibraryData {
 
 /**
  * library.json. Version 1 had { id, name, sql, connId, createdAt, updatedAt } per script and no folders; version 2
- * adds folder and tags per script and the list of folders. A version 1 reader still reads a version 2 file.
+ * adds folder and tags per script and the list of folders; version 3 adds description, engine, params, favorite
+ * and targets (all optional). An older reader still reads a newer file: it keeps the fields it does not know.
  */
-export const LIBRARY_VERSION = 2;
+export const LIBRARY_VERSION = 3;
 
 export type LibrarySort = "name" | "recent";
 
@@ -119,6 +169,75 @@ function compareFolders(a: string, b: string): number {
 
 const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
 
+export function normalizeEngine(value: unknown): EngineTag | undefined {
+  return typeof value === "string" && (ENGINE_TAGS as readonly string[]).includes(value) ? (value as EngineTag) : undefined;
+}
+
+/** A parameter's name as findParams gives it ("cliente", "?1"). */
+const PARAM_NAME = /^(\?\d+|[A-Za-z_]\w*)$/;
+
+/** Valid parameters, each name once (the first wins), texts kept to a sane length. ":x", "${x}" and "@x" become "x". */
+export function normalizeParams(value: unknown): ScriptParam[] {
+  const out: ScriptParam[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(value) ? value : []) {
+    if (!item || typeof item !== "object") continue;
+    const p = item as Record<string, unknown>;
+    const name = typeof p.name === "string" ? p.name.trim().replace(/^\$\{(.*)\}$/, "$1").replace(/^[:$@]/, "") : "";
+    if (!PARAM_NAME.test(name) || seen.has(name)) continue;
+    seen.add(name);
+    out.push({
+      name,
+      default: typeof p.default === "string" ? p.default.slice(0, 4000) : typeof p.default === "number" ? String(p.default) : "",
+      description: typeof p.description === "string" ? p.description.trim().slice(0, 400) : "",
+    });
+  }
+  return out;
+}
+
+/** What tells two targets apart (the database and schema in any case). */
+export function targetKey(target: RunTarget): string {
+  return `${target.connId}\u0000${target.database.toLowerCase()}\u0000${(target.schema ?? "").toLowerCase()}`;
+}
+
+/** Valid run targets, without repeats, at most 12. */
+export function normalizeTargets(value: unknown): RunTarget[] {
+  const out: RunTarget[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(value) ? value : []) {
+    if (!item || typeof item !== "object") continue;
+    const t = item as Record<string, unknown>;
+    if (typeof t.connId !== "string" || !t.connId) continue;
+    const target: RunTarget = { connId: t.connId, database: typeof t.database === "string" ? t.database.trim() : "" };
+    if (typeof t.schema === "string" && t.schema.trim()) target.schema = t.schema.trim();
+    const key = targetKey(target);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(target);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+/**
+ * The version 3 fields of a script as read from a file: valid ones kept, invalid ones dropped, absent ones left
+ * absent (a file read and saved again is the same file).
+ */
+function scriptExtras(s: Record<string, unknown>): Partial<LibraryScript> {
+  const out: Partial<LibraryScript> = {};
+  if (typeof s.description === "string" && s.description.trim()) out.description = s.description.trim().slice(0, 2000);
+  const engine = normalizeEngine(s.engine);
+  if (engine) out.engine = engine;
+  const params = normalizeParams(s.params);
+  if (params.length) out.params = params;
+  if (s.favorite === true) out.favorite = true;
+  const targets = normalizeTargets(s.targets);
+  if (targets.length) out.targets = targets;
+  return out;
+}
+
+const EXTRA_KEYS = ["description", "engine", "params", "favorite", "targets"] as const;
+
 /**
  * Reads library.json in any version (null when there is none) without losing anything: unknown fields of a
  * script are kept as they are, and so are unknown top-level fields (`extra`, written back on save).
@@ -140,8 +259,11 @@ export function migrateLibrary(raw: unknown): LibraryData & { extra: Record<stri
     for (let n = 2; ids.has(id); n++) id = `${s.id}-${n}`;
     ids.add(id);
     const createdAt = num(s.createdAt);
+    const rest = { ...s };
+    for (const key of EXTRA_KEYS) delete rest[key];
     scripts.push({
-      ...s,
+      ...rest,
+      ...scriptExtras(s),
       id,
       name: s.name,
       sql: s.sql,
@@ -216,7 +338,7 @@ export function matchesQuery(script: LibraryScript, query: LibraryQuery): boolea
   const tags = script.tags.map((t) => t.toLowerCase());
   if (!query.tags.every((tag) => tags.includes(tag))) return false;
   if (!query.words.length) return true;
-  const haystack = `${script.name}\n${script.folder}\n${tags.join(" ")}\n${script.sql}`.toLowerCase();
+  const haystack = `${script.name}\n${script.folder}\n${tags.join(" ")}\n${script.description ?? ""}\n${script.sql}`.toLowerCase();
   return query.words.every((word) => haystack.includes(word));
 }
 
@@ -236,9 +358,15 @@ export function sortScripts(list: LibraryScript[], by: LibrarySort): LibraryScri
 
 // ---------------------------------------------------------------- the tree
 
+export type LibrarySection = "fav" | "recent" | "all";
+
 export type LibraryRow =
   | { kind: "folder"; key: string; path: string; name: string; depth: number; count: number; open: boolean }
-  | { kind: "script"; key: string; script: LibraryScript; depth: number };
+  | { kind: "script"; key: string; script: LibraryScript; depth: number; section?: "fav" | "recent" }
+  | { kind: "section"; key: string; section: LibrarySection; label: string; count: number };
+
+/** How many recently used scripts the «Recientes» section shows. */
+export const RECENT_COUNT = 5;
 
 export interface TreeOptions {
   query?: string;
@@ -247,18 +375,47 @@ export interface TreeOptions {
   collapsed?: ReadonlySet<string>;
   /** Only scripts of this connection and those of none (undefined: all). */
   connId?: string | null;
+  /** Any other filter (engine compatibility): only the scripts it accepts. */
+  include?: (script: LibraryScript) => boolean;
+  /** «Favoritos» and «Recientes» on top (not while searching: then only the matches are listed). */
+  pinned?: boolean;
+}
+
+/** The script a row key stands for: "s:<id>", "fav:<id>", "rec:<id>" → id; anything else → "". */
+export function scriptIdOf(key: string): string {
+  const m = /^(?:s|fav|rec):(.+)$/s.exec(key);
+  return m ? m[1] : "";
 }
 
 /**
- * The rows of the panel: folders first (each followed by its content), then the scripts at that level. While
- * searching or filtering, only the matches and the folders that lead to them, all open.
+ * The rows of the panel: «Favoritos» and «Recientes» first when asked (the scripts also stay in their folders),
+ * then folders (each followed by its content) and the scripts at that level. While searching or filtering, only the
+ * matches and the folders that lead to them, all open.
  */
 export function buildTree(data: LibraryData, options: TreeOptions = {}): LibraryRow[] {
   const query = parseQuery(options.query ?? "");
-  const filtering = Boolean(query.words.length || query.tags.length || options.connId !== undefined);
+  const searching = Boolean(query.words.length || query.tags.length);
+  const filtering = Boolean(searching || options.connId !== undefined || options.include);
   const visible = data.scripts.filter(
-    (s) => matchesQuery(s, query) && (options.connId === undefined || s.connId === null || s.connId === options.connId),
+    (s) => matchesQuery(s, query) && (options.connId === undefined || s.connId === null || s.connId === options.connId) && (!options.include || options.include(s)),
   );
+  const top: LibraryRow[] = [];
+  if (options.pinned && !searching) {
+    const favorites = sortScripts(visible.filter((s) => s.favorite), "name");
+    const recent = visible
+      .filter((s) => !s.favorite && s.usedAt)
+      .sort((a, b) => (b.usedAt ?? 0) - (a.usedAt ?? 0))
+      .slice(0, RECENT_COUNT);
+    if (favorites.length) {
+      top.push({ kind: "section", key: "x:fav", section: "fav", label: "Favoritos", count: favorites.length });
+      for (const script of favorites) top.push({ kind: "script", key: `fav:${script.id}`, script, depth: 0, section: "fav" });
+    }
+    if (recent.length) {
+      top.push({ kind: "section", key: "x:recent", section: "recent", label: "Recientes", count: recent.length });
+      for (const script of recent) top.push({ kind: "script", key: `rec:${script.id}`, script, depth: 0, section: "recent" });
+    }
+    if (top.length) top.push({ kind: "section", key: "x:all", section: "all", label: "Todos", count: visible.length });
+  }
   const folders = withParents(filtering ? [] : data.folders, visible);
   const counts = new Map<string, number>();
   for (const s of visible) for (const f of folderChain(s.folder)) counts.set(f, (counts.get(f) ?? 0) + 1);
@@ -275,7 +432,7 @@ export function buildTree(data: LibraryData, options: TreeOptions = {}): Library
     if (list) list.push(f);
     else children.set(parent, [f]);
   }
-  const rows: LibraryRow[] = [];
+  const rows: LibraryRow[] = top;
   const walk = (folder: string, depth: number) => {
     for (const sub of children.get(folder) ?? []) {
       const open = filtering || !options.collapsed?.has(sub);
@@ -337,6 +494,10 @@ export function exportBundle(scripts: LibraryScript[]): string {
         const meta: Record<string, unknown> = { name: s.name };
         if (s.folder) meta.folder = s.folder;
         if (s.tags.length) meta.tags = s.tags;
+        // What describes the script travels with it; favourites and run targets are this machine's own.
+        if (s.description) meta.description = s.description;
+        if (s.engine) meta.engine = s.engine;
+        if (s.params?.length) meta.params = s.params;
         return `${MARK}${JSON.stringify(meta)}\n${s.sql.replace(/\s+$/, "")}\n`;
       })
       .join("\n")
@@ -348,6 +509,9 @@ export interface ImportedScript {
   sql: string;
   folder: string;
   tags: string[];
+  description?: string;
+  engine?: EngineTag;
+  params?: ScriptParam[];
 }
 
 /**
@@ -374,7 +538,52 @@ export function parseSqlFile(fileName: string, text: string): ImportedScript[] {
     }
     const sql = lines.slice(start + 1, starts[i + 1] ?? lines.length).join("\n").replace(/\s+$/, "");
     const name = typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : `${base} ${i + 1}`;
-    out.push({ name, sql, folder: normalizeFolder(meta.folder), tags: normalizeTags(meta.tags) });
+    const { description, engine, params } = scriptExtras(meta);
+    out.push({ name, sql, folder: normalizeFolder(meta.folder), tags: normalizeTags(meta.tags), ...(description ? { description } : {}), ...(engine ? { engine } : {}), ...(params ? { params } : {}) });
   });
   return out;
+}
+
+// ---------------------------------------------------------------- running: statements, parameters, targets
+
+/** How many statements the script has (pieces that are only comments do not count). */
+export function statementCount(sql: string, dialect?: string): number {
+  return splitSql(sql, dialect).filter((part) => codeOnly(part.sql, dialect).trim()).length;
+}
+
+/** A parameter of the script as the details form shows it: found in its SQL, declared, or both. */
+export interface ParamRow extends ScriptParam {
+  /** It appears in the SQL (a declared one that no longer does is kept, marked as unused). */
+  used: boolean;
+}
+
+/** The SQL's parameters, in order, with what the script declares for them, then the declared ones not in the SQL. */
+export function paramRows(sql: string, declared: ScriptParam[] | undefined, dialect?: string): ParamRow[] {
+  const byName = new Map((declared ?? []).map((p) => [p.name, p]));
+  const found = paramNames(findParams(sql, dialect));
+  const rows: ParamRow[] = found.map((name) => ({ name, default: byName.get(name)?.default ?? "", description: byName.get(name)?.description ?? "", used: true }));
+  for (const p of declared ?? []) if (!found.includes(p.name)) rows.push({ ...p, used: false });
+  return rows;
+}
+
+/** The declared parameters worth keeping: those with a default or a description. */
+export function paramsToKeep(rows: ScriptParam[]): ScriptParam[] {
+  return normalizeParams(rows.filter((p) => p.default !== "" || p.description.trim()));
+}
+
+/**
+ * The statement that puts a target's schema first, run on the console's session before anything else: PostgreSQL's
+ * search_path (the schema, then public). null where a session has no default schema to change (SQL Server takes the
+ * login's, Informix the owner's) or where the database is the schema (MySQL, MariaDB).
+ */
+export function schemaSetupSql(kind: DbKind | undefined, schema: string | undefined): string | null {
+  const name = schema?.trim();
+  if (!name || kind !== "postgres") return null;
+  const quoted = `"${name.replace(/"/g, '""')}"`;
+  return name.toLowerCase() === "public" ? `SET search_path TO ${quoted}` : `SET search_path TO ${quoted}, public`;
+}
+
+/** Engines where a target picks a database (SQLite is one file; generic ODBC, what its DSN says). */
+export function targetHasDatabase(kind: DbKind | undefined): boolean {
+  return kind === "postgres" || kind === "mysql" || kind === "mssql" || kind === "informix";
 }

@@ -30,7 +30,8 @@ import { activitySpec, readSessions, synapseDedicated, type ServerSession } from
 import type { AiMessage } from "./ai";
 import { insertAt } from "./windowModel";
 import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
-import { libraryDirty } from "./library";
+import { libraryDirty, scriptById } from "./library";
+import type { ScriptParam } from "./libraryModel";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
@@ -1026,25 +1027,38 @@ export function closeActivity() {
 }
 
 /** What the parameters dialog edits; values are remembered per console. */
+export interface ParamAnswer {
+  values: Record<string, string>;
+  raw: Record<string, boolean>;
+}
+
 export interface ParamAsk {
   names: string[];
   values: Record<string, string>;
   raw: Record<string, boolean>;
+  /** What each parameter is, from the library script's declaration (shown under its field). */
+  notes: Record<string, string>;
   sql: string;
-  resolve: (answer: { values: Record<string, string>; raw: Record<string, boolean> } | null) => void;
+  resolve: (answer: ParamAnswer | null) => void;
 }
 
-const rememberedParams: Record<string, { values: Record<string, string>; raw: Record<string, boolean> }> = {};
+const rememberedParams: Record<string, ParamAnswer> = {};
 
-function askParamValues(tabId: string, names: string[], sql: string) {
+/**
+ * Asks for the values of `names`. Pre-filled with what was typed before in this console, else the library script's
+ * declared default; the script's descriptions document each field.
+ */
+function askParamValues(tabId: string, names: string[], sql: string, declared: ScriptParam[] = []) {
   // Only one dialog: a second ask cancels the first (its run does not happen).
   if (state.paramAsk) answerParams(null);
   const previous = rememberedParams[tabId] ?? { values: {}, raw: {} };
-  return new Promise<{ values: Record<string, string>; raw: Record<string, boolean> } | null>((resolve) =>
+  const byName = new Map(declared.map((p) => [p.name, p]));
+  return new Promise<ParamAnswer | null>((resolve) =>
     setState("paramAsk", {
       names,
-      values: Object.fromEntries(names.map((name) => [name, previous.values[name] ?? ""])),
+      values: Object.fromEntries(names.map((name) => [name, previous.values[name] ?? byName.get(name)?.default ?? ""])),
       raw: Object.fromEntries(names.map((name) => [name, previous.raw[name] ?? false])),
+      notes: Object.fromEntries(names.flatMap((name) => (byName.get(name)?.description ? [[name, byName.get(name)!.description]] : []))),
       sql,
       resolve: (answer) => {
         if (answer) rememberedParams[tabId] = { values: { ...previous.values, ...answer.values }, raw: { ...previous.raw, ...answer.raw } };
@@ -1054,7 +1068,7 @@ function askParamValues(tabId: string, names: string[], sql: string) {
   );
 }
 
-export function answerParams(answer: { values: Record<string, string>; raw: Record<string, boolean> } | null) {
+export function answerParams(answer: ParamAnswer | null) {
   state.paramAsk?.resolve(answer);
   setState("paramAsk", null);
 }
@@ -1447,7 +1461,11 @@ export async function refreshNode(connId: string, path: string[]) {
 
 // ---------------------------------------------------------------- consoles
 
-export function openQuery(connId: string | null, sql = "", title?: string) {
+/**
+ * A new console on `connId` (in `extra.database` when given: its session opens there), active and warming up its
+ * session. `extra.libraryId` links it to a library script from the start.
+ */
+export function openQuery(connId: string | null, sql = "", title?: string, extra: { database?: string; libraryId?: string } = {}) {
   const conn = connectionById(connId);
   const tab = blankSql(uid(), connId, sql, title ?? conn?.name ?? CONSOLE_TITLE);
   const session = connId ? state.sessions[connId] : undefined;
@@ -1455,6 +1473,8 @@ export function openQuery(connId: string | null, sql = "", title?: string) {
     tab.database = session.database;
     tab.serverInfo = session.serverInfo;
   }
+  if (extra.database) tab.database = extra.database;
+  if (extra.libraryId) tab.libraryId = extra.libraryId;
   setState("tabs", [...state.tabs, tab]);
   setState("activeTabId", tab.id);
   persistSoon();
@@ -1536,6 +1556,18 @@ function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
   // Only its own entry: a console moved to another connection meanwhile has a newer job here.
   void job.finally(() => openingSql.get(tab.id) === job && openingSql.delete(tab.id)).catch(() => {});
   return job;
+}
+
+/**
+ * Opens the console's session now and runs `setup` on it (a target's SET search_path): what the console runs next
+ * runs after it. Errors are thrown (the caller says where it failed).
+ */
+export async function prepareConsoleSession(tabId: string, setup: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "sql") throw new Error("La pestaña ya no existe");
+  const ready = await ensureSqlSession(tab);
+  await api().execute(ready.sessionId!, setup, 1);
+  pushOutput(tabId, { at: Date.now(), sql: setup, ok: true, text: "Hecho", elapsedMs: null });
 }
 
 /**
@@ -1675,19 +1707,35 @@ export function formatMs(ms: number | null | undefined) {
   return `${m} min ${Math.round((ms % 60000) / 1000)} s`;
 }
 
-/** Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive). */
-export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string) {
+export interface RunOptions {
+  /** Parameter values already asked: a script run on several targets asks once, on the first one. */
+  params?: ParamAnswer;
+  /** Gets the values typed for the parameters (so the next target can use them). */
+  onParams?: (answer: ParamAnswer) => void;
+  /** The database it must run in (a target of «Ejecutar en…»): if the session is in another one, nothing runs. */
+  database?: string;
+  /** The library script's declared parameters (defaults and descriptions for the prompt). */
+  declared?: ScriptParam[];
+}
+
+/**
+ * Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive,
+ * the library). True when the statements were sent (whatever the server answered).
+ */
+export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string, options: RunOptions = {}): Promise<boolean> {
   const current = activeSql();
-  if (!current || current.running) return;
+  if (!current || current.running) return false;
   const conn = connectionById(current.connId);
   let sql = text?.trim() || current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
-  if (!sql) return;
+  if (!sql) return false;
   // Parameters (:name, ?, ${name}): ask for their values and write them in as literals.
   if (state.settings.askParams) {
     const refs = findParams(sql, conn?.kind);
     if (refs.length) {
-      const answer = await askParamValues(current.id, paramNames(refs), sql);
-      if (!answer) return;
+      const declared = options.declared ?? (current.libraryId ? scriptById(current.libraryId)?.params : undefined) ?? [];
+      const answer = options.params ?? (await askParamValues(current.id, paramNames(refs), sql, declared));
+      if (!answer) return false;
+      options.onParams?.(answer);
       sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
     }
   }
@@ -1696,7 +1744,8 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     // Pieces that are only comments ("SELECT 1; -- fin") are not statements.
     const parts = splitSql(sql, conn?.kind).filter((part) => codeOnly(part.sql, conn?.kind).trim());
     if (parts.length > 1) notify("La selección tiene varias sentencias: se muestra el plan de la primera", "info");
-    return explainStatement(current.id, parts[0]?.sql ?? sql, mode === "analyze");
+    await explainStatement(current.id, parts[0]?.sql ?? sql, mode === "analyze");
+    return true;
   }
   // hasUnfilteredWrite also sees the DELETE / UPDATE inside a CTE (WITH d AS (DELETE …) SELECT … WHERE …).
   if (conn?.production && state.settings.confirmMutations && (needsProductionConfirm(sql, conn.kind) || hasUnfilteredWrite(sql, conn.kind))) {
@@ -1706,7 +1755,7 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       "Ejecutar de todos modos",
       true,
     );
-    if (!ok) return;
+    if (!ok) return false;
   } else if (state.settings.confirmNoWhere && hasUnfilteredWrite(sql, conn?.kind)) {
     const ok = await confirmDialog(
       "DELETE / UPDATE sin WHERE",
@@ -1714,18 +1763,22 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       "Ejecutar de todos modos",
       true,
     );
-    if (!ok) return;
+    if (!ok) return false;
   }
   const fresh = state.tabs[tabIndex(current.id)];
-  if (!fresh || fresh.kind !== "sql") return;
+  if (!fresh || fresh.kind !== "sql") return false;
   patchTab(current.id, { running: true, error: "", messages: [], startedAt: Date.now(), lastSql: sql });
   const token = tokenOf(current.id);
   try {
     const hadSession = Boolean(fresh.sessionId);
     const tab = await ensureSqlSession(fresh);
+    // A target database that could not be opened (the session fell back to the connection's own): not run there.
+    if (options.database && !sameDatabase(tab.database, options.database)) {
+      throw new NotRun(`No se pudo abrir la base de datos «${options.database}» (la sesión está en «${tab.database || "la predeterminada"}»): no se ha ejecutado nada`);
+    }
     const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize);
     // Disconnected while it ran: this answer belongs to a closed session.
-    if (tokenOf(current.id) !== token) return;
+    if (tokenOf(current.id) !== token) return true;
     // The session opened for this run: how long that took goes with the output. One that dropped and came back on
     // its own says so (the core's note) and the tab shows it.
     const opened = hadSession ? null : tabLink(tab);
@@ -1767,9 +1820,16 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       if (tab.connId) void refreshNode(tab.connId, []);
     } else if (completionAfterResult.has(tab.id)) refreshCompletion(tab.id, output.results);
     await remember(tab, sql, true, output.elapsedMs, rows);
+    return true;
   } catch (err) {
-    if (tokenOf(current.id) !== token) return;
+    if (tokenOf(current.id) !== token) return true;
     const full = errorText(err);
+    if (err instanceof NotRun) {
+      // Nothing reached the server: no history entry.
+      patchTab(current.id, { running: false, startedAt: null, error: full, elapsedMs: null, activeResult: -1 });
+      pushOutput(current.id, { at: Date.now(), sql, ok: false, text: full, elapsedMs: null });
+      return false;
+    }
     // The connection dropped: the core reconnected (or could not) and says what was lost; the tab shows it.
     const dropped = noteDropped(current.id, current.title, full);
     const message = dropped ? plainError(full) : full;
@@ -1779,7 +1839,16 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
     offerDriverHelp(full, null);
+    return true;
   }
+}
+
+/** A run stopped before anything was sent to the server. */
+class NotRun extends Error {}
+
+/** Database names as engines compare them (case aside; SQL Server and MySQL on Windows ignore it, the rest rarely clash). */
+function sameDatabase(a: string, b: string) {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 /**

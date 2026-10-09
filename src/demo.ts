@@ -124,6 +124,52 @@ function demoConnection(): ConnConfig {
   };
 }
 
+/** The browser preview's first library: a favourite check with a declared parameter, a report and a multi-statement script. */
+function demoLibrary() {
+  const at = Date.UTC(2026, 0, 1);
+  return {
+    version: 3,
+    folders: ["Comprobaciones", "Informes"],
+    scripts: [
+      {
+        id: "demo-check",
+        name: "Clientes con pedidos desde",
+        sql: "SELECT c.name, count(o.id) AS pedidos, sum(o.total) AS total\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.created >= :desde\nGROUP BY c.name\nORDER BY total DESC;",
+        connId: null,
+        folder: "Comprobaciones",
+        tags: ["clientes"],
+        createdAt: at,
+        updatedAt: at,
+        description: "Pedidos e importe por cliente desde una fecha. Sirve en cualquier motor.",
+        engine: "generic",
+        favorite: true,
+        params: [{ name: "desde", default: "2026-01-01", description: "Fecha inicial (AAAA-MM-DD)" }],
+      },
+      {
+        id: "demo-report",
+        name: "Ventas por producto",
+        sql: "SELECT sku, count(*) AS pedidos, round(sum(total), 2) AS total\nFROM orders\nGROUP BY sku\nORDER BY total DESC\nLIMIT 10;",
+        connId: "demo",
+        folder: "Informes",
+        tags: ["ventas"],
+        createdAt: at,
+        updatedAt: at,
+      },
+      {
+        id: "demo-script",
+        name: "Resumen en dos pasos",
+        sql: "-- Primero los clientes activos, después sus pedidos.\nSELECT count(*) AS activos FROM customers WHERE active = 1;\nSELECT count(*) AS pedidos FROM orders;",
+        connId: null,
+        folder: "",
+        tags: [],
+        createdAt: at,
+        updatedAt: at,
+        description: "Dos sentencias: «Ejecutar todo» o abrirlo y elegir una.",
+      },
+    ],
+  };
+}
+
 function loadConns(): ConnConfig[] {
   const list = readJson<ConnConfig[]>("celer.connections", []);
   if (!list.length) {
@@ -672,6 +718,7 @@ export function createDemoBackend(): Backend {
     },
     async loadJson(name) {
       const value = localStorage.getItem(`celer.${name}`);
+      if (!value && name === "library") return demoLibrary();
       return value ? JSON.parse(value) : null;
     },
     async saveJson(name, value, merge) {

@@ -9,6 +9,9 @@
 //! exact SQL the interface writes for each engine, produced by dev/engine-sql.ts from the tables as the driver
 //! sees them: table filters, saved edits, generated scripts, UPSERT/MERGE, the FK lookup, the activity monitor
 //! and the schema and data synchronization scripts.
+//! The `library_*` tests run one saved library script (dev/library-sql.ts) on every engine: PostgreSQL
+//! (CELER_PG_TEST), MySQL and MariaDB (CELER_MYSQL_TEST), SQL Server, Informix over DRDA and JDBC, SQLite in memory
+//! and generic ODBC (CELER_ODBC_TEST, an ODBC connection string).
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -1106,4 +1109,129 @@ fn informix_jdbc_reconnects() {
     let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
     let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
     informix_reconnect_suite("JDBC", &connect, &mut admin);
+}
+
+// ───────────────────────────────────────────────────────────────── the library on every engine
+
+/// What the interface sends when one library script runs on a connection of `kind` («Ejecutar en…»), from
+/// dev/library-sql.ts: the same saved entry everywhere, with its declared parameter (and, from the variables
+/// feature on, its variables) resolved the way the console does it.
+fn library_statements(input: serde_json::Value) -> Vec<Statement> {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../dev/library-sql.ts");
+    let node = std::env::var("CELER_NODE").unwrap_or_else(|_| "node".into());
+    let mut child = Command::new(node)
+        .args(["--experimental-strip-types", "--no-warnings", script])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("node (CELER_NODE) para dev/library-sql.ts");
+    child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "library-sql.ts: {}", String::from_utf8_lossy(&out.stderr));
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// celer_lib_check (ids 1 to 3) in `schema` (or the session's default one), the library's statements, and clean up.
+fn library_suite(d: &mut dyn Driver, kind: &str, schema: Option<&str>) {
+    let table = match schema {
+        Some(s) => format!("{s}.celer_lib_check"),
+        None => "celer_lib_check".to_string(),
+    };
+    if let Some(s) = schema {
+        d.execute(&format!("CREATE SCHEMA IF NOT EXISTS {s}"), 10).unwrap();
+    }
+    d.execute(&format!("DROP TABLE IF EXISTS {table}"), 10).unwrap();
+    d.execute(&format!("CREATE TABLE {table} (id INT NOT NULL PRIMARY KEY, nombre VARCHAR(40) NOT NULL)"), 10).unwrap();
+    // One row per INSERT: Informix has no multi-row VALUES.
+    for (id, name) in [(1, "uno"), (2, "dos"), (3, "tres")] {
+        d.execute(&format!("INSERT INTO {table} (id, nombre) VALUES ({id}, '{name}')"), 10).unwrap();
+    }
+    let statements = library_statements(json!({ "kind": kind, "schema": schema }));
+    run_generated(d, &statements);
+    d.execute(&format!("DROP TABLE {table}"), 10).unwrap();
+}
+
+#[test]
+fn library_postgres() {
+    let Some(s) = spec("CELER_PG_TEST") else { return };
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Postgres;
+    cfg.encryption = "off".into();
+    cfg.host = get(&s, "host");
+    cfg.port = get(&s, "port").parse().ok();
+    cfg.user = get(&s, "user");
+    cfg.password = Some(get(&s, "password"));
+    cfg.database = get(&s, "dbname");
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    // In a schema outside search_path: only the target's schema (SET search_path) makes the script find it.
+    library_suite(&mut d, "postgres", Some("celer_lib"));
+    d.execute("DROP SCHEMA celer_lib", 10).unwrap();
+}
+
+/// MySQL, and MariaDB in the second run of dev/wsl/engines.sh (it runs the tests named "mysql").
+#[test]
+fn library_mysql() {
+    let Ok(url) = std::env::var("CELER_MYSQL_TEST") else { return };
+    let rest = url.trim().trim_start_matches("mysql://");
+    let (auth, hostdb) = rest.rsplit_once('@').expect("mysql://user:pass@host:port/db");
+    let (user, pass) = auth.split_once(':').unwrap_or((auth, ""));
+    let (hostport, db) = hostdb.split_once('/').unwrap_or((hostdb, ""));
+    let (host, port) = hostport.split_once(':').unwrap_or((hostport, "3306"));
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Mysql;
+    cfg.host = host.into();
+    cfg.port = port.parse().ok();
+    cfg.user = user.into();
+    cfg.password = Some(pass.into());
+    cfg.database = db.into();
+    cfg.encryption = "login".into();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    println!("{}", d.server_info().unwrap_or_default());
+    library_suite(&mut d, "mysql", None);
+}
+
+#[test]
+fn library_sqlite() {
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Sqlite;
+    cfg.id = "library-sqlite-test".into();
+    cfg.file_path = ":memory:".into();
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite en memoria");
+    library_suite(&mut d, "sqlite", None);
+}
+
+#[test]
+fn library_mssql() {
+    let Some(mut master) = mssql("master") else { return };
+    master.execute("IF DB_ID('celer_test') IS NULL CREATE DATABASE celer_test", 10).unwrap();
+    drop(master);
+    let mut d = mssql("celer_test").unwrap();
+    library_suite(&mut d, "mssql", None);
+}
+
+#[test]
+fn library_informix() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let mut d = drda_connect(lib)(cfg).expect("conexión Informix por DRDA");
+    library_suite(d.as_mut(), "informix", None);
+}
+
+/// Generic ODBC: CELER_ODBC_TEST is a connection string to any source (e.g. the PostgreSQL ODBC driver to the test
+/// server: "Driver={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer;").
+#[test]
+fn library_odbc() {
+    let Ok(conn_str) = std::env::var("CELER_ODBC_TEST") else { return };
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Odbc;
+    cfg.odbc_conn_str = conn_str;
+    let mut d = crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC");
+    library_suite(&mut d, "odbc", None);
+}
+
+#[test]
+fn library_informix_jdbc() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt)(cfg).expect("conexión Informix por JDBC");
+    library_suite(d.as_mut(), "informix", None);
 }

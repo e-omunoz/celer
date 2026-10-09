@@ -40,6 +40,10 @@ engine_env() {
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"
   export CELER_JDBC_JARS="$D/jdbc/jdbc-15.0.1.4.jar:$D/jdbc/bson-3.8.0.jar"
   export CELER_REQUIRE_BRIDGE=1 CELER_NODE=node CELER_INFORMIX_CONTAINER=celer-ifx
+  # Generic ODBC: the PostgreSQL ODBC driver (odbc-postgresql) to the test server, when it is installed.
+  if odbcinst -q -d 2>/dev/null | grep -q '^\[PostgreSQL Unicode\]'; then
+    export CELER_ODBC_TEST="Driver={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer;"
+  fi
 }
 
 case "${1:-status}" in

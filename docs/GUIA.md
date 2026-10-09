@@ -228,10 +228,26 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
 - **Guardar**: **Ctrl+Alt+B** guarda la consola con un nombre y una carpeta. En una consola abierta desde la
   biblioteca, el mismo atajo (o el botón del marcador en la barra de la consola) guarda sus cambios; un punto naranja
   avisa de que hay cambios sin guardar. *Guardar la consola en la biblioteca como script nuevo* crea otro.
-- **Buscar**: el cuadro busca en el nombre, la carpeta, las etiquetas y el SQL; `#etiqueta` filtra por etiqueta (o haz
-  clic en ella). Los scripts también salen en la paleta (**Shift Shift**).
+- **Buscar**: el cuadro busca en el nombre, la descripción, la carpeta, las etiquetas y el SQL; `#etiqueta` filtra por
+  etiqueta (o haz clic en ella). Los scripts también salen en la paleta (**Shift Shift**), cada uno también con su
+  *Ejecutar en…*.
+- **Favoritos y recientes**: la estrella (o *Añadir a favoritos* en el menú) lo pone en *Favoritos*, arriba del todo;
+  debajo, *Recientes* con los cinco últimos que abriste o ejecutaste. Siguen también en su carpeta.
 - **Abrir y ejecutar**: clic o **Intro** abre el script en su consola (si ya está abierta, va a ella);
-  **Ctrl+Intro** o el botón ▶ lo abre y lo ejecuta entero. Arrastrado al editor, pega su SQL donde lo sueltes.
+  **Ctrl+Intro** o el botón ▶ lo abre y lo ejecuta entero: en un script de varias sentencias el menú lo dice
+  (*Abrir y ejecutar todo (3 sentencias)*). Para ejecutar solo una, ábrelo y pulsa **Ctrl+Intro** en ella. Arrastrado
+  al editor, pega su SQL donde lo sueltes.
+- **Ejecutar en…** (**Mayús+Intro**, el botón ⏵ en círculo, el menú o la paleta): elige dónde ejecutarlo, sin tocar la
+  conexión con la que se guardó. Cada destino es una conexión y, si el motor las tiene, una base de datos (en MySQL y
+  MariaDB, el esquema) y en PostgreSQL un esquema, que se pone primero en el `search_path` de esa consola. *Añadir
+  destino* lo ejecuta en varios a la vez: una consola por destino, cada una con sus resultados en su pestaña, una
+  después de otra. Las confirmaciones de producción y de DELETE/UPDATE sin WHERE se piden en cada destino, y los
+  parámetros una sola vez. Si la base de datos elegida no se puede abrir, en ese destino no se ejecuta nada. *Solo
+  abrir* abre las consolas sin ejecutar, para elegir la sentencia. La próxima vez se proponen los mismos destinos.
+- **Detalles** (lápiz o **Alt+Intro**): una **descripción** (sale bajo el nombre y en la ventana de *Ejecutar en…*), el
+  **motor** para el que está escrito (o *Genérico / SQL estándar*) y los **parámetros** del SQL (`:nombre`, `?`,
+  `${nombre}`) con un valor por defecto y una descripción: al ejecutar, la ventana de parámetros sale rellena con ese
+  valor (o el último que escribiste en esa consola) y explica cada uno.
 - **Organizar**: carpetas y subcarpetas (botón de carpeta nueva o clic derecho), etiquetas y una conexión asociada
   (lápiz o **Alt+Intro**). Arrastra scripts y carpetas para moverlos. El menú **⋯** ordena por nombre o por uso y
   muestra solo los de la conexión activa.
@@ -241,9 +257,11 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
   confirmación (y también se puede deshacer).
 - **Importar y exportar**: *Importar ficheros .sql* crea un script por fichero en la carpeta seleccionada. Un script
   se exporta como SQL normal; una carpeta o la biblioteca entera, en un solo `.sql` que sigue ejecutándose como script
-  y que, al importarlo, recupera los scripts con sus carpetas y etiquetas.
+  y que, al importarlo, recupera los scripts con sus carpetas, etiquetas, descripción, motor y parámetros (los favoritos y
+  los destinos de *Ejecutar en…* son de cada equipo y no se exportan).
 
-La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas.
+La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas, y los
+`.sql` exportados antes se importan igual que siempre.
 
 ## Asistente de IA y servidor MCP
 

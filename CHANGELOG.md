@@ -6,6 +6,24 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Script library as a working tool** (#99):
+  - **«Ejecutar en…»** (Shift+Enter, a button on each script, its menu and the palette) picks where a script runs
+    without changing the connection it was saved with: a connection and, where the engine has them, a database (the
+    schema on MySQL and MariaDB) and, on PostgreSQL, a schema put first in that console's `search_path`. Several
+    targets run one after the other, one console per target with its results in its own tab; production and "no
+    WHERE" confirmations are asked per target and the parameters once. A target database that cannot be opened runs
+    nothing there. "Solo abrir" opens the consoles without running. The last targets are offered again next time.
+  - Scripts get a **description** (under the name, in the tooltip and in «Ejecutar en…»), an optional **engine**
+    («Genérico / SQL estándar» included) and **parameters** with a default value and a description: the parameters
+    prompt comes pre-filled with the default (or the value last typed in that console) and explains each field.
+  - **Favourites and recent** at the top of the panel (a star on each script; the five last used), and the search
+    also looks in the description.
+  - Multi-statement scripts say what runs: «Abrir y ejecutar todo (3 sentencias)»; to run one statement, open it and
+    press Ctrl+Enter on it.
+  - The library file moves to version 3; older files and `.sql` bundles load unchanged, and bundles now carry the
+    description, engine and parameters (favourites and targets stay on each machine).
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

@@ -33,7 +33,7 @@ import type { ThemeName } from "./types";
 import { askAi } from "./ai";
 import { checkForUpdates } from "./update";
 import { openMigration } from "./migrate";
-import { createLibraryFolder, exportLibrary, importLibraryFiles, library, loadLibrary, saveToLibrary, setLibrary, setOnlyConn } from "./library";
+import { createLibraryFolder, exportLibrary, importLibraryFiles, library, loadLibrary, openRunOn, saveToLibrary, selectedScript, setLibrary, setOnlyConn } from "./library";
 import { chordLabel, chordOf, chordsFor, EDITOR_COMMANDS } from "./keymap";
 import { resetGibTips } from "./gib/memory";
 import { isTauri } from "./api";
@@ -101,6 +101,7 @@ export function commands(): Command[] {
     { id: "save-library", label: "Guardar la consola en la biblioteca (o sus cambios)", group: "Biblioteca", run: () => void saveToLibrary(), enabled: sqlOnly },
     { id: "library-save-new", label: "Guardar la consola en la biblioteca como script nuevo", group: "Biblioteca", run: () => void saveToLibrary(true), enabled: sqlOnly },
     { id: "library-search", label: "Buscar en la biblioteca de scripts", group: "Biblioteca", run: () => { openInspector("library"); void loadLibrary(); setLibrary("focusSearch", library.focusSearch + 1); } },
+    { id: "library-run-on", label: "Ejecutar el script seleccionado de la biblioteca en… (otra conexión o base de datos, o varias)", group: "Biblioteca", run: () => { const script = selectedScript(); if (script) openRunOn(script.id); }, enabled: () => Boolean(selectedScript() && state.connections.length) },
     { id: "library-new-folder", label: "Nueva carpeta en la biblioteca", group: "Biblioteca", run: () => void createLibraryFolder("") },
     { id: "library-import", label: "Importar ficheros .sql a la biblioteca…", group: "Biblioteca", run: () => void importLibraryFiles() },
     { id: "library-export", label: "Exportar toda la biblioteca a .sql…", group: "Biblioteca", run: () => void exportLibrary({ folder: "" }) },

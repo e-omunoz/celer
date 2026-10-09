@@ -931,6 +931,29 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .lib-details { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 8px; padding: 10px 12px; margin: 2px 6px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2, var(--bg)); animation: pop-in var(--dur-med) var(--ease-out); transform-origin: top center; }
 .lib-details label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
 .lib-details .library-name-row { grid-column: 1 / -1; }
+.lib-details textarea { min-width: 0; padding: 4px 8px; font: inherit; font-size: 12.5px; resize: vertical; }
+.lib-details .lib-params { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+.lib-param { display: grid; grid-template-columns: minmax(60px, max-content) 1fr 1.4fr; gap: 6px; align-items: center; }
+.lib-param code { font-size: 11.5px; color: var(--syntax-param, var(--text)); overflow: hidden; text-overflow: ellipsis; }
+.lib-param code.unused { color: var(--text-faint); text-decoration: line-through; }
+.lib-param input { min-width: 0; padding: 3px 6px; font: inherit; font-size: 12px; }
+.lib-desc { font-size: 11.5px; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lib-star { flex: none; color: var(--warning); line-height: 0; }
+.lib-section { display: flex; align-items: center; gap: 6px; padding: 8px 8px 3px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-faint); }
+.lib-section small { font-weight: 500; font-variant-numeric: tabular-nums; }
+.lib-engine { display: inline-flex; align-items: center; gap: 3px; height: 16px; padding: 0 5px; border-radius: 8px; font-size: 10.5px; color: var(--text-muted); border: 1px solid var(--border); background: var(--surface); }
+.lib-engine.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
+.lib-engine.guess { border-style: dashed; }
+.dialog.runon-dialog { width: min(620px, calc(100vw - 32px)); }
+.runon-desc { white-space: pre-wrap; }
+.runon-facts { margin: -4px 0 12px; }
+.runon-targets { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
+.runon-target { display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 8px; align-items: end; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.runon-target:has(.runon-schema) { grid-template-columns: 1.3fr 1fr 0.8fr auto; }
+.runon-row-actions { display: flex; gap: 4px; align-items: center; min-height: 32px; }
+.runon-add { margin: 8px 0 12px; }
+.runon-action { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; padding: 0; border: none; }
+.runon-action .check small { margin-left: 2px; }
 .lib-empty p { margin: 0 0 12px; }
 .lib-empty-actions { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
 .lib-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
@@ -1768,7 +1791,8 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .params-dialog { width: min(540px, calc(100vw - 32px)); }
 .params-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 14px; max-height: 50vh; overflow: auto; }
 .param-row { display: grid; grid-template-columns: minmax(96px, max-content) 1fr auto; align-items: center; gap: 10px; }
-.param-name { font-family: var(--mono); font-size: 12.5px; color: var(--syntax-param, var(--text)); }
+.param-name { font-family: var(--mono); font-size: 12.5px; color: var(--syntax-param, var(--text)); display: flex; flex-direction: column; gap: 1px; max-width: 220px; }
+.param-note { font-family: var(--sans); font-size: 11px; color: var(--text-muted); white-space: normal; }
 .param-row input:not([type="checkbox"]) { font-family: var(--mono); }
 .param-raw { font-size: 11.5px; color: var(--text-muted); }
 .params-dialog footer { align-items: center; }

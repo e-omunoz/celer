@@ -109,8 +109,11 @@ function ParamsDialog(props: { ask: NonNullable<typeof state.paramAsk> }) {
         <div class="params-list">
           <For each={props.ask.names}>
             {(name, index) => (
-              <label class="param-row">
-                <span class="param-name">{label(name)}</span>
+              <label class="param-row" title={props.ask.notes[name] || undefined}>
+                <span class="param-name">
+                  {label(name)}
+                  <Show when={props.ask.notes[name]}><small class="param-note">{props.ask.notes[name]}</small></Show>
+                </span>
                 <input
                   value={values()[name] ?? ""}
                   spellcheck={false}

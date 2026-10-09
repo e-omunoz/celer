@@ -4,6 +4,7 @@ import {
   allTags,
   buildTree,
   copyName,
+  engineLabel,
   exportBundle,
   exportScript,
   fileNameFor,
@@ -15,13 +16,21 @@ import {
   migrateLibrary,
   moveFolder,
   normalizeFolder,
+  normalizeParams,
   normalizeTags,
+  normalizeTargets,
+  paramRows,
+  paramsToKeep,
   parseQuery,
   parseSqlFile,
   removeFolder,
   renameFolder,
+  schemaSetupSql,
+  scriptIdOf,
   serializeLibrary,
   sortScripts,
+  statementCount,
+  targetHasDatabase,
   toggleTagInQuery,
   withParents,
   type LibraryData,
@@ -160,5 +169,92 @@ assert.deepEqual(parseSqlFile("C:\\scripts\\Ventas mes.SQL", "\uFEFFSELECT 1\r\n
 assert.deepEqual(parseSqlFile("vacío.sql", "  \n"), []);
 const odd = parseSqlFile("x.sql", 'SELECT 0;\n-- @celer-script {roto\nSELECT 1\n-- @celer-script {"name":"  "}\nSELECT 2');
 assert.deepEqual(odd.map((s) => [s.name, s.sql]), [["x", "SELECT 0;"], ["x 1", "SELECT 1"], ["x 2", "SELECT 2"]], "text before the first mark, damaged marks and empty names");
+
+// Version 3: description, engine, params, favourite and targets; invalid values dropped, absent ones stay absent.
+const v3 = migrateLibrary({
+  version: 3,
+  scripts: [
+    {
+      id: "p",
+      name: "Pedidos",
+      sql: "SELECT * FROM orders WHERE created >= :desde AND total > ${minimo}",
+      description: "  Pedidos desde una fecha  ",
+      engine: "postgres",
+      favorite: true,
+      params: [{ name: ":desde", default: "2026-01-01", description: "Fecha" }, { name: "${minimo}", default: 10 }, { name: "mal nombre" }, { name: "desde", default: "x" }],
+      targets: [{ connId: "c1", database: "ventas", schema: " public " }, { connId: "c1", database: "VENTAS", schema: "PUBLIC" }, { connId: "" }, { connId: "c2" }],
+    },
+    { id: "q", name: "Raro", sql: "x", engine: "oracle", favorite: "yes", params: "a", targets: {}, description: 7 },
+  ],
+});
+assert.deepEqual(v3.scripts[0].params, [{ name: "desde", default: "2026-01-01", description: "Fecha" }, { name: "minimo", default: "10", description: "" }], "names without :, ${} and repeats");
+assert.equal(v3.scripts[0].description, "Pedidos desde una fecha");
+assert.equal(v3.scripts[0].engine, "postgres");
+assert.equal(v3.scripts[0].favorite, true);
+assert.deepEqual(v3.scripts[0].targets, [{ connId: "c1", database: "ventas", schema: "public" }, { connId: "c2", database: "" }], "the same target once, in any case");
+for (const key of ["description", "engine", "params", "favorite", "targets"]) assert.ok(!(key in v3.scripts[1]), `an invalid ${key} is dropped`);
+assert.ok(!("description" in migrated.scripts[0]) && !("params" in migrated.scripts[0]), "a version 1 script gets no empty new fields");
+assert.deepEqual(migrateLibrary(JSON.parse(JSON.stringify(serializeLibrary(v3)))).scripts, v3.scripts, "version 3 reads back the same");
+assert.equal(LIBRARY_VERSION, 3);
+
+// Bundles carry what describes a script (not favourites or targets, which are this machine's own).
+const described = script("Pedidos", { sql: "SELECT :desde", description: "Desde una fecha", engine: "generic", params: [{ name: "desde", default: "2026-01-01", description: "Fecha" }], favorite: true, targets: [{ connId: "c1", database: "" }] });
+const describedBundle = exportBundle([described]);
+assert.match(describedBundle, /"description":"Desde una fecha"/);
+assert.doesNotMatch(describedBundle, /favorite|targets/);
+assert.deepEqual(parseSqlFile("b.sql", describedBundle), [
+  { name: "Pedidos", sql: "SELECT :desde", folder: "", tags: [], description: "Desde una fecha", engine: "generic", params: [{ name: "desde", default: "2026-01-01", description: "Fecha" }] },
+]);
+assert.deepEqual(parseSqlFile("b.sql", '-- @celer-script {"name":"X","engine":"db2","params":3}\nSELECT 1'), [{ name: "X", sql: "SELECT 1", folder: "", tags: [], }], "unknown engines and bad params are left out");
+assert.ok(matchesQuery(described, parseQuery("fecha")), "the description is searched");
+
+// Favourites and recent on top (and still in their folders); not while searching.
+const pinnedData: LibraryData = {
+  scripts: [
+    script("a", { folder: "F", favorite: true }),
+    script("b", { usedAt: 50 }),
+    script("c", { usedAt: 90, favorite: true }),
+    script("d", { usedAt: 70 }),
+    ...Array.from({ length: 6 }, (_, i) => script(`r${i}`, { usedAt: 10 + i })),
+  ],
+  folders: ["F"],
+};
+const pinnedRows = buildTree(pinnedData, { pinned: true });
+assert.deepEqual(
+  pinnedRows.slice(0, 11).map((row) => row.key),
+  ["x:fav", "fav:a", "fav:c", "x:recent", "rec:d", "rec:b", "rec:r5", "rec:r4", "rec:r3", "x:all", "f:F"],
+  "favourites by name, then the 5 most recently used that are not favourites",
+);
+assert.equal(pinnedRows.filter((row) => row.kind === "script" && !row.section).length, pinnedData.scripts.length, "every script is still in the tree");
+assert.ok(!buildTree(pinnedData, { pinned: true, query: "a" }).some((row) => row.kind === "section"), "no sections while searching");
+assert.ok(!buildTree({ scripts: [script("x")], folders: [] }, { pinned: true }).some((row) => row.kind === "section"), "no sections when nothing is pinned or used");
+assert.deepEqual(keys(pinnedData, { include: (s: LibraryScript) => s.name.startsWith("r") }).length, 6, "any other filter");
+assert.equal(scriptIdOf("fav:abc"), "abc");
+assert.equal(scriptIdOf("rec:a:b"), "a:b");
+assert.equal(scriptIdOf("s:x"), "x");
+assert.equal(scriptIdOf("f:x"), "");
+
+// Running: statements, parameters, targets.
+assert.equal(statementCount("SELECT 1; -- fin\nSELECT 2;\n-- nada"), 2);
+assert.equal(statementCount("SELECT ';'"), 1, "a ; in a string does not split");
+assert.deepEqual(paramRows("SELECT :a, :b, ?", [{ name: "b", default: "2", description: "Be" }, { name: "old", default: "x", description: "" }], "mysql"), [
+  { name: "a", default: "", description: "", used: true },
+  { name: "b", default: "2", description: "Be", used: true },
+  { name: "?1", default: "", description: "", used: true },
+  { name: "old", default: "x", description: "", used: false },
+]);
+assert.deepEqual(paramsToKeep([{ name: "a", default: "", description: " " }, { name: "b", default: "0", description: "" }, { name: "c", default: "", description: "Ce" }]), [
+  { name: "b", default: "0", description: "" },
+  { name: "c", default: "", description: "Ce" },
+], "empty ones are not kept");
+assert.equal(schemaSetupSql("postgres", "ventas"), 'SET search_path TO "ventas", public');
+assert.equal(schemaSetupSql("postgres", "Raro\"x"), 'SET search_path TO "Raro""x", public');
+assert.equal(schemaSetupSql("postgres", "public"), 'SET search_path TO "public"');
+assert.equal(schemaSetupSql("postgres", " "), null);
+for (const kind of ["mysql", "mssql", "sqlite", "informix", "odbc"] as const) assert.equal(schemaSetupSql(kind, "x"), null, kind);
+assert.ok(targetHasDatabase("postgres") && targetHasDatabase("mssql") && !targetHasDatabase("sqlite") && !targetHasDatabase("odbc"));
+assert.deepEqual(normalizeTargets([{ connId: "a", database: " db " }, { connId: "a", database: "DB" }]), [{ connId: "a", database: "db" }]);
+assert.deepEqual(normalizeParams([{ name: "?2", default: "1" }]), [{ name: "?2", default: "1", description: "" }]);
+assert.equal(engineLabel("generic"), "Genérico / SQL estándar");
 
 console.log("library-check: all good");

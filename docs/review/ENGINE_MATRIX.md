@@ -14,7 +14,7 @@ lists each engine with ✅ / ❌ / ⚠️ not applicable (and why). "Not tested 
 | Informix over DRDA (IBM CLI) | WSL `celer-ifx` | `localhost:9089` informix/in4mix db `celerdemo` | `CELER_INFORMIX_TEST` |
 | Informix over JDBC (bridge) | WSL `celer-ifx` | `localhost:9088` server `informix` | `CELER_INFORMIX_JDBC_TEST` |
 | SQLite | embedded | any `.db` file; browser preview uses it (`src/demo.ts`) | unit tests |
-| Generic ODBC | Windows ODBC DSN to any engine above | e.g. a PostgreSQL/MySQL ODBC DSN | — (manual in the app) |
+| Generic ODBC | Windows ODBC DSN to any engine above · WSL: PostgreSQL ODBC driver (odbc-postgresql) | e.g. a PostgreSQL/MySQL ODBC DSN | `CELER_ODBC_TEST` (a connection string; set by `engines.sh` when the driver is installed) |
 
 Seeds (`dev\wsl.ps1 db seed`): `dev/seed-postgres.sql`, `seed-mysql.sql` (MySQL and MariaDB), `seed-mssql.sql`,
 `seed-informix.sql`. Azure SQL / Synapse cannot be run locally: check the dialect branches in code and say so.

@@ -62,7 +62,7 @@ import {
   type Tab,
   type TableTab,
 } from "./state";
-import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, openLibraryScript, revertConsole, saveToLibrary, scriptById } from "./library";
+import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, openLibraryScript, openRunOn, revertConsole, saveToLibrary, scriptById } from "./library";
 import { closeSchemaCompare, openSyncScript, schemaCompare, setSchemaCompare, swapCompare } from "./schemaCompareRun";
 import { closeDataCompare, dataCompare, openDataSyncScript, setDataCompare, swapDataCompare } from "./dataCompareRun";
 import { installOnClose } from "./update";
@@ -935,6 +935,11 @@ async function panelAction(action: string, args: Record<string, unknown>) {
       break;
     case "library-insert":
       insertLibraryScript(text("id"));
+      break;
+    case "library-run-on":
+      await loadLibrary();
+      openRunOn(text("id"));
+      void focusSelf();
       break;
     case "library-save":
       await saveToLibrary(args.asNew === true, typeof args.folder === "string" ? args.folder : undefined);

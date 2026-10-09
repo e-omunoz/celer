@@ -1,7 +1,7 @@
 import { CircleAlert, CircleCheck, Info, Search, TriangleAlert, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { commands } from "../commands";
-import { library, loadLibrary, openLibraryScript } from "../library";
+import { library, loadLibrary, openLibraryScript, openRunOn } from "../library";
 import { returnFocus } from "../focus";
 import { ObjIcon } from "../icons";
 import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty } from "../state";
@@ -244,6 +244,17 @@ export function Palette() {
             run: () => void openLibraryScript(script.id),
             score: score + 6,
           });
+          if (state.connections.length) {
+            out.push({
+              key: `lib-on:${script.id}`,
+              label: `Ejecutar en… «${script.name}»`,
+              detail: "Elegir conexión y base de datos (una o varias)",
+              group: "Biblioteca",
+              icon: "action",
+              run: () => openRunOn(script.id),
+              score: score + 2,
+            });
+          }
         }
       }
     }

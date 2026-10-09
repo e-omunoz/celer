@@ -1,7 +1,7 @@
 // The script library panel (Inspector › Biblioteca): a tree of folders and scripts with search, tags, drag and drop,
 // a context menu and keyboard shortcuts. The actions live in library.ts.
-import { BookmarkPlus, ChevronRight, Ellipsis, FileCode2, Folder, FolderOpen, FolderPlus, Pencil, Play, Search, X } from "lucide-solid";
-import { createEffect, createMemo, createSignal, For, on, onMount, Show } from "solid-js";
+import { BookmarkPlus, ChevronRight, CirclePlay, Ellipsis, FileCode2, Folder, FolderOpen, FolderPlus, Pencil, Play, Search, Star, X } from "lucide-solid";
+import { createEffect, createMemo, createSignal, For, Index, on, onMount, Show } from "solid-js";
 import { shortcutLabel, withShortcut } from "../commands";
 import {
   cancelNaming,
@@ -20,6 +20,7 @@ import {
   moveLibraryFolder,
   moveScriptsToFolder,
   openLibraryScript,
+  openRunOn,
   renameLibraryFolder,
   renameLibraryScript,
   revertConsole,
@@ -28,12 +29,28 @@ import {
   setLibrary,
   setLibrarySort,
   setOnlyConn,
+  toggleFavorite,
   toggleFolder,
   updateLibraryScript,
   type LibraryScript,
 } from "../library";
-import { allTags, folderName, inFolder, parentFolder, toggleTagInQuery, type LibraryRow, buildTree } from "../libraryModel";
-import { activeSql, activeTab, confirmDialog, connColor, connectionById, copyText, openMenu, state, type MenuItem } from "../state";
+import {
+  allTags,
+  buildTree,
+  ENGINE_TAGS,
+  engineLabel,
+  folderName,
+  inFolder,
+  paramRows,
+  paramsToKeep,
+  parentFolder,
+  statementCount,
+  toggleTagInQuery,
+  type EngineTag,
+  type LibraryRow,
+  type ScriptParam,
+} from "../libraryModel";
+import { activeSql, activeTab, confirmDialog, connColor, connectionById, copyText, kindOf, openMenu, state, type MenuItem } from "../state";
 
 const SCRIPT_MIME = "application/x-celer-script";
 const FOLDER_MIME = "application/x-celer-folder";
@@ -83,9 +100,12 @@ export function LibraryView() {
         sort: library.sort,
         collapsed: new Set(library.collapsed),
         connId: library.onlyConn && currentConn() ? currentConn() : undefined,
+        pinned: true,
       },
     ),
   );
+  /** The rows the keyboard moves through (section titles are not stops). */
+  const stops = createMemo(() => rows().filter((row): row is Exclude<LibraryRow, { kind: "section" }> => row.kind !== "section"));
   const tags = createMemo(() => allTags(library.scripts));
   const activeTags = createMemo(() => new Set(library.query.toLowerCase().split(/\s+/).filter((t) => t.startsWith("#")).map((t) => t.slice(1))));
 
@@ -106,10 +126,13 @@ export function LibraryView() {
     const dirty = libraryDirty(script.id);
     const conn = currentConn();
     const connName = connectionById(conn)?.name;
+    const count = statementCount(script.sql, kindOf(script.connId ?? conn));
     return [
       { label: "Abrir", hint: "Intro", run: () => void openLibraryScript(script.id) },
-      { label: "Abrir y ejecutar", hint: "Ctrl+Intro", run: () => void openLibraryScript(script.id, true) },
+      { label: count > 1 ? `Abrir y ejecutar todo (${count} sentencias)` : "Abrir y ejecutar", hint: "Ctrl+Intro", run: () => void openLibraryScript(script.id, true) },
+      { label: "Ejecutar en…", hint: "Mayús+Intro", disabled: !state.connections.length, run: () => openRunOn(script.id) },
       { label: "Insertar en la consola", disabled: !activeSql(), run: () => insertLibraryScript(script.id) },
+      { label: script.favorite ? "Quitar de favoritos" : "Añadir a favoritos", run: () => void toggleFavorite(script.id) },
       { separator: true },
       ...(dirty
         ? [
@@ -119,7 +142,7 @@ export function LibraryView() {
           ]
         : []),
       { label: "Renombrar", hint: "F2", run: () => setLibrary("renaming", `s:${script.id}`) },
-      { label: "Carpeta, etiquetas y conexión…", hint: "Alt+Intro", run: () => setLibrary("editing", script.id) },
+      { label: "Detalles: descripción, parámetros, motor…", hint: "Alt+Intro", run: () => setLibrary("editing", script.id) },
       { label: "Duplicar", hint: "Ctrl+D", run: () => void duplicateLibraryScript(script.id) },
       ...(script.folder ? [{ label: "Sacar de la carpeta", run: () => void moveScriptsToFolder([script.id], "") }] : []),
       conn && conn !== script.connId
@@ -175,6 +198,7 @@ export function LibraryView() {
 
   /** The context menu of a row, from the mouse or from the keyboard (placed under the row). */
   function menuFor(row: LibraryRow, event?: MouseEvent) {
+    if (row.kind === "section") return;
     select(row.key);
     const items = row.kind === "script" ? scriptMenu(row.script) : folderMenu(row.path, row.open);
     if (event) openMenu(event, items);
@@ -188,7 +212,7 @@ export function LibraryView() {
 
   function onKey(event: KeyboardEvent) {
     if (event.target instanceof Element && event.target.closest("input, select, textarea, button.library-inline")) return;
-    const list = rows();
+    const list = stops();
     if (!list.length) return;
     const index = list.findIndex((row) => row.key === library.selected);
     const row = index >= 0 ? list[index] : undefined;
@@ -231,8 +255,9 @@ export function LibraryView() {
       case "Enter":
         if (!row) handled = false;
         else if (row.kind === "folder") toggleFolder(row.path);
-        else if (event.altKey) setLibrary("editing", row.script.id);
-        else void openLibraryScript(row.script.id, ctrl);
+        else if (row.kind === "script" && event.altKey) setLibrary("editing", row.script.id);
+        else if (row.kind === "script" && event.shiftKey) openRunOn(row.script.id);
+        else if (row.kind === "script") void openLibraryScript(row.script.id, ctrl);
         break;
       case "F2":
         if (row) setLibrary("renaming", row.key);
@@ -348,6 +373,10 @@ export function LibraryView() {
     const conn = () => connectionById(script().connId);
     const isOpen = () => activeSql()?.libraryId === script().id;
     const dirty = () => libraryDirty(script().id);
+    const runAllTitle = () => {
+      const n = statementCount(script().sql, kindOf(script().connId ?? currentConn()));
+      return n > 1 ? `Abrir y ejecutar todo: las ${n} sentencias (Ctrl+Intro). Para una sola, ábrelo y usa Ctrl+Intro en ella` : "Abrir y ejecutar (Ctrl+Intro)";
+    };
     return (
       <>
         <div
@@ -358,7 +387,7 @@ export function LibraryView() {
           role="treeitem"
           aria-level={props.row.depth + 1}
           aria-selected={library.selected === key()}
-          title={`${script().name}\n\n${script().sql.slice(0, 600)}${script().sql.length > 600 ? "…" : ""}\n\nClic: abrir · Ctrl+Intro: abrir y ejecutar · Arrástralo al editor para pegar su SQL`}
+          title={`${script().name}${script().description ? `\n${script().description}` : ""}\n\n${script().sql.slice(0, 600)}${script().sql.length > 600 ? "…" : ""}\n\nClic: abrir · Ctrl+Intro: abrir y ejecutar · Mayús+Intro: ejecutar en… · Arrástralo al editor para pegar su SQL`}
           draggable={!renaming()}
           onDragStart={(event) => {
             event.dataTransfer?.setData(SCRIPT_MIME, script().id);
@@ -382,13 +411,22 @@ export function LibraryView() {
               <Show when={renaming()} fallback={<span class="lib-name">{script().name}</span>}>
                 <InlineName value={script().name} onDone={(name) => void (name !== null && renameLibraryScript(script().id, name))} />
               </Show>
+              <Show when={script().favorite}>
+                <span class="lib-star" title="Favorito"><Star size={11} fill="currentColor" /></span>
+              </Show>
               <Show when={dirty()}>
                 <i class="lib-dirty" title="La consola tiene cambios sin guardar en la biblioteca" />
               </Show>
             </div>
+            <Show when={script().description}>
+              <span class="lib-desc">{script().description}</span>
+            </Show>
             <code class="lib-preview">{preview(script().sql)}</code>
-            <Show when={conn() || script().tags.length}>
+            <Show when={conn() || script().tags.length || script().engine}>
               <div class="lib-meta">
+                <Show when={script().engine}>
+                  <span class="lib-engine" title="Motor para el que está escrito">{engineLabel(script().engine!)}</span>
+                </Show>
                 <Show when={conn()}>
                   <span class="lib-conn" title="Conexión asociada: se abre en ella"><i style={{ background: connColor(conn()) }} />{conn()!.name}</span>
                 </Show>
@@ -415,12 +453,14 @@ export function LibraryView() {
             <Show when={dirty()}>
               <button type="button" class="icon-btn" title={withShortcut("Guardar los cambios de la consola", "save-library")} onClick={() => void saveConsoleToScript(script().id)}><BookmarkPlus size={13} /></button>
             </Show>
-            <button type="button" class="icon-btn" title="Abrir y ejecutar (Ctrl+Intro)" onClick={() => void openLibraryScript(script().id, true)}><Play size={13} /></button>
-            <button type="button" class="icon-btn" title="Carpeta, etiquetas y conexión (Alt+Intro)" onClick={() => setLibrary("editing", library.editing === script().id ? "" : script().id)}><Pencil size={13} /></button>
+            <button type="button" class="icon-btn" title={runAllTitle()} onClick={() => void openLibraryScript(script().id, true)}><Play size={13} /></button>
+            <button type="button" class="icon-btn" title="Ejecutar en… otra conexión o base de datos, o en varias (Mayús+Intro)" disabled={!state.connections.length} onClick={() => openRunOn(script().id)}><CirclePlay size={13} /></button>
+            <button type="button" class="icon-btn" classList={{ on: script().favorite }} title={script().favorite ? "Quitar de favoritos" : "Añadir a favoritos"} onClick={() => void toggleFavorite(script().id)}><Star size={13} /></button>
+            <button type="button" class="icon-btn" title="Detalles: descripción, parámetros, motor, carpeta, etiquetas y conexión (Alt+Intro)" onClick={() => setLibrary("editing", library.editing === script().id ? "" : script().id)}><Pencil size={13} /></button>
             <button type="button" class="icon-btn" title="Más acciones" onClick={(event) => menuFor(props.row, event)}><Ellipsis size={13} /></button>
           </div>
         </div>
-        <Show when={library.editing === script().id}>
+        <Show when={library.editing === script().id && library.selected === key()}>
           <ScriptDetails script={script()} depth={props.row.depth} />
         </Show>
       </>
@@ -428,7 +468,7 @@ export function LibraryView() {
   }
 
   const count = () => library.scripts.length;
-  const shown = () => rows().filter((row) => row.kind === "script").length;
+  const shown = () => rows().filter((row) => row.kind === "script" && !row.section).length;
 
   return (
     <div class="library">
@@ -470,7 +510,7 @@ export function LibraryView() {
           <Search size={12} />
           <input
             ref={search}
-            placeholder="Buscar: texto o #etiqueta"
+            placeholder="Buscar: nombre, SQL, descripción o #etiqueta"
             value={library.query}
             onInput={(event) => setLibrary("query", event.currentTarget.value)}
             onKeyDown={(event) => {
@@ -480,7 +520,7 @@ export function LibraryView() {
               } else if (event.key === "ArrowDown") {
                 // From the search into the results.
                 event.preventDefault();
-                const first = rows().find((row) => row.kind === "script") ?? rows()[0];
+                const first = stops().find((row) => row.kind === "script") ?? stops()[0];
                 if (first) select(first.key);
                 tree?.focus();
               } else if (event.key === "Enter") {
@@ -523,7 +563,7 @@ export function LibraryView() {
         tabIndex={0}
         onKeyDown={onKey}
         onFocus={() => {
-          if (!library.selected && rows().length) select(rows()[0].key);
+          if (!library.selected && stops().length) select(stops()[0].key);
         }}
         onDragOver={(event) => over(event, "")}
         onDragLeave={(event) => {
@@ -549,13 +589,26 @@ export function LibraryView() {
         <Show when={(count() || library.folders.length) && !rows().length}>
           <p class="inspector-empty">Ningún script coincide con la búsqueda.</p>
         </Show>
-        <For each={rows()}>{(row) => (row.kind === "folder" ? <FolderRow row={row} /> : <ScriptRow row={row} />)}</For>
+        <For each={rows()}>
+          {(row) =>
+            row.kind === "folder" ? (
+              <FolderRow row={row} />
+            ) : row.kind === "section" ? (
+              <div class="lib-section" role="presentation">
+                {row.label}
+                <small>{row.count}</small>
+              </div>
+            ) : (
+              <ScriptRow row={row} />
+            )
+          }
+        </For>
       </div>
       <Show when={count()}>
         <div class="lib-foot">
           {shown() === count() ? `${count()} ${count() === 1 ? "script" : "scripts"}` : `${shown()} de ${count()} scripts`}
           <span class="spacer" />
-          <span title="Intro abre · Ctrl+Intro ejecuta · F2 renombra · Supr borra · Ctrl+D duplica · clic derecho: todo lo demás">Intro · Ctrl+Intro · F2 · Supr</span>
+          <span title="Intro abre · Ctrl+Intro ejecuta todo · Mayús+Intro: ejecutar en… · F2 renombra · Supr borra · Ctrl+D duplica · clic derecho: todo lo demás">Intro · Ctrl+Intro · Mayús+Intro · F2</span>
         </div>
       </Show>
     </div>
@@ -600,9 +653,13 @@ function FolderInput(props: { id: string; name: string; value: string }) {
   );
 }
 
-/** Folder, tags and connection of a script, under its row. */
+/** Name, description, folder, tags, connection, engine and parameters of a script, under its row. */
 function ScriptDetails(props: { script: LibraryScript; depth: number }) {
   const id = `lib-edit-${props.script.id}`;
+  // The parameters of the SQL (and the declared ones it no longer has), edited here and kept on "Guardar".
+  const dialect = () => kindOf(props.script.connId ?? activeTab()?.connId);
+  const [params, setParams] = createSignal(paramRows(props.script.sql, props.script.params, dialect()));
+  const setParam = (index: number, change: Partial<ScriptParam>) => setParams((list) => list.map((p, i) => (i === index ? { ...p, ...change } : p)));
   const close = () => {
     setLibrary("editing", "");
     queueMicrotask(() => document.querySelector<HTMLElement>(".lib-tree")?.focus());
@@ -619,6 +676,9 @@ function ScriptDetails(props: { script: LibraryScript; depth: number }) {
           folder: data.get("folder") as string,
           tags: data.get("tags") as string,
           connId: (data.get("connId") as string) || null,
+          description: data.get("description") as string,
+          engine: (data.get("engine") as EngineTag | "") ?? "",
+          params: paramsToKeep(params()),
         });
         close();
       }}
@@ -630,6 +690,8 @@ function ScriptDetails(props: { script: LibraryScript; depth: number }) {
     >
       <label for={`${id}-name`}>Nombre</label>
       <input id={`${id}-name`} name="name" value={props.script.name} ref={(el) => queueMicrotask(() => el.focus())} />
+      <label for={`${id}-desc`}>Descripción</label>
+      <textarea id={`${id}-desc`} name="description" rows={2} value={props.script.description ?? ""} placeholder="Qué hace y cuándo usarlo (opcional)" />
       <label for={`${id}-folder`}>Carpeta</label>
       <FolderInput id={`${id}-folder`} name="folder" value={props.script.folder} />
       <label for={`${id}-tags`}>Etiquetas</label>
@@ -642,6 +704,27 @@ function ScriptDetails(props: { script: LibraryScript; depth: number }) {
           <option value={props.script.connId!} selected>Conexión borrada</option>
         </Show>
       </select>
+      <label for={`${id}-engine`}>Motor</label>
+      <select id={`${id}-engine`} name="engine" value={props.script.engine ?? ""}>
+        <option value="">Sin indicar</option>
+        <For each={ENGINE_TAGS}>{(tag) => <option value={tag} selected={tag === props.script.engine}>{engineLabel(tag)}</option>}</For>
+      </select>
+      <Show when={params().length}>
+        <div class="lib-params">
+          <label>Parámetros: valor por defecto y descripción</label>
+          <Index each={params()}>
+            {(param, index) => (
+              <div class="lib-param">
+                <code classList={{ unused: !param().used }} title={param().used ? param().name : `${param().name}: ya no aparece en el SQL (se borra si lo dejas vacío)`}>
+                  {param().name}
+                </code>
+                <input value={param().default} placeholder="Por defecto" spellcheck={false} aria-label={`Valor por defecto de ${param().name}`} onInput={(event) => setParam(index, { default: event.currentTarget.value })} />
+                <input value={param().description} placeholder="Qué es" aria-label={`Descripción de ${param().name}`} onInput={(event) => setParam(index, { description: event.currentTarget.value })} />
+              </div>
+            )}
+          </Index>
+        </div>
+      </Show>
       <div class="library-name-row">
         <Show when={consoleOf(props.script.id)}>
           <small class="muted">Edita el SQL en su consola y guárdalo con {shortcutLabel("save-library") || "el botón de guardar"}.</small>
