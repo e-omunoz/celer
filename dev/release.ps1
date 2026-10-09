@@ -58,6 +58,19 @@ foreach ($file in "src-tauri\Cargo.toml", "installer\src-tauri\Cargo.toml") {
     [IO.File]::WriteAllText("$root\$file", [regex]::Replace($text, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1))
   }
 }
+# The lockfiles carry the package's own version too: left behind, the first build after the release rewrites them
+# (dirty tree) and `cargo build --locked` on the tag fails.
+foreach ($lock in @(@("src-tauri\Cargo.lock", "celer"), @("installer\src-tauri\Cargo.lock", "celer-setup"))) {
+  if (Test-Path "$root\$($lock[0])") {
+    $text = [IO.File]::ReadAllText("$root\$($lock[0])")
+    $text = [regex]::Replace($text, "(?m)(^name = `"$($lock[1])`"\r?\nversion = `")[^`"]+`"", "`${1}$Version`"", 1)
+    [IO.File]::WriteAllText("$root\$($lock[0])", $text)
+  }
+}
+$text = [IO.File]::ReadAllText("$root\package-lock.json")
+$text = [regex]::Replace($text, '^(\{\s*"name": "celer",\s*"version": ")[^"]+"', "`${1}$Version`"", 1)
+$text = [regex]::Replace($text, '("": \{\s*"name": "celer",\s*"version": ")[^"]+"', "`${1}$Version`"", 1)
+[IO.File]::WriteAllText("$root\package-lock.json", $text)
 
 # ---------------------------------------------------------------- changelog
 # The workflow takes the release notes from this section of CHANGELOG.md.
@@ -74,7 +87,8 @@ if (-not $notes) { $notes = "Celer $Version" }
 
 # ---------------------------------------------------------------- git
 Step "Commit y etiqueta $tag"
-& $git add package.json src-tauri/tauri.conf.json installer/src-tauri/tauri.conf.json src-tauri/Cargo.toml installer/src-tauri/Cargo.toml CHANGELOG.md
+& $git add package.json src-tauri/tauri.conf.json installer/src-tauri/tauri.conf.json src-tauri/Cargo.toml installer/src-tauri/Cargo.toml `
+  src-tauri/Cargo.lock installer/src-tauri/Cargo.lock package-lock.json CHANGELOG.md
 # Message through a file: PowerShell 5 mangles quotes in native arguments (the notes have them).
 $msgFile = Join-Path ([IO.Path]::GetTempPath()) "celer-release-$Version.txt"
 [IO.File]::WriteAllText($msgFile, "chore(release): $tag`n`n$notes`n", [Text.UTF8Encoding]::new($false))
