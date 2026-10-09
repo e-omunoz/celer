@@ -32,7 +32,7 @@ seed() {
 
 engine_env() {
   local ifx_ip; ifx_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' celer-ifx)
-  export CELER_PG_TEST="host=localhost port=55432 user=celer password=celer dbname=celer"
+  export CELER_PG_TEST="host=localhost port=15432 user=celer password=celer dbname=celer"
   export CELER_MSSQL_TEST="host=localhost port=1433 user=sa password=$MSSQL_PASSWORD"
   export CELER_INFORMIX_TEST="host=localhost port=9089 user=informix password=in4mix database=celer"
   export CELER_INFORMIX_JDBC_TEST="host=$ifx_ip port=9088 user=informix password=in4mix database=celer server=informix proxied=localhost"

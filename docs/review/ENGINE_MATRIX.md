@@ -7,7 +7,7 @@ lists each engine with ✅ / ❌ / ⚠️ not applicable (and why). "Not tested 
 
 | Engine | Where it runs | From Windows (desktop app) | Cargo integration test env |
 |---|---|---|---|
-| PostgreSQL 17 | WSL `celer-pg` · or `dev\testdb-postgres.ps1` | `localhost:55432` celer/celer db `celer` (portable: 54329) | `CELER_PG_TEST` |
+| PostgreSQL 17 | WSL `celer-pg` · or `dev\testdb-postgres.ps1` | `localhost:15432` celer/celer db `celer` (portable: 54329) | `CELER_PG_TEST` |
 | MySQL 8.4 | WSL `celer-mysql` | `localhost:33306` celer/celer db `celer` | `CELER_MYSQL_TEST` (run 1) |
 | MariaDB 11.4 | WSL `celer-mariadb` · or `dev\testdb-mysql.ps1` | `localhost:33307` celer/celer (portable: 33069) | `CELER_MYSQL_TEST` (run 2) |
 | SQL Server 2022 | WSL `celer-mssql` | `localhost:1433` sa/`Celer_Test_2026!` db `celerdemo` | `CELER_MSSQL_TEST` |
