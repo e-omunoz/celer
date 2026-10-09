@@ -9,17 +9,22 @@ import {
   insertAt,
   isInside,
   joinFolder,
+  liftDeleted,
+  movedFolderPath,
   normalizeFolder,
   parentFolder,
   parseConnectionsJson,
+  placeBefore,
   planImport,
+  planMove,
   pushRecent,
   renameFolderPath,
   toggleIn,
   uniqueName,
   type ConnSort,
 } from "./connTree";
-import { connectionById, disconnect, notify, refreshConnections, saveSettings, setState, state } from "./state";
+import { confirmDialog, connectionById, disconnect, notify, refreshConnections, saveSettings, setState, state } from "./state";
+import { selectionLabel } from "./treeSelect";
 import type { ConnConfig, ConnSummary } from "./types";
 
 /** La configuración guardable de una conexión del explorador (sin `hasPassword`; contraseña vacía = la guardada sigue). */
@@ -128,14 +133,18 @@ function folderSnapshot() {
   };
 }
 
+async function putFolders(snapshot: ReturnType<typeof folderSnapshot>) {
+  const changes = snapshot.conns.flatMap(({ id, folder }) => {
+    const conn = connectionById(id);
+    return conn ? [{ conn, folder }] : [];
+  });
+  await applyFolders(changes);
+  await saveSettings({ connFolders: snapshot.connFolders, collapsedFolders: snapshot.collapsedFolders });
+}
+
 async function restoreFolders(snapshot: ReturnType<typeof folderSnapshot>) {
   try {
-    const changes = snapshot.conns.flatMap(({ id, folder }) => {
-      const conn = connectionById(id);
-      return conn ? [{ conn, folder }] : [];
-    });
-    await applyFolders(changes);
-    await saveSettings({ connFolders: snapshot.connFolders, collapsedFolders: snapshot.collapsedFolders });
+    await putFolders(snapshot);
     notify("Carpetas como estaban", "success");
   } catch (err) {
     notify("No se pudo deshacer", "error", errorText(err));
@@ -230,6 +239,106 @@ export async function moveConnectionsTo(ids: string[], folder: string) {
   } catch (err) {
     notify("No se pudo mover la conexión", "error", errorText(err));
   }
+}
+
+// ---------------------------------------------------------------- several at once (multi-selection)
+
+/**
+ * Moves a selection of connections and folders into `folder` (dragging it, or its menu), with one undo. Each folder
+ * goes with its contents; dropped on a connection (`beforeId`), the moved connections go right above it.
+ */
+export async function moveItemsTo(ids: string[], folders: string[], folder: string, beforeId?: string) {
+  const target = normalizeFolder(folder);
+  const plan = planMove(
+    state.connections.map((conn) => ({ id: conn.id, folder: conn.folder || "" })),
+    ids,
+    folders,
+    target,
+  );
+  if (plan.blocked.length) notify("Una carpeta no puede ir dentro de sí misma", "warning", plan.blocked.map((path) => `«${folderName(path)}»`).join(", "));
+  const changes = state.connections.flatMap((conn) => (plan.folderOf.has(conn.id) ? [{ conn, folder: plan.folderOf.get(conn.id)! }] : []));
+  const before = beforeId ? state.connections.map((conn) => conn.id) : [];
+  const order = beforeId ? placeBefore(before, ids, beforeId) : before;
+  const reorder = order.some((id, i) => id !== before[i]);
+  if (!changes.length && !plan.moves.length && !reorder) return;
+  const snapshot = folderSnapshot();
+  try {
+    await applyFolders(changes);
+    if (plan.moves.length) {
+      const moved = (list: string[]) => [...new Set(list.map((path) => movedFolderPath(path, plan.moves)).filter(Boolean))];
+      await saveSettings({ connFolders: moved([...state.settings.connFolders, ...plan.moves.map(([, to]) => to)]), collapsedFolders: moved(state.settings.collapsedFolders) });
+    }
+    if (reorder) {
+      await api().reorderConnections(placeBefore(state.connections.map((conn) => conn.id), ids, beforeId!));
+      await refreshConnections();
+    }
+    if (changes.length || plan.moves.length) {
+      const label = selectionLabel(ids.filter((id) => connectionById(id)).length, plan.moves.length);
+      notify(`${label} → ${target || "Sin carpeta"}`, "success", undefined, { label: "Deshacer", run: () => void restoreFolders(snapshot) });
+    }
+  } catch (err) {
+    notify("No se pudo mover la selección", "error", errorText(err));
+  }
+}
+
+/**
+ * Deletes several connections and folders after one confirmation (a single one is deleted without asking, see
+ * deleteConnectionUndoable); one undo brings everything back. The contents of a deleted folder go up a level, as with
+ * deleteFolder; a connection kept connected in the disconnect confirmation is not deleted.
+ */
+export async function deleteItems(ids: string[], folders: string[]) {
+  const conns = ids.map(connectionById).filter((conn): conn is ConnSummary => Boolean(conn));
+  const paths = [...new Set(folders.map(normalizeFolder).filter(Boolean))];
+  if (!conns.length && !paths.length) return;
+  const names = [...conns.map((conn) => `«${conn.name}»`), ...paths.map((path) => `la carpeta «${folderName(path)}»`)];
+  const listed = names.length > 8 ? `${names.slice(0, 8).join(", ")} y ${names.length - 8} más` : names.join(", ");
+  const body = `Se eliminarán ${listed}.${paths.length ? " Lo que hay dentro de las carpetas sube un nivel." : ""} Se puede deshacer desde el aviso.`;
+  if (!(await confirmDialog(`Eliminar ${selectionLabel(conns.length, paths.length)}`, body, "Eliminar", true))) return;
+  const snapshot = folderSnapshot();
+  const removed: { cfg: ConnConfig; at: number }[] = [];
+  for (const conn of conns) {
+    await disconnect(conn.id, true);
+    if (state.sessions[conn.id]) continue;
+    removed.push({ cfg: configOf(conn), at: snapshot.conns.findIndex((c) => c.id === conn.id) });
+  }
+  try {
+    for (const { cfg } of removed) await api().deleteConnection(cfg.id);
+    await refreshConnections();
+    if (paths.length) {
+      await applyFolders(state.connections.map((conn) => ({ conn, folder: liftDeleted(conn.folder || "", paths) })));
+      const lift = (list: string[]) => [...new Set(list.filter((path) => !paths.includes(normalizeFolder(path))).map((path) => liftDeleted(path, paths)).filter(Boolean))];
+      await saveSettings({ connFolders: lift(state.settings.connFolders), collapsedFolders: lift(state.settings.collapsedFolders) });
+    }
+  } catch (err) {
+    notify("No se pudo eliminar la selección", "error", errorText(err));
+    return;
+  }
+  if (removed.some(({ cfg }) => state.treeSelected === `c:${cfg.id}`) || paths.some((path) => state.treeSelected === `g:${path}`)) setState("treeSelected", "");
+  const label = selectionLabel(removed.length, paths.length);
+  notify(`Eliminado: ${label}`, "info", undefined, { label: "Deshacer", run: () => void restoreItems(removed, paths.length ? snapshot : null, label) });
+}
+
+async function restoreItems(removed: { cfg: ConnConfig; at: number }[], snapshot: ReturnType<typeof folderSnapshot> | null, label: string) {
+  try {
+    // In their old order, each one back at its old place.
+    for (const { cfg, at } of removed.slice().sort((a, b) => a.at - b.at)) {
+      const saved = await api().restoreConnection(cfg);
+      await refreshConnections();
+      await api().reorderConnections(insertAt(state.connections.map((c) => c.id), saved.id, at));
+    }
+    await refreshConnections();
+    if (snapshot) await putFolders(snapshot);
+    notify(`Recuperado: ${label}`, "success");
+  } catch (err) {
+    notify("No se pudo recuperar la selección", "error", errorText(err));
+  }
+}
+
+/** Marks or unmarks several connections as favourites at once. */
+export function setFavorites(ids: string[], on: boolean) {
+  const current = state.settings.favoriteConns;
+  const next = on ? [...current, ...ids.filter((id) => !current.includes(id))] : current.filter((id) => !ids.includes(id));
+  if (next.length !== current.length) void saveSettings({ favoriteConns: next });
 }
 
 // ---------------------------------------------------------------- orden, favoritas, recientes
