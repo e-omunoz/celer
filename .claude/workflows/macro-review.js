@@ -15,6 +15,8 @@ export const meta = {
 const A = args || {}
 const MODE = A.mode === 'audit' ? 'audit' : 'full'
 const BASE = A.base || 'origin/main'
+// since: review the latest implementations first (git log/diff since that ref), then the rest of the area.
+const SINCE = A.since || null
 const MILESTONE = A.milestone || 'Macro review'
 const TRACKING = A.tracking || null
 
@@ -128,6 +130,8 @@ function auditPrompt(area) {
 
 Area: **${area.title}** — checklist in \`.claude/skills/macro-review/areas/${area.key}.md\`. Read it first.
 ${appRule}
+${SINCE ? `Priority: the latest implementations. Start with what changed in this area since \`${SINCE}\` (\`git log --oneline ${SINCE}..HEAD\`, \`git diff --stat ${SINCE}..HEAD\`): review that code line by line and test it live, then cover the rest of the checklist.` : ''}
+Databases: every engine runs locally (\`dev\\wsl.ps1 db up\`, \`db seed\`; ports in \`docs/review/ENGINE_MATRIX.md\`). Anything that reaches a connection is checked on every engine of the matrix, and your not_checked list names any engine you could not reach.
 Put any screenshot or output under \`review-out/${area.key}/\`.
 Skip anything already filed: \`gh issue list --label review --state all -L 200\`.
 Return every real defect you can prove, most severe first, plus what you could not check.`

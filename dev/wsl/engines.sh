@@ -53,6 +53,10 @@ case "${1:-status}" in
     npx tsc --noEmit -p .
     engine_env
     cd src-tauri
+    cargo test --lib --no-run -q   # build outside the lock
+    # The engines are shared by every checkout: integration runs take turns.
+    exec 9>/tmp/celer-engines.lock
+    flock 9
     # MySQL and MariaDB are different engines for Celer: the MySQL tests run against both.
     CELER_MYSQL_TEST="mysql://celer:celer@127.0.0.1:33306/celer" cargo test --lib $filter -- --test-threads=1
     CELER_MYSQL_TEST="mysql://celer:celer@127.0.0.1:33307/celer" cargo test --lib mysql -- --test-threads=1

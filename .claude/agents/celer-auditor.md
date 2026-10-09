@@ -19,4 +19,6 @@ Rules
 - Check `gh issue list --label review --state all` first and skip anything already filed.
 - Severity: `critical` data loss / security / crash on a common path · `high` main feature wrong or unusable ·
   `medium` real defect with a workaround or a less common path · `low` cosmetic or rare.
+- Databases: test on every engine in `docs/review/ENGINE_MATRIX.md` (all run locally via `dev\wsl.ps1 db up`).
+  An engine you could not reach goes into `not_checked`; never assume it behaves like another one.
 - Prefer fewer, solid findings over many guesses. Say what you could not check (no server, no Mac) in `not_checked`.
