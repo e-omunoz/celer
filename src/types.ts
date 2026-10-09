@@ -68,10 +68,45 @@ export interface ConnConfig {
   filePath: string;
   /** Statements run on every new session right after connecting (SET search_path…, SET LOCK_TIMEOUT…). */
   startupSql?: string;
+  /** SSH tunnel to the server (network engines only). Absent: none. */
+  ssh?: SshConfig;
+}
+
+/** How a connection reaches its server through an SSH bastion (src-tauri/src/ssh.rs). */
+export interface SshConfig {
+  enabled: boolean;
+  host: string;
+  port: number | null;
+  user: string;
+  /** "password" | "key" (a file or a pasted key, with its passphrase) | "agent" (ssh-agent, Pageant, OpenSSH agent). */
+  auth: string;
+  /** Private key file; empty when the key is pasted (it is kept in the credential store). */
+  keyPath: string;
+  /** Jump hosts in the order they are crossed: "user@host:port" (user and port optional). */
+  jumps: string[];
+  /** Secrets: only on their way to the credential store ("" or absent = keep the saved one). */
+  password?: string | null;
+  passphrase?: string | null;
+  privateKey?: string | null;
+}
+
+/** An SSH server's host key shown to the user before trusting it. */
+export interface SshHostKeyInfo {
+  host: string;
+  port: number;
+  keyType: string;
+  /** SHA256:… as OpenSSH shows it (ssh-keygen -lf). */
+  fingerprint: string;
+}
+
+export function emptySsh(): SshConfig {
+  return { enabled: false, host: "", port: 22, user: "", auth: "password", keyPath: "", jumps: [] };
 }
 
 export interface ConnSummary extends ConnConfig {
   hasPassword: boolean;
+  /** Which SSH secrets the credential store keeps (only for connections with a tunnel). */
+  sshSaved?: { password: boolean; passphrase: boolean; key: boolean };
 }
 
 export interface MetaNode {
@@ -139,7 +174,7 @@ export interface OpenSessionOptions {
 
 /** One step of "Probar conexión", timed. */
 export interface ConnTestStep {
-  /** resolve | tcp | tls | login | database */
+  /** resolve | tcp | tls | login | database; ssh | forward through an SSH tunnel */
   id: string;
   label: string;
   status: "ok" | "failed" | "skipped";

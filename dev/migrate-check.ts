@@ -37,7 +37,7 @@ assert.deepEqual(parseJdbcUrl("jdbc:nonsense://x"), {});
 // ---------------------------------------------------------------- the DBeaver sample: one connection per engine
 
 const sample = parseDbeaver({ tool: "dbeaver", project: "General", path: "/ws/General/.dbeaver/data-sources.json", text: fixture("DBeaverData/workspace6/General/.dbeaver/data-sources.json") });
-assert.equal(sample.length, 8);
+assert.equal(sample.length, 9);
 assert.ok(sample.every((c) => c.status === "new"), sample.filter((c) => c.status !== "new").map((c) => `${c.cfg.name}: ${c.reason}`).join("; "));
 assert.ok(sample.every((c) => c.cfg.folder === "DBeaver · Celer"));
 // MANUAL: the fields (they match the URL here).
@@ -72,6 +72,7 @@ assert.deepEqual(
     ["SQL Server sin host en la URL", "sa", true],
     ["Informix JDBC", "informix", true],
     ["Informix DRDA", "informix", true],
+    ["PG por SSH", "celer", true],
     ["ODBC CelerPG", "celer", true],
   ],
 );
@@ -173,7 +174,7 @@ assert.equal((await applyDbeaverCredentials(listed, "/ws/General/.dbeaver/data-s
 // ---------------------------------------------------------------- DbVisualizer
 
 const vis = dbvis(fixture(".dbvis/config230/dbvis.xml"));
-assert.equal(vis.length, 8);
+assert.equal(vis.length, 10);
 assert.ok(vis.every((c) => c.status === "new"), vis.filter((c) => c.status !== "new").map((c) => c.cfg.name).join(", "));
 // Variables only (empty URL).
 assert.deepEqual(where(byName(vis, "PG variables")), { kind: "postgres", host: "localhost", port: 15432, database: "celer", instance: "", informixMode: "auto", encryption: "login", trustCert: true, extra: "application_name=Celer desde DbVisualizer", filePath: "", odbcConnStr: "", user: "celer", integratedAuth: false });
@@ -197,6 +198,46 @@ const visEdge = dbvis(`<DbVisualizer><Databases>
 assert.deepEqual([visEdge[0].cfg.host, visEdge[0].cfg.port, visEdge[0].cfg.instance], ["ifx", 9088, "ol"]);
 assert.deepEqual([visEdge[1].cfg.host, visEdge[1].cfg.instance, visEdge[1].cfg.port, visEdge[1].cfg.database], ["sql03", "TEST", null, "crm"]);
 assert.deepEqual([visEdge[2].cfg.name, visEdge[2].cfg.encryption, visEdge[2].cfg.host], ["Entidades & CDATA", "required", "h"]);
+// ---------------------------------------------------------------- SSH tunnels (#115)
+
+// DBeaver: the ssh_tunnel handler gives bastion, port and method; the user and password are in its credentials file.
+const sshPg = byName(sample, "PG por SSH");
+assert.deepEqual(sshPg.cfg.ssh, { enabled: true, host: "localhost", port: 2222, user: "", auth: "password", keyPath: "", jumps: [] });
+assert.deepEqual([sshPg.cfg.host, sshPg.cfg.port, sshPg.cfg.database], ["celer-pg", 5432, "celer"], "the database as the bastion sees it");
+assert.ok(sshPg.notes.some((n) => n.includes("usuario está en las credenciales")), sshPg.notes.join(" "));
+const sshWithCreds = byName(withCreds, "PG por SSH");
+assert.deepEqual([sshWithCreds.cfg.ssh?.user, sshWithCreds.cfg.ssh?.password], ["celer", "celer"]);
+assert.ok(sample.every((c) => !c.cfg.ssh?.password), "no SSH password without the option");
+// Key and agent authentication, the handler's own user, a key passphrase from the credentials, jump servers noted.
+const sshEdge = dbeaver(
+  {
+    key: { provider: "mysql", driver: "mysql8", name: "Clave", configuration: { url: "jdbc:mysql://db:3306/x", handlers: { ssh_tunnel: { type: "TUNNEL", enabled: true, user: "ops", properties: { host: "jump.example.com", port: "2200", authType: "PUBLIC_KEY", keyPath: "C:\\Users\\ana\\.ssh\\id_ed25519", jumpServerSettingsSaved: "true" } } } } },
+    agent: { provider: "sqlserver", driver: "microsoft", name: "Agente", configuration: { url: "jdbc:sqlserver://sql:1433", handlers: { ssh_tunnel: { type: "TUNNEL", enabled: true, properties: { host: "b", authType: "AGENT", user: "u" } } } } },
+    off: { provider: "postgresql", driver: "postgres-jdbc", name: "Apagado", configuration: { url: "jdbc:postgresql://pg/x", handlers: { ssh_tunnel: { type: "TUNNEL", enabled: false, properties: { host: "b" } } } } },
+    sqlite: { provider: "generic", driver: "sqlite_jdbc", name: "Fichero", configuration: { url: "jdbc:sqlite:/tmp/x.db", handlers: { ssh_tunnel: { type: "TUNNEL", enabled: true, properties: { host: "b" } } } } },
+  },
+  "/ws/ssh/.dbeaver/data-sources.json",
+);
+assert.deepEqual(byName(sshEdge, "Clave").cfg.ssh, { enabled: true, host: "jump.example.com", port: 2200, user: "ops", auth: "key", keyPath: "C:\\Users\\ana\\.ssh\\id_ed25519", jumps: [] });
+assert.ok(byName(sshEdge, "Clave").notes.some((n) => n.includes("saltos")));
+assert.deepEqual([byName(sshEdge, "Agente").cfg.ssh?.auth, byName(sshEdge, "Agente").cfg.ssh?.user, byName(sshEdge, "Agente").cfg.ssh?.port], ["agent", "u", 22]);
+assert.equal(byName(sshEdge, "Apagado").cfg.ssh, undefined);
+assert.equal(byName(sshEdge, "Fichero").cfg.ssh, undefined, "no tunnel for SQLite");
+const keyCredsPlain = new TextEncoder().encode(JSON.stringify({ key: { "network/ssh_tunnel": { user: "otro", password: "frase" } } }));
+const keyCredsHex = toHex(iv) + toHex(new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CBC", iv }, key, keyCredsPlain)));
+const keyWithCreds = byName(await applyDbeaverCredentials(sshEdge, "/ws/ssh/.dbeaver/data-sources.json", keyCredsHex), "Clave");
+assert.deepEqual([keyWithCreds.cfg.ssh?.user, keyWithCreds.cfg.ssh?.passphrase, keyWithCreds.cfg.ssh?.password], ["otro", "frase", undefined], "with a key, the saved secret is its passphrase");
+// DbVisualizer: the Ssh* elements of a database, and a chain of SSH servers by id (the last one is the SSH server).
+assert.deepEqual(byName(vis, "PG por SSH").cfg.ssh, { enabled: true, host: "localhost", port: 2222, user: "celer", auth: "password", keyPath: "", jumps: [] });
+assert.deepEqual(byName(vis, "MySQL por dos saltos SSH").cfg.ssh, { enabled: true, host: "127.0.0.1", port: 22, user: "celer", auth: "password", keyPath: "", jumps: ["celer@localhost:2222"] });
+assert.equal(byName(vis, "MariaDB").cfg.ssh, undefined);
+const visKey = dbvis(`<DbVisualizer><Databases><Database id="k"><Alias>K</Alias><Url>jdbc:postgresql://db/x</Url><Driver>PostgreSQL</Driver>
+  <SshSettings><SshEnabled>true</SshEnabled><SshHost>b</SshHost><SshUserid>u</SshUserid><SshPrivateKeyFile>/home/u/.ssh/id_rsa</SshPrivateKeyFile></SshSettings></Database>
+  <Database id="m"><Alias>Falta</Alias><Url>jdbc:postgresql://db/x</Url><Driver>PostgreSQL</Driver><SshServerIds>nope</SshServerIds></Database></Databases></DbVisualizer>`);
+assert.deepEqual([visKey[0].cfg.ssh?.auth, visKey[0].cfg.ssh?.keyPath, visKey[0].cfg.ssh?.port], ["key", "/home/u/.ssh/id_rsa", 22]);
+assert.equal(visKey[1].cfg.ssh, undefined);
+assert.ok(visKey[1].notes.some((n) => n.includes("no define")));
+
 // The XML reader refuses what is not XML.
 assert.throws(() => parseXml("<a><b></a>"), /no es un XML válido/);
 assert.throws(() => parseXml("texto"), /no es un XML válido/);

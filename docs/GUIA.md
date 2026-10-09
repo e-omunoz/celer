@@ -58,6 +58,33 @@ Si falla, dice qué significa y qué hacer (nombre que no resuelve o VPN caída,
 contraseña, base que no existe, certificado, `pg_hba.conf`, ERROR 1130 de MySQL…) y deja el error original del driver
 para copiarlo.
 
+Por un túnel SSH los dos primeros pasos son otros, y dicen cuál falló: **Túnel SSH** (entrar en el servidor SSH, y en
+los saltos, con su clave de servidor y el método de autenticación) y **Reenvío a servidor:puerto** (que el servidor SSH
+llega a la base). Después vienen el inicio de sesión y la base, como siempre.
+
+### Túnel SSH
+
+Para una base a la que solo se llega a través de un bastión, **Túnel SSH** (en PostgreSQL, MySQL/MariaDB, SQL Server e
+Informix, también por DRDA y JDBC) hace que Celer entre por SSH y reenvíe un puerto local hasta el servidor:
+
+- **Servidor SSH**, **Puerto** (22) y **Usuario SSH**. El *Servidor* y el *Puerto* de la base, arriba, son los que ve
+  el servidor SSH: `localhost` es el propio servidor SSH.
+- **Autenticación**: *Contraseña*, *Clave privada* (un fichero OpenSSH, PEM o PuTTY `.ppk`, o la clave pegada, con su
+  *Frase de paso* si la tiene) o *Agente SSH* (Pageant o el agente de OpenSSH en Windows; `ssh-agent` en Linux y macOS).
+- **Saltos previos** (opcional): otros servidores SSH que hay que cruzar antes, uno por línea y en orden
+  (`usuario@servidor:puerto`), con la misma autenticación.
+- La contraseña SSH, la frase de paso y la clave pegada se guardan en el almacén de credenciales del sistema, nunca en
+  `connections.json`; al exportar sin contraseñas solo viajan servidor, puerto, usuario, método y la ruta de la clave.
+- La primera vez que Celer ve un servidor SSH enseña su **huella** (`SHA256:…`) y no conecta hasta que pulsas
+  **Confiar en esta clave**; la guarda en `known_hosts` de la carpeta de datos de Celer (también se fía de tu
+  `~/.ssh/known_hosts`). Si un servidor conocido presenta otra clave, Celer no conecta y dice dónde está la guardada.
+- Todas las sesiones de la conexión comparten un túnel. Si el bastión se reinicia o el túnel se corta, la siguiente
+  consulta vuelve a abrir el túnel y la sesión, como con cualquier corte.
+- Una instancia con nombre de SQL Server necesita su **puerto**: SQL Server Browser no cruza el túnel. Cancelar una
+  consulta de Informix por SQLI puede no llegar al servidor por el túnel (usa datos urgentes de TCP).
+- SQLite (un fichero de este equipo) y ODBC (la conexión la abre el driver del DSN) no tienen túnel: en ODBC se
+  configura en el propio origen de datos.
+
 ### Organizar las conexiones
 
 En el explorador:
@@ -98,7 +125,9 @@ JDBC** del formulario: servidor, puerto, base, instancia de SQL Server (también
 `informixserver`, protocolo de Informix (`jdbc:ids` es DRDA), cifrado y certificado, y lo que el driver entiende como
 *Parámetros extra*. Las propiedades del driver que guarda DBeaver se suman a las de la URL en todos los motores. Un
 campo vacío en la herramienta no pisa lo que dice la URL; en una URL con varios servidores Celer usa el primero, y la
-lista avisa de lo que no se ha podido traer.
+lista avisa de lo que no se ha podido traer. El **túnel SSH** de una conexión también se trae (servidor, puerto,
+usuario y método; de DbVisualizer, también los saltos); de DBeaver, el usuario y la contraseña SSH vienen con las
+contraseñas guardadas.
 
 ### Conectar rápido
 

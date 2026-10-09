@@ -59,6 +59,46 @@ pub(crate) fn mark_deleted(id: &str, deleted: bool) {
     }
 }
 
+/// Windows' credential store takes about 2.5 KB per credential: a longer secret (an RSA private key for an SSH
+/// tunnel) is kept in parts of this many characters, `{id}#part1…`, and `{id}` says how many there are.
+const PART_CHARS: usize = 1000;
+const PARTS_MARK: &str = "\u{1}celer-parts:";
+
+fn part_account(id: &str, i: usize) -> String {
+    format!("{id}#part{i}")
+}
+
+fn parts_of(value: &str) -> Option<usize> {
+    value.strip_prefix(PARTS_MARK).and_then(|n| n.parse().ok())
+}
+
+/// Writes a secret to the system's store, in parts when it is long. False when the store did not take it.
+fn keyring_set(id: &str, value: &str) -> bool {
+    let set = |account: &str, text: &str| keyring::Entry::new(keyring_service(), account).and_then(|e| e.set_password(text)).is_ok();
+    delete_parts(id);
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= PART_CHARS {
+        return set(id, value);
+    }
+    let parts: Vec<String> = chars.chunks(PART_CHARS).map(|c| c.iter().collect()).collect();
+    for (i, part) in parts.iter().enumerate() {
+        if !set(&part_account(id, i + 1), part) {
+            return false;
+        }
+    }
+    set(id, &format!("{PARTS_MARK}{}", parts.len()))
+}
+
+/// Removes the parts of a long secret, if `id` was one.
+fn delete_parts(id: &str) {
+    let Some(n) = keyring::Entry::new(keyring_service(), id).and_then(|e| e.get_password()).ok().as_deref().and_then(parts_of) else { return };
+    for i in 1..=n {
+        if let Ok(e) = keyring::Entry::new(keyring_service(), &part_account(id, i)) {
+            let _ = e.delete_credential();
+        }
+    }
+}
+
 pub struct Store {
     pub dir: PathBuf,
     conns_file: parking_lot::Mutex<ConnsFile>,
@@ -169,6 +209,7 @@ impl Store {
         for c in conns {
             let mut c = c.clone();
             c.password = None;
+            c.ssh = c.ssh.without_secrets();
             out.push(serde_json::to_value(c)?);
         }
         out.extend(file.unknown.iter().cloned());
@@ -196,6 +237,10 @@ impl Store {
     /// (sesión sin llavero), se guarda en `secrets.json` con permisos restringidos.
     pub fn get_password(&self, id: &str) -> Option<String> {
         if let Some(p) = keyring_get(id) {
+            // A long secret kept in parts (`keyring_set`): all of them, or none.
+            if let Some(n) = parts_of(&p) {
+                return (1..=n).map(|i| keyring_get(&part_account(id, i))).collect::<Option<String>>();
+            }
             return Some(p);
         }
         self.secrets().get(id).cloned()
@@ -203,14 +248,12 @@ impl Store {
 
     pub fn set_password(&self, id: &str, pwd: &str) -> Result<()> {
         mark_deleted(id, false);
-        if let Ok(e) = keyring::Entry::new(keyring_service(), id) {
-            if e.set_password(pwd).is_ok() {
-                let mut map = self.secrets();
-                if map.remove(id).is_some() {
-                    let _ = self.write_secrets(&map);
-                }
-                return Ok(());
+        if keyring_set(id, pwd) {
+            let mut map = self.secrets();
+            if map.remove(id).is_some() {
+                let _ = self.write_secrets(&map);
             }
+            return Ok(());
         }
         let mut map = self.secrets();
         map.insert(id.to_string(), pwd.to_string());
@@ -219,6 +262,7 @@ impl Store {
 
     pub fn delete_password(&self, id: &str) {
         mark_deleted(id, true);
+        delete_parts(id);
         if let Ok(e) = keyring::Entry::new(keyring_service(), id) {
             let _ = e.delete_credential();
         }
@@ -420,6 +464,41 @@ mod tests {
         assert!(store.load_connections().is_empty());
         assert!(store.connections_problem().is_some());
         assert!(store.save_connections(&[]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ssh_secrets_never_reach_the_file() {
+        use crate::model::{ConnConfig, DbKind, SshConfig};
+        let dir = std::env::temp_dir().join(format!("celer-store-ssh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let ssh = SshConfig {
+            enabled: true,
+            host: "bastion".into(),
+            user: "ops".into(),
+            auth: "key".into(),
+            jumps: vec!["edge:2022".into()],
+            password: Some("ssh-pass-1".into()),
+            passphrase: Some("frase-2".into()),
+            private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----key-3".into()),
+            forwarded_to: "db:5432".into(),
+            ..Default::default()
+        };
+        let with = ConnConfig { id: "a".into(), kind: DbKind::Postgres, password: Some("db-4".into()), ssh, ..Default::default() };
+        let without = ConnConfig { id: "b".into(), kind: DbKind::Mysql, ..Default::default() };
+        store.save_connections(&[with, without]).unwrap();
+        let text = std::fs::read_to_string(dir.join("connections.json")).unwrap();
+        for secret in ["ssh-pass-1", "frase-2", "key-3", "db-4", "privateKey", "passphrase", "forwardedTo"] {
+            assert!(!text.contains(secret), "{secret} in connections.json");
+        }
+        let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(saved[0]["ssh"]["host"], "bastion");
+        assert_eq!(saved[0]["ssh"]["jumps"][0], "edge:2022");
+        assert!(saved[1].get("ssh").is_none(), "no ssh block for a connection without a tunnel");
+        let back = store.load_connections();
+        assert_eq!(back[0].ssh.auth, "key");
+        assert!(back[0].ssh.password.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

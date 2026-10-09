@@ -14,6 +14,7 @@ import {
   saveSettings,
   setState,
   state,
+  trustSshHostKey,
 } from "../state";
 import { ACCENTS, type ThemeName } from "../types";
 import { CodeView } from "./Editor";
@@ -71,6 +72,30 @@ export function Modals() {
       <Show when={state.activity}><ActivityView /></Show>
       <Show when={schemaCompare.open && !isPanelWindow() && !isDetached("schema-compare")}><SchemaCompareView /></Show>
       <Show when={dataCompare.open && !isPanelWindow() && !isDetached("data-compare")}><DataCompareView /></Show>
+      <Show when={state.sshHostKey}>
+        {(ask) => (
+          <Dialog title="Clave del servidor SSH" onClose={() => setState("sshHostKey", null)} small class="ssh-hostkey">
+            <p class="dialog-lead">{ask().text}</p>
+            <Show when={ask().info}>
+              {(info) => (
+                <dl class="hostkey-facts">
+                  <dt>Servidor</dt>
+                  <dd>{info().host}:{info().port}</dd>
+                  <dt>Tipo</dt>
+                  <dd>{info().keyType}</dd>
+                  <dt>Huella</dt>
+                  <dd><code>{info().fingerprint}</code></dd>
+                </dl>
+              )}
+            </Show>
+            <p class="muted small">Compárala con la que te dé quien administra el servidor (en él: <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>). Si no coincide, no la aceptes.</p>
+            <footer>
+              <button type="button" class="btn" ref={(el) => queueMicrotask(() => el.focus())} onClick={() => setState("sshHostKey", null)}>Cancelar</button>
+              <button type="button" class="btn primary" onClick={() => void trustSshHostKey()}>Confiar en esta clave</button>
+            </footer>
+          </Dialog>
+        )}
+      </Show>
       <Show when={state.passwordAsk}>
         {(ask) => (
           <Dialog title={`Conectar a ${ask().name}`} onClose={() => answerPassword(null)} small>

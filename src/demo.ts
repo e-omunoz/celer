@@ -427,6 +427,13 @@ export function createDemoBackend(): Backend {
       const secrets = readJson<Record<string, string>>("celer.secrets", {});
       return self.saveConnection({ ...source, id: "", name, password: secrets[id] ?? "" });
     },
+    // No SSH in the browser (only SQLite): nothing is ever pending.
+    async sshHostKey() {
+      return null;
+    },
+    async sshTrustHostKey() {
+      throw new Error("En el navegador no hay túneles SSH.");
+    },
     async testConnection(cfg) {
       const t0 = performance.now();
       if (cfg.kind !== "sqlite") {

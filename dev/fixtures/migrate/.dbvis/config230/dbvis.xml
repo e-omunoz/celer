@@ -83,6 +83,26 @@
         <Driver>SQLite</Driver>
         <Type>sqlite</Type>
       </Database>
+      <Database id="9">
+        <Alias>PG por SSH</Alias>
+        <Url>jdbc:postgresql://celer-pg:5432/celer</Url>
+        <Driver>PostgreSQL</Driver>
+        <Userid>celer</Userid>
+        <Type>postgresql</Type>
+        <SshEnabled>true</SshEnabled>
+        <SshHost>localhost</SshHost>
+        <SshPort>2222</SshPort>
+        <SshUserid>celer</SshUserid>
+        <SshAuthenticationType>Password</SshAuthenticationType>
+      </Database>
+      <Database id="10">
+        <Alias>MySQL por dos saltos SSH</Alias>
+        <Url>jdbc:mysql://celer-mysql:3306/celer</Url>
+        <Driver>MySQL 8</Driver>
+        <Userid>celer</Userid>
+        <Type>mysql</Type>
+        <SshServerIds>bastion,inner</SshServerIds>
+      </Database>
       <Database id="8">
         <Alias>ODBC CelerPG</Alias>
         <Url>jdbc:odbc:CelerPG</Url>
@@ -92,4 +112,23 @@
       </Database>
     </Folder>
   </Databases>
+  <!-- SSH servers a database refers to by id, crossed in order (the bastion, then the same sshd seen from inside). -->
+  <SshServers>
+    <SshServer id="bastion">
+      <Name>Bastión</Name>
+      <Host>localhost</Host>
+      <Port>2222</Port>
+      <Userid>celer</Userid>
+      <AuthenticationType>Password</AuthenticationType>
+      <Enabled>true</Enabled>
+    </SshServer>
+    <SshServer id="inner">
+      <Name>Interior</Name>
+      <Host>127.0.0.1</Host>
+      <Port>22</Port>
+      <Userid>celer</Userid>
+      <AuthenticationType>Password</AuthenticationType>
+      <Enabled>true</Enabled>
+    </SshServer>
+  </SshServers>
 </DbVisualizer>

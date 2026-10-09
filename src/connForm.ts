@@ -27,6 +27,10 @@ export interface VisibleFields {
   encryption: boolean;
   trustCert: boolean;
   extra: boolean;
+  /** The «Túnel SSH» section (network engines). */
+  ssh: boolean;
+  /** Why there is no SSH tunnel for this engine ("" when there is one). */
+  sshNote: string;
 }
 
 export function visibleFields(cfg: ConnConfig): VisibleFields {
@@ -58,10 +62,26 @@ export function visibleFields(cfg: ConnConfig): VisibleFields {
     trustCert: tls && cfg.encryption !== "off",
     // SQL Server and SQLite do not read "Parámetros extra".
     extra: kind === "postgres" || kind === "mysql" || kind === "informix",
+    ssh: network,
+    sshNote:
+      kind === "sqlite"
+        ? "SQLite abre un fichero de este equipo: no hay servidor al que llegar por SSH."
+        : kind === "odbc"
+          ? "Con ODBC la conexión la abre el driver ODBC del origen de datos, no Celer: el túnel se configura en el DSN o con un túnel SSH externo."
+          : "",
   };
 }
 
-export type IssueField = "name" | "host" | "port" | "user" | "database" | "instance" | "filePath" | "odbcConnStr" | "extra";
+/** One jump host as the core reads it (src-tauri/src/ssh.rs parse_hop): `user@host:port`, user and port optional. */
+export function parseJump(text: string): { user: string; host: string; port: number } | null {
+  const m = /^(?:([^@\s]+)@)?(\[[^\]\s]+\]|[^\s:@[\]]+|[0-9a-f]*:[0-9a-f:.]*)(?::(\d{1,5}))?$/i.exec(text.trim());
+  if (!m) return null;
+  const port = m[3] ? Number(m[3]) : 22;
+  if (port < 1 || port > 65535) return null;
+  return { user: m[1] ?? "", host: m[2].replace(/^\[(.*)\]$/, "$1"), port };
+}
+
+export type IssueField = "name" | "host" | "port" | "user" | "database" | "instance" | "filePath" | "odbcConnStr" | "extra" | "sshHost" | "sshPort" | "sshUser" | "sshKey" | "sshJumps";
 
 /** Something wrong with a field: an error blocks saving and testing; a warning does not. */
 export interface FieldIssue {
@@ -73,8 +93,11 @@ export interface FieldIssue {
   fixLabel?: string;
 }
 
-/** The problems of a connection's fields; `others` are the saved connections (for repeated names). */
-export function validateConn(cfg: ConnConfig, others: { id: string; name: string }[] = []): FieldIssue[] {
+/**
+ * The problems of a connection's fields; `others` are the saved connections (for repeated names), `sshKeySaved`: the
+ * credential store keeps a pasted SSH key for it.
+ */
+export function validateConn(cfg: ConnConfig, others: { id: string; name: string }[] = [], sshKeySaved = false): FieldIssue[] {
   const out: FieldIssue[] = [];
   const show = visibleFields(cfg);
   const error = (field: IssueField, message: string, fix?: Partial<ConnConfig>, fixLabel?: string) => out.push({ field, level: "error", message, fix, fixLabel });
@@ -138,6 +161,21 @@ export function validateConn(cfg: ConnConfig, others: { id: string; name: string
     warn(field, "Lleva la contraseña (PWD=): al guardar se pasa a «Contraseña» y se guarda en el almacén de credenciales de Windows.", { [field]: withoutInlinePassword(cfg[field]), password: found }, "Mover a «Contraseña»");
   }
 
+  const ssh = cfg.ssh;
+  if (show.ssh && ssh?.enabled) {
+    if (!ssh.host.trim()) error("sshHost", "Indica el servidor SSH (el bastión).");
+    else if (/\s/.test(ssh.host.trim())) error("sshHost", "El servidor SSH no puede llevar espacios.");
+    if (ssh.port !== null && ssh.port !== undefined && (!Number.isInteger(ssh.port) || ssh.port < 1 || ssh.port > 65535)) error("sshPort", "El puerto SSH es un número entre 1 y 65535 (normalmente 22).");
+    if (!ssh.user.trim()) error("sshUser", "Indica el usuario SSH.");
+    if (ssh.auth === "key" && !ssh.keyPath.trim() && !ssh.privateKey?.trim() && !sshKeySaved) error("sshKey", "Elige el fichero de la clave privada o pégala.");
+    const wrong = ssh.jumps.map((jump) => jump.trim()).filter((jump) => jump && !parseJump(jump));
+    if (wrong.length) error("sshJumps", `No se entiende ${wrong.map((jump) => `«${jump}»`).join(", ")}: cada salto va en una línea como usuario@servidor:puerto.`);
+    // SQL Server Browser (UDP 1434) does not cross the tunnel: a named instance needs its port.
+    if (cfg.kind === "mssql" && (cfg.instance.trim() || /\\/.test(cfg.host)) && (cfg.port === null || cfg.port === undefined)) {
+      error("port", "Por un túnel SSH la instancia con nombre necesita su puerto: SQL Server Browser no cruza el túnel.");
+    }
+  }
+
   if (show.extra && cfg.extra.trim()) {
     for (const part of cfg.extra.split(/[;\n\r]/).map((p) => p.trim()).filter(Boolean)) {
       const at = part.indexOf("=");
@@ -184,6 +222,7 @@ export function applyJdbcUrl(cfg: ConnConfig, url: string): { cfg: ConnConfig; n
         savePassword: cfg.savePassword,
         startupSql: cfg.startupSql,
         password: cfg.password,
+        ssh: cfg.ssh,
       };
   const filled: string[] = [];
   if (info.kind === "sqlite") {

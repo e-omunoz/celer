@@ -50,6 +50,8 @@ rust_decimal = { version = "1", features = ["db-postgres"] }
 # MySQL / MariaDB — owned by src/mysql.rs
 mysql = { version = "26", default-features = false, features = ["minimal-rust", "native-tls"] }
 calamine = { version = "0.36.1", features = ["dates"] }
+# SSH tunnels (src/ssh.rs): pure Rust, ring for the crypto (no C toolchain beyond what ring needs)
+russh = { version = "0.64", default-features = false, features = ["ring", "rsa", "flate2"] }
 # A second launch raises the running Celer instead of writing its files from a stale copy (src/lib.rs run)
 tauri-plugin-single-instance = "2"
 

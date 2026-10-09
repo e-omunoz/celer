@@ -12,6 +12,7 @@ import type {
   OpenSessionOptions,
   SessionHealth,
   SessionInfo,
+  SshHostKeyInfo,
   TableColumn,
 } from "./types";
 import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
@@ -32,6 +33,10 @@ export interface Backend {
   duplicateConnection(id: string, name: string): Promise<ConnConfig>;
   /** "Probar conexión": every step timed. Rejects only when the connection cannot even be attempted (driver missing…). */
   testConnection(cfg: ConnConfig): Promise<ConnTestReport>;
+  /** The SSH host key behind an SSH_HOST_UNKNOWN:<token>: error (null once it is no longer pending). */
+  sshHostKey(token: string): Promise<SshHostKeyInfo | null>;
+  /** «Confiar en esta clave»: the key goes to Celer's known_hosts. */
+  sshTrustHostKey(token: string): Promise<SshHostKeyInfo>;
   openSession(connId: string, password?: string, options?: OpenSessionOptions): Promise<SessionInfo>;
   /** Checks a session (a cheap round trip if it has been idle, or always with `force`) and reconnects it if it dropped. */
   checkSession(sessionId: string, force: boolean): Promise<SessionHealth>;
@@ -130,6 +135,8 @@ function tauriBackend(): Backend {
     restoreConnection: (cfg) => invoke("restore_connection", { cfg: { ...cfg, password: cfg.password || null } }),
     duplicateConnection: (id, name) => invoke("duplicate_connection", { id, name }),
     testConnection: (cfg) => invoke("test_connection", { cfg }),
+    sshHostKey: (token) => invoke("ssh_host_key", { token }),
+    sshTrustHostKey: (token) => invoke("ssh_trust_host_key", { token }),
     openSession: (connId, password, options) =>
       invoke("open_session", { connId: connId, password: password ?? null, database: options?.database || null, autocommit: options?.autocommit ?? null }),
     checkSession: (sessionId, force) => invoke("check_session", { sessionId: sessionId, force }),

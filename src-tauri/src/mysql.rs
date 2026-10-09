@@ -843,7 +843,8 @@ impl MysqlDriver {
             database: db.to_string(),
             mariadb: false,
             version: String::new(),
-            endpoint: format!("{host}:{port}"),
+            // Through an SSH tunnel, the server behind it (not the local port).
+            endpoint: if cfg.ssh.forwarded_to.is_empty() { format!("{host}:{port}") } else { format!("{} (túnel SSH)", cfg.ssh.forwarded_to) },
         };
         let rows = d.query("SELECT VERSION(), DATABASE(), @@autocommit")?;
         if let Some(r) = rows.first() {

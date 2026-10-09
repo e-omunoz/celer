@@ -117,6 +117,37 @@
 				"auth-model": "native"
 			}
 		},
+		"postgres-ssh-18f2a1d1711-3c4d5e6f70819203": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "PG por SSH",
+			"folder": "Celer",
+			"save-password": true,
+			"configuration": {
+				"host": "celer-pg",
+				"port": "5432",
+				"database": "celer",
+				"url": "jdbc:postgresql://celer-pg:5432/celer",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"auth-model": "native",
+				"handlers": {
+					"ssh_tunnel": {
+						"type": "TUNNEL",
+						"enabled": true,
+						"save-password": true,
+						"properties": {
+							"host": "localhost",
+							"port": 2222,
+							"authType": "PASSWORD",
+							"implementation": "sshj",
+							"aliveInterval": "0",
+							"sshConnectTimeout": "10000"
+						}
+					}
+				}
+			}
+		},
 		"odbc-18f2a1d0600-2b3c4d5e6f708192": {
 			"provider": "generic",
 			"driver": "odbc",

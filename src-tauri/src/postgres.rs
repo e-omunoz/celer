@@ -1261,6 +1261,10 @@ impl Driver for PostgresDriver {
             self.version.clone()
         };
         let ver = ver.split_whitespace().next().unwrap_or("?").to_string();
+        // Through an SSH tunnel, the server behind it (not the tunnel's local port).
+        if !self.cfg.ssh.forwarded_to.is_empty() {
+            return Ok(format!("PostgreSQL {ver} — {}/{} (túnel SSH)", self.cfg.ssh.forwarded_to, self.database));
+        }
         let host = if self.cfg.host.trim().is_empty() {
             "localhost"
         } else {

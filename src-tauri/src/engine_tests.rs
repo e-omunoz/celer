@@ -1139,7 +1139,7 @@ fn imported_connections_connect() {
     let out = Command::new(node).args(["--experimental-strip-types", "--no-warnings", script]).output().expect("node (CELER_NODE) para dev/migrate-sample.ts");
     assert!(out.status.success(), "migrate-sample.ts: {}", String::from_utf8_lossy(&out.stderr));
     let imported: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(imported.len(), 16, "8 de DBeaver y 8 de DbVisualizer");
+    assert_eq!(imported.len(), 19, "9 de DBeaver y 10 de DbVisualizer");
     let store = sample_store("imported");
     let odbc_dsn = Command::new("odbcinst").args(["-q", "-s"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("[CelerPG]")).unwrap_or(false);
     let mut failures = Vec::new();
@@ -1155,9 +1155,23 @@ fn imported_connections_connect() {
             eprintln!("⚠ {label}: sin el driver IBM CLI (CELER_IBM_LIB)");
             continue;
         }
+        if cfg.ssh.enabled && spec("CELER_SSH_TEST").is_none() {
+            eprintln!("⚠ {label}: sin el bastión SSH de prueba (CELER_SSH_TEST)");
+            continue;
+        }
         cfg.id = String::new();
         let probe = if cfg.kind == DbKind::Informix { "SELECT 1 FROM systables WHERE tabid = 1" } else { "SELECT 1" };
-        let result = crate::prepare(&store, cfg.clone()).map_err(anyhow::Error::msg).and_then(|p| (p.connector)().map(|d| (d, p.route)));
+        let connect = || crate::prepare(&store, cfg.clone()).map_err(anyhow::Error::msg).and_then(|p| (p.connector)().map(|d| (d, p.route)));
+        // Through SSH, each host key not seen yet is shown first; here the user trusts the test bastion's.
+        let mut result = connect();
+        for _ in 0..3 {
+            let token = match &result {
+                Err(e) if e.to_string().starts_with("SSH_HOST_UNKNOWN:") => e.to_string().split(':').nth(1).unwrap_or("").to_string(),
+                _ => break,
+            };
+            crate::ssh::trust(&store.dir, &token).expect("confiar en la clave");
+            result = connect();
+        }
         match result {
             Ok((mut d, route)) => match d.execute(probe, 10) {
                 Ok(out) => {
@@ -1171,4 +1185,251 @@ fn imported_connections_connect() {
     }
     let _ = std::fs::remove_dir_all(&store.dir);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// ───────────────────────────────────────────────────────────────── SSH tunnels (ssh.rs)
+//   CELER_SSH_TEST="host=localhost port=2222 user=celer password=celer key=<private key> container=celer-sshd
+//                   pg=celer-pg:5432 mysql=celer-mysql:3306 mariadb=celer-mariadb:3306 mssql=celer-mssql:1433 ifx=celer-ifx"
+// The engine addresses only resolve inside the Docker network of dev/wsl/compose.yml: the tunnel is the only route.
+
+/// One engine reached through the bastion: its settings with the target as the bastion sees it.
+struct Tunnelled {
+    name: &'static str,
+    cfg: ConnConfig,
+    probe: &'static str,
+}
+
+fn ssh_spec() -> Option<Vec<(String, String)>> {
+    spec("CELER_SSH_TEST")
+}
+
+fn split_target(text: &str, default_port: u16) -> (String, Option<u16>) {
+    match text.split_once(':') {
+        Some((host, port)) => (host.into(), port.parse().ok()),
+        None => (text.into(), Some(default_port)),
+    }
+}
+
+/// Every engine of the environment, through the tunnel, authenticated with the test key.
+fn tunnelled_engines(s: &[(String, String)]) -> Vec<Tunnelled> {
+    let ssh = crate::model::SshConfig {
+        enabled: true,
+        host: get(s, "host"),
+        port: get(s, "port").parse().ok(),
+        user: get(s, "user"),
+        auth: "key".into(),
+        key_path: get(s, "key"),
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    let mut add = |name: &'static str, mut cfg: ConnConfig, target: &str, port: u16, probe: &'static str| {
+        let (host, p) = split_target(target, port);
+        cfg.id = format!("ssh-test-{name}");
+        cfg.host = host;
+        cfg.port = p;
+        cfg.ssh = ssh.clone();
+        out.push(Tunnelled { name, cfg, probe });
+    };
+    if let Some(pg) = spec("CELER_PG_TEST") {
+        let cfg = ConnConfig { kind: DbKind::Postgres, user: get(&pg, "user"), password: Some(get(&pg, "password")), database: get(&pg, "dbname"), encryption: "off".into(), ..Default::default() };
+        add("PostgreSQL", cfg, &get(s, "pg"), 5432, "SELECT 1");
+    }
+    if let Some(url) = std::env::var("CELER_MYSQL_TEST").ok().and_then(|u| u.strip_prefix("mysql://").map(str::to_string)) {
+        let (auth, rest) = url.rsplit_once('@').unwrap_or(("", ""));
+        let (user, password) = auth.split_once(':').unwrap_or((auth, ""));
+        let database = rest.split_once('/').map(|(_, d)| d).unwrap_or("");
+        let cfg = ConnConfig { kind: DbKind::Mysql, user: user.into(), password: Some(password.into()), database: database.into(), encryption: "login".into(), ..Default::default() };
+        add("MySQL", cfg.clone(), &get(s, "mysql"), 3306, "SELECT 1");
+        add("MariaDB", cfg, &get(s, "mariadb"), 3306, "SELECT 1");
+    }
+    if let Some(cfg) = mssql_cfg("master") {
+        add("SQL Server", cfg, &get(s, "mssql"), 1433, "SELECT 1");
+    }
+    if let Some((mut cfg, _)) = informix_cfg() {
+        cfg.informix_mode = "drda".into();
+        add("Informix DRDA", cfg, &format!("{}:9089", get(s, "ifx")), 9089, "SELECT 1 FROM systables WHERE tabid = 1");
+    }
+    if let Some((cfg, _)) = informix_jdbc_cfg() {
+        add("Informix JDBC", cfg, &format!("{}:9088", get(s, "ifx")), 9088, "SELECT 1 FROM systables WHERE tabid = 1");
+    }
+    out.retain(|t| !t.cfg.host.is_empty());
+    out
+}
+
+/// The connector the app would use (lib.rs `prepare`).
+fn ssh_prepared(store: &crate::store::Store, cfg: &ConnConfig) -> crate::Prepared {
+    crate::prepare(store, cfg.clone()).unwrap_or_else(|e| panic!("{}: {e}", cfg.name))
+}
+
+/// The bastion's host key is unknown to a new data folder: nothing connects until it is trusted. Returns whether it
+/// had to be trusted (the user's own ~/.ssh/known_hosts may know it already).
+fn trust_bastion(store: &crate::store::Store, cfg: &ConnConfig) -> bool {
+    let prepared = ssh_prepared(store, cfg);
+    match (prepared.connector)() {
+        Ok(_) => false,
+        Err(e) => {
+            let text = e.to_string();
+            assert!(text.starts_with("SSH_HOST_UNKNOWN:"), "la primera vez, la clave es desconocida: {text}");
+            let token = text.split(':').nth(1).unwrap().to_string();
+            let info = crate::ssh::pending_info(&token).expect("clave pendiente");
+            assert!(info.fingerprint.starts_with("SHA256:"), "{info:?}");
+            assert!(text.contains(&info.fingerprint), "the error shows the fingerprint: {text}");
+            crate::ssh::trust(&store.dir, &token).expect("confiar en la clave");
+            true
+        }
+    }
+}
+
+/// Every network engine through the bastion: the host key is not accepted until trusted, each engine connects only
+/// through the tunnel (its address does not resolve outside Docker), the sessions of a connection share one tunnel,
+/// «Probar conexión» reports the SSH steps apart, and a restarted bastion is crossed again on the next query.
+#[test]
+fn ssh_tunnel_every_engine() {
+    let Some(s) = ssh_spec() else { return };
+    let engines = tunnelled_engines(&s);
+    assert!(!engines.is_empty(), "CELER_SSH_TEST sin motores de prueba");
+    let store = sample_store("engines");
+    let trusted = trust_bastion(&store, &engines[0].cfg);
+    eprintln!("SSH: clave del bastión {}", if trusted { "confirmada por el usuario" } else { "ya conocida en ~/.ssh/known_hosts" });
+
+    let mut sessions = Vec::new();
+    for t in &engines {
+        // Not reachable without the tunnel.
+        let host = t.cfg.host.clone();
+        assert!(std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), 1)).is_err(), "{}: {host} no debe resolverse fuera de Docker", t.name);
+
+        // «Probar conexión»: SSH, forward, login and database, each apart.
+        let prepared = ssh_prepared(&store, &t.cfg);
+        assert!(prepared.route.contains("túnel SSH"), "{}: {}", t.name, prepared.route);
+        let report = crate::probe::run(&t.cfg, prepared.connector.clone(), &prepared.route, prepared.ssh.as_deref());
+        let steps: Vec<(&str, &str)> = report.steps.iter().map(|s| (s.id, s.status)).collect();
+        assert!(report.ok, "{}: {steps:?} {}", t.name, report.error);
+        assert_eq!(steps, [("ssh", "ok"), ("forward", "ok"), ("login", "ok"), ("database", "ok")], "{}", t.name);
+
+        // Two sessions of the connection, one tunnel.
+        let key = if t.cfg.kind == DbKind::Mssql { String::new() } else { prepared.key.clone() };
+        let mut a = guarded(t.cfg.kind, &prepared.connector, &key, "");
+        let mut b = guarded(t.cfg.kind, &prepared.connector, &key, "");
+        assert_eq!(scalar(&mut a, t.probe), "1", "{}", t.name);
+        assert_eq!(scalar(&mut b, t.probe), "1", "{}", t.name);
+        let plan = prepared.ssh.clone().unwrap();
+        let port = plan.tunnel().unwrap().local_port;
+        assert_eq!(plan.tunnel().unwrap().local_port, port, "{}: un túnel por conexión", t.name);
+        eprintln!("SSH ✔ {}: por el túnel (puerto local {port}) · {}", t.name, report.steps[0].detail);
+        sessions.push((t, a, b, key));
+    }
+
+    // The bastion restarts: every tunnel drops; the next query brings tunnel and session back (reads are repeated).
+    let container = get(&s, "container");
+    if !container.is_empty() {
+        let restarted = Command::new("docker").args(["restart", &container]).output().expect("docker restart");
+        assert!(restarted.status.success(), "{}", String::from_utf8_lossy(&restarted.stderr));
+        std::thread::sleep(Duration::from_millis(1500));
+        for (t, a, _, _) in &mut sessions {
+            let t0 = Instant::now();
+            let out = a.execute(t.probe, 10).unwrap_or_else(|e| panic!("{} tras reiniciar el bastión: {e}", t.name));
+            eprintln!("SSH ✔ {}: túnel y sesión recuperados en {} ms {:?}", t.name, t0.elapsed().as_millis(), out.messages);
+            assert_eq!(txt(&out.results[0].rows[0][0]), "1", "{}", t.name);
+        }
+    }
+    for (_, a, b, key) in sessions {
+        drop(a);
+        drop(b);
+        crate::guard::pool_forget(&format!("engine-test-{key}"));
+    }
+    let _ = std::fs::remove_dir_all(&store.dir);
+}
+
+/// Password authentication, a jump host (the bastion through itself), a forward the bastion refuses and a host key
+/// that changed: each says which step failed and why.
+#[test]
+fn ssh_tunnel_auth_jumps_and_refusals() {
+    let Some(s) = ssh_spec() else { return };
+    let Some(first) = tunnelled_engines(&s).into_iter().next() else { return };
+    let store = sample_store("auth");
+    trust_bastion(&store, &first.cfg);
+
+    // Password, and a chain: localhost:2222 → the same sshd as seen from inside (127.0.0.1:22).
+    let mut cfg = first.cfg.clone();
+    cfg.id = "ssh-test-password".into();
+    cfg.ssh.auth = "password".into();
+    cfg.ssh.key_path.clear();
+    cfg.ssh.password = Some(get(&s, "password"));
+    cfg.ssh.jumps = vec![format!("{}@{}:{}", get(&s, "user"), get(&s, "host"), get(&s, "port"))];
+    cfg.ssh.host = "127.0.0.1".into();
+    cfg.ssh.port = Some(22);
+    // The inner hop has a key of its own (127.0.0.1:22 for Celer): trusted like the first.
+    let prepared = ssh_prepared(&store, &cfg);
+    if let Err(e) = (prepared.connector)() {
+        let text = e.to_string();
+        assert!(text.starts_with("SSH_HOST_UNKNOWN:") && text.contains("127.0.0.1:22"), "{text}");
+        crate::ssh::trust(&store.dir, text.split(':').nth(1).unwrap()).unwrap();
+    }
+    let prepared = ssh_prepared(&store, &cfg);
+    let report = crate::probe::run(&cfg, prepared.connector.clone(), &prepared.route, prepared.ssh.as_deref());
+    assert!(report.ok, "{:?} {}", report.steps, report.error);
+    assert!(report.steps[0].detail.contains("→") && report.steps[0].detail.contains("contraseña"), "{}", report.steps[0].detail);
+    eprintln!("SSH ✔ contraseña y salto: {}", report.steps[0].detail);
+
+    // The SSH agent (ssh-agent here; Pageant or the OpenSSH agent on Windows) holding the test key.
+    #[cfg(unix)]
+    if Command::new("ssh-agent").arg("-h").output().is_ok() {
+        let sock = std::env::temp_dir().join(format!("celer-ssh-agent-{}", std::process::id()));
+        let _ = std::fs::remove_file(&sock);
+        let mut agent = Command::new("ssh-agent").arg("-D").arg("-a").arg(&sock).stdout(Stdio::null()).spawn().expect("ssh-agent");
+        for _ in 0..50 {
+            if sock.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let added = Command::new("ssh-add").arg(get(&s, "key")).env("SSH_AUTH_SOCK", &sock).output().expect("ssh-add");
+        assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stderr));
+        std::env::set_var("SSH_AUTH_SOCK", &sock);
+        let mut by_agent = first.cfg.clone();
+        by_agent.id = "ssh-test-agent".into();
+        by_agent.ssh.auth = "agent".into();
+        by_agent.ssh.key_path.clear();
+        let prepared = ssh_prepared(&store, &by_agent);
+        let report = crate::probe::run(&by_agent, prepared.connector.clone(), &prepared.route, prepared.ssh.as_deref());
+        let _ = agent.kill();
+        std::env::remove_var("SSH_AUTH_SOCK");
+        let _ = std::fs::remove_file(&sock);
+        assert!(report.ok, "{:?} {}", report.steps, report.error);
+        assert!(report.steps[0].detail.contains("agente SSH"), "{}", report.steps[0].detail);
+        eprintln!("SSH ✔ agente: {}", report.steps[0].detail);
+    }
+
+    // A wrong password: the SSH step fails, the database is not tried.
+    let mut wrong = cfg.clone();
+    wrong.id = "ssh-test-wrong".into();
+    wrong.ssh.password = Some("mala".into());
+    let prepared = ssh_prepared(&store, &wrong);
+    let report = crate::probe::run(&wrong, prepared.connector.clone(), &prepared.route, prepared.ssh.as_deref());
+    assert_eq!(report.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), [("ssh", "failed")], "{}", report.error);
+    assert!(report.error.contains("no aceptó la autenticación"), "{}", report.error);
+
+    // A port nobody listens on behind the bastion: the forward step fails, the SSH one is fine.
+    let mut closed = first.cfg.clone();
+    closed.id = "ssh-test-closed".into();
+    closed.port = Some(1);
+    let prepared = ssh_prepared(&store, &closed);
+    let report = crate::probe::run(&closed, prepared.connector.clone(), &prepared.route, prepared.ssh.as_deref());
+    assert_eq!(report.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), [("ssh", "ok"), ("forward", "failed")], "{}", report.error);
+    // And a session through it says it was the forward.
+    let e = (prepared.connector)().err().expect("sin servidor detrás").to_string();
+    assert!(e.contains("no pudo abrir la conexión"), "{e}");
+
+    // Another key kept for the bastion: refused, never replaced in silence.
+    let changed = sample_store("changed");
+    let other_key = "AAAAC3NzaC1lZDI1NTE5AAAAIC41+NZJQtVUMQCd674m8Rz7ExbU516UV7jdMruaJXwy";
+    let known = |host: &str, port: &str| if port == "22" { host.to_string() } else { format!("[{host}]:{port}") };
+    std::fs::write(changed.dir.join("known_hosts"), format!("{} ssh-ed25519 {other_key}\n", known(&get(&s, "host"), &get(&s, "port")))).unwrap();
+    let mut cfg = first.cfg.clone();
+    cfg.id = "ssh-test-changed".into();
+    let e = (ssh_prepared(&changed, &cfg).connector)().err().expect("clave cambiada").to_string();
+    assert!(e.starts_with("SSH_HOST_CHANGED: ") && e.contains("known_hosts, línea 1"), "{e}");
+    eprintln!("SSH ✔ clave cambiada rechazada: {e}");
+    let _ = std::fs::remove_dir_all(&changed.dir);
+    let _ = std::fs::remove_dir_all(&store.dir);
 }

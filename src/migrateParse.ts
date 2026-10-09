@@ -1,7 +1,7 @@
 // Parsers for the migration assistant: DBeaver data-sources.json and DbVisualizer dbvis.xml → Celer connection
 // configs. DBeaver's encrypted credentials-config.json is applied separately (applyDbeaverCredentials), only when the
 // user asks to import the saved passwords. Pure functions (no store, no IPC) so they can be tested.
-import { emptyConn, type ConnConfig, type DbKind } from "./types.ts";
+import { emptyConn, emptySsh, type ConnConfig, type DbKind } from "./types.ts";
 
 export interface MigrationSource {
   tool: "dbeaver" | "dbvisualizer";
@@ -521,6 +521,8 @@ export async function decryptDbeaverCredentials(hex: string): Promise<Record<str
 /** What DBeaver keeps for one connection in credentials-config.json. */
 export interface DbeaverCredentials {
   "#connection"?: { user?: string; password?: string };
+  /** The SSH tunnel's user and password (or key passphrase). */
+  "network/ssh_tunnel"?: { user?: string; password?: string };
 }
 
 // ---------------------------------------------------------------- DBeaver
@@ -568,6 +570,39 @@ function dbeaverSsl(cfg: ConnConfig, handlers: Record<string, DbeaverHandler> | 
   }
 }
 
+const SSH_ENGINES: DbKind[] = ["postgres", "mysql", "mssql", "informix"];
+
+/** How a tool names the SSH login: Celer's "password" | "key" | "agent". */
+function sshAuth(value: string | undefined): string {
+  const v = (value ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  if (/publickey|privatekey|key|pubkey/.test(v)) return "key";
+  if (/agent|pageant/.test(v)) return "agent";
+  return "password";
+}
+
+/**
+ * DBeaver's SSH tunnel (the ssh_tunnel handler), when it is on: bastion, port, user and how it logs in. The user and
+ * the password of newer DBeaver versions are in its credentials file (applyDbeaverCredentials).
+ */
+function dbeaverSsh(cfg: ConnConfig, handlers: Record<string, DbeaverHandler> | undefined, notes: string[]) {
+  const entry = Object.entries(handlers ?? {}).find(([id, handler]) => id === "ssh_tunnel" || (/ssh/i.test(id) && handler.type === "TUNNEL"));
+  const handler = entry?.[1];
+  if (!handler || handler.enabled !== true || !SSH_ENGINES.includes(cfg.kind)) return;
+  const props = handler.properties ?? {};
+  const port = Number(given(props.port) ?? 22);
+  cfg.ssh = {
+    ...emptySsh(),
+    enabled: true,
+    host: given(props.host) ?? "",
+    port: Number.isInteger(port) && port > 0 && port < 65536 ? port : 22,
+    user: given(handler.user) ?? given(props.user) ?? "",
+    auth: sshAuth(given(props.authType)),
+    keyPath: given(props.keyPath) ?? "",
+  };
+  if (!cfg.ssh.user) notes.push("Túnel SSH: el usuario está en las credenciales de DBeaver (marca «Importar también las contraseñas guardadas») o escríbelo en la conexión.");
+  if (Object.keys(props).some((key) => /^jump/i.test(key))) notes.push("Túnel SSH: los saltos (jump servers) de DBeaver no se importan; añádelos en «Túnel SSH».");
+}
+
 /** DBeaver's connections, without credentials: the user comes from the plain configuration if it is there. */
 export function parseDbeaver(source: MigrationSource): Candidate[] {
   const doc = JSON.parse(source.text) as { connections?: Record<string, DbeaverConnection> };
@@ -587,7 +622,10 @@ export function parseDbeaver(source: MigrationSource): Candidate[] {
     const type = (given(conf.configurationType) ?? given(conf["configuration-type"]) ?? "").toUpperCase();
     const fields = { host: given(conf.host), port: given(conf.port), database: given(conf.database), server: given(conf.server) };
     const kind = readConnection(cfg, hint, url, fields, conf.properties as Record<string, unknown> | undefined, type !== "URL", notes);
-    if (kind) dbeaverSsl(cfg, conf.handlers);
+    if (kind) {
+      dbeaverSsl(cfg, conf.handlers);
+      dbeaverSsh(cfg, conf.handlers, notes);
+    }
     out.push({ key: `dbeaver:${source.project}:${id}`, tool: "dbeaver", project: source.project, cfg, driver, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${c.provider ?? c.driver ?? "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: Boolean(c["save-password"]), notes });
   }
   return out;
@@ -600,9 +638,18 @@ export function parseDbeaver(source: MigrationSource): Candidate[] {
 export async function applyDbeaverCredentials(candidates: Candidate[], sourcePath: string, hex: string): Promise<Candidate[]> {
   const creds = await decryptDbeaverCredentials(hex).catch(() => ({}) as Awaited<ReturnType<typeof decryptDbeaverCredentials>>);
   return candidates.map((c) => {
-    const cred = c.tool === "dbeaver" && c.sourcePath === sourcePath ? creds[c.sourceId]?.["#connection"] : undefined;
-    if (!cred) return c;
-    return { ...c, cfg: { ...c.cfg, user: cred.user ?? c.cfg.user, password: cred.password ?? "" } };
+    const saved = c.tool === "dbeaver" && c.sourcePath === sourcePath ? creds[c.sourceId] : undefined;
+    const cred = saved?.["#connection"];
+    // The SSH tunnel's user and its password (or the key's passphrase, with a key).
+    const tunnel = saved?.["network/ssh_tunnel"];
+    if (!cred && !tunnel) return c;
+    const cfg = { ...c.cfg };
+    if (cred) Object.assign(cfg, { user: cred.user ?? c.cfg.user, password: cred.password ?? "" });
+    if (tunnel && cfg.ssh?.enabled) {
+      const secret = tunnel.password ?? "";
+      cfg.ssh = { ...cfg.ssh, user: tunnel.user || cfg.ssh.user, ...(cfg.ssh.auth === "key" ? { passphrase: secret } : cfg.ssh.auth === "password" ? { password: secret } : {}) };
+    }
+    return { ...c, cfg };
   });
 }
 
@@ -709,6 +756,39 @@ function descendants(node: XmlNode, tag: string, out: XmlNode[] = []): XmlNode[]
   return out;
 }
 
+/**
+ * DbVisualizer's SSH tunnel: the Ssh* elements of the database (SshEnabled, SshHost, SshPort, SshUserid,
+ * SshPrivateKeyFile, SshAuthenticationType, also inside <SshSettings>), or the SSH servers it refers to by id
+ * (<SshServerIds>a,b</SshServerIds> or <SshServerId> elements, defined in <SshServers>): the last one is the SSH
+ * server, the ones before it are crossed first.
+ */
+function dbvisSsh(cfg: ConnConfig, db: XmlNode, doc: XmlNode, notes: string[]) {
+  if (!SSH_ENGINES.includes(cfg.kind)) return;
+  const own = (tag: string) => textOf(db, tag) || textOf(kid(db, "SshSettings"), tag);
+  const portOf = (text: string) => (/^\d+$/.test(text) && Number(text) > 0 && Number(text) < 65536 ? Number(text) : 22);
+  if (/^true$/i.test(own("SshEnabled"))) {
+    const keyPath = own("SshPrivateKeyFile");
+    cfg.ssh = { ...emptySsh(), enabled: true, host: own("SshHost"), port: portOf(own("SshPort")), user: own("SshUserid") || own("SshUser"), auth: keyPath ? "key" : sshAuth(own("SshAuthenticationType")), keyPath };
+    return;
+  }
+  const ids = [...own("SshServerIds").split(/[,;\s]+/), ...kids(db, "SshServerId").map((n) => n.text.trim())].filter(Boolean);
+  if (!ids.length) return;
+  const servers = descendants(doc, "SshServer");
+  const chain = ids.map((id) => servers.find((s) => (s.attrs.id ?? textOf(s, "Id")) === id));
+  if (chain.some((s) => !s)) {
+    notes.push("Túnel SSH: dbvis.xml nombra un servidor SSH que no define; revisa «Túnel SSH».");
+  }
+  const found = chain.filter((s): s is XmlNode => Boolean(s) && !/^false$/i.test(textOf(s, "Enabled")));
+  if (!found.length) return;
+  const server = (s: XmlNode) => {
+    const keyPath = textOf(s, "PrivateKeyFile");
+    return { host: textOf(s, "Host"), port: portOf(textOf(s, "Port")), user: textOf(s, "Userid") || textOf(s, "User"), auth: keyPath ? "key" : sshAuth(textOf(s, "AuthenticationType")), keyPath };
+  };
+  const last = server(found[found.length - 1]);
+  const jumps = found.slice(0, -1).map(server).map((s) => `${s.user ? `${s.user}@` : ""}${s.host.includes(":") ? `[${s.host}]` : s.host}:${s.port}`);
+  cfg.ssh = { ...emptySsh(), enabled: true, ...last, jumps };
+}
+
 export function parseDbVisualizer(source: MigrationSource): Candidate[] {
   const doc = parseXml(source.text);
   const out: Candidate[] = [];
@@ -741,6 +821,7 @@ export function parseDbVisualizer(source: MigrationSource): Candidate[] {
     const fields = { host: given(vars.server), port: given(vars.port), database: given(vars.database), server: given(vars.informixserver ?? vars["informix server"] ?? vars.servername ?? vars.instance) };
     const fieldsWin = Object.values(fields).some(Boolean);
     const kind = readConnection(cfg, hint, url, fields, properties, fieldsWin, notes);
+    if (kind) dbvisSsh(cfg, db, doc, notes);
     const id = db.attrs.id ?? String(index);
     out.push({ key: `dbvis:${id}`, tool: "dbvisualizer", project: source.project, cfg, driver: driverName, status: kind ? "new" : "unsupported", reason: kind ? "" : `Driver no soportado (${driverName || "desconocido"})`, sourcePath: source.path, sourceId: id, savedPassword: false, notes });
   });

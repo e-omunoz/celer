@@ -151,6 +151,19 @@ assert.throws(() => parseConnectionsJson("{"), /JSON válido/);
 assert.throws(() => parseConnectionsJson(JSON.stringify({ connections: [] })), /exportación de conexiones de Celer/);
 assert.throws(() => parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 1, connections: [{ kind: "oracle" }] })), /motor desconocido/);
 assert.throws(() => parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 9, connections: [] })), /Versión/);
+// An SSH tunnel travels with its settings, never with its password, passphrase or key; without one, no "ssh" key.
+const tunnelled = conn("id-3", "Por SSH", "", "postgres", {
+  host: "db.internal",
+  ssh: { enabled: true, host: "bastion", port: 2222, user: "ops", auth: "key", keyPath: "~/.ssh/id_ed25519", jumps: ["edge"], password: "ssh-pw", passphrase: "frase", privateKey: "-----BEGIN KEY-----" },
+});
+const sshText = exportConnectionsJson([tunnelled, ifx], [], new Date());
+for (const word of ["ssh-pw", "frase", "BEGIN KEY", "passphrase", "privateKey"]) assert.ok(!sshText.includes(word), word);
+assert.deepEqual(JSON.parse(sshText).connections[0].ssh, { enabled: true, host: "bastion", port: 2222, user: "ops", auth: "key", keyPath: "~/.ssh/id_ed25519", jumps: ["edge"] });
+assert.equal(JSON.parse(sshText).connections[1].ssh, undefined);
+const sshBack = parseConnectionsJson(sshText).connections;
+assert.deepEqual(sshBack[0].ssh, { enabled: true, host: "bastion", port: 2222, user: "ops", auth: "key", keyPath: "~/.ssh/id_ed25519", jumps: ["edge"] });
+assert.equal(sshBack[1].ssh, undefined);
+assert.deepEqual(parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 1, connections: [{ kind: "mysql", ssh: { enabled: true, host: "b", port: "x", auth: "rot13", jumps: [1, "j"] } }] })).connections[0].ssh, { enabled: true, host: "b", port: 22, user: "", auth: "password", keyPath: "", jumps: ["j"] });
 // Duplicates: the same server, database and user (case-insensitive) are not imported twice, not even within the file.
 assert.equal(connIdentity({ ...secret, host: "SQL01" }), connIdentity(secret));
 const plan = planImport([secret], [...back.connections, { ...back.connections[1] }]);

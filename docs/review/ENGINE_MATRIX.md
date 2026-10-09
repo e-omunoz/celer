@@ -16,6 +16,11 @@ lists each engine with ✅ / ❌ / ⚠️ not applicable (and why). "Not tested 
 | SQLite | embedded | any `.db` file; browser preview uses it (`src/demo.ts`) | unit tests |
 | Generic ODBC | Windows ODBC DSN to any engine above | e.g. a PostgreSQL/MySQL ODBC DSN | — (manual in the app) |
 
+SSH tunnels: the WSL bastion `celer-sshd` (`localhost:2222`, celer/celer or the key `~/celer-drivers/ssh/id_ed25519`)
+reaches every server engine by its container name (`celer-pg:5432`, `celer-mysql:3306`, `celer-mariadb:3306`,
+`celer-mssql:1433`, `celer-ifx:9088/9089`), which only resolves inside Docker: through the tunnel is the only way.
+`CELER_SSH_TEST` (engines.sh) runs the tunnel tests; `docker restart celer-sshd` drops every tunnel.
+
 Seeds (`dev\wsl.ps1 db seed`): `dev/seed-postgres.sql`, `seed-mysql.sql` (MySQL and MariaDB), `seed-mssql.sql`,
 `seed-informix.sql`. Azure SQL / Synapse cannot be run locally: check the dialect branches in code and say so.
 

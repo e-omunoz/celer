@@ -16,6 +16,7 @@ mod probe;
 mod session;
 mod sheets;
 mod sqlite;
+mod ssh;
 mod startup;
 mod store;
 mod update;
@@ -166,6 +167,22 @@ struct Prepared {
     /// "" si el motor no usa el pool genérico (SQL Server lleva el suyo; SQLite abre al instante).
     key: String,
     kind: DbKind,
+    /// The SSH tunnel the connection goes through, if it uses one.
+    ssh: Option<Arc<ssh::Plan>>,
+}
+
+/// The SSH secrets the form left empty («sin cambios»): the saved ones.
+fn fill_ssh_secrets(store: &Store, cfg: &mut ConnConfig) {
+    if !cfg.ssh.active(cfg.kind) {
+        return;
+    }
+    for account in SshConfig::ACCOUNTS {
+        let id = cfg.id.clone();
+        let slot = cfg.ssh.secret_mut(account);
+        if slot.as_deref().is_none_or(str::is_empty) && !id.is_empty() {
+            *slot = store.get_password(&ssh_account(&id, account));
+        }
+    }
 }
 
 fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
@@ -173,6 +190,7 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
     if cfg.password.as_deref().is_none_or(str::is_empty) && !cfg.integrated_auth {
         cfg.password = store.get_password(&cfg.id).or(cfg.password);
     }
+    fill_ssh_secrets(store, &mut cfg);
     let kind = cfg.kind;
     let mut route = String::new();
     let mut jdbc_rt: Option<jdbc::Runtime> = None;
@@ -212,26 +230,48 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
     // The startup script runs inside each driver, on every connection it opens; a read-only connection
     // refuses one that writes before connecting at all.
     startup::check(&cfg).map_err(err)?;
+    // The tunnel's settings are checked now (the Informix protocol is already resolved: it decides the port).
+    let tunnel = if cfg.ssh.active(kind) { Some(Arc::new(ssh::Plan::new(&cfg, &store.dir).map_err(err)?)) } else { None };
+    if let Some(plan) = &tunnel {
+        route = [route.as_str(), &format!("por {}", plan.label())].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+    }
     let key = match kind {
         DbKind::Mssql | DbKind::Sqlite => String::new(),
         _ => mssql::pool_key(&cfg),
     };
+    let plan = tunnel.clone();
     let connector: guard::Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> {
-        let cfg = cfg.clone();
-        let driver: Box<dyn Driver> = match (kind, jdbc_rt.clone()) {
-            (DbKind::Sqlite, _) => Box::new(sqlite::SqliteDriver::connect(cfg)?),
-            (DbKind::Mssql, _) => Box::new(mssql::MssqlDriver::connect(cfg)?),
-            (DbKind::Postgres, _) => Box::new(postgres::PostgresDriver::connect(cfg)?),
-            (DbKind::Mysql, _) => Box::new(mysql::MysqlDriver::connect(cfg)?),
-            (DbKind::Informix, Some(rt)) => Box::new(jdbc::connect(cfg, rt)?),
-            (DbKind::Informix | DbKind::Odbc, _) => {
-                let path = odbc_lib.clone().unwrap_or_else(|| odbc::system_manager().to_string());
-                Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
+        let mut cfg = cfg.clone();
+        // Through SSH: the driver connects to the tunnel's local port (rebuilt here when its session dropped).
+        let via = match &plan {
+            Some(plan) => {
+                let t = plan.tunnel()?;
+                cfg.ssh.forwarded_to = t.target_label();
+                cfg.host = "127.0.0.1".into();
+                cfg.port = Some(t.local_port);
+                Some(t)
             }
+            None => None,
         };
-        Ok(driver)
+        let connected: anyhow::Result<Box<dyn Driver>> = (|| {
+            Ok(match (kind, jdbc_rt.clone()) {
+                (DbKind::Sqlite, _) => Box::new(sqlite::SqliteDriver::connect(cfg)?) as Box<dyn Driver>,
+                (DbKind::Mssql, _) => Box::new(mssql::MssqlDriver::connect(cfg)?),
+                (DbKind::Postgres, _) => Box::new(postgres::PostgresDriver::connect(cfg)?),
+                (DbKind::Mysql, _) => Box::new(mysql::MysqlDriver::connect(cfg)?),
+                (DbKind::Informix, Some(rt)) => Box::new(jdbc::connect(cfg, rt)?),
+                (DbKind::Informix | DbKind::Odbc, _) => {
+                    let path = odbc_lib.clone().unwrap_or_else(|| odbc::system_manager().to_string());
+                    Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
+                }
+            })
+        })();
+        match (connected, via) {
+            (Err(e), Some(t)) => Err(t.explain(e)),
+            (result, _) => result,
+        }
     });
-    Ok(Prepared { connector, route, key, kind })
+    Ok(Prepared { connector, route, key, kind, ssh: tunnel })
 }
 
 /// Cierra las conexiones libres que dejaron las sesiones de una conexión guardada (al desconectarla, editarla o
@@ -239,6 +279,8 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
 fn forget_free(conn_id: &str) {
     guard::pool_forget(conn_id);
     mssql::pool_forget(conn_id);
+    // And its SSH tunnel, once no connection goes through it.
+    ssh::forget(conn_id);
 }
 
 #[derive(Serialize)]
@@ -247,6 +289,17 @@ struct ConnSummary {
     #[serde(flatten)]
     cfg: ConnConfig,
     has_password: bool,
+    /// The SSH secrets kept in the credential store (the form shows «guardada» instead of asking again).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ssh_saved: Option<SshSaved>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshSaved {
+    password: bool,
+    passphrase: bool,
+    key: bool,
 }
 
 /// Las conexiones guardadas han cambiado: las demás ventanas las vuelven a leer (windows.ts).
@@ -256,6 +309,7 @@ fn connections_changed(window: &tauri::WebviewWindow) {
 
 #[tauri::command]
 fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
+    let saved = |c: &ConnConfig, account: &str| state.store.get_password(&ssh_account(&c.id, account)).is_some();
     state
         .conns
         .lock()
@@ -263,6 +317,7 @@ fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
         .cloned()
         .map(|c| ConnSummary {
             has_password: c.save_password && state.store.get_password(&c.id).is_some(),
+            ssh_saved: c.ssh.enabled.then(|| SshSaved { password: saved(&c, "ssh-password"), passphrase: saved(&c, "ssh-passphrase"), key: saved(&c, "ssh-key") }),
             cfg: c,
         })
         .collect()
@@ -295,6 +350,7 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
         app.store.delete_password(&cfg.id);
     }
     cfg.password = None;
+    save_ssh_secrets(app, &mut cfg)?;
     let mut conns = app.conns.lock();
     match conns.iter_mut().find(|c| c.id == cfg.id) {
         Some(c) => {
@@ -306,6 +362,25 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     }
     app.store.save_connections(&conns).map_err(err)?;
     Ok(cfg)
+}
+
+/// The SSH password, key passphrase and pasted key go to the credential store (never to connections.json); the ones
+/// the authentication method no longer uses are deleted. An empty one is «sin cambios».
+fn save_ssh_secrets(app: &AppState, cfg: &mut ConnConfig) -> CmdResult<()> {
+    let had_ssh = app.conns.lock().iter().any(|c| c.id == cfg.id && !c.ssh.is_unset());
+    for account in SshConfig::ACCOUNTS {
+        let name = ssh_account(&cfg.id, account);
+        let value = cfg.ssh.secret_mut(account).take().filter(|v| !v.is_empty());
+        if cfg.ssh.uses(account) {
+            if let Some(value) = value {
+                app.store.set_password(&name, &value).map_err(err)?;
+            }
+        } else if had_ssh || !cfg.ssh.is_unset() {
+            app.store.delete_password(&name);
+        }
+    }
+    cfg.ssh = cfg.ssh.without_secrets();
+    Ok(())
 }
 
 /// Connections saved by earlier versions with a `PWD=` in the ODBC string or "Parámetros extra": the password goes to
@@ -328,23 +403,34 @@ fn move_inline_passwords(store: &Store, conns: &mut [ConnConfig]) {
     }
 }
 
-/// «Deshacer» un borrado: la conexión vuelve con su id y con la contraseña que tenía guardada.
+/// «Deshacer» un borrado: la conexión vuelve con su id y con la contraseña (y los secretos SSH) que tenía guardados.
 #[tauri::command]
 fn restore_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
-    let kept = state.trash.lock().remove(&cfg.id);
-    if cfg.password.as_deref().is_none_or(str::is_empty) {
-        cfg.password = kept;
+    {
+        let mut trash = state.trash.lock();
+        let kept = trash.remove(&cfg.id);
+        if cfg.password.as_deref().is_none_or(str::is_empty) {
+            cfg.password = kept;
+        }
+        for account in SshConfig::ACCOUNTS {
+            let kept = trash.remove(&ssh_account(&cfg.id, account));
+            let slot = cfg.ssh.secret_mut(account);
+            if slot.as_deref().is_none_or(str::is_empty) {
+                *slot = kept;
+            }
+        }
     }
     let saved = save_cfg(&state, cfg)?;
     connections_changed(&window);
     Ok(saved)
 }
 
-/// Una copia de una conexión guardada, con otro id y otro nombre y con su contraseña guardada.
+/// Una copia de una conexión guardada, con otro id y otro nombre y con su contraseña y sus secretos SSH guardados.
 #[tauri::command]
 fn duplicate_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, id: String, name: String) -> CmdResult<ConnConfig> {
     let mut cfg = state.conn(&id)?;
     cfg.password = if cfg.save_password { state.store.get_password(&id) } else { None };
+    fill_ssh_secrets(&state.store, &mut cfg);
     cfg.id = String::new();
     cfg.name = name;
     let saved = save_cfg(&state, cfg)?;
@@ -370,10 +456,13 @@ fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState
     }
     forget_free(&id);
     // Hasta cerrar Celer, en memoria: «Deshacer» la devuelve con la conexión.
-    if let Some(p) = state.store.get_password(&id) {
-        state.trash.lock().insert(id.clone(), p);
+    let accounts = std::iter::once(id.clone()).chain(SshConfig::ACCOUNTS.iter().map(|a| ssh_account(&id, a)));
+    for account in accounts {
+        if let Some(p) = state.store.get_password(&account) {
+            state.trash.lock().insert(account.clone(), p);
+        }
+        state.store.delete_password(&account);
     }
-    state.store.delete_password(&id);
     {
         let mut conns = state.conns.lock();
         conns.retain(|c| c.id != id);
@@ -383,8 +472,9 @@ fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState
     Ok(())
 }
 
-/// «Probar conexión»: cada paso con su tiempo (resolver el nombre, abrir el puerto, TLS, iniciar sesión, la base) y,
-/// si falla, qué hacer. Solo falla del todo si ni siquiera se puede intentar (falta un driver).
+/// «Probar conexión»: cada paso con su tiempo (resolver el nombre, abrir el puerto, TLS, iniciar sesión, la base; o el
+/// túnel SSH y el reenvío) y, si falla, qué hacer. Solo falla del todo si ni siquiera se puede intentar (falta un
+/// driver, el túnel SSH está a medio configurar).
 #[tauri::command]
 async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<probe::Report> {
     let app = state.inner().clone();
@@ -393,11 +483,23 @@ async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> Cm
     std::thread::Builder::new()
         .name("celer-test-connection".into())
         .spawn(move || {
-            let report = prepare(&app.store, cfg.clone()).map(|p| probe::run(&cfg, p.connector, &p.route));
+            let report = prepare(&app.store, cfg.clone()).map(|p| probe::run(&cfg, p.connector, &p.route, p.ssh.as_deref()));
             let _ = tx.send(report);
         })
         .map_err(err)?;
     rx.await.map_err(|_| "La prueba de conexión terminó inesperadamente".to_string())?
+}
+
+/// A host key shown to the user (`SSH_HOST_UNKNOWN:<token>:`): server, type and fingerprint.
+#[tauri::command]
+fn ssh_host_key(token: String) -> Option<ssh::HostKeyInfo> {
+    ssh::pending_info(&token)
+}
+
+/// «Confiar en esta clave»: the key goes to Celer's known_hosts and the next connection goes on.
+#[tauri::command]
+fn ssh_trust_host_key(state: State<'_, Arc<AppState>>, token: String) -> CmdResult<ssh::HostKeyInfo> {
+    ssh::trust(&state.store.dir, &token).map_err(err)
 }
 
 /// An Informix connection over JDBC is about to open: Java starts now, while the user types the password.
@@ -1401,6 +1503,8 @@ pub fn run() {
             restore_connection,
             duplicate_connection,
             test_connection,
+            ssh_host_key,
+            ssh_trust_host_key,
             open_session,
             check_session,
             close_session,

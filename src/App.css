@@ -1069,6 +1069,12 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .disclosure { align-self: flex-start; color: var(--text-muted); font-size: 12.5px; font-weight: 500; }
 .disclosure:hover { color: var(--text); }
 .advanced { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--border); }
+.ssh-section { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--border); }
+.ssh-section textarea, .ssh-key { width: 100%; resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+.ssh-note { align-self: flex-start; }
+.hostkey-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 4px 0 10px; font-size: 12.5px; }
+.hostkey-facts dt { color: var(--text-faint); }
+.hostkey-facts dd { margin: 0; word-break: break-all; }
 .test-result { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); font-size: 12.5px; background: var(--panel); border: 1px solid var(--border); color: var(--text-muted); }
 .test-result pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; margin: 0; color: var(--text); flex: 1; }
 .test-result.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 7%, var(--panel)); }

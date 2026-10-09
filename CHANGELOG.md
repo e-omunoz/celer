@@ -6,6 +6,17 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **SSH tunnels** (#115): «Túnel SSH» in the connection form reaches PostgreSQL, MySQL/MariaDB, SQL Server and Informix
+  (DRDA and JDBC) through a bastion, with a password, a private key (file or pasted, OpenSSH/PEM/PuTTY, with its
+  passphrase) or the SSH agent (Pageant, the OpenSSH agent of Windows, ssh-agent), and optional jump hosts. The Rust
+  core forwards a local port (one tunnel per connection, shared by its sessions) and rebuilds it when the bastion
+  drops: the next query reconnects through the session guard. An unknown host key is shown with its fingerprint and
+  «Confiar en esta clave», and a changed one is refused. «Probar conexión» reports the SSH step and the forward apart
+  from the database's. The SSH password, passphrase and key go to the OS credential store (long keys in parts), never
+  to connections.json; exports carry only the tunnel's settings, and DBeaver/DbVisualizer imports bring them too.
+  Hidden, with a note why, for SQLite and ODBC.
+
 ### Fixed
 - **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
   «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),

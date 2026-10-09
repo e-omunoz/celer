@@ -29,7 +29,7 @@ import type { ConnConfig, ConnSummary } from "./types";
 
 /** La configuración guardable de una conexión del explorador (sin `hasPassword`; contraseña vacía = la guardada sigue). */
 function configOf(conn: ConnSummary): ConnConfig {
-  const { hasPassword: _hasPassword, ...cfg } = conn;
+  const { hasPassword: _hasPassword, sshSaved: _sshSaved, ...cfg } = conn;
   return { ...cfg, password: "" };
 }
 

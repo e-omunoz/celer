@@ -1,7 +1,7 @@
 // Lógica pura del explorador de conexiones: carpetas anidadas ("Clientes/Egarsat"), orden, búsqueda y filtros, y el
 // formato portable para exportar e importar conexiones sin contraseñas. Sin solid-js ni efectos, para poder probarla
 // con node (dev/explorer-check.ts).
-import { emptyConn, ENGINES, type ConnConfig, type DbKind } from "./types.ts";
+import { emptyConn, ENGINES, type ConnConfig, type DbKind, type SshConfig } from "./types.ts";
 
 /** Separador de niveles de carpeta en `ConnConfig.folder`. Las carpetas antiguas con " · " son nombres planos. */
 export const FOLDER_SEP = "/";
@@ -304,6 +304,23 @@ export function inlinePassword(text: string): string | null {
   return found;
 }
 
+/** The settings of an SSH tunnel that travel in a file (no password, passphrase or key); null without a tunnel. */
+export function portableSsh(ssh: SshConfig | undefined | null): SshConfig | null {
+  if (!ssh || (!ssh.enabled && !ssh.host)) return null;
+  return { enabled: Boolean(ssh.enabled), host: ssh.host ?? "", port: ssh.port ?? 22, user: ssh.user ?? "", auth: ssh.auth || "password", keyPath: ssh.keyPath ?? "", jumps: [...(ssh.jumps ?? [])] };
+}
+
+/** An SSH block read from a file, checked field by field; null when it is not one. */
+function readSsh(raw: unknown): SshConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const port = typeof r.port === "number" && Number.isInteger(r.port) && r.port > 0 && r.port < 65536 ? r.port : 22;
+  const auth = ["password", "key", "agent"].includes(str(r.auth)) ? str(r.auth) : "password";
+  const jumps = Array.isArray(r.jumps) ? r.jumps.filter((j): j is string => typeof j === "string") : [];
+  return portableSsh({ enabled: r.enabled === true, host: str(r.host), port, user: str(r.user), auth, keyPath: str(r.keyPath), jumps });
+}
+
 /** Las conexiones (sin id ni contraseña) y las carpetas, como JSON legible. */
 export function exportConnectionsJson(conns: ConnConfig[], folders: string[], exportedAt: Date): string {
   const connections = conns.map((conn) => {
@@ -313,6 +330,9 @@ export function exportConnectionsJson(conns: ConnConfig[], folders: string[], ex
       if (value !== undefined) out[key] = key === "odbcConnStr" || key === "extra" ? withoutInlinePassword(String(value)) : value;
     }
     if (conn.startupSql) out.startupSql = conn.startupSql;
+    // The SSH tunnel's settings, never its secrets (only for connections that have one).
+    const ssh = portableSsh(conn.ssh);
+    if (ssh) out.ssh = ssh;
     return out;
   });
   const used = allFolders(
@@ -359,6 +379,8 @@ export function parseConnectionsJson(text: string): { connections: ConnConfig[];
     }
     cfg.id = "";
     cfg.password = "";
+    const ssh = readSsh(item.ssh);
+    if (ssh) cfg.ssh = ssh;
     cfg.folder = normalizeFolder(String(cfg.folder ?? ""));
     if (!String(cfg.name ?? "").trim()) cfg.name = `Conexión ${index + 1}`;
     return cfg as unknown as ConnConfig;
