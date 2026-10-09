@@ -754,6 +754,14 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     assert!(columns[0].primary_key, "{columns:?}");
     assert!(d.ddl(&obj).unwrap().to_uppercase().contains("CREATE TABLE"));
     assert!(d.completion("celer").unwrap().tables.iter().any(|t| t.name == "celer_t"));
+    // Keys in the DDL: the primary key in its own order, UNIQUE and FOREIGN KEY constraints.
+    d.execute("DROP TABLE IF EXISTS ddl_c; DROP TABLE IF EXISTS ddl_p; CREATE TABLE ddl_p (a INT, b INT, PRIMARY KEY (b, a));
+               CREATE TABLE ddl_c (id INT PRIMARY KEY, code CHAR(5) UNIQUE, pb INT, pa INT, FOREIGN KEY (pb, pa) REFERENCES ddl_p ON DELETE CASCADE)", 10).unwrap();
+    let ddl_of = |d: &mut dyn Driver, name: &str| d.ddl(&ObjectRef { database: "celer".into(), schema: owner.clone(), name: name.into(), kind: "table".into() }).unwrap();
+    let p_ddl = ddl_of(d, "ddl_p");
+    assert!(p_ddl.contains("PRIMARY KEY (b, a)"), "{p_ddl}");
+    let c_ddl = ddl_of(d, "ddl_c");
+    assert!(c_ddl.contains("UNIQUE (code)") && c_ddl.contains(&format!("FOREIGN KEY (pb, pa) REFERENCES {owner}.ddl_p (b, a) ON DELETE CASCADE")), "{c_ddl}");
 
     // Paging and closing a cursor half way.
     d.execute("DROP TABLE IF EXISTS many; CREATE TABLE many (n INT)", 10).unwrap();

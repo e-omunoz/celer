@@ -473,13 +473,23 @@ impl<L: Link> LinkDriver<L> {
             .collect())
     }
 
-    /// Foreign keys of a table: (constraint, columns, referenced owner, referenced table, referenced columns).
-    fn ifx_foreign_keys(&self, o: &ObjectRef) -> Result<Vec<(String, Vec<String>, String, String, Vec<String>)>> {
+    /// Primary key or unique constraints (`kind` 'P' or 'U') of table `tabid`: their columns, in key order.
+    fn ifx_key_constraints(&self, db: &str, tabid: i64, kind: char) -> Result<Vec<Vec<String>>> {
+        let rows = self.q(&format!(
+            "SELECT idxname FROM {db}sysconstraints WHERE tabid = {tabid} AND constrtype = '{kind}' ORDER BY constrname"
+        ))?;
+        rows.iter().map(|r| self.ifx_index_cols(db, tabid, &cell_str(&r[0]))).collect()
+    }
+
+    /// Foreign keys of a table: (constraint, columns, referenced owner, referenced table, referenced columns, ON
+    /// DELETE CASCADE).
+    #[allow(clippy::type_complexity)]
+    fn ifx_foreign_keys(&self, o: &ObjectRef) -> Result<Vec<(String, Vec<String>, String, String, Vec<String>, bool)>> {
         let db = self.ifx_db(&o.database);
         let tabid = self.ifx_tabid(o)?;
         let rows = self.q(&format!(
             // Index names as stored: the ones Informix generates for constraints start with a space (" 101_2").
-            "SELECT TRIM(c.constrname), c.idxname, r.ptabid, TRIM(pt.tabname), TRIM(pt.owner), pc.idxname \
+            "SELECT TRIM(c.constrname), c.idxname, r.ptabid, TRIM(pt.tabname), TRIM(pt.owner), pc.idxname, r.delrule \
              FROM {db}sysconstraints c, {db}sysreferences r, {db}systables pt, {db}sysconstraints pc \
              WHERE c.tabid = {tabid} AND c.constrtype = 'R' AND r.constrid = c.constrid \
                AND pt.tabid = r.ptabid AND pc.constrid = r.primary ORDER BY 1"
@@ -488,7 +498,7 @@ impl<L: Link> LinkDriver<L> {
             .map(|r| {
                 let cols = self.ifx_index_cols(&db, tabid, &cell_str(&r[1]))?;
                 let ref_cols = self.ifx_index_cols(&db, cell_i64(&r[2]), &cell_str(&r[5]))?;
-                Ok((cell_str(&r[0]), cols, cell_str(&r[4]), cell_str(&r[3]), ref_cols))
+                Ok((cell_str(&r[0]), cols, cell_str(&r[4]), cell_str(&r[3]), ref_cols, cell_str(&r[6]).trim() == "C"))
             })
             .collect()
     }
@@ -1018,7 +1028,7 @@ impl<L: Link> Driver for LinkDriver<L> {
                 Ok(self
                     .ifx_foreign_keys(&o)?
                     .into_iter()
-                    .map(|(constraint, cols, ref_owner, ref_table, ref_cols)| {
+                    .map(|(constraint, cols, ref_owner, ref_table, ref_cols, _)| {
                         MetaNode::leaf(constraint, "key", Some(format!("{} → {}({})", cols.join(", "), ref_table, ref_cols.join(", "))))
                             .with_obj(ObjectRef::new(db, &ref_owner, &ref_table, "table"))
                     })
@@ -1108,9 +1118,17 @@ impl<L: Link> Driver for LinkDriver<L> {
                         l
                     })
                     .collect();
-                let pk: Vec<String> = cols.iter().filter(|c| c.3).map(|c| c.0.clone()).collect();
-                if !pk.is_empty() {
+                // Keys in their own column order (not the table's), then the foreign keys.
+                let tabid = self.ifx_tabid(obj)?;
+                for pk in self.ifx_key_constraints(&db, tabid, 'P')? {
                     lines.push(format!("    PRIMARY KEY ({})", pk.join(", ")));
+                }
+                for unique in self.ifx_key_constraints(&db, tabid, 'U')? {
+                    lines.push(format!("    UNIQUE ({})", unique.join(", ")));
+                }
+                for (_, cols, ref_owner, ref_table, ref_cols, cascade) in self.ifx_foreign_keys(obj)? {
+                    let cascade = if cascade { " ON DELETE CASCADE" } else { "" };
+                    lines.push(format!("    FOREIGN KEY ({}) REFERENCES {ref_owner}.{ref_table} ({}){cascade}", cols.join(", "), ref_cols.join(", ")));
                 }
                 let mut out = format!(
                     "CREATE TABLE {}.{} (\n{}\n);\n",
