@@ -1939,7 +1939,8 @@ impl MssqlDriver {
     /// Envía un lote (sin GO) y lee sus resultados hasta que uno queda abierto o acaba.
     fn execute_batch(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
-        self.notes = std::mem::take(&mut *self.late.lock());
+        let late = std::mem::take(&mut *self.late.lock());
+        self.notes.extend(late);
         let kw = first_keyword(sql);
         let effects = session_effects(sql);
         if let (Engine::Synapse, Some(db)) = (self.engine, &effects.use_only) {
@@ -2065,6 +2066,8 @@ impl Driver for MssqlDriver {
     /// Un script con líneas GO se envía lote a lote, como en SSMS; sin GO, el texto es un solo lote.
     fn execute(&mut self, sql: &str, fetch: usize) -> Result<ExecOutput> {
         let t0 = Instant::now();
+        // What closing the previous result does (reserve connection, draining) goes in this run's timing line.
+        self.notes.clear();
         self.close_cursor()?;
         let mut notes = Vec::new();
         if std::mem::take(&mut self.cut) {
