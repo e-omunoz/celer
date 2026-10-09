@@ -6,6 +6,13 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Your own Gib** (#105): *Ajustes › Apariencia › Gib* has a live preview and sets his colour (the classic black tie,
+  the accent colour, which follows it, or any colour), accessories (cap, glasses, headphones, scarf: layers on every
+  pose that move with his head and leave his eyes alone), the name he uses in his messages and the palette (default
+  «Gib») and the companion's pose (standing, Monday, head only, with the laptop). The look applies to every Gib in the
+  app; the lab takes `acc=` and `tint=` to check the eyes with each accessory.
+
 ### Fixed
 - **Gib's eyes, in every pose, mood and activity** (#103): the pupils are clipped to the eye whites and their movement
   is clamped to the room each pose's eyes have, so they never leave the eye (an error face used to shrink them towards

@@ -1,3 +1,5 @@
+import { defaultGibLook, type GibLook } from "./gib/prefs.ts";
+
 export type Cell = null | boolean | number | string;
 
 export type ColKind = "number" | "text" | "bool" | "date" | "binary" | "other";
@@ -243,6 +245,8 @@ export interface Settings {
   favoriteConns: string[];
   /** Explorer: the connections connected to last, newest first. */
   recentConns: { id: string; at: number }[];
+  /** Gib as the user made him (Settings › Apariencia › Gib; src/gib/prefs.ts). */
+  gib: GibLook;
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -299,6 +303,7 @@ export const defaultSettings: Settings = {
   connSort: "manual",
   favoriteConns: [],
   recentConns: [],
+  gib: defaultGibLook,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

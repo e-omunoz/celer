@@ -1,7 +1,7 @@
 // Gib's animation lab, captured (needs the dev server: npm run dev, or GIB_LAB_URL=http://localhost:<port>).
 //
 // Grid check (regressions in the eyes, every pose × mood × activity, every size, every theme):
-//   node dev/gib-lab-shots.mjs <outDir> --grid [themes=dark,light] [sizes=34,46,84] [t=0,900] [acc=cap,glasses]
+//   node dev/gib-lab-shots.mjs <outDir> --grid [themes=dark,light] [sizes=34,46,84] [t=0,900] [acc=cap,glasses] [tint=#3b82f6]
 // For each theme and size it captures the grid frozen at each time t (ms into the animations), with the lids shut
 // (a blink) and with the gaze pushed to the four corners, and checks the geometry of every Gib in it: two eye whites,
 // two pupils and two lids; the eyes inside the head group (they move with it); each pupil's centre inside its eye;
@@ -46,6 +46,9 @@ async function open(hash) {
   // The lab is loaded on demand (src/main.tsx): wait for it (each probe short-lived, so one sent to the page being
   // replaced cannot hang), then for the moods' poses to settle in.
   const probe = () => Promise.race([cdp.js(`return !!document.querySelector('.giblab .gib');`).catch(() => false), sleep(1000).then(() => false)]);
+  for (let i = 0; i < 100 && !(await probe()); i++) await sleep(200);
+  // The dev server may reload the page once (new dependencies optimised): make sure the lab is still there.
+  await sleep(800);
   for (let i = 0; i < 100 && !(await probe()); i++) await sleep(200);
   await cdp.js(`await document.fonts.ready; await new Promise((r) => setTimeout(r, 900));`);
 }
@@ -108,7 +111,8 @@ async function grid(opts) {
   const themes = (opts.themes || ALL_THEMES.join(",")).split(",");
   const sizes = (opts.sizes || ALL_SIZES.join(",")).split(",").map(Number);
   const times = (opts.t || "0,700,1600,2800,4400").split(",").map(Number);
-  const extra = opts.acc ? `&acc=${opts.acc}` : "";
+  const extra = (opts.acc ? `&acc=${opts.acc}` : "") + (opts.tint ? `&tint=${encodeURIComponent(opts.tint)}` : "");
+  const tag = opts.acc ? `-${opts.acc.replace(/,/g, "+")}` : "";
   const passes = [
     { name: "rest", query: "", times },
     { name: "blink", query: "&blink", times: [0] },
@@ -121,7 +125,7 @@ async function grid(opts) {
         for (const t of pass.times) {
           await freeze(t);
           const fails = await cdp.js(CHECK(pass.name));
-          const file = join(out, `grid-${theme}-${size}-${pass.name}-${String(t).padStart(5, "0")}.png`);
+          const file = join(out, `grid${tag}-${theme}-${size}-${pass.name}-${String(t).padStart(5, "0")}.png`);
           // Every frame of the rest pass, and the blink and gaze passes, are kept as the reference images.
           await fullShot(file);
           for (const fail of fails) console.log(`FAIL ${theme} ${pass.name} t=${t}: ${fail}`);

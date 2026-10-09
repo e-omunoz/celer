@@ -8,6 +8,7 @@ import { EngineIcon } from "../icons";
 import {
   activeSql,
   applyTheme,
+  gibName,
   createSampleDatabase,
   notify,
   openConnDialog,
@@ -46,7 +47,7 @@ const TOUR: Spot[] = [
   { selector: ".search-trigger", title: "Buscar en todo", body: "Pulsa Mayús dos veces (o Ctrl+K) para saltar a cualquier tabla, pestaña o acción. Ctrl+N va directo a una tabla." },
   { selector: ".stripe-btn[title^='Biblioteca']", title: "Biblioteca de scripts", body: "Las consultas que repites, guardadas con nombre (Ctrl+Alt+B desde la consola). Ordénalas en carpetas y etiquetas, ábrelas o ejecútalas con un clic y arrástralas al editor." },
   { selector: ".stripe-btn[title^='Asistente']", title: "Asistente de IA", body: "Genera, explica, corrige y optimiza SQL con Claude usando tu esquema real, nunca tus filas. Y desde Ajustes › IA, un servidor MCP con permisos por conexión." },
-  { selector: ".companion .gib", title: "Gib", body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan; si no hay nada que hacer, me entretengo a mi manera. No me persigas con el ratón, que me molesta. ¿Un consejo? Haz clic en mí." },
+  { selector: ".companion .gib", get title() { return gibName(); }, body: "Ese soy yo. Pienso mientras corren tus consultas y te aviso cuando terminan; si no hay nada que hacer, me entretengo a mi manera. No me persigas con el ratón, que me molesta. ¿Un consejo? Haz clic en mí." },
 ];
 
 const KEYS: [string, string][] = [
@@ -74,7 +75,7 @@ export function Onboarding() {
   const close = (completed: boolean) => {
     void saveSettings({ onboarded: true });
     setState("onboardingOpen", false);
-    if (completed) notify("Todo listo. Gib queda en la esquina por si lo necesitas.", "success");
+    if (completed) notify(`Todo listo. ${gibName()} queda en la esquina por si lo necesitas.`, "success");
   };
 
   const next = () => setStep(STEPS[Math.min(STEPS.length - 1, index() + 1)].id);

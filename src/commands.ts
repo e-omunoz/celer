@@ -12,6 +12,7 @@ import {
   erSchemaPath,
   formatActive,
   gib,
+  gibName,
   notify,
   openActivity,
   openConnDialog,
@@ -67,6 +68,8 @@ export const themeChoices = THEMES;
 const sqlOnly = () => activeTab()?.kind === "sql";
 
 export function commands(): Command[] {
+  // Gib under the name the user gave him (still found by "Gib").
+  const who = gibName() === "Gib" ? "Gib" : `${gibName()} (Gib)`;
   const list: Command[] = [
     { id: "run", label: "Ejecutar sentencia o selección", group: "Consulta", run: () => void runActive("statement"), enabled: sqlOnly },
     { id: "run-script", label: "Ejecutar script completo", group: "Consulta", run: () => void runActive("script"), enabled: sqlOnly },
@@ -125,9 +128,9 @@ export function commands(): Command[] {
     { id: "font-up", label: "Aumentar tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.min(24, state.settings.editorFontSize + 1) }) },
     { id: "font-down", label: "Reducir tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.max(10, state.settings.editorFontSize - 1) }) },
     { id: "guide", label: "Guía de inicio", group: "Ayuda", run: () => setState("onboardingOpen", true) },
-    { id: "gib-tip", label: "Gib: un consejo", group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
-    { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
-    { id: "gib-reset", label: "Gib: volver a contar los consejos desde el principio", group: "Ayuda", run: () => { resetGibTips(); notify("Gib volverá a darte sus consejos", "success", "Los que ya viste cuentan como nuevos."); } },
+    { id: "gib-tip", label: `${who}: un consejo`, group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
+    { id: "gib-play", label: `${who}: haz algo`, group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
+    { id: "gib-reset", label: `${who}: volver a contar los consejos desde el principio`, group: "Ayuda", run: () => { resetGibTips(); notify(`${gibName()} volverá a darte sus consejos`, "success", "Los que ya viste cuentan como nuevos."); } },
     { id: "about", label: "Acerca de Celer", group: "Ayuda", run: () => setState("aboutOpen", true) },
     { id: "update", label: "Buscar actualizaciones", group: "Ayuda", run: () => void checkForUpdates(true) },
   ];

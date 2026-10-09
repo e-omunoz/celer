@@ -1,11 +1,11 @@
 // Development only (http://localhost:1420/#giblab): every mood and idle activity of Gib, big and looping, to review
 // the animations by eye or capture them (dev/gib-lab-shots.mjs). Not part of the production bundle.
 //   #giblab?only=yawn,think&size=150&paused&side=left      one big Gib per activity / mood (looping)
-//   #giblab?grid&sizes=34,46,84,150&theme=sand&blink&look=6,-6
+//   #giblab?grid&sizes=34,46,84,150&theme=sand&blink&look=6,-6&acc=cap,glasses&tint=%23D97757
 //       every pose × (mood ∪ activity) at once, at each size Gib is shown in the app, in one theme; `blink` shuts the
-//       lids, `look` fixes the gaze (SVG units).
+//       lids, `look` fixes the gaze (SVG units), `acc` and `tint` dress him (as Settings › Apariencia › Gib does).
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { Gib, type GibActivity, type GibMood, type GibPose } from "./Gib";
+import { Gib, GIB_ACCESSORIES, type GibAccessory, type GibActivity, type GibMood, type GibPose } from "./Gib";
 
 const ACTIVITIES: [GibActivity, number][] = [
   ["yawn", 3400],
@@ -53,6 +53,14 @@ export function GibLab() {
   const params = new URLSearchParams(location.hash.split("?")[1] ?? "");
   const theme = params.get("theme");
   if (theme) document.documentElement.dataset.theme = theme;
+  // Dressed as Settings › Apariencia › Gib would (the root's data-gib-acc and --gib-tint, App.css).
+  const tint = params.get("tint");
+  if (tint) {
+    document.documentElement.style.setProperty("--gib-tint", tint);
+    document.documentElement.dataset.gibTint = "";
+  }
+  const acc = (params.get("acc") ?? "").split(",").filter((name): name is GibAccessory => (GIB_ACCESSORIES as readonly string[]).includes(name));
+  if (acc.length) document.documentElement.dataset.gibAcc = acc.join(" ");
   return <Show when={params.has("grid")} fallback={<Showcase params={params} />}><Grid params={params} /></Show>;
 }
 

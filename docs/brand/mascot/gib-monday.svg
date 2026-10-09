@@ -24,6 +24,7 @@
         <path fill="#16171B" d="M94 166h12l4 28-10 8-12-10z"/>
       </g>
     </g>
+    <!-- acc:neck (Settings › Apariencia › Gib: the app inserts the accessories here and in acc:head) -->
     <g class="g-head">
       <g id="monday-ears">
         <circle cx="36" cy="94" r="22" fill="url(#monday-fur)"/>
@@ -86,6 +87,7 @@
         <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
       </g>
       <path class="mouth" d="M94 128c6 2 12-1 18 2" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
+      <!-- acc:head -->
     </g>
     <g class="mug">
       <rect x="128" y="148" width="34" height="42" rx="6" fill="#F7F7F4"/>

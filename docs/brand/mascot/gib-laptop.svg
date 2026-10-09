@@ -32,9 +32,12 @@
       <ellipse cx="100" cy="150" rx="19" ry="8" fill="url(#laptop-fur)"/>
       <path fill="#FAFAF7" stroke="#C9CDD4" d="M100 157 84 146 79 167z"/>
       <path fill="#FAFAF7" stroke="#C9CDD4" d="M100 157 116 146 121 167z"/>
-      <path fill="#1B1C21" d="M95 158h10l2 8.5H93z"/>
-      <path fill="#1B1C21" d="M93 166.5h14L110 199 100 209 89 199z"/>
+      <g class="tie">
+        <path fill="#1B1C21" d="M95 158h10l2 8.5H93z"/>
+        <path fill="#1B1C21" d="M93 166.5h14L110 199 100 209 89 199z"/>
+      </g>
     </g>
+    <!-- acc:neck (Settings › Apariencia › Gib: the app inserts the accessories here and in acc:head) -->
     <!-- Arms: shoulder → elbow → hands on the keyboard (hidden behind the lid). -->
     <g class="type-l">
       <g transform="rotate(-24 60 170)">
@@ -133,6 +136,7 @@
         <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
       </g>
       <path class="mouth" d="M95 127q6 2 12 0" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
+      <!-- acc:head -->
       <path class="tongue" d="M107 127.5c3 4 7 5.5 9 3 1.2-1.8-.8-3.6-4-3.2" fill="#EE7C8E"/>
     </g>
   </g>

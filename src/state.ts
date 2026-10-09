@@ -34,6 +34,7 @@ import { libraryDirty } from "./library";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
+import { gibDisplayName, gibTint, normalizeGibLook } from "./gib/prefs";
 import type { ColumnOrder } from "./columnOrder";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
@@ -468,6 +469,17 @@ export function applyTheme(settings: Settings = state.settings, preview?: ThemeN
   root.dataset.density = settings.density;
   root.dataset.motion = reducedMotion(settings) ? "reduce" : "full";
   root.style.setProperty("--accent", settings.accent);
+  // Gib's look, for every Gib on the page (App.css, "Gib: personalisation").
+  const look = settings.gib ?? defaultSettings.gib;
+  const tint = gibTint(look.color);
+  if (tint) {
+    root.style.setProperty("--gib-tint", tint);
+    root.dataset.gibTint = "";
+  } else {
+    root.style.removeProperty("--gib-tint");
+    delete root.dataset.gibTint;
+  }
+  root.dataset.gibAcc = look.accessories.join(" ");
   // White on Clay, Ember, Teal or Green is below 4.5:1: those buttons get a black label.
   root.style.setProperty("--accent-fg", labelColorOn(settings.accent));
   root.style.fontSize = `${settings.fontSize}px`;
@@ -495,7 +507,7 @@ export async function boot() {
   try {
     const loaded = await api().loadJson("settings");
     if (loaded && typeof loaded === "object") {
-      setState("settings", { ...defaultSettings, ...(loaded as Settings) });
+      setState("settings", withDefaults(loaded as Partial<Settings>));
     }
   } catch (err) {
     // Defaults this time (a damaged file was set aside, or it could not be read: the message says which). One
@@ -701,9 +713,19 @@ export async function saveSettings(patch: Partial<Settings>) {
   await api().saveJson("settings", patch, true);
 }
 
+/** Settings as stored, completed with the defaults (and Gib's, which may be missing, old or edited by hand, made valid). */
+function withDefaults(value: Partial<Settings>): Settings {
+  return { ...defaultSettings, ...value, gib: normalizeGibLook(value.gib) };
+}
+
+/** Gib's name for his messages (Settings › Apariencia › Gib), «Gib» unless the user named him. */
+export function gibName(): string {
+  return gibDisplayName(state.settings.gib);
+}
+
 /** Settings changed by another window (the core sends the whole file). */
 export function applySharedSettings(value: Partial<Settings>) {
-  setState("settings", { ...defaultSettings, ...value });
+  setState("settings", withDefaults(value));
   applyTheme();
 }
 

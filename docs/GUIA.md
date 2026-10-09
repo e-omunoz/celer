@@ -310,6 +310,16 @@ le persigues con el ratón mientras espera, aparta el cursor como a una mosca.
   en la biblioteca. Cada aviso sale una vez por sesión y los consejos, como mucho dos veces.
 - *Gib: volver a contar los consejos desde el principio* (paleta) hace que vuelvan a salir todos.
 
+**Tu Gib** (*Ajustes › Apariencia › Gib*, con una vista previa que reacciona a cada cambio):
+
+- **Nombre**: el que usa en sus mensajes y en la paleta (por defecto, «Gib»).
+- **Color** de la corbata y los accesorios: el clásico (corbata negra), el color de acento (y cambia con él) u otro.
+- **Accesorios**: gorra, gafas, cascos y bufanda, en todas sus posturas y sin taparle los ojos.
+- **Postura en la barra de estado**: de pie, recién levantado, solo la cabeza o con el portátil. Para sus
+  entretenimientos se pone de pie.
+
+El aspecto se aplica a todos los Gib de Celer: la barra de estado, el arranque, los estados vacíos y los diálogos.
+
 En *Ajustes › Apariencia* se puede poner en silencio (solo avisos, sin consejos por su cuenta) o apagar. Con
 *Animaciones: reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de
 animarse.

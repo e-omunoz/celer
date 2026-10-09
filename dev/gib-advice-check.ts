@@ -1,6 +1,7 @@
 // Quick checks for src/gib/advice.ts: node --experimental-strip-types dev/gib-advice-check.ts
 import assert from "node:assert/strict";
 import { nextTip, queryAdvice, SLOW_MS, statementKey, TIPS, type RunInfo } from "../src/gib/advice.ts";
+import { defaultGibLook, gibDisplayName, gibTint, normalizeGibLook } from "../src/gib/prefs.ts";
 
 const run = (sql: string, extra: Partial<RunInfo> = {}) => queryAdvice({ sql, kind: "postgres", ms: 20, columns: 3, hasMore: false, ...extra })?.id ?? null;
 const slow = (sql: string, extra: Partial<RunInfo> = {}) => run(sql, { ms: SLOW_MS + 1, ...extra });
@@ -79,5 +80,26 @@ assert.equal(slow("SELECT * FROM t WHERE a = NULL AND name LIKE '%x'"), "eq-null
 assert.equal(statementKey("SELECT  *\nFROM t;"), statementKey("select * from t"));
 assert.equal(statementKey("SELECT 1 -- note"), statementKey("select 1"));
 assert.notEqual(statementKey("SELECT 1"), statementKey("SELECT 2"));
+
+// Gib's look (Settings › Apariencia › Gib): whatever is stored becomes a valid look.
+assert.deepEqual(normalizeGibLook(undefined), defaultGibLook, "missing: the default look");
+assert.deepEqual(normalizeGibLook("nonsense"), defaultGibLook);
+assert.deepEqual(normalizeGibLook({ color: "#3B82F6", accessories: ["scarf", "cap", "hat", "cap"], name: "  Bob   el  mono ", pose: "icon" }), {
+  color: "#3b82f6",
+  accessories: ["cap", "scarf"],
+  name: "Bob el mono",
+  pose: "icon",
+}, "colour lowercased, unknown and repeated accessories dropped (in a fixed order), name tidied");
+assert.equal(normalizeGibLook({ color: "red" }).color, "classic", "only #rrggbb, classic or accent");
+assert.equal(normalizeGibLook({ color: "accent" }).color, "accent");
+assert.equal(normalizeGibLook({ pose: "dancing" }).pose, "poker");
+assert.equal(normalizeGibLook({ name: "   " }).name, "Gib", "an empty name is Gib");
+assert.equal(normalizeGibLook({ name: "x".repeat(60) }).name.length, 20, "names are kept short");
+assert.equal(gibDisplayName(undefined), "Gib");
+assert.equal(gibDisplayName({ name: " Pepe " }), "Pepe");
+assert.equal(gibTint("classic"), null, "classic: the black tie, no tint");
+assert.equal(gibTint("accent"), "var(--accent)");
+assert.equal(gibTint("#14b8a6"), "#14b8a6");
+assert.equal(gibTint("url(x)"), null, "nothing but a colour reaches the CSS");
 
 console.log("gib-advice-check: all good");

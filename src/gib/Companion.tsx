@@ -1,7 +1,7 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 import { shortcutLabel } from "../commands";
 import { saveToLibrary } from "../library";
-import { activeSql, activeTab, formatMs, gibEvent, notify, openPalette, reducedMotion, runActive, saveSettings, splashDone, state, type GibEvent } from "../state";
+import { activeSql, activeTab, formatMs, gibEvent, gibName, notify, openPalette, reducedMotion, runActive, saveSettings, splashDone, state, type GibEvent } from "../state";
 import { nextTip, queryAdvice, statementKey, type Advice } from "./advice";
 import { memory, saveMemory, sessionAdvice } from "./memory";
 import { Gib, type GibActivity, type GibMood } from "./Gib";
@@ -431,11 +431,11 @@ export function Companion() {
                   <button
                     type="button"
                     class="link small tip-mute"
-                    title="Gib deja de ofrecer consejos por su cuenta (Ajustes › Apariencia)"
+                    title={`${gibName()} deja de ofrecer consejos por su cuenta (Ajustes › Apariencia › Gib)`}
                     onClick={() => {
                       closeBubble();
                       void saveSettings({ companion: "quiet" });
-                      notify("Gib ya no dará consejos por su cuenta", "info", "Haz clic en él para pedir uno, o vuelve a «Normal» en Ajustes › Apariencia.");
+                      notify(`${gibName()} ya no dará consejos por su cuenta`, "info", "Haz clic en él para pedir uno, o vuelve a «Normal» en Ajustes › Apariencia › Gib.");
                     }}
                   >
                     No más consejos
@@ -455,10 +455,10 @@ export function Companion() {
         </Show>
         <Gib
           size={46}
-          pose={mood() === "sleep" ? "monday" : "poker"}
+          pose={mood() === "sleep" ? "monday" : state.settings.gib.pose}
           mood={mood()}
           activity={activity()}
-          label="Gib: haz clic para un consejo"
+          label={`${gibName()}: haz clic para un consejo`}
           onHover={(inside) => {
             setHover(inside);
             // The cursor interrupts whatever he was doing (except while he is away for coffee).

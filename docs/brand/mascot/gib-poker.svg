@@ -37,6 +37,7 @@
       <rect x="53.5" y="190" width="13" height="26" rx="6.5" fill="url(#poker-fur)"/>
       <circle cx="60" cy="219" r="8.5" fill="#F2D0AC" stroke="#D4AC86" stroke-width="1.2"/>
     </g>
+    <!-- acc:neck (Settings › Apariencia › Gib: the app inserts the accessories here and in acc:head) -->
     <g class="g-head">
       <g id="poker-ears">
         <g class="ear-l"><circle cx="36" cy="94" r="22" fill="url(#poker-fur)"/><circle cx="44" cy="96" r="13.5" fill="#E2B38B"/></g>
@@ -92,6 +93,7 @@
         <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
       </g>
       <path id="poker-mouth" class="mouth" d="M96 127h16" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
+      <!-- acc:head -->
     </g>
     <g class="arm-r">
       <rect x="131" y="162" width="18" height="32" rx="9" fill="url(#poker-sleeve)" stroke="#C9CDD4" stroke-width="1.2"/>

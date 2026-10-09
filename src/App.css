@@ -477,6 +477,20 @@ kbd {
 .swatch.big { width: 26px; height: 26px; }
 .swatch.custom { background: conic-gradient(from 90deg, #f43f5e, #f59e0b, #22c55e, #3b82f6, #a855f7, #f43f5e); overflow: hidden; cursor: pointer; }
 .swatch.custom input { opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.swatch.follow { display: grid; place-items: center; color: var(--accent-fg); font: 700 11px/1 var(--sans); }
+
+/* Settings › Apariencia › Gib */
+.gib-settings { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 14px; }
+.gib-preview { flex: none; width: 168px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 12px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: radial-gradient(70% 60% at 50% 40%, color-mix(in srgb, var(--accent) 10%, var(--surface)), var(--surface)); }
+.gib-preview-name { font-size: 12px; font-weight: 600; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gib-look { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.gib-look .field input[type="text"] { max-width: 240px; }
+.gib-look .seg { flex-wrap: wrap; width: fit-content; }
+.gib-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gib-chip { height: 26px; padding: 0 11px; border-radius: 13px; border: 1px solid var(--border-strong); color: var(--text-muted); font-size: 12px; transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast); }
+.gib-chip:hover { color: var(--text); background: var(--hover); }
+.gib-chip.on { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
+@media (max-width: 720px) { .gib-settings { flex-direction: column; align-items: stretch; } .gib-preview { width: auto; } }
 
 .stepper { display: inline-flex; align-items: center; height: 30px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; width: fit-content; }
 .stepper button { width: 30px; height: 100%; color: var(--text-muted); font-size: 15px; }
@@ -1271,6 +1285,20 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .gib .lid { transform: translateY(max(calc(var(--lid-top) * -1px), calc((1 - var(--lid, 1)) * var(--lid-shut) * 1px))); transition: transform 160ms var(--ease-out); }
 /* A blink shuts the lids fully (fast, so the 150 ms blink is not over before they meet) and opens them at the usual pace. */
 .gib.is-blink .lid { --lid: 0; transition-duration: 60ms; }
+/* Gib: personalisation (Settings › Apariencia › Gib). The root carries the user's choice (state.ts, applyTheme):
+   data-gib-acc lists the accessories, --gib-tint the colour (absent: the classic black tie); a Gib with its own
+   (the preview, the lab) has .acc-own / .tinted instead. Accessories take the tint, or the accent colour. */
+.gib { --gib-acc: var(--gib-tint, var(--accent, #D97757)); }
+.gib .acc-fill { fill: var(--gib-acc); }
+.gib .acc-frame { stroke: var(--gib-tint, #2A2B30); }
+:is(:root[data-gib-tint] .gib:not(.acc-own), .gib.tinted) .tie path[fill] { fill: var(--gib-tint); }
+:is(:root[data-gib-tint] .gib:not(.acc-own), .gib.tinted) .tie path[stroke] { stroke: color-mix(in srgb, var(--gib-tint) 78%, #fff); }
+:root[data-gib-acc~="cap"] .gib:not(.acc-own) .acc-cap, .gib.acc-cap .acc-cap,
+:root[data-gib-acc~="glasses"] .gib:not(.acc-own) .acc-glasses, .gib.acc-glasses .acc-glasses,
+:root[data-gib-acc~="headphones"] .gib:not(.acc-own) .acc-headphones, .gib.acc-headphones .acc-headphones,
+:root[data-gib-acc~="scarf"] .gib:not(.acc-own) .acc-scarf, .gib.acc-scarf .acc-scarf { display: inline; }
+/* The laptop pose already wears its own glasses. */
+.gib.pose-laptop .acc-glasses { display: none !important; }
 /* Not looking at the cursor: thinking, asleep, at work, and while an idle activity directs the eyes. */
 .gib:is(.mood-think, .mood-sleep, .mood-offline, .mood-busy, .mood-idea, .mood-sad, [class*=" act-"]) .pupils { --look-x: 0px; --look-y: 0px; }
 .gib .brow-l, .gib .brow-r { transform-box: fill-box; transform-origin: center; transition: transform 240ms var(--ease-spring); }

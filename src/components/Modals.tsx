@@ -21,6 +21,7 @@ import { ExportDialog } from "./ExportDialog";
 import { AiSettings } from "./AiSettings";
 import { SnippetSettings } from "./SnippetSettings";
 import { KeymapSettings } from "./KeymapSettings";
+import { GibSettings } from "./GibSettings";
 import { ErDiagram } from "./ErDiagram";
 import { ActivityView } from "./ActivityView";
 import { SchemaCompareView } from "./SchemaCompareView";
@@ -249,6 +250,8 @@ function SettingsDialog() {
                 </select>
               </label>
             </div>
+            <h4>Gib</h4>
+            <GibSettings />
           </Show>
           <Show when={section() === "editor"}>
             <div class="form-row">

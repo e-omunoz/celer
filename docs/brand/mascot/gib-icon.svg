@@ -16,6 +16,7 @@
         <path fill="#16171B" d="M93 166.5h14L110 197 100 206 90 197z"/>
       </g>
     </g>
+    <!-- acc:neck (Settings › Apariencia › Gib: the app inserts the accessories here and in acc:head) -->
     <g class="g-head">
       <g id="icon-ears">
         <circle cx="36" cy="94" r="22" fill="#6E4B33"/>
@@ -69,6 +70,7 @@
         <ellipse cx="106" cy="111" rx="2.2" ry="1.5"/>
       </g>
       <path class="mouth" d="M96 127h16" stroke="#9A6A49" stroke-width="2.2" stroke-linecap="round"/>
+      <!-- acc:head -->
     </g>
   </g>
 </svg>

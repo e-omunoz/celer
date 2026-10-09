@@ -4,6 +4,9 @@ import icon from "../../docs/brand/mascot/gib-icon.svg?raw";
 import laptop from "../../docs/brand/mascot/gib-laptop.svg?raw";
 import monday from "../../docs/brand/mascot/gib-monday.svg?raw";
 import poker from "../../docs/brand/mascot/gib-poker.svg?raw";
+import type { GibAccessory, GibPose } from "./prefs";
+
+export { GIB_ACCESSORIES, type GibAccessory, type GibPose } from "./prefs";
 
 export type GibMood = "idle" | "wave" | "busy" | "think" | "idea" | "ok" | "happy" | "love" | "error" | "offline" | "sleep" | "sad" | "annoyed" | "grumpy";
 /**
@@ -24,9 +27,41 @@ export type GibActivity =
   | "dance"
   | "scratch"
   | "bug";
-export type GibPose = "poker" | "laptop" | "monday" | "icon";
+/**
+ * Accessories (Settings › Apariencia › Gib): SVG layers every pose carries, hidden until chosen (App.css shows the ones
+ * named in the root's data-gib-acc, or a Gib's own `accessories`). Head ones go at the end of the head group, so they
+ * move with it and sit over the eyes and lids without touching them; the scarf goes under the head, over the body.
+ * Every pose shares the head's geometry, so one drawing fits all. Colour: .acc-fill and .acc-frame (App.css).
+ */
+const ACC_HEAD = `
+  <g class="acc acc-cap" display="none">
+    <path class="acc-fill" d="M52 50C52 22 74 10 100 10s48 12 48 40z"/>
+    <path d="M100 11v39M78 16q-9 14-9 34M122 16q9 14 9 34" stroke="#000" stroke-opacity=".16" stroke-width="1.6"/>
+    <path class="acc-fill" d="M44 50q56-10 112 0q4 6-2 9q-54-9-108 0q-6-3-2-9z"/>
+    <path d="M44 50q56-10 112 0q4 6-2 9q-54-9-108 0q-6-3-2-9z" fill="#000" fill-opacity=".22"/>
+    <circle class="acc-fill" cx="100" cy="11" r="4.2"/>
+  </g>
+  <g class="acc acc-glasses" display="none">
+    <circle class="acc-frame" cx="79" cy="85" r="16.5" fill="#BFE0FF" fill-opacity=".12" stroke-width="2.8"/>
+    <circle class="acc-frame" cx="121" cy="85" r="16.5" fill="#BFE0FF" fill-opacity=".12" stroke-width="2.8"/>
+    <path class="acc-frame" d="M95.5 84q4.5-3 9 0M62.5 82l-8-3M137.5 82l8-3" stroke-width="2.6" stroke-linecap="round"/>
+  </g>
+  <g class="acc acc-headphones" display="none">
+    <path d="M27 96C25 44 58 17 100 17s75 27 73 79" stroke="#2E3138" stroke-width="7" stroke-linecap="round"/>
+    <rect class="acc-fill" x="15" y="76" width="25" height="40" rx="11"/>
+    <rect class="acc-fill" x="160" y="76" width="25" height="40" rx="11"/>
+    <path d="M24 84v24M176 84v24" stroke="#000" stroke-opacity=".2" stroke-width="5" stroke-linecap="round"/>
+  </g>`;
+const ACC_NECK = `
+  <g class="acc acc-scarf" display="none">
+    <path class="acc-fill" d="M110 150l13 42-13 3-9-40z"/>
+    <path d="M112 182l11-3M114 188l10-3" stroke="#fff" stroke-opacity=".45" stroke-width="2"/>
+    <path class="acc-fill" d="M64 141q36 17 72 0l3 13q-39 19-78 0z"/>
+    <path d="M66 147q34 15 68 0" stroke="#fff" stroke-opacity=".4" stroke-width="2"/>
+  </g>`;
 
-const ART: Record<GibPose, string> = { poker, laptop, monday, icon };
+const dress = (svg: string) => svg.replace("<!-- acc:head -->", ACC_HEAD).replace(/<!-- acc:neck[^>]*-->/, ACC_NECK);
+const ART: Record<GibPose, string> = { poker: dress(poker), laptop: dress(laptop), monday: dress(monday), icon: dress(icon) };
 
 let instances = 0;
 /**
@@ -51,6 +86,9 @@ export function Gib(props: {
   onDblClick?: () => void;
   onHover?: (inside: boolean) => void;
   ref?: (el: HTMLSpanElement) => void;
+  /** His own accessories and colour (the settings preview, the lab); otherwise those of the settings, from the root. */
+  accessories?: GibAccessory[];
+  tint?: string | null;
   /** GibLab only: lids shut (to check that a blink closes them fully), and a fixed gaze in SVG units. */
   blink?: boolean;
   look?: [number, number];
@@ -136,10 +174,11 @@ export function Gib(props: {
         props.ref?.(el);
       }}
       class="gib"
-      classList={{ [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink() || Boolean(props.blink), clickable: Boolean(props.onClick) }}
+      classList={{ ...accessoryClasses(props.accessories), tinted: Boolean(props.tint), [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink() || Boolean(props.blink), clickable: Boolean(props.onClick) }}
       style={{
         width: `${props.size ?? 96}px`,
         "--gib-size": `${props.size ?? 96}px`,
+        ...(props.tint ? { "--gib-tint": props.tint } : {}),
         ...(props.look ? { "--look-x": `${props.look[0]}px`, "--look-y": `${props.look[1]}px` } : {}),
       }}
       role={props.onClick ? "button" : "img"}
@@ -252,4 +291,9 @@ function ActivityFx(props: { activity: GibActivity | null }) {
       </Show>
     </>
   );
+}
+/** "acc-own" plus one class per accessory when a Gib has its own set (App.css then ignores the root's). */
+function accessoryClasses(list: GibAccessory[] | undefined): Record<string, boolean> {
+  if (!list) return {};
+  return { "acc-own": true, ...Object.fromEntries(list.map((name) => [`acc-${name}`, true])) };
 }
