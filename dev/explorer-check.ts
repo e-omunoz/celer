@@ -2,6 +2,7 @@
 // passwords, moving and deleting several items) and src/treeSelect.ts (multi-selection):
 // node --experimental-strip-types dev/explorer-check.ts
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   allFolders,
   buildConnTree,
@@ -9,6 +10,11 @@ import {
   connMatches,
   countConns,
   exportConnectionsJson,
+  exportConnectionsJsonWithSecrets,
+  joinParams,
+  secretRequests,
+  splitSecretParams,
+  withImportedSecrets,
   filterActive,
   folderName,
   inlinePassword,
@@ -164,6 +170,49 @@ const sshBack = parseConnectionsJson(sshText).connections;
 assert.deepEqual(sshBack[0].ssh, { enabled: true, host: "bastion", port: 2222, user: "ops", auth: "key", keyPath: "~/.ssh/id_ed25519", jumps: ["edge"] });
 assert.equal(sshBack[1].ssh, undefined);
 assert.deepEqual(parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 1, connections: [{ kind: "mysql", ssh: { enabled: true, host: "b", port: "x", auth: "rot13", jumps: [1, "j"] } }] })).connections[0].ssh, { enabled: true, host: "b", port: 22, user: "", auth: "password", keyPath: "", jumps: ["j"] });
+// ---------------------------------------------------------------- export with passwords (#101)
+// Without «Incluir contraseñas» the file is byte for byte what Celer 2.2.0 wrote (v1): the SHA-256 of that output.
+const golden = [
+  conn("a", "Producción", "Clientes/Egarsat", "mssql", { host: "sql01", port: 1433, user: "sa", password: "S3creta", database: "crm", production: true, startupSql: "SET LOCK_TIMEOUT 5000;" }),
+  conn("b", "Almacén", "", "informix", { host: "ifx", instance: "ol_demo", extra: "DB_LOCALE=en_US.819;sslpassword=x" }),
+  conn("c", "Odbc", "", "odbc", { odbcConnStr: "DSN=x;UID=u;PWD={a;b}}c};Trusted=no", password: "p" }),
+].map(({ id, name, folder, kind, ...rest }) => ({ ...emptyConn(kind), ...rest, id, name, folder, kind }));
+const v1 = exportConnectionsJson(golden, ["Vacía"], new Date("2026-10-08T10:00:00Z"));
+assert.equal(createHash("sha256").update(v1).digest("hex"), "954b4aaae34b4daad0d76c134f9907b6cbb625a6f5d7a57d011f4fcd03fbc18a", v1);
+// Secret entries of the parameters (not PWD=/Password=, which are the password) are split out for the core.
+assert.deepEqual(splitSecretParams("DB_LOCALE=en_US.819;sslpassword=x;passfile=/p;PWD=y;api_key={a;b}"), { kept: "DB_LOCALE=en_US.819;passfile=/p;PWD=y;", secret: "sslpassword=x;api_key={a;b}" });
+assert.deepEqual(splitSecretParams("application_name=x\ntoken=t\nconnect_timeout=5"), { kept: "application_name=x\nconnect_timeout=5", secret: "token=t" });
+assert.equal(joinParams("DB_LOCALE=en_US.819;", "sslpassword=x"), "DB_LOCALE=en_US.819;sslpassword=x");
+assert.equal(joinParams("", "token=t"), "token=t");
+assert.equal(joinParams("a=1\nb=2", "token=t"), "a=1\nb=2\ntoken=t");
+const asked = secretRequests(golden);
+assert.deepEqual(asked.requests, [
+  { id: "a", inline: null },
+  { id: "b", inline: { extra: "sslpassword=x" } },
+  { id: "c", inline: null },
+]);
+// With them: v2, saying so on top, the sealed block as the core gave it, and no secret anywhere else.
+const sealed = { encrypted: true, cipher: "AES-256-GCM", kdf: { name: "Argon2id", memoryKiB: 65536, iterations: 3, parallelism: 1, salt: "c2FsdA==" }, nonce: "bm9uY2U=", data: "ZGF0YQ==" };
+const v2 = exportConnectionsJsonWithSecrets(golden, ["Vacía"], new Date("2026-10-08T10:00:00Z"), sealed);
+const v2doc = JSON.parse(v2);
+assert.equal(v2doc.version, 2);
+assert.match(v2doc.containsSecrets, /cifradas/);
+assert.deepEqual(v2doc.secrets, sealed);
+for (const word of ["S3creta", "sslpassword", "a;b}}c"]) assert.ok(!v2.includes(word), word);
+assert.equal(v2doc.connections[1].extra, "DB_LOCALE=en_US.819;");
+assert.match(JSON.parse(exportConnectionsJsonWithSecrets(golden, [], new Date(), { encrypted: false })).containsSecrets, /SIN CIFRAR/);
+// Reading: v1 files still import (no secrets); v2 hands over its block; a v2 without it is refused.
+assert.equal(parseConnectionsJson(v1).secrets, null);
+const read = parseConnectionsJson(v2);
+assert.deepEqual(read.secrets, { encrypted: true, block: sealed });
+assert.equal(read.connections.length, 3);
+assert.throws(() => parseConnectionsJson(JSON.stringify({ ...v2doc, secrets: undefined })), /secrets/);
+assert.throws(() => parseConnectionsJson(JSON.stringify({ ...v2doc, version: 3 })), /Versión/);
+// What the core opens goes back into each connection: password, SSH secrets, secret parameters.
+const restored = withImportedSecrets({ ...read.connections[1], ssh: { enabled: true, host: "b", port: 22, user: "u", auth: "key", keyPath: "", jumps: [] } }, { password: "pw", sshPassphrase: "frase", sshKey: "KEY", inline: { extra: "sslpassword=x" } });
+assert.deepEqual([restored.password, restored.savePassword, restored.extra, restored.ssh?.passphrase, restored.ssh?.privateKey, restored.ssh?.password], ["pw", true, "DB_LOCALE=en_US.819;sslpassword=x", "frase", "KEY", null]);
+assert.equal(withImportedSecrets(read.connections[0], undefined), read.connections[0], "a connection without secrets is saved as it came");
+
 // Duplicates: the same server, database and user (case-insensitive) are not imported twice, not even within the file.
 assert.equal(connIdentity({ ...secret, host: "SQL01" }), connIdentity(secret));
 const plan = planImport([secret], [...back.connections, { ...back.connections[1] }]);

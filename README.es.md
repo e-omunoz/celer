@@ -85,7 +85,9 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
   conexiones con un nivel de permiso por conexión, límites de filas y tiempo, columnas enmascaradas y registro de
   auditoría.
 - **Trae tus conexiones.** Impórtalas desde **DBeaver** (con las contraseñas guardadas, si quieres) y
-  **DbVisualizer**, con carpetas y marcas de producción. Arrastra conexiones entre carpetas en el explorador.
+  **DbVisualizer**, con carpetas, marcas de producción y túneles SSH. Llega a servidores detrás de un bastión con un
+  **túnel SSH** (contraseña, clave o agente, con saltos). Expórtalas con sus contraseñas, cifradas con una contraseña
+  del fichero (Argon2id + AES-256-GCM). Arrastra conexiones entre carpetas en el explorador.
 - **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
   configurables, biblioteca de scripts, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
   tiene una idea cuando acaba una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como

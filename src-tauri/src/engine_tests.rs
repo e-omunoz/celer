@@ -1187,6 +1187,86 @@ fn imported_connections_connect() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+// ───────────────────────────────────────────────────────────────── export with passwords (#101)
+
+/// Export «con contraseñas» → import elsewhere, on every engine: the connections of the migration samples (one per
+/// engine, two through the SSH bastion) with their passwords kept as the credential store keeps them; their secrets
+/// collected and sealed with a passphrase as `export_secrets` does, opened as `open_secrets` does (a wrong passphrase
+/// opens nothing), and given back to the connections as the interface does on import; each one then connects from a
+/// fresh data folder without any password typed.
+#[test]
+fn exported_passwords_connect_after_import() {
+    if spec("CELER_PG_TEST").is_none() {
+        return;
+    }
+    let node = std::env::var("CELER_NODE").unwrap_or_else(|_| "node".into());
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../dev/migrate-sample.ts");
+    let out = Command::new(node).args(["--experimental-strip-types", "--no-warnings", script]).output().expect("node (CELER_NODE) para dev/migrate-sample.ts");
+    assert!(out.status.success(), "migrate-sample.ts: {}", String::from_utf8_lossy(&out.stderr));
+    let samples: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    // The source machine: connections saved without secrets, the secrets in its credential store.
+    let mut keyring = std::collections::HashMap::new();
+    let mut conns = Vec::new();
+    for (i, item) in samples.into_iter().filter(|i| i["tool"] == "dbeaver").enumerate() {
+        let mut cfg: ConnConfig = serde_json::from_value(item).unwrap();
+        cfg.id = format!("src-{i}");
+        if let Some(p) = cfg.password.take().filter(|p| !p.is_empty()) {
+            keyring.insert(cfg.id.clone(), p);
+        }
+        for account in crate::model::SshConfig::ACCOUNTS {
+            if let Some(v) = cfg.ssh.secret_mut(account).take() {
+                keyring.insert(crate::model::ssh_account(&cfg.id, account), v);
+            }
+        }
+        conns.push(cfg);
+    }
+    let requests = conns.iter().map(|c| (c.id.clone(), None)).collect();
+    let sets = crate::secrets::collect(&conns, requests, |account| keyring.get(account).cloned());
+    let block = crate::secrets::seal(&sets, Some("una frase de exportación")).unwrap();
+    let text = block.to_string();
+    assert!(keyring.values().all(|secret| !text.contains(secret.as_str())), "no secret in clear");
+    assert!(crate::secrets::open(&block, Some("otra")).unwrap_err().to_string().starts_with("SECRETS_PASSPHRASE:"));
+    let opened = crate::secrets::open(&block, Some("una frase de exportación")).unwrap();
+
+    // The other machine: a fresh data folder; each connection gets its secrets from the file, none typed.
+    let fresh = sample_store("fresh-import");
+    let odbc_dsn = Command::new("odbcinst").args(["-q", "-s"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("[CelerPG]")).unwrap_or(false);
+    let mut failures = Vec::new();
+    for (index, mut cfg) in conns.into_iter().enumerate() {
+        let label = format!("«{}»", cfg.name);
+        if (cfg.kind == DbKind::Odbc && !odbc_dsn) || (cfg.ssh.enabled && spec("CELER_SSH_TEST").is_none()) || (cfg.informix_mode == "drda" && std::env::var("CELER_IBM_LIB").is_err()) {
+            eprintln!("⚠ {label}: no disponible en este equipo");
+            continue;
+        }
+        let set = opened.get(&index.to_string()).cloned().unwrap_or_default();
+        assert!(cfg.kind == DbKind::Sqlite || set.password.is_some(), "{label}: su contraseña viaja en el fichero");
+        cfg.id = String::new();
+        cfg.password = set.password.clone();
+        cfg.ssh.password = set.ssh_password.clone();
+        cfg.ssh.passphrase = set.ssh_passphrase.clone();
+        cfg.ssh.private_key = set.ssh_key.clone();
+        let probe = if cfg.kind == DbKind::Informix { "SELECT 1 FROM systables WHERE tabid = 1" } else { "SELECT 1" };
+        let connect = || crate::prepare(&fresh, cfg.clone()).map_err(anyhow::Error::msg).and_then(|p| (p.connector)());
+        let mut result = connect();
+        // A new machine has not seen the bastion's key: shown and trusted once, as in the app.
+        while let Err(e) = &result {
+            let text = e.to_string();
+            let Some(token) = text.strip_prefix("SSH_HOST_UNKNOWN:").and_then(|t| t.split(':').next()) else { break };
+            crate::ssh::trust(&fresh.dir, token).unwrap();
+            result = connect();
+        }
+        match result.and_then(|mut d| d.execute(probe, 10)) {
+            Ok(out) => {
+                assert_eq!(txt(&out.results[0].rows[0][0]), "1", "{label}");
+                eprintln!("✔ {label}: conecta tras importar, sin escribir contraseñas");
+            }
+            Err(e) => failures.push(format!("{label}: {e}")),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&fresh.dir);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // ───────────────────────────────────────────────────────────────── SSH tunnels (ssh.rs)
 //   CELER_SSH_TEST="host=localhost port=2222 user=celer password=celer key=<private key> container=celer-sshd
 //                   pg=celer-pg:5432 mysql=celer-mysql:3306 mariadb=celer-mariadb:3306 mssql=celer-mssql:1433 ifx=celer-ifx"

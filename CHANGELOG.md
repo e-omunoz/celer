@@ -16,6 +16,14 @@ All notable changes to Celer are documented here. The format follows
   from the database's. The SSH password, passphrase and key go to the OS credential store (long keys in parts), never
   to connections.json; exports carry only the tunnel's settings, and DBeaver/DbVisualizer imports bring them too.
   Hidden, with a note why, for SQLite and ODBC.
+- **Export connections with their passwords** (#101): «Exportar» opens a dialog with «Incluir contraseñas», off by
+  default (the file is then exactly the v1 file as before). With it on, a passphrase typed twice seals every secret
+  (database password, SSH password, passphrase and pasted key, secret entries of the ODBC string and "Parámetros
+  extra") with Argon2id + AES-256-GCM in the Rust core, so the secrets never reach the interface on export; the file
+  (format v2) says on top that it carries encrypted passwords. «Sin cifrar» exists only behind an explicit warning.
+  Importing a v2 file asks for the passphrase, refuses a wrong one without importing any secret (try again, or import
+  without passwords), and saves the secrets to the OS credential store, never to connections.json. v1 files import as
+  before.
 
 ### Fixed
 - **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as

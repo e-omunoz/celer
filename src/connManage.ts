@@ -1,10 +1,11 @@
 // Gestión de las conexiones desde el explorador: renombrar, duplicar, borrar con deshacer, carpetas anidadas (crear,
-// renombrar, mover, borrar), orden, favoritas y recientes, y exportar e importar sin contraseñas. La lógica pura está
+// renombrar, mover, borrar), orden, favoritas y recientes, y exportar e importar (con o sin contraseñas). La lógica pura está
 // en connTree.ts; aquí, lo que guarda y avisa.
 import { api, errorText, isTauri } from "./api";
 import {
   allFolders,
   exportConnectionsJson,
+  exportConnectionsJsonWithSecrets,
   folderName,
   insertAt,
   isInside,
@@ -19,9 +20,12 @@ import {
   planMove,
   pushRecent,
   renameFolderPath,
+  secretRequests,
   toggleIn,
   uniqueName,
+  withImportedSecrets,
   type ConnSort,
+  type ImportedSecrets,
 } from "./connTree";
 import { confirmDialog, connectionById, disconnect, notify, refreshConnections, saveSettings, setState, state } from "./state";
 import { selectionLabel } from "./treeSelect";
@@ -361,36 +365,95 @@ export function noteRecent(id: string) {
 
 // ---------------------------------------------------------------- exportar e importar
 
-/** Exporta las conexiones elegidas (todas si `ids` va vacío) a un JSON sin contraseñas. */
-export async function exportConnections(ids: string[] = [], title = "conexiones") {
+/** The connections an export takes (all when `ids` is empty) and the empty folders that go with them. */
+function exportChoice(ids: string[]) {
   const chosen = (ids.length ? ids.map(connectionById).filter((conn): conn is ConnSummary => Boolean(conn)) : state.connections).map(configOf);
+  const folders = state.settings.connFolders.filter((folder) => !ids.length || chosen.some((conn) => isInside(conn.folder || "", folder) || isInside(folder, conn.folder || "")));
+  return { chosen, folders };
+}
+
+/** Exportar: opens the dialog (with «Incluir contraseñas», off by default) for the chosen connections (all if none). */
+export function exportConnections(ids: string[] = [], title = "conexiones") {
+  const { chosen } = exportChoice(ids);
   if (!chosen.length) {
     notify("No hay conexiones que exportar", "info");
     return;
   }
-  const folders = state.settings.connFolders.filter((folder) => !ids.length || chosen.some((conn) => isInside(conn.folder || "", folder) || isInside(folder, conn.folder || "")));
-  const text = exportConnectionsJson(chosen, folders, new Date());
+  setState("connExport", { ids, title, count: chosen.length });
+}
+
+/**
+ * Writes the export. Without passwords, the v1 JSON as always; with them (`secrets`), v2 with the secrets the core
+ * sealed with the passphrase (null passphrase: in clear, only after the explicit warning in the dialog).
+ */
+export async function runConnectionsExport(ids: string[], title: string, secrets: { passphrase: string | null } | null): Promise<boolean> {
+  const { chosen, folders } = exportChoice(ids);
   try {
-    const picked = await api().pickSavePath([{ name: "Conexiones de Celer (JSON)", extensions: ["json"] }]);
+    let text: string;
+    if (secrets) {
+      const block = await api().exportSecrets(secretRequests(chosen).requests, secrets.passphrase);
+      text = exportConnectionsJsonWithSecrets(chosen, folders, new Date(), block);
+    } else {
+      text = exportConnectionsJson(chosen, folders, new Date());
+    }
+    const suffix = secrets ? (secrets.passphrase ? "-con-contraseñas" : "-contraseñas-sin-cifrar") : "";
+    const name = `celer-${title.replace(/[^\w-]+/g, "-")}${suffix}.json`;
+    const picked = await api().pickSavePath([{ name: "Conexiones de Celer (JSON)", extensions: ["json"] }], name);
     // En el navegador no hay diálogo de guardar: se descarga con este nombre.
-    const path = picked ?? (isTauri() ? null : `celer-${title.replace(/[^\w-]+/g, "-")}.json`);
-    if (!path) return;
+    const path = picked ?? (isTauri() ? null : name);
+    if (!path) return false;
     await api().writeTextFile(path.toLowerCase().endsWith(".json") ? path : `${path}.json`, text);
-    notify(`${chosen.length === 1 ? "1 conexión exportada" : `${chosen.length} conexiones exportadas`} (sin contraseñas)`, "success", path);
+    const what = secrets ? (secrets.passphrase ? "con las contraseñas cifradas" : "con las contraseñas SIN CIFRAR") : "sin contraseñas";
+    notify(`${chosen.length === 1 ? "1 conexión exportada" : `${chosen.length} conexiones exportadas`} (${what})`, secrets && !secrets.passphrase ? "warning" : "success", path);
+    return true;
   } catch (err) {
     notify("No se pudieron exportar las conexiones", "error", errorText(err));
+    return false;
   }
 }
 
-/** Importa un JSON exportado por Celer: ids nuevos, sin contraseñas, sin repetir las que ya existen. */
+/**
+ * The secrets of a v2 file: asks for its passphrase until it is right (a wrong one imports no secret) or the user
+ * imports without passwords (an empty object) or cancels (null: nothing is imported).
+ */
+async function unlockSecrets(file: ReturnType<typeof parseConnectionsJson>): Promise<Record<string, ImportedSecrets> | null> {
+  if (!file.secrets) return {};
+  if (!file.secrets.encrypted) return api().openSecrets(file.secrets.block, null);
+  let error = "";
+  for (;;) {
+    const answer = await askSecretsPassphrase(error);
+    if (answer === null) return null;
+    if (answer === false) return {};
+    try {
+      return await api().openSecrets(file.secrets.block, answer);
+    } catch (err) {
+      const text = errorText(err);
+      if (!text.startsWith("SECRETS_PASSPHRASE:")) throw err;
+      error = text.replace(/^SECRETS_PASSPHRASE:\s*/, "");
+    }
+  }
+}
+
+/**
+ * Importa un JSON exportado por Celer: ids nuevos, sin repetir las que ya existen. Si trae contraseñas (v2), pide la
+ * contraseña del fichero y las guarda en el almacén de credenciales del sistema, nunca en connections.json.
+ */
 export async function importConnections() {
   try {
     const path = await api().pickOpenPath([{ name: "Conexiones de Celer (JSON)", extensions: ["json"] }]);
     if (!path) return;
     const { text } = await api().readTextFile(path);
     const file = parseConnectionsJson(text);
+    const secrets = await unlockSecrets(file);
+    if (secrets === null) return;
+    const position = new Map(file.connections.map((conn, index) => [conn, String(index)]));
     const plan = planImport(state.connections, file.connections);
-    for (const cfg of plan.fresh) await api().saveConnection({ ...cfg, id: "", password: "" });
+    let withPasswords = 0;
+    for (const cfg of plan.fresh) {
+      const set = secrets[position.get(cfg) ?? ""];
+      if (set && (set.password || set.sshPassword || set.sshPassphrase || set.sshKey)) withPasswords++;
+      await api().saveConnection(withImportedSecrets({ ...cfg, id: "", password: "" }, set));
+    }
     const folders = file.folders.filter((folder) => !state.settings.connFolders.includes(folder));
     if (folders.length) await saveSettings({ connFolders: [...state.settings.connFolders, ...folders] });
     await refreshConnections();
@@ -398,8 +461,19 @@ export async function importConnections() {
     const dup = plan.duplicates.length;
     const text1 = fresh === 1 ? "1 conexión importada" : `${fresh} conexiones importadas`;
     const text2 = dup ? (dup === 1 ? "1 ya existía" : `${dup} ya existían`) : "";
-    notify([text1, text2].filter(Boolean).join(", "), fresh ? "success" : "info", fresh ? "Sin contraseñas: Celer las pedirá al conectar." : undefined);
+    const detail = !fresh ? undefined : withPasswords ? `${withPasswords === fresh ? "Todas" : `${withPasswords} de ${fresh}`} con su contraseña, guardada en el almacén de credenciales del sistema.` : "Sin contraseñas: Celer las pedirá al conectar.";
+    notify([text1, text2].filter(Boolean).join(", "), fresh ? "success" : "info", detail);
   } catch (err) {
     notify("No se pudieron importar las conexiones", "error", errorText(err));
   }
+}
+
+/** Asks for the passphrase of a file with encrypted passwords: the text, false to import without them, null to cancel. */
+function askSecretsPassphrase(error: string): Promise<string | false | null> {
+  return new Promise((resolve) => setState("secretsAsk", { error, resolve }));
+}
+
+export function answerSecretsPassphrase(value: string | false | null) {
+  state.secretsAsk?.resolve(value);
+  setState("secretsAsk", null);
 }

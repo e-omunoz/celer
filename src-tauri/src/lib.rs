@@ -13,6 +13,7 @@ mod odbc;
 mod odbc_driver;
 mod postgres;
 mod probe;
+mod secrets;
 mod session;
 mod sheets;
 mod sqlite;
@@ -500,6 +501,40 @@ fn ssh_host_key(token: String) -> Option<ssh::HostKeyInfo> {
 #[tauri::command]
 fn ssh_trust_host_key(state: State<'_, Arc<AppState>>, token: String) -> CmdResult<ssh::HostKeyInfo> {
     ssh::trust(&state.store.dir, &token).map_err(err)
+}
+
+/// One connection of an export «con contraseñas»: its id and the secret entries the interface took out of its
+/// "Parámetros extra" / ODBC string.
+#[derive(serde::Deserialize)]
+struct SecretRequest {
+    id: String,
+    #[serde(default)]
+    inline: Option<serde_json::Value>,
+}
+
+/// The `secrets` block of an export with passwords (format v2), keyed by the connection's position in the file:
+/// sealed with `passphrase` (Argon2id + AES-256-GCM), or in clear without one. The secrets are read here from the
+/// credential store and never cross to the interface.
+#[tauri::command]
+async fn export_secrets(state: State<'_, Arc<AppState>>, items: Vec<SecretRequest>, passphrase: Option<String>) -> CmdResult<serde_json::Value> {
+    let app = state.inner().clone();
+    // Argon2id takes a moment: off the main thread.
+    tokio::task::spawn_blocking(move || {
+        let conns = app.conns.lock().clone();
+        let requests = items.into_iter().map(|i| (i.id, i.inline)).collect();
+        let sets = secrets::collect(&conns, requests, |account| app.store.get_password(account));
+        secrets::seal(&sets, passphrase.as_deref()).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// The secrets of an imported v2 file, for the connections it creates (saved straight to the credential store). A
+/// wrong passphrase fails with `SECRETS_PASSPHRASE:` and returns none.
+#[tauri::command]
+async fn open_secrets(block: serde_json::Value, passphrase: Option<String>) -> CmdResult<std::collections::BTreeMap<String, secrets::SecretSet>> {
+    // Argon2id takes a moment: off the main thread.
+    tokio::task::spawn_blocking(move || secrets::open(&block, passphrase.as_deref()).map_err(err)).await.map_err(err)?
 }
 
 /// An Informix connection over JDBC is about to open: Java starts now, while the user types the password.
@@ -1505,6 +1540,8 @@ pub fn run() {
             test_connection,
             ssh_host_key,
             ssh_trust_host_key,
+            export_secrets,
+            open_secrets,
             open_session,
             check_session,
             close_session,

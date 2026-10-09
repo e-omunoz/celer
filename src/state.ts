@@ -327,6 +327,10 @@ export const [state, setState] = createStore({
   informixDrivers: null as InformixDrivers | null,
   /** A JDBC connection lacks Java or the driver: what is missing, and what to retry once it is downloaded. */
   jdbcSetup: null as { missing: ("java" | "jdbc")[]; text: string; retry: (() => void) | null } | null,
+  /** «Exportar conexiones»: the dialog with «Incluir contraseñas» (ids empty = all). */
+  connExport: null as { ids: string[]; title: string; count: number } | null,
+  /** Importing a file with encrypted passwords: its passphrase (false = without passwords, null = cancel). */
+  secretsAsk: null as { error: string; resolve: (value: string | false | null) => void } | null,
   /** An SSH server's key Celer has not seen (SSH_HOST_UNKNOWN): shown with «Confiar en esta clave». */
   sshHostKey: null as { token: string; text: string; info: SshHostKeyInfo | null; retry: (() => void) | null } | null,
   /** The Informix drivers guide, open on a topic (jdbc, sdk, drda, locale, server), with the error that led there. */

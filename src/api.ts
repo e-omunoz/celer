@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
 import type { MigrationSource } from "./migrate";
+import type { ImportedSecrets, SecretRequest } from "./connTree";
 import { createDemoBackend } from "./demo";
 
 export interface Backend {
@@ -37,6 +38,13 @@ export interface Backend {
   sshHostKey(token: string): Promise<SshHostKeyInfo | null>;
   /** «Confiar en esta clave»: the key goes to Celer's known_hosts. */
   sshTrustHostKey(token: string): Promise<SshHostKeyInfo>;
+  /**
+   * The `secrets` block of an export with passwords: the core reads each connection's secrets from the credential
+   * store and seals them with `passphrase` (Argon2id + AES-256-GCM), or leaves them in clear when it is null.
+   */
+  exportSecrets(items: SecretRequest[], passphrase: string | null): Promise<{ encrypted: boolean } & Record<string, unknown>>;
+  /** The secrets of a v2 file, by connection position. A wrong passphrase rejects with SECRETS_PASSPHRASE:. */
+  openSecrets(block: Record<string, unknown>, passphrase: string | null): Promise<Record<string, ImportedSecrets>>;
   openSession(connId: string, password?: string, options?: OpenSessionOptions): Promise<SessionInfo>;
   /** Checks a session (a cheap round trip if it has been idle, or always with `force`) and reconnects it if it dropped. */
   checkSession(sessionId: string, force: boolean): Promise<SessionHealth>;
@@ -137,6 +145,8 @@ function tauriBackend(): Backend {
     testConnection: (cfg) => invoke("test_connection", { cfg }),
     sshHostKey: (token) => invoke("ssh_host_key", { token }),
     sshTrustHostKey: (token) => invoke("ssh_trust_host_key", { token }),
+    exportSecrets: (items, passphrase) => invoke("export_secrets", { items, passphrase }),
+    openSecrets: (block, passphrase) => invoke("open_secrets", { block, passphrase }),
     openSession: (connId, password, options) =>
       invoke("open_session", { connId: connId, password: password ?? null, database: options?.database || null, autocommit: options?.autocommit ?? null }),
     checkSession: (sessionId, force) => invoke("check_session", { sessionId: sessionId, force }),

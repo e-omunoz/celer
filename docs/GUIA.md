@@ -99,8 +99,16 @@ En el explorador:
   usuario, carpeta y motor (`pg`, `sqlserver`, `ifx`…). Los filtros rápidos dejan ver solo las favoritas, las
   conectadas, las de producción o las de un motor.
 - **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
-- **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON sin contraseñas, para compartirlas o
-  llevarlas a otro equipo; al importar no se repiten las que ya existen.
+- **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON, para compartirlas o llevarlas a otro
+  equipo; al importar no se repiten las que ya existen. De entrada va **sin contraseñas** (el fichero de siempre) y
+  Celer las pide al conectar. Con **Incluir contraseñas** viajan también la contraseña de la base, las del túnel SSH
+  (contraseña, frase de paso y clave pegada) y los parámetros secretos de la cadena ODBC y de *Parámetros extra*:
+  - Hay que escribir dos veces una **contraseña del fichero** (8 caracteres o más); Celer cifra con ella los secretos
+    (Argon2id + AES-256-GCM) y el fichero dice arriba que lleva contraseñas cifradas. Sin ella no se pueden recuperar.
+  - **Sin cifrar** existe, pero solo marcando que entiendes que cualquiera que lea el fichero podrá usarlas.
+  - Al importar un fichero con contraseñas cifradas, Celer pide su contraseña: si no es la correcta no importa ningún
+    secreto y deja volver a intentarlo, o **Importar sin contraseñas**. Los secretos van al almacén de credenciales
+    del sistema, nunca a `connections.json`, y las conexiones conectan sin volver a escribir nada.
 - **Varias a la vez**: Ctrl+clic (⌘+clic en macOS) añade o quita una fila, Mayús+clic selecciona un rango tal como se
   ve en el árbol y Ctrl+Mayús+clic lo añade a lo que ya había; con el teclado, Mayús+flechas (y Mayús+Inicio/Fin)
   amplían la selección y Ctrl+A selecciona todas las filas visibles del mismo tipo que la que tiene el foco (todas las

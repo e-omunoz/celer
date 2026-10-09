@@ -52,6 +52,11 @@ mysql = { version = "26", default-features = false, features = ["minimal-rust", 
 calamine = { version = "0.36.1", features = ["dates"] }
 # SSH tunnels (src/ssh.rs): pure Rust, ring for the crypto (no C toolchain beyond what ring needs)
 russh = { version = "0.64", default-features = false, features = ["ring", "rsa", "flate2"] }
+# Connection export with passwords (src/secrets.rs): Argon2id + AES-256-GCM, the versions russh already brings
+argon2 = "0.6"
+aes-gcm = "0.11"
+base64 = "0.22"
+getrandom = "0.3"
 # A second launch raises the running Celer instead of writing its files from a stale copy (src/lib.rs run)
 tauri-plugin-single-instance = "2"
 
@@ -61,6 +66,12 @@ winreg = "0.56"
 
 [profile.dev]
 debug = "line-tables-only"
+
+# Argon2id is far too slow unoptimised: an export with passwords would take seconds in debug builds and tests.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

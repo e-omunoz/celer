@@ -33,6 +33,7 @@ import { importer } from "../importer";
 import { checkForUpdates, openReleasePage } from "../update";
 import { isDetached, isPanelWindow } from "../windows";
 import { DriversSettings, InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
+import { answerSecretsPassphrase, runConnectionsExport } from "../connManage";
 import { ConnectionDialog } from "./ConnectionDialog";
 
 export function Modals() {
@@ -72,6 +73,8 @@ export function Modals() {
       <Show when={state.activity}><ActivityView /></Show>
       <Show when={schemaCompare.open && !isPanelWindow() && !isDetached("schema-compare")}><SchemaCompareView /></Show>
       <Show when={dataCompare.open && !isPanelWindow() && !isDetached("data-compare")}><DataCompareView /></Show>
+      <Show when={state.connExport}>{(ask) => <ConnExportDialog ask={ask()} />}</Show>
+      <Show when={state.secretsAsk}>{(ask) => <SecretsPassphraseDialog error={ask().error} />}</Show>
       <Show when={state.sshHostKey}>
         {(ask) => (
           <Dialog title="Clave del servidor SSH" onClose={() => setState("sshHostKey", null)} small class="ssh-hostkey">
@@ -113,6 +116,107 @@ export function Modals() {
         )}
       </Show>
     </>
+  );
+}
+
+/**
+ * «Exportar conexiones»: without passwords by default (the file as always). «Incluir contraseñas» asks for a passphrase
+ * twice and the core encrypts every secret with it; «sin cifrar» exists only behind an explicit warning.
+ */
+function ConnExportDialog(props: { ask: { ids: string[]; title: string; count: number } }) {
+  const [include, setInclude] = createSignal(false);
+  const [first, setFirst] = createSignal("");
+  const [second, setSecond] = createSignal("");
+  const [plain, setPlain] = createSignal(false);
+  const [understood, setUnderstood] = createSignal(false);
+  const [busy, setBusy] = createSignal(false);
+  const [tried, setTried] = createSignal(false);
+  const close = () => setState("connExport", null);
+  // In the browser there is no Argon2id: only in clear.
+  const encryptable = () => isTauri();
+  const problem = () => {
+    if (!include()) return "";
+    if (plain() || !encryptable()) return understood() ? "" : "Marca que entiendes que el fichero llevará las contraseñas sin cifrar.";
+    if (first().length < 8) return "La contraseña del fichero tiene que tener al menos 8 caracteres.";
+    if (first() !== second()) return "Las dos contraseñas no coinciden.";
+    return "";
+  };
+  const run = async () => {
+    setTried(true);
+    if (problem() || busy()) return;
+    setBusy(true);
+    const secrets = include() ? { passphrase: plain() || !encryptable() ? null : first() } : null;
+    const done = await runConnectionsExport(props.ask.ids, props.ask.title, secrets);
+    setBusy(false);
+    if (done) close();
+  };
+  const what = () => (props.ask.count === 1 ? "1 conexión" : `${props.ask.count} conexiones`);
+  return (
+    <Dialog title={`Exportar ${what()}`} onClose={close} class="conn-export">
+      <form onSubmit={(event) => { event.preventDefault(); void run(); }}>
+        <p class="dialog-lead">Un fichero JSON con la configuración de las conexiones y sus carpetas, para compartirlas o llevarlas a otro equipo.</p>
+        <label class="check"><input type="checkbox" checked={include()} onChange={(event) => setInclude(event.currentTarget.checked)} /> Incluir contraseñas</label>
+        <Show when={!include()}>
+          <small class="field-hint">Sin contraseñas: al importarlo, Celer las pedirá al conectar.</small>
+        </Show>
+        <Show when={include()}>
+          <div class="export-secrets">
+            <small class="field-hint">Van la contraseña de la base, las del túnel SSH (contraseña, frase de paso y clave pegada) y los parámetros secretos de la cadena ODBC y de «Parámetros extra».</small>
+            <Show when={encryptable() && !plain()}>
+              <div class="form-row">
+                <label class="field grow">
+                  <span>Contraseña del fichero</span>
+                  <input type="password" value={first()} autocomplete="new-password" ref={(el) => queueMicrotask(() => el.focus())} onInput={(event) => setFirst(event.currentTarget.value)} />
+                </label>
+                <label class="field grow">
+                  <span>Repítela</span>
+                  <input type="password" value={second()} autocomplete="new-password" onInput={(event) => setSecond(event.currentTarget.value)} />
+                </label>
+              </div>
+              <small class="field-hint">Cifra las contraseñas con Argon2id y AES-256-GCM. Sin ella no se pueden recuperar: guárdala aparte del fichero.</small>
+            </Show>
+            <Show when={encryptable()}>
+              <label class="check danger"><input type="checkbox" checked={plain()} onChange={(event) => setPlain(event.currentTarget.checked)} /> Sin cifrar (no recomendado)</label>
+            </Show>
+            <Show when={plain() || !encryptable()}>
+              <div class="export-warning" role="alert">
+                <b>Las contraseñas irán en claro.</b> Cualquiera que abra el fichero, o una copia suya en el correo, un chat o una copia de seguridad, podrá
+                leerlas y conectarse con ellas.
+                <label class="check"><input type="checkbox" checked={understood()} onChange={(event) => setUnderstood(event.currentTarget.checked)} /> Lo entiendo: exportar sin cifrar</label>
+              </div>
+            </Show>
+          </div>
+        </Show>
+        <Show when={tried() && problem()}><small class="field-msg error" role="alert">{problem()}</small></Show>
+        <footer>
+          <button type="button" class="btn" onClick={close}>Cancelar</button>
+          <button type="submit" class="btn primary" classList={{ danger: include() && (plain() || !encryptable()) }} disabled={busy()}>{busy() ? "Exportando…" : "Exportar…"}</button>
+        </footer>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Importing a file with encrypted passwords: its passphrase, or without them, or cancel. */
+function SecretsPassphraseDialog(props: { error: string }) {
+  const [value, setValue] = createSignal("");
+  return (
+    <Dialog title="Fichero con contraseñas" onClose={() => answerSecretsPassphrase(null)} small>
+      <form onSubmit={(event) => { event.preventDefault(); answerSecretsPassphrase(value()); }}>
+        <p class="dialog-lead">El fichero trae las contraseñas cifradas. Escribe la contraseña con la que se exportó y se guardarán en el almacén de credenciales del sistema.</p>
+        <label class="field">
+          <span>Contraseña del fichero</span>
+          <input type="password" value={value()} aria-invalid={Boolean(props.error)} ref={(el) => queueMicrotask(() => el.focus())} onInput={(event) => setValue(event.currentTarget.value)} />
+          <Show when={props.error}><small class="field-msg error" role="alert">{props.error}</small></Show>
+        </label>
+        <footer>
+          <button type="button" class="btn" onClick={() => answerSecretsPassphrase(null)}>Cancelar</button>
+          <span class="spacer" />
+          <button type="button" class="btn" onClick={() => answerSecretsPassphrase(false)}>Importar sin contraseñas</button>
+          <button type="submit" class="btn primary" disabled={!value()}>Importar</button>
+        </footer>
+      </form>
+    </Dialog>
   );
 }
 

@@ -434,6 +434,23 @@ export function createDemoBackend(): Backend {
     async sshTrustHostKey() {
       throw new Error("En el navegador no hay túneles SSH.");
     },
+    // Passwords in an export: in the browser only in clear (there is no Argon2id here); the desktop app encrypts them.
+    async exportSecrets(items, passphrase) {
+      if (passphrase !== null) throw new Error("En el navegador las contraseñas solo se exportan sin cifrar; la aplicación de escritorio las cifra.");
+      const secrets = readJson<Record<string, string>>("celer.secrets", {});
+      const data: Record<string, unknown> = {};
+      items.forEach((item, index) => {
+        const set: Record<string, unknown> = {};
+        if (secrets[item.id]) set.password = secrets[item.id];
+        if (item.inline) set.inline = item.inline;
+        if (Object.keys(set).length) data[String(index)] = set;
+      });
+      return { encrypted: false, warning: "Contraseñas SIN CIFRAR: cualquiera que lea este fichero puede usarlas.", data };
+    },
+    async openSecrets(block) {
+      if (block.encrypted === true) throw new Error("En el navegador no se pueden abrir contraseñas cifradas: importa el fichero en la aplicación de escritorio.");
+      return (block.data ?? {}) as Record<string, never>;
+    },
     async testConnection(cfg) {
       const t0 = performance.now();
       if (cfg.kind !== "sqlite") {
