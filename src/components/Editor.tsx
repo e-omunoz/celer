@@ -65,10 +65,14 @@ function dialectOf(kind: DbKind) {
 }
 void MariaSQL;
 
-/** Paints a soft band behind the statement under the cursor, like DataGrip. */
+/**
+ * Paints a soft band behind the statement under the cursor, like DataGrip. The split is kept while only the cursor
+ * moves, and very long scripts (a dump) get no band, as with unfilteredWarning.
+ */
 const statementBand = (dialect: () => string) => ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    split: { doc: EditorState["doc"]; dialect: string; text: string; parts: ReturnType<typeof splitSql> } | null = null;
     constructor(view: EditorView) {
       this.decorations = this.build(view);
     }
@@ -78,8 +82,15 @@ const statementBand = (dialect: () => string) => ViewPlugin.fromClass(
     build(view: EditorView): DecorationSet {
       const builder = new RangeSetBuilder<Decoration>();
       const doc = view.state.doc;
-      const text = doc.toString();
-      const parts = splitSql(text, dialect());
+      if (doc.length > 200_000) {
+        this.split = null;
+        return builder.finish();
+      }
+      if (this.split?.doc !== doc || this.split.dialect !== dialect()) {
+        const text = doc.toString();
+        this.split = { doc, dialect: dialect(), text, parts: splitSql(text, dialect()) };
+      }
+      const { text, parts } = this.split;
       if (parts.length < 2) return builder.finish();
       const head = view.state.selection.main.head;
       let chosen = parts[0];
