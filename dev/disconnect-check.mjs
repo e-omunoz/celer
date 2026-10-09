@@ -51,22 +51,24 @@ await press("Enter", 2);
 const tx = await js(`await until(() => pane().querySelector('.rtab.on')?.textContent.includes('Resultado'), 15000); await sleep(300); return { tx: !!pane().querySelector('.tx-pending, .tx-badge, [class*=pending]'), result: pane().querySelector('.rtab.on')?.textContent };`);
 check("manual console ran a statement", /Resultado/.test(tx.result ?? ""), JSON.stringify(tx));
 
-// Disconnect: a confirmation names the open transaction; cancelling keeps everything.
+// Disconnect: the open transaction is Commit, Rollback or Cancelar (never an implicit commit); cancelling keeps everything.
 const ask = await js(`
   await menu(/^Desconectar$/);
   const dlg = await until(() => document.querySelector('[role=dialog], .dialog'), 3000);
   const text = dlg?.textContent ?? '';
+  const buttons = [...(dlg?.querySelectorAll('button') ?? [])].map((b) => b.textContent.trim()).filter(Boolean);
   button(/Cancelar/, dlg)?.click();
   await sleep(300);
-  return { text, stillConnected: connRow().classList.contains('connected') };
+  return { text, buttons, stillConnected: connRow().classList.contains('connected') };
 `);
 check("disconnect asks about the open transaction", /transacci/.test(ask.text), ask.text);
+check("it offers Commit and Rollback", ask.buttons.includes("Commit") && ask.buttons.includes("Rollback"), JSON.stringify(ask.buttons));
 check("cancel keeps the connection", ask.stillConnected);
 
 const gone = await js(`
   await menu(/^Desconectar$/);
   const dlg = await until(() => document.querySelector('[role=dialog], .dialog'), 3000);
-  button(/^Desconectar$/, dlg)?.click();
+  button(/^Rollback$/, dlg)?.click();
   await until(() => !connRow().classList.contains('connected'), 5000);
   await sleep(300);
   return {
@@ -92,7 +94,7 @@ check("the console reconnects and runs again", again.connected && !again.error, 
 const all = await js(`
   await menu(/^Desconectar$/);
   const dlg = await until(() => document.querySelector('[role=dialog], .dialog'), 1500);
-  if (dlg) button(/^Desconectar$/, dlg)?.click();
+  if (dlg) button(/^Rollback$/, dlg)?.click();
   await until(() => !connRow().classList.contains('connected'), 5000);
   return { connected: document.querySelectorAll('.tree-row.conn.connected').length };
 `);
