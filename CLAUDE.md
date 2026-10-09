@@ -21,6 +21,14 @@ from Windows on localhost), `test -Ref <ref>` (logic checks + cargo tests agains
 packages), `run "<cmd>"`. Each git worktree gets its own WSL checkout and cargo target; database test runs take turns.
 Use WSL for databases, Linux builds and cargo/engine tests; Windows for editing, the Windows build and the desktop app.
 
+Working from inside WSL (Claude Code started in `~/celer`): tools are on PATH (`git`, `gh`, `node`, `cargo`, `java`,
+`docker`); `origin` is GitHub, `win` is the Windows checkout. Engines: `bash dev/wsl/engines.sh up|seed|test|build`
+directly. The Linux app runs through WSLg (`npx tauri dev`). The Windows build and the desktop app on WebView2 still run
+on Windows: push the branch, then `powershell.exe -ExecutionPolicy Bypass -File 'C:\Users\oscar\Projects\celer\dev\run-desktop.ps1'`
+after `git -C /mnt/c/Users/oscar/Projects/celer fetch origin && git -C /mnt/c/Users/oscar/Projects/celer switch <branch>`
+(keep the Windows checkout clean for that). Windows-side commands in this file (`dev\*.ps1`) are run the same way
+through `powershell.exe`.
+
 ## Local testing: everything is allowed
 This is the owner's own Windows development machine, and testing here is fully authorised. Do whatever a check
 needs, without asking:
