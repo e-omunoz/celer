@@ -18,7 +18,7 @@ const H = `
   const until = async (fn, ms = 20000) => { const t = Date.now(); while (Date.now() - t < ms) { const v = fn(); if (v) return v; await sleep(50); } return null; };
   const inv = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const connRow = (name) => [...document.querySelectorAll('.tree-row.conn')].find((e) => e.querySelector('.tree-name')?.textContent === name || e.textContent.includes(name));
-  const menuItem = (re) => until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => re.test(b.textContent)), 4000);
+  const menuItem = (re) => until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => re.test(b.querySelector('.menu-label')?.textContent ?? b.textContent)), 4000);
   const pane = () => document.querySelector('.pane-host.active');
   const conn = async (name) => (await inv('list_connections')).find((x) => x.name === name);
   const sql = async (name, text) => {
