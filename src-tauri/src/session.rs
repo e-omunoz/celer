@@ -201,6 +201,8 @@ pub fn with_deadline(cancel: Canceller, secs: u64, f: impl FnOnce() -> Result<cr
     let deadline = Deadline::start(cancel, secs);
     let r = f();
     match (deadline.stop(), r) {
+        // A lost session (the bridge reopened the connection) keeps its own note: it says what was rolled back.
+        (true, Err(e)) if e.to_string().starts_with("SESSION_LOST:") => Err(format!("{e}\n\n{}", timeout_error(secs))),
         (true, Err(_)) => Err(timeout_error(secs)),
         (true, Ok(mut out)) => {
             out.messages.push(timeout_note(secs));
