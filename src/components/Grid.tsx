@@ -1673,14 +1673,21 @@ export function DataGrid(props: GridProps) {
 
   // Selection statistics for the status bar. Only this grid's own are cleared: another tab's grid may have written since.
   const clearStats = () => untrack(() => state.gridStats && state.gridStats.owner === props.busyKey && setState("gridStats", null));
+  // Worked out in slices between frames (a column of 100k rows is a quarter of a million cells: one go froze the
+  // window for half a second when a header was pressed or dropped) and not at all while a column is being dragged.
+  let statsRun = 0;
   createEffect(() => {
     const s = sel();
+    const run = ++statsRun;
     if (!s || (s.r1 === s.r2 && s.c1 === s.c2)) {
       clearStats();
       return;
     }
+    if (colMove()) return;
     const rows = ordered();
     const order = colOrder();
+    const data = raw(props.rows);
+    const owner = untrack(() => props.busyKey);
     let cells = 0;
     let numeric = 0;
     let sum = 0;
@@ -1688,26 +1695,41 @@ export function DataGrid(props: GridProps) {
     let max: number | null = null;
     const distinct = new Set<string>();
     const budget = 250_000;
-    const data = raw(props.rows);
-    outer: for (let vr = s.r1; vr <= s.r2; vr++) {
-      const row = data[rows[vr]];
-      for (let c = s.c1; c <= s.c2; c++) {
-        if (cells++ > budget) break outer;
-        const sc = order[c] ?? c;
-        const cell = row?.[sc];
-        if (isNullCell(cell)) continue;
-        if (distinct.size < 10_000) distinct.add(cellText(cell));
-        const n = typeof cell === "number" ? cell : props.columns[sc]?.kind === "number" ? Number(cell) : NaN;
-        if (!Number.isNaN(n) && Number.isFinite(n)) {
-          numeric++;
-          sum += n;
-          min = min === null ? n : Math.min(min, n);
-          max = max === null ? n : Math.max(max, n);
+    const slice = 20_000;
+    let vr = s.r1;
+    const step = () => {
+      if (run !== statsRun) return;
+      const until = cells + slice;
+      for (; vr <= s.r2; vr++) {
+        if (cells > budget) {
+          vr = s.r2 + 1;
+          break;
+        }
+        if (cells >= until) break;
+        const row = data[rows[vr]];
+        for (let c = s.c1; c <= s.c2; c++) {
+          cells++;
+          const sc = order[c] ?? c;
+          const cell = row?.[sc];
+          if (isNullCell(cell)) continue;
+          if (distinct.size < 10_000) distinct.add(cellText(cell));
+          const n = typeof cell === "number" ? cell : props.columns[sc]?.kind === "number" ? Number(cell) : NaN;
+          if (!Number.isNaN(n) && Number.isFinite(n)) {
+            numeric++;
+            sum += n;
+            min = min === null ? n : Math.min(min, n);
+            max = max === null ? n : Math.max(max, n);
+          }
         }
       }
-    }
-    const stats: GridStats = { cells, rows: s.r2 - s.r1 + 1, numeric, sum, min, max, distinct: distinct.size, owner: untrack(() => props.busyKey) };
-    setState("gridStats", stats);
+      if (vr <= s.r2) {
+        timer = window.setTimeout(step, 0);
+        return;
+      }
+      setState("gridStats", { cells, rows: s.r2 - s.r1 + 1, numeric, sum, min, max, distinct: distinct.size, owner } as GridStats);
+    };
+    let timer = window.setTimeout(step, 0);
+    onCleanup(() => window.clearTimeout(timer));
   });
 
   createEffect(() => {

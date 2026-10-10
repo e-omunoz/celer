@@ -31,6 +31,9 @@ All notable changes to Celer are documented here. The format follows
   rows past the last one.
 
 ### Fixed
+- Result grid (#109): loading the rest of a very large result (200 columns, 100,000 rows) no longer freezes the window
+  for about 700 ms per page, and pressing or dropping a column header no longer works the column's statistics out in
+  one go, so dragging a header stays smooth.
 - Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row
   in each batch, and dates go into Informix DATE columns as `MDY(…)` whatever DBDATE says.
 

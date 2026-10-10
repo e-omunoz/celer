@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
-import { raw } from "./raw";
+import { asRaw, raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
 import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
 import type {
@@ -2064,7 +2064,7 @@ function concatRows(current: Cell[][], extra: Cell[][]): Cell[][] {
   const out = new Array<Cell[]>(base.length + extra.length);
   for (let i = 0; i < base.length; i++) out[i] = base[i];
   for (let i = 0; i < extra.length; i++) out[base.length + i] = extra[i];
-  return out;
+  return asRaw(out);
 }
 
 export async function changeAutocommit(on: boolean) {
