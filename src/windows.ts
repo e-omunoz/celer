@@ -494,7 +494,7 @@ function ghostColors(strip?: string): Record<string, string> {
 export function startTabDrag(tabId: string, title: string, ghost: { preview?: string; color?: string } = {}) {
   if (!isTauri() || panelKind) return;
   dragging = tabId;
-  const style = { title, preview: ghost.preview ?? "", label: "Soltar para abrir en una ventana nueva", colors: ghostColors(ghost.color), reduce: document.documentElement.dataset.motion === "reduce" };
+  const style = { title, preview: ghost.preview ?? "", label: "Soltar para abrir en una ventana nueva", colors: ghostColors(ghost.color), reduce: document.documentElement.dataset.motion === "reduce", scale: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--motion-scale")) || 1 };
   void invoke("tab_drag_start", { tab: tabId, title, ghost: style }).catch(() => {});
 }
 
