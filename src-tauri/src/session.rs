@@ -356,6 +356,13 @@ mod tests {
         });
         assert_eq!(r.unwrap_err(), timeout_error(1));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // A lost transaction keeps its SESSION_LOST note next to the timeout text (JDBC/ODBC reset on cancel).
+        let r = with_deadline(cancel.clone(), 1, || {
+            std::thread::sleep(std::time::Duration::from_millis(1300));
+            Err(anyhow!("SESSION_LOST: Consulta cancelada\nLa transacción que estaba abierta se ha perdido"))
+        });
+        let e = r.unwrap_err();
+        assert!(e.starts_with("SESSION_LOST:") && e.contains(&timeout_error(1)), "{e}");
         // Ended anyway after the cancel: the output stays, with a note.
         let r = with_deadline(cancel, 1, || {
             std::thread::sleep(std::time::Duration::from_millis(1300));

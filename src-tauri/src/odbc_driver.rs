@@ -227,7 +227,7 @@ impl<L: Link> LinkDriver<L> {
         let lost = self.in_tx;
         self.recover();
         if lost {
-            anyhow!("{e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
+            anyhow!("SESSION_LOST: {e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
         } else {
             e
         }
