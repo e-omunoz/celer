@@ -790,8 +790,10 @@ export async function openErDiagram(connId: string, path: string[], focus?: Obje
   }
   try {
     if (path[0]) await api().useDatabase(opened.sessionId, path[0]).catch(() => {});
-    const folders = await api().metaChildren(opened.sessionId, path);
-    const folder = folders.find((node) => node.kind === "folder" && (node.path[node.path.length - 1] === "tables" || /^(tablas|tables)$/i.test(node.name)));
+    const isTables = (node: MetaNode) => node.kind === "folder" && (node.path[node.path.length - 1] === "tables" || /^(tablas|tables)$/i.test(node.name));
+    let folder = (await api().metaChildren(opened.sessionId, path).catch(() => [] as MetaNode[])).find(isTables);
+    // A generic ODBC source has no database level: its tree starts at the folders (Tablas, Vistas).
+    if (!folder && kindOf(connId) === "odbc" && path.length) folder = (await api().metaChildren(opened.sessionId, [])).find(isTables);
     if (!folder) throw new Error("Aquí no hay una carpeta de tablas");
     const all = (await api().metaChildren(opened.sessionId, folder.path)).filter((node) => node.obj?.kind === "table");
     if (!current()) return;
