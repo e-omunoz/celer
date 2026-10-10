@@ -68,19 +68,20 @@ one has today.
 
 ## Next
 
-From the open issues (see [docs/ROADMAP.md](docs/ROADMAP.md) for the longer view):
+Implemented in the current sprint (one branch per package, integrated in one PR; listed here so the docs match the
+code): Gib's animations, colour, accessories and reactions (#103, #104, #105); SSH tunnels, export with secrets and
+JDBC URL parsing in the import (#115, #101, #102); transaction timer and whole-window environment colours (#116,
+#117); library on any database and variables (#99, #118); MCP acting in the app and from WSL (#100, #124); results
+grid column drag, pinned result compare and typed Excel import (#109, #119, #120); settings review, error log and
+bug reports from the app (#106, #122, #112); theme editor, tear-off hint and animations (#107, #108, #110); SQL Server
+PRINT messages, Informix idle-drop recovery and E-R foreign keys in one query (#67, #97, #98); Informix point-in-time
+row history (#123).
 
-1. **Fixes**: DBeaver/DbVisualizer JDBC URL parsing (#102), Gib's animations (#103), SQL Server PRINT and
-   low-severity RAISERROR messages (#67), Informix recovery after an idle drop (#97).
-2. **Working tools**: the library on any database (#99), variables (#118), Excel import with typed values and
-   streaming (#120), pinned results compared with any other (#119), transaction timer (#116), engine compatibility
-   indicator (#113), E-R foreign keys in one query (#98).
-3. **Connections**: SSH tunnel (#115), export with secrets (#101), environment colours for the whole window (#117).
-4. **AI**: MCP from Claude Code inside WSL with a status indicator (#124), MCP acting in the app (#100).
-5. **Look and feel**: simplify overgrown areas (#111, proposal on the issue), settings review (#106), theme editor
-   (#107), tear-off hint (#108), column drag (#109), animations (#110), Gib (#104, #105).
-6. **Support**: local error log (#122), report bugs from the app (#112); Informix point-in-time rows (#123,
-   feasibility).
+Still open (see [docs/ROADMAP.md](docs/ROADMAP.md) for the longer view):
+
+1. **Simplify**: apply the reorganisation proposed for overgrown menus, toolbars, dialogs and settings (#111).
+2. **Working tools**: engine compatibility indicator (#113).
+3. **Docs**: keep this file and the roadmap refreshed at the end of each sprint (#121).
 
 ## Development
 ```powershell

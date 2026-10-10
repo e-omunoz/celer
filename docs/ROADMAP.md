@@ -54,21 +54,18 @@
 
 ## Next — from the open issues
 
-The next sprints, from the open GitHub issues (refreshed at the end of each sprint):
+Delivered in the latest sprint (integrated in one PR, see [STATUS.md](../STATUS.md)): working tools (library on any
+database #99, variables #118, typed Excel import #120, pinned result compare #119, transaction timer #116, E-R
+foreign keys in one query #98); connections (SSH tunnel #115, export with secrets #101, whole-window environment
+colours #117, JDBC URL parsing #102); AI (MCP from WSL #124, MCP acting in the app #100); look and feel (theme editor
+#107, tear-off hint #108, column drag #109, animations #110, Gib #103, #104, #105, settings review #106); drivers
+(SQL Server PRINT / RAISERROR #67, Informix idle-drop recovery #97, Informix row history #123); support (error log
+#122, report from the app #112).
 
-- **Simplify** — area definitions and a reorganisation proposal for overgrown menus, toolbars, dialogs and settings
-  (#111), settings review (#106)
-- **Working tools** — library scripts on any database (#99), variables (#118), Excel import with typed values and
-  streaming (#120), pin and compare any two results (#119), transaction timer (#116), engine compatibility
-  indicator (#113), E-R foreign keys in one catalog query (#98)
-- **Connections** — SSH tunnel (#115), export with secrets (#101), whole-window environment colours (#117), JDBC URL
-  parsing in the DBeaver/DbVisualizer import (#102)
-- **AI** — MCP from Claude Code inside WSL with a status indicator (#124), MCP acting in the app (#100)
-- **Look and feel** — theme editor (#107), tear-off hint (#108), whole-column drag (#109), animations (#110),
-  Gib (#103, #104, #105)
-- **Drivers** — SQL Server PRINT / RAISERROR messages (#67), Informix recovery after an idle drop (#97), Informix
-  point-in-time rows from the logical logs (#123, feasibility first)
-- **Support** — local error log (#122), report bugs and request features from the app (#112)
+Next sprints, from what is still open (refreshed at the end of each sprint):
+
+- **Simplify** — apply the reorganisation proposal for overgrown menus, toolbars, dialogs and settings (#111)
+- **Working tools** — engine compatibility indicator (#113)
 
 ## Phase 4 — Tier 2 drivers (analytics and cloud)
 - [ ] DuckDB (including CSV / Parquet / JSON files)
