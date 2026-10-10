@@ -111,8 +111,9 @@ for (const name of CONNS) {
     const item = await until(() => [...document.querySelectorAll('.palette .pal-item, .palette button')].find((b) => /import_tipos/i.test(b.textContent) && b.textContent.includes(${JSON.stringify(name)})), 10000);
     if (!item) return 'no palette item';
     item.click();
-    await until(() => pane()?.querySelector('.grid-canvas') && [...pane().querySelectorAll('.tb-icon')].some((b) => /^Importar datos/.test(b.title)), 20000);
-    return 'ok';
+    // The new tab, not the previous engine's import_tipos still on show: its title names this connection.
+    const shown = await until(() => document.querySelector('.tab.on')?.title.includes(' · ' + ${JSON.stringify(name)}) && pane()?.querySelector('.grid-canvas') && [...pane().querySelectorAll('.tb-icon')].some((b) => /^Importar datos/.test(b.title)), 20000);
+    return shown ? 'ok' : 'the table tab of this connection is not on show';
   `);
   check(`${name}: table tab opened`, opened && tab === "ok", tab);
   if (tab !== "ok") continue;
