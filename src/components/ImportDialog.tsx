@@ -35,8 +35,9 @@ export function ImportDialog() {
   const mappedCount = () => importer.mapping.filter((value) => value >= 0).length;
   const missingRequired = () =>
     importer.columns.filter((col, index) => !col.nullable && !col.identity && !col.default && importer.mapping[index] < 0).map((col) => col.name);
+  /** What «todo» imports: the used area from the header row down (a title above it left out). */
   const usedRange = () => {
-    const a = importer.area;
+    const a = importer.range.trim() ? importer.area : (importArea() ?? importer.area);
     return a.r2 >= 0 ? `${columnLetters(a.c1)}${a.r1 + 1}:${columnLetters(a.c2)}${a.r2 + 1}` : "";
   };
   const rangeBad = () => Boolean(importer.range.trim()) && !importArea();

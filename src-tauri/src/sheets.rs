@@ -52,6 +52,9 @@ pub struct SheetInfo {
     pub rows: u32,
     /// Las primeras filas (hasta PREVIEW_ROWS) desde `first_row`, columnas `first_col..=last_col`.
     pub preview: Vec<Vec<SheetCell>>,
+    /// For each preview row, the first and last column with data from that row down to the last one (None: all
+    /// blank): the columns of a table whose header is there, without those only a title above it uses.
+    pub spans: Vec<Option<(u32, u32)>>,
 }
 
 struct OpenSheet {
@@ -159,7 +162,7 @@ fn read_range(path: &str, sheet: Option<&str>, stop: &AtomicBool, progress: &dyn
 /// The used area of a range, without trailing empty rows (formatted but blank) and its first rows.
 fn describe(handle: u64, sheets: Vec<String>, sheet: String, range: &Range<Data>) -> SheetInfo {
     let (Some(start), Some(end)) = (range.start(), range.end()) else {
-        return SheetInfo { handle, sheets, sheet, first_row: 0, first_col: 0, last_row: 0, last_col: 0, rows: 0, preview: Vec::new() };
+        return SheetInfo { handle, sheets, sheet, first_row: 0, first_col: 0, last_row: 0, last_col: 0, rows: 0, preview: Vec::new(), spans: Vec::new() };
     };
     let mut last_row = end.0;
     while last_row > start.0 && (start.1..=end.1).all(|c| range.get_value((last_row, c)).is_none_or(|v| matches!(v, Data::Empty))) {
@@ -168,7 +171,29 @@ fn describe(handle: u64, sheets: Vec<String>, sheet: String, range: &Range<Data>
     let empty = (start.1..=end.1).all(|c| range.get_value((last_row, c)).is_none_or(|v| matches!(v, Data::Empty)));
     let rows = if empty { 0 } else { last_row - start.0 + 1 };
     let preview = if rows == 0 { Vec::new() } else { cells(range, start.0, (start.0 + PREVIEW_ROWS as u32 - 1).min(last_row), start.1, end.1) };
-    SheetInfo { handle, sheets, sheet, first_row: start.0, first_col: start.1, last_row, last_col: end.1, rows, preview }
+    let spans = spans(range, start, rows, preview.len());
+    SheetInfo { handle, sheets, sheet, first_row: start.0, first_col: start.1, last_row, last_col: end.1, rows, preview, spans }
+}
+
+/// For the first `keep` of `rows` rows from `start`: the columns with data from each one down to the last row.
+fn spans(range: &Range<Data>, start: (u32, u32), rows: u32, keep: usize) -> Vec<Option<(u32, u32)>> {
+    let used = |v: &Data| !matches!(v, Data::Empty);
+    let bounds: Vec<Option<(u32, u32)>> = range
+        .rows()
+        .take(rows as usize)
+        .map(|row| Some((start.1 + row.iter().position(used)? as u32, start.1 + row.iter().rposition(used)? as u32)))
+        .collect();
+    let mut out = vec![None; keep.min(bounds.len())];
+    let mut acc: Option<(u32, u32)> = None;
+    for (i, b) in bounds.iter().enumerate().rev() {
+        if let Some((a, z)) = *b {
+            acc = Some(acc.map_or((a, z), |(x, y)| (x.min(a), y.max(z))));
+        }
+        if let Some(slot) = out.get_mut(i) {
+            *slot = acc;
+        }
+    }
+    out
 }
 
 /// Rows `row0..=row1`, columns `col0..=col1` (sheet positions, 0-based) of a range, typed.
@@ -338,6 +363,9 @@ mod tests {
     fn reads_the_typed_fixture() {
         let sheet = read(TYPED_FIXTURE, None);
         assert_eq!((sheet.first_row, sheet.first_col, sheet.last_row, sheet.last_col, sheet.rows), (0, 0, 6, 6, 7));
+        // The title in A1 widens the used area; from the header row (3) down the table is B..G.
+        assert_eq!(sheet.spans, vec![Some((0, 6)), Some((1, 6)), Some((1, 6)), Some((1, 6)), Some((1, 6)), Some((1, 6)), Some((1, 6))]);
+        assert_eq!(serde_json::to_string(&sheet.spans[2]).unwrap(), "[1,6]");
         assert_eq!(sheet.preview[2][1..], [text("id"), text("nombre"), text("alta"), text("activo"), text("saldo"), text("momento")]);
         assert_eq!(
             sheet.preview[3][1..],

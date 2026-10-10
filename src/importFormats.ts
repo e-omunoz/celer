@@ -258,6 +258,24 @@ export function detectHeader(rows: SheetCell[][]): { header: number; start: numb
   return { header: -1, start: 0 };
 }
 
+/**
+ * For each of the first `keep` rows: the first and last column with data from that row down to the last one (null:
+ * all blank). From the header row down they are the table's columns, without those only a title above it uses.
+ */
+export function columnSpans(rows: SheetCell[][], keep = rows.length): ([number, number] | null)[] {
+  const out: ([number, number] | null)[] = new Array(Math.min(keep, rows.length)).fill(null);
+  let acc: [number, number] | null = null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const first = rows[i].findIndex((cell) => !isEmpty(cell));
+    if (first >= 0) {
+      const last = rows[i].length - 1 - [...rows[i]].reverse().findIndex((cell) => !isEmpty(cell));
+      acc = acc ? [Math.min(acc[0], first), Math.max(acc[1], last)] : [first, last];
+    }
+    if (i < out.length) out[i] = acc;
+  }
+  return out;
+}
+
 /** Column letters for a 0-based column (0 → A, 26 → AA). */
 export function columnLetters(col: number): string {
   let out = "";

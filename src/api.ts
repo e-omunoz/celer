@@ -132,6 +132,8 @@ export interface SheetInfo {
   lastCol: number;
   rows: number;
   preview: SheetCell[][];
+  /** For each preview row, the first and last column with data from it down to the last row (null: all blank). */
+  spans: ([number, number] | null)[];
 }
 
 export function isTauri(): boolean {

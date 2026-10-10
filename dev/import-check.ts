@@ -1,6 +1,6 @@
 // Checks for src/importFormats.ts: node --experimental-strip-types dev/import-check.ts
 import assert from "node:assert/strict";
-import { blankRow, cellDisplay, columnLetters, detectDelimiter, detectHeader, excelSerialDate, importFormat, importLiteral, importStatements, inferCell, parseCellRange, parseCsv, parseJsonRows, pastedCells, pastedValue, plainNumber } from "../src/importFormats.ts";
+import { blankRow, cellDisplay, columnLetters, columnSpans, detectDelimiter, detectHeader, excelSerialDate, importFormat, importLiteral, importStatements, inferCell, parseCellRange, parseCsv, parseJsonRows, pastedCells, pastedValue, plainNumber } from "../src/importFormats.ts";
 
 // CSV.
 assert.deepEqual(parseCsv('a;b\r\n"x;1";"he said ""hi"""\n', ";"), [["a", "b"], ["x;1", 'he said "hi"']]);
@@ -131,3 +131,12 @@ assert.ok(blankRow([null, "  ", 3], [0, 1, -1, -1, -1, -1]), "nothing in the map
 assert.ok(!blankRow([null, "x"], [0, 1]));
 
 console.log("import-check: all good");
+
+// The columns of a table under a title: from the header row down, the title's column A is not one of them.
+{
+  const sheet = [["Clientes importados", null, null], [null, null, null], [null, "id", "nombre"], [null, 1, "Ana"], [null, 2, null]];
+  assert.deepEqual(columnSpans(sheet), [[0, 2], [1, 2], [1, 2], [1, 2], [1, 1]]);
+  assert.deepEqual(columnSpans(sheet, 2), [[0, 2], [1, 2]]);
+  // A wider data row further down widens the table; blank rows at the end have no columns.
+  assert.deepEqual(columnSpans([[null, "a", null, null], [null, 1, null, 9], [null, null, null, null]]), [[1, 3], [1, 3], null]);
+}

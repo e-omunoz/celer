@@ -6,6 +6,7 @@ import {
   blankRow,
   cellDisplay,
   columnLetters,
+  columnSpans,
   detectDelimiter,
   detectHeader,
   importBatch,
@@ -67,6 +68,8 @@ export interface ImportState {
   detectedHeader: number;
   /** First data row when there is no header and no range (a title above the data is skipped). */
   autoStart: number;
+  /** For the first rows of the used area: the columns with data from each one down (see `columnSpans`). */
+  spans: ([number, number] | null)[];
   /** The header cells and the first data rows of the import area, typed. */
   headerCells: SheetCell[];
   previewRows: SheetCell[][];
@@ -107,6 +110,7 @@ export const [importer, setImporter] = createStore<ImportState>({
   headerRow: -1,
   detectedHeader: -1,
   autoStart: 0,
+  spans: [],
   headerCells: [],
   previewRows: [],
   pasted: [],
@@ -124,10 +128,18 @@ export function hasFile() {
 /** Read by position (a workbook's sheet or a block pasted from Excel). */
 export const isSheetLike = () => importer.format === "sheet" || importer.format === "paste";
 
-/** The area the user chose (a range), within the used area; null when the range does not parse. */
+/**
+ * The area the user chose (a range), within the used area; null when the range does not parse. Without a range,
+ * the used area from the header row (or the first data row) down: a title above the table neither adds rows nor
+ * columns (a title in A1 over a table in B3:G7 imports B..G).
+ */
 export function importArea(): { r1: number; c1: number; r2: number; c2: number } | null {
   const used = importer.area;
-  if (!importer.range.trim()) return used;
+  if (!importer.range.trim()) {
+    const top = importer.headerRow >= 0 ? importer.headerRow : importer.detectedHeader >= 0 ? importer.detectedHeader : importer.autoStart;
+    const span = importer.spans[top - used.r1];
+    return span ? { r1: Math.max(used.r1, top), c1: span[0], r2: used.r2, c2: span[1] } : used;
+  }
   const r = parseCellRange(importer.range);
   if (!r) return null;
   return { r1: r.r1, c1: r.c1, r2: Math.min(r.r2 ?? used.r2, used.r2), c2: Math.min(r.c2 ?? used.c2, used.c2) };
@@ -192,7 +204,7 @@ export async function startImport(connId: string, obj: ObjectRef) {
   }
 }
 
-const emptySheet = () => ({ handle: 0, area: NO_AREA, head: [] as SheetCell[][], range: "", headerRow: -1, detectedHeader: -1, autoStart: 0, headerCells: [] as SheetCell[], previewRows: [] as SheetCell[][], pasted: [] as SheetCell[][], reading: null });
+const emptySheet = () => ({ handle: 0, area: NO_AREA, head: [] as SheetCell[][], range: "", headerRow: -1, detectedHeader: -1, autoStart: 0, spans: [] as ([number, number] | null)[], headerCells: [] as SheetCell[], previewRows: [] as SheetCell[][], pasted: [] as SheetCell[][], reading: null });
 
 export async function pickImportFile() {
   const path = await api().pickOpenPath([
@@ -262,6 +274,7 @@ async function openSheet(path: string, sheet: string | null, fileName = importer
       headerRow: found.header >= 0 ? info.firstRow + found.header : -1,
       detectedHeader: found.header >= 0 ? info.firstRow + found.header : -1,
       autoStart: info.firstRow + found.start,
+      spans: info.spans ?? [],
       pasted: [],
       reading: null,
     });
@@ -384,6 +397,7 @@ export async function pasteImport(text: string) {
     headerRow: found.header,
     detectedHeader: found.header,
     autoStart: found.start,
+    spans: columnSpans(cells, 30),
   });
   await refreshPreview(cells, 0);
   remap();
