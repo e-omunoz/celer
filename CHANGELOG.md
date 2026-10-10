@@ -30,6 +30,11 @@ All notable changes to Celer are documented here. The format follows
   the tab opens in the background, and a Celer window in the background flashes its taskbar button. Scripts the AI
   adds to the library show the badge and their notes.
 
+### Fixed
+- **Informix DRDA on Windows** (#124, #100): text values and catalog names no longer come back truncated or empty (the IBM CLI driver packs block indicators 4 bytes apiece).
+- **Masking on generic ODBC sources** (#100, #124): column names are read from the ODBC catalog, so protected columns are hidden in expressions and filters too.
+- **AI «ejecutar» on a connection that is still connecting** (#100): the console waits for the connection instead of failing with «Sin conexión».
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

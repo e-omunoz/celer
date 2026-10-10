@@ -126,8 +126,9 @@ pub struct Api {
     get_info: FnGetInfo,
     drivers: Option<FnEnum>,
     data_sources: Option<FnEnum>,
-    /// SQLLEN is 32 bits: IBM's CLI driver outside Windows (built without ODBC64) writes 4-byte lengths and
-    /// indicators where the ODBC headers of a 64-bit system say 8. Windows and unixODBC use 8.
+    /// SQLLEN is 32 bits: IBM's CLI driver (built without ODBC64, on Windows too: db2cli64.dll packs the indicators of
+    /// a bound block 4 bytes apiece) writes 4-byte lengths and indicators where the ODBC headers of a 64-bit system
+    /// say 8. Other drivers use 8.
     len32: bool,
 }
 
@@ -211,7 +212,7 @@ impl Api {
             drivers: opt!("SQLDriversW"),
             data_sources: opt!("SQLDataSourcesW"),
             _lib: lib,
-            len32: !cfg!(windows) && is_ibm_cli(path),
+            len32: is_ibm_cli(path),
         })
     }
 
