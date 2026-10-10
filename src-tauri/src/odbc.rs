@@ -799,7 +799,9 @@ impl Stmt {
                             return Ok(Cell::Text(s));
                         }
                     }
-                    let s = String::from_utf16_lossy(&out);
+                    // The IBM CLI driver on Windows pads some catalog values with NULs.
+                    let mut s = String::from_utf16_lossy(&out);
+                    s.truncate(s.trim_end_matches('\0').len());
                     Ok(Cell::Text(match p.frac {
                         Some(digits) => fit_fraction(s, digits),
                         None => s,
@@ -1042,6 +1044,7 @@ fn decode(p: &ColPlan, data: &[u8], ind: isize) -> Cell {
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let mut s = String::from_utf16_lossy(&u);
+            s.truncate(s.trim_end_matches('\0').len());
             if let Some(digits) = p.frac {
                 s = fit_fraction(s, digits);
             }
