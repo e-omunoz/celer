@@ -806,11 +806,12 @@ async fn row_history(
         cfg.password = state.store.get_password(&cfg.id).or(cfg.password);
     }
     let (rt, _) = jdbc_runtime(&state.store)?;
+    let dir = state.store.dir.clone();
     let stop = Arc::new(AtomicBool::new(false));
     state.exports.lock().insert(history_id.clone(), stop.clone());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let spawned = std::thread::Builder::new().name("celer-row-history".into()).spawn(move || {
-        let _ = tx.send(rowhistory::read(cfg, rt, request, &stop));
+        let _ = tx.send(rowhistory::read(cfg, rt, request, &stop, Some(&dir)));
     });
     let res = match spawned {
         Ok(_) => rx.await.map_err(|_| "La lectura del historial terminó inesperadamente".to_string()).and_then(|r| r.map_err(err)),

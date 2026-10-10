@@ -16,6 +16,7 @@
 //! checked against the size the server announces, and a table whose layout Celer cannot read is refused.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -65,6 +66,9 @@ pub struct History {
     pub partial: Vec<String>,
     /// What else the user should know (not gaps).
     pub notes: Vec<String>,
+    /// The server's CDC reader stopped answering (a test needs to tell it from a partial history).
+    #[serde(skip)]
+    pub stalled: bool,
 }
 
 impl History {
@@ -910,8 +914,11 @@ impl Builder {
     }
 
     /// The history: the changes and every reason it may not be complete.
-    pub fn finish(self, first_log: i64, stopped: Option<String>) -> History {
+    pub fn finish(self, first_log: i64, stopped: Option<String>, gaps: Vec<String>) -> History {
         let mut h = History { status: "ok", columns: self.columns(), ..Default::default() };
+        // A read that did not reach the end of the log says nothing about the row: no change seen is not "no change".
+        let cut_short = stopped.is_some() || !gaps.is_empty();
+        h.partial.extend(gaps);
         if let Some(why) = stopped {
             h.partial.push(why);
         }
@@ -922,7 +929,7 @@ impl Builder {
             h.partial.push(format!("Hay más de {MAX_EVENTS} cambios de la fila: se muestran los {MAX_EVENTS} primeros."));
         }
         match self.events.first().filter(|_| self.key_moved_in.is_none()) {
-            None if self.key_moved_in.is_some() => {}
+            None if self.key_moved_in.is_some() || cut_short => {}
             None => h.partial.push(format!(
                 "No hay cambios de esta fila en los logs que quedan en disco (desde el log {first_log}): ya tenía sus valores actuales antes de ese log, y lo anterior no se puede saber."
             )),
@@ -955,7 +962,10 @@ impl Builder {
 // ───────────────────────────────────────────────────────────────── the read
 
 /// How long a read may take before it stops and says the history is partial.
-const MAX_READ: Duration = Duration::from_secs(180);
+const MAX_READ: Duration = Duration::from_secs(120);
+/// How long a read of the CDC session may get no answer at all (it sends a timeout record every two seconds when it
+/// has nothing): past it the server's reader is stuck, and the history says so instead of waiting for it.
+const STALL: Duration = Duration::from_secs(30);
 /// Bit of `sysptnhdr.flags` set while full row logging is on (measured: `cdc_set_fullrowlogging` sets it).
 const FULL_ROW_LOGGING: i64 = 0x0400_0000;
 /// Bit of `systables.flags` of a RAW (unlogged) table.
@@ -1012,7 +1022,7 @@ fn cdc_error(code: i64) -> String {
 
 /// The single number an EXECUTE FUNCTION returns.
 fn call(conn: &JdbcConn, sql: &str) -> Result<i64> {
-    let rows = conn.query_all(sql)?;
+    let rows = conn.query_within(sql, STALL)?;
     rows.first().and_then(|r| r.first()).and_then(int).ok_or_else(|| anyhow!("La función no devolvió un número: {sql}"))
 }
 
@@ -1022,15 +1032,57 @@ fn privilege_error(e: &anyhow::Error) -> bool {
 
 /// Opens its own Informix connection over JDBC (in the row's database) and reads the history. `stop`: the user
 /// closed the window; the read ends between two reads of the CDC session.
-pub fn read(mut cfg: ConnConfig, rt: crate::jdbc::Runtime, req: Request, stop: &AtomicBool) -> Result<History> {
+/// `dir`: where Celer keeps the note of the tables it turned full row logging on for (see `ledger_add`).
+pub fn read(mut cfg: ConnConfig, rt: crate::jdbc::Runtime, req: Request, stop: &AtomicBool, dir: Option<&Path>) -> Result<History> {
     cfg.database = req.database.trim().to_string();
     let read_only = cfg.read_only;
     let user = cfg.user.clone();
-    let conn = JdbcConn::connect(&cfg, rt, crate::jdbc::informix_params).map_err(crate::jdbc::explain)?;
-    run(&conn, &req, read_only, &user, stop)
+    let connect = || JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).map_err(crate::jdbc::explain);
+    let conn = connect()?;
+    let ledger = dir.map(|d| d.join(LEDGER));
+    run(&conn, &req, read_only, &user, stop, &Env { ledger: ledger.as_deref(), fresh: &connect })
 }
 
-pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &AtomicBool) -> Result<History> {
+/// What a read needs besides its connection.
+pub struct Env<'a> {
+    /// The file noting the tables Celer turned full row logging on for.
+    pub ledger: Option<&'a Path>,
+    /// Another connection like the first, for when that one is stuck behind a read the server never answered.
+    pub fresh: &'a dyn Fn() -> Result<JdbcConn>,
+}
+
+impl Env<'_> {
+    fn fresh(&self) -> Result<JdbcConn> {
+        (self.fresh)()
+    }
+}
+
+const LEDGER: &str = "informix-full-row-logging.txt";
+
+/// Celer turns full row logging on for a read and off after it. If it dies in between, the server keeps the change:
+/// each table it turns on is noted here first, and removed once it is off again. A later read of a table that is
+/// still on and still noted turns it off after reading, and says so.
+fn ledger_has(path: Option<&Path>, key: &str) -> bool {
+    path.and_then(|p| std::fs::read_to_string(p).ok()).is_some_and(|t| t.lines().any(|l| l == key))
+}
+
+fn ledger_add(path: Option<&Path>, key: &str) {
+    let Some(p) = path else { return };
+    if !ledger_has(path, key) {
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(p).and_then(|mut f| writeln!(f, "{key}"));
+    }
+}
+
+fn ledger_forget(path: Option<&Path>, key: &str) {
+    let Some(p) = path else { return };
+    if let Ok(t) = std::fs::read_to_string(p) {
+        let kept: Vec<&str> = t.lines().filter(|l| *l != key).collect();
+        let _ = if kept.is_empty() { std::fs::remove_file(p) } else { std::fs::write(p, kept.join("\n") + "\n") };
+    }
+}
+
+pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &AtomicBool, env: &Env) -> Result<History> {
     let db = ident(&req.database)?;
     let table = ident(&req.table)?;
     if req.key.is_empty() {
@@ -1103,6 +1155,26 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             "el servidor no tiene la base de datos syscdcv1 de la API CDC. Un administrador la crea una vez con: dbaccess - $INFORMIXDIR/etc/syscdcv1.sql",
         ));
     }
+    let server = q("SELECT DBSERVERNAME FROM systables WHERE tabid = 1")?.first().and_then(|r| r.first()).map(text).unwrap_or_default();
+    let ledger_key = format!("{server}\t{full_name}");
+    let left_over = frl_on && ledger_has(env.ledger, &ledger_key);
+    if !frl_on && read_only {
+        return Ok(History::unavailable("la conexión es de solo lectura y la tabla necesita full row logging, que es un cambio en el servidor."));
+    }
+    if !frl_on {
+        // Before offering to change the server: can this user use the API at all? (opening a session changes nothing)
+        match call(conn, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_opensess({}, 0, 2, 50, 1, 1)", lit(&server))) {
+            Ok(id) if id > 0 => {
+                let _ = call(conn, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_closesess({id})"));
+            }
+            Err(e) if privilege_error(&e) => {
+                return Ok(History::unavailable(format!(
+                    "el usuario «{user}» no tiene permiso para usar la API CDC de Informix (solo el usuario informix puede ejecutar sus funciones): {e}"
+                )))
+            }
+            _ => {}
+        }
+    }
     if !frl_on && !req.enable_full_row_logging {
         return Ok(History {
             status: "needsFullRowLogging",
@@ -1110,9 +1182,6 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             skipped,
             ..Default::default()
         });
-    }
-    if !frl_on && read_only {
-        return Ok(History::unavailable("la conexión es de solo lectura y la tabla necesita full row logging, que es un cambio en el servidor."));
     }
 
     // The logs on disk.
@@ -1130,7 +1199,6 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         .iter()
         .filter_map(|r| Some((r.first().and_then(int)?, r.get(1).map(text)?)))
         .collect();
-    let server = q("SELECT DBSERVERNAME FROM systables WHERE tabid = 1")?.first().and_then(|r| r.first()).map(text).unwrap_or_default();
 
     // Where the log is now: the start of the page being written (`used` counts it whole). An LSN's offset is the page
     // number shifted 12 bits plus the byte in the page, whatever the page size (measured). The read is complete once
@@ -1148,20 +1216,39 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     let older = used.iter().take_while(|(_, f, fill)| f & 2 == 0 && *fill > 0 && *fill < created).count();
     let start_logs: Vec<i64> = used[older..].iter().map(|l| l.0).collect();
 
+    if !frl_on {
+        ledger_add(env.ledger, &ledger_key);
+    }
     let session = match open_capture(conn, &server, user, &full_name, &captured, !frl_on)? {
         Ok(s) => s,
-        Err(h) => return Ok(h),
+        Err(h) => {
+            ledger_forget(env.ledger, &ledger_key);
+            return Ok(h);
+        }
     };
-    let turned_on = !frl_on;
+    let turned_on = !frl_on || left_over;
     let mut session = session;
+    // Set when a read of the CDC session got no answer: the connection is stuck behind it and is left alone.
+    let wedged = std::cell::Cell::new(false);
     let result = (|| -> Result<History> {
         // From the start of the first log to read; one reused in the meantime moves the start to the next.
         let mut gone = Vec::new();
         let mut from = None;
+        // Where an earlier read of this table found the first position the server reads cleanly (see `RESUME`).
+        let remembered_key = (ledger_key.clone(), created, start_logs.first().copied().unwrap_or(0));
+        let remembered = RESUME.lock().get(&remembered_key).cloned().filter(|r| !r.is_empty());
+        let mut resumed = None;
         for &log in &start_logs {
-            match activate(conn, session.id, Lsn(log as u32, 0))? {
+            let at = match remembered.as_ref().and_then(|r| r.last()) {
+                Some(&(_, resume, _)) if resume.0 as i64 == log => resume,
+                _ => Lsn(log as u32, 0),
+            };
+            match activate(conn, session.id, at)? {
                 0 => {
                     from = Some(log);
+                    if at.1 != 0 {
+                        resumed = Some(at);
+                    }
                     break;
                 }
                 -83713 => gone.push(log),
@@ -1175,12 +1262,18 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         let mut b = Builder::new(key, created, users, codeset);
         let mut buf: Vec<u8> = Vec::new();
         let mut stopped = None;
-        let mut read_from = Lsn(from as u32, 0);
+        let mut read_from = resumed.unwrap_or(Lsn(from as u32, 0));
+        b.last = read_from;
         let mut searches = 0;
-        let mut skipped_from: Vec<(Lsn, Lsn, String)> = Vec::new();
+        let mut skipped_from: Vec<(Lsn, Lsn, String)> = if resumed.is_some() { remembered.clone().unwrap_or_default() } else { Vec::new() };
+        let mut stalled = false;
+        let mut walls_hit: Vec<Lsn> = Vec::new();
         let mut waiting: Option<(Lsn, Instant)> = None;
         // Whether a read from `at` gets past the table's creation (a commit after it, or the end) without an error.
         let probe = |at: Lsn| -> Result<Option<bool>> {
+            if wedged.get() || started.elapsed() > MAX_READ {
+                return Ok(None);
+            }
             let mut s = match open_capture(conn, &server, user, &full_name, &captured, false)? {
                 Ok(s) => s,
                 Err(_) => return Ok(None),
@@ -1191,11 +1284,17 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
                 }
                 let mut t = Builder::new(vec![], created, HashMap::new(), codeset);
                 let mut buf = Vec::new();
-                let deadline = Instant::now() + Duration::from_secs(30);
+                let deadline = Instant::now() + Duration::from_secs(30).min(MAX_READ.saturating_sub(started.elapsed()));
                 let mut stalled = None;
                 while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
                     t.caught_up = false;
-                    buf.extend_from_slice(&conn.lo_read(s.id as i32, 256 << 10)?);
+                    match conn.lo_read(s.id as i32, 256 << 10, STALL)? {
+                        Some(chunk) => buf.extend_from_slice(&chunk),
+                        None => {
+                            wedged.set(true);
+                            return Ok(None);
+                        }
+                    }
                     let (recs, n) = parse_records(&buf)?;
                     buf.drain(..n);
                     for rec in recs {
@@ -1220,7 +1319,9 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
                 }
                 Ok(None)
             })();
-            s.close(conn);
+            if !wedged.get() && !s.close(conn) {
+                wedged.set(true);
+            }
             verdict
         };
         loop {
@@ -1234,7 +1335,16 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             }
             // Caught up only by a timeout in this read (an earlier one may have come while older logs were scanned).
             b.caught_up = false;
-            let chunk = conn.lo_read(session.id as i32, 256 << 10)?;
+            let Some(chunk) = conn.lo_read(session.id as i32, 256 << 10, STALL)? else {
+                wedged.set(true);
+                stalled = true;
+                stopped = Some(format!(
+                    "El lector CDC del servidor no respondió en {} s (posición {} del log): solo se muestra lo leído hasta entonces, y no se sabe nada más de la fila.",
+                    STALL.as_secs(),
+                    b.last.max(read_from)
+                ));
+                break;
+            };
             buf.extend_from_slice(&chunk);
             let (recs, used_bytes) = parse_records(&buf)?;
             buf.drain(..used_bytes);
@@ -1253,7 +1363,12 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             }
             if b.failed.is_some() {
                 // The session cannot go on after a server error.
-                session.close(conn);
+                if !session.close(conn) {
+                    wedged.set(true);
+                    stalled = true;
+                    stopped = Some("El servidor no respondió al cerrar la sesión CDC tras un error: la lectura se detuvo.".to_string());
+                    break;
+                }
                 let failed_at = b.last.max(read_from);
                 let why = b.take_error();
                 if b.after_creation || searches >= MAX_SEARCHES {
@@ -1293,25 +1408,79 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
                 break;
             }
             // The API only hands over the part of the log the server has made available (measured: the last changes
-            // can take tens of seconds): waiting there without progress ends the read, said as partial.
-            if b.caught_up {
-                match waiting {
-                    Some((at, since)) if at == b.last => {
-                        if since.elapsed() > MAX_WAIT {
-                            stopped = Some(format!(
-                                "Los cambios más recientes, desde la posición {at} del log, todavía no están disponibles para la API CDC (el servidor aún no ha escrito esa parte del log): vuelve a leer en unos segundos."
-                            ));
-                            break;
+            // can take tens of seconds): waiting there without progress ends the read, said as partial. In a log that
+            // is already complete it is a wall (see `WALLS`): the read goes on from the next log.
+            let mut wall = None;
+            if b.caught_up && b.last.0 < end.0 {
+                wall = WALLS.lock().get(&(server.clone(), b.last.0)).copied().filter(|w| b.last >= *w);
+            }
+            if wall.is_none() {
+                if b.caught_up {
+                    match waiting {
+                        Some((at, since)) if at == b.last => {
+                            if since.elapsed() > MAX_WAIT {
+                                if at.0 < end.0 && at != Lsn::default() {
+                                    WALLS.lock().insert((server.clone(), at.0), at);
+                                    wall = Some(at);
+                                } else {
+                                    stopped = Some(if at == Lsn::default() {
+                                        "El servidor no ha entregado ningún registro del log: su lector CDC no avanza. No se sabe nada de la fila; vuelve a leer en unos segundos.".to_string()
+                                    } else if end.1.saturating_sub(at.1) >= 2 << 12 {
+                                        format!(
+                                            "El lector CDC del servidor se detuvo en la posición {at} del log {}, aunque el log ya tiene datos hasta {end}: tras una lectura que llegó al final de ese log mientras se escribía, el servidor no entrega nada más de él hasta que cambie de log lógico (onmode -l, o cuando el log actual se llene). Los cambios posteriores a esa posición no se pueden ver ahora.",
+                                            at.0
+                                        )
+                                    } else {
+                                        format!(
+                                            "Los cambios más recientes, desde la posición {at} del log, todavía no están disponibles para la API CDC (el servidor aún no ha escrito esa parte del log): vuelve a leer en unos segundos."
+                                        )
+                                    });
+                                    break;
+                                }
+                            }
                         }
+                        _ => waiting = Some((b.last, Instant::now())),
                     }
-                    _ => waiting = Some((b.last, Instant::now())),
+                } else {
+                    waiting = None;
                 }
-            } else {
+            }
+            if let Some(w) = wall {
+                walls_hit.push(w);
+                let next = Lsn(w.0 + 1, 0);
+                if !session.close(conn) {
+                    wedged.set(true);
+                    stalled = true;
+                    stopped = Some("El servidor no respondió al cerrar la sesión CDC: la lectura se detuvo.".to_string());
+                    break;
+                }
+                session = match open_capture(conn, &server, user, &full_name, &captured, false)? {
+                    Ok(s) => s,
+                    Err(h) => {
+                        stopped = Some(format!("La lectura no pudo seguir tras el log {}: {}", w.0, h.reason));
+                        break;
+                    }
+                };
+                match activate(conn, session.id, next)? {
+                    0 => {}
+                    code => {
+                        stopped = Some(format!("La lectura no pudo seguir en el log {}: {}.", next.0, cdc_error(code)));
+                        break;
+                    }
+                }
+                b.last = next;
+                read_from = next;
+                buf.clear();
                 waiting = None;
             }
         }
         let last = b.last;
-        let mut h = b.finish(from, stopped);
+        let stalled = stalled || wedged.get();
+        if !stalled && stopped.is_none() && !skipped_from.is_empty() {
+            RESUME.lock().insert(remembered_key, skipped_from.clone());
+        }
+        let mut h = b.finish(from, stopped, walls_hit.iter().map(|w| wall_text(*w)).collect());
+        h.stalled = stalled;
         h.skipped = skipped.clone();
         h.range = Some(LogRange {
             first_log: from,
@@ -1338,16 +1507,60 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         if altered {
             h.notes.push("La tabla se ha modificado con ALTER TABLE: en los cambios anteriores a ese ALTER, el servidor da como NULL las columnas añadidas después.".into());
         }
-        if turned_on {
+        if left_over {
+            h.notes.push("Una lectura anterior de Celer se interrumpió con full row logging activado en la tabla: se ha vuelto a desactivar.".into());
+        } else if turned_on {
             h.notes.push("Se activó full row logging en la tabla solo durante la lectura, y se ha vuelto a desactivar.".into());
         }
         Ok(h)
     })();
-    // Always: the session closes, and full row logging goes back off if Celer turned it on.
-    session.close(conn);
+    // A request the server never answered: the history says so, and the clean-up below uses another connection.
+    let result = match result {
+        Err(e) if crate::jdbc::is_wait_timeout(&e) => {
+            wedged.set(true);
+            Ok(History {
+                status: "ok",
+                partial: vec![format!("El servidor no respondió a la API CDC en {} s: no se pudo leer nada del log, y no se sabe nada de la fila.", STALL.as_secs())],
+                stalled: true,
+                ..Default::default()
+            })
+        }
+        other => other,
+    };
+    // Always: the session closes, and full row logging goes back off if Celer turned it on. A connection stuck behind a
+    // request the server never answered is left alone: the clean-up goes through another one.
+    let mut spare: Option<JdbcConn> = None;
+    let mut use_spare = wedged.get();
+    if !use_spare && !session.close(conn) {
+        use_spare = true;
+    }
+    if use_spare {
+        spare = env.fresh().ok();
+        if let Some(c) = &spare {
+            let _ = call(c, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_closesess({})", session.id));
+        }
+    }
     if turned_on {
-        let off = call(conn, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging({}, 0)", lit(&full_name)));
-        if !matches!(off, Ok(0)) {
+        // The server refuses while the capture session is still winding down: a few tries.
+        let mut off = Err(anyhow!("sin conexión"));
+        for attempt in 0..4 {
+            if use_spare && spare.is_none() {
+                spare = env.fresh().ok();
+            }
+            let c = if use_spare { spare.as_ref() } else { Some(conn) };
+            let Some(c) = c else { break };
+            off = call(c, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging({}, 0)", lit(&full_name)));
+            if matches!(off, Ok(0)) || attempt == 3 {
+                break;
+            }
+            if matches!(&off, Err(e) if crate::jdbc::is_wait_timeout(e)) {
+                use_spare = true;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        if matches!(off, Ok(0)) {
+            ledger_forget(env.ledger, &ledger_key);
+        } else {
             let mut h = result?;
             h.notes.push(format!(
                 "No se pudo volver a desactivar full row logging en «{full_name}»: hazlo con EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full_name}', 0)."
@@ -1356,6 +1569,25 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         }
     }
     result
+}
+
+/// Per table (server, name, creation time, first log read): the errors the server gave before the table existed and
+/// the position each read went on from. Finding it takes a bisection of sessions (tens of seconds), and the next
+/// history of the same table starts from there at once. The table's own changes never come before it.
+static RESUME: std::sync::LazyLock<parking_lot::Mutex<HashMap<(String, i64, i64), Vec<(Lsn, Lsn, String)>>>> = std::sync::LazyLock::new(Default::default);
+
+/// Per (server, log): the position where the server's CDC reader stops for good in that log. Measured on Informix 15: a
+/// session that reaches the end of a log while its last page is still being written leaves that log unreadable past
+/// that position for every later session, until the server restarts or the log is reused; the reader does not go on
+/// to the next log either. A read that meets such a wall (no progress for `MAX_WAIT` in a log that is already
+/// complete) goes on from the start of the next log, and says what it could not see.
+static WALLS: std::sync::LazyLock<parking_lot::Mutex<HashMap<(String, u32), Lsn>>> = std::sync::LazyLock::new(Default::default);
+
+fn wall_text(at: Lsn) -> String {
+    format!(
+        "El lector CDC del servidor no entrega el log {} más allá de la posición {at} (una lectura anterior llegó al final de ese log mientras se escribía, y el servidor ya no lo lee más allá): los cambios de ese log posteriores a esa posición no se pueden ver.",
+        at.0
+    )
 }
 
 /// Searches for a readable position after errors before the read gives up.
@@ -1402,11 +1634,16 @@ struct Session {
 }
 
 impl Session {
-    fn close(&mut self, conn: &JdbcConn) {
+    /// false when the server did not answer (the connection is then stuck behind the request).
+    fn close(&mut self, conn: &JdbcConn) -> bool {
         if std::mem::replace(&mut self.open, false) {
-            let _ = call(conn, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_deactivatesess({})", self.id));
-            let _ = call(conn, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_closesess({})", self.id));
+            for f in ["cdc_deactivatesess", "cdc_closesess"] {
+                if matches!(call(conn, &format!("EXECUTE FUNCTION syscdcv1:informix.{f}({})", self.id)), Err(e) if crate::jdbc::is_wait_timeout(&e)) {
+                    return false;
+                }
+            }
         }
+        true
     }
 }
 
@@ -1668,7 +1905,7 @@ mod tests {
             }
         }
         assert!(buf.is_empty() && b.caught_up);
-        b.finish(61, None)
+        b.finish(61, None, vec![])
     }
 
     #[test]
@@ -1729,6 +1966,38 @@ mod tests {
         assert_eq!(old.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"]);
     }
 
+    /// A read cut short (a stuck reader, the time limit) never claims the row had no changes: nothing was seen is not
+    /// the same as nothing happened.
+    #[test]
+    fn a_read_cut_short_infers_nothing() {
+        let b = || Builder::new(vec![("id".into(), "1".into())], 0, HashMap::new(), Codeset::Latin1);
+        let whole = b().finish(61, None, vec![]);
+        assert!(whole.partial.iter().any(|p| p.contains("ya tenía sus valores actuales")), "{:?}", whole.partial);
+        let cut = b().finish(61, Some("El lector CDC del servidor no respondió".into()), vec![]);
+        assert_eq!(cut.partial.len(), 1, "{:?}", cut.partial);
+        assert!(!cut.partial.iter().any(|p| p.contains("ya tenía")), "{:?}", cut.partial);
+    }
+
+    /// The note of tables Celer turned full row logging on for survives a crash and is cleared once it is off.
+    #[test]
+    fn the_ledger_of_tables_turned_on() {
+        let dir = std::env::temp_dir().join(format!("celer-ledger-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LEDGER);
+        let p = Some(path.as_path());
+        assert!(!ledger_has(p, "a\tdb:u.t1"));
+        ledger_add(p, "a\tdb:u.t1");
+        ledger_add(p, "a\tdb:u.t1");
+        ledger_add(p, "a\tdb:u.t2");
+        assert!(ledger_has(p, "a\tdb:u.t1") && ledger_has(p, "a\tdb:u.t2"));
+        ledger_forget(p, "a\tdb:u.t1");
+        assert!(!ledger_has(p, "a\tdb:u.t1") && ledger_has(p, "a\tdb:u.t2"));
+        ledger_forget(p, "a\tdb:u.t2");
+        assert!(!path.exists());
+        assert!(!ledger_has(None, "x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// After a server error before the table existed, the read goes on from the first position it reads cleanly from:
     /// found by trying later logs, then bisecting inside one, to within 32 bytes and never before it.
     #[test]
@@ -1766,7 +2035,7 @@ mod tests {
         assert_eq!(b.failed, Some(-83790));
         assert_eq!(b.take_error(), "error -83790");
         assert_eq!(b.failed, None);
-        assert!(b.finish(1, None).partial.iter().all(|p| !p.contains("-83790")));
+        assert!(b.finish(1, None, vec![]).partial.iter().all(|p| !p.contains("-83790")));
     }
 
     #[test]

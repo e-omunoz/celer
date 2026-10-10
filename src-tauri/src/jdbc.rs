@@ -551,7 +551,7 @@ impl Bridge {
                 Ok(r) => r,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.pending.lock().remove(&req);
-                    bail!("El servidor no respondió en {} s", t.as_secs());
+                    return Err(WaitTimeout(t).into());
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return Err(self.gone()),
             },
@@ -570,6 +570,23 @@ impl Bridge {
             let _ = self.write(0, session, op, body);
         }
     }
+}
+
+/// A request that got no reply in the time given.
+#[derive(Debug)]
+struct WaitTimeout(Duration);
+
+impl std::fmt::Display for WaitTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "El servidor no respondió en {} s", self.0.as_secs())
+    }
+}
+
+impl std::error::Error for WaitTimeout {}
+
+/// Whether an error is a request that got no reply in the time given.
+pub fn is_wait_timeout(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<WaitTimeout>().is_some()
 }
 
 /// Notes in `reset` that the bridge cut the connection (the next operation reconnects).
@@ -729,21 +746,40 @@ impl JdbcConn {
     }
 
     fn run(&self, sql: &str, first: usize) -> Result<JdbcStmt> {
+        self.run_within(sql, first, None)
+    }
+
+    fn run_within(&self, sql: &str, first: usize, wait: Option<Duration>) -> Result<JdbcStmt> {
         let mut b = Out::default();
         b.str(sql);
         b.varint(first.min(i32::MAX as usize) as u64);
         b.u8(self.page_fetch as u8);
-        let reply = noting_reset(&self.reset, self.bridge.call(self.session, OP_EXEC, &b.0, None))?;
+        let reply = noting_reset(&self.reset, self.bridge.call(self.session, OP_EXEC, &b.0, wait))?;
         JdbcStmt::from_exec(self.bridge.clone(), self.session, self.page_fetch, self.reset.clone(), &reply)
     }
 
-    /// Up to `max` bytes of an Informix smart large object descriptor open on this connection (a CDC session).
-    pub fn lo_read(&self, fd: i32, max: usize) -> Result<Vec<u8>> {
+    /// All rows of a statement's first result, or a `WaitTimeout` error (see `is_wait_timeout`) when the server does
+    /// not answer within `wait`; the connection is then stuck behind the statement, as with `lo_read`.
+    pub fn query_within(&self, sql: &str, wait: Duration) -> Result<Vec<Vec<Cell>>> {
+        let mut st = self.run_within(sql, usize::MAX, Some(wait))?;
+        if st.cols.is_empty() {
+            return Ok(vec![]);
+        }
+        Ok(st.read(usize::MAX)?.0)
+    }
+
+    /// Up to `max` bytes of an Informix smart large object descriptor open on this connection (a CDC session), or
+    /// `None` when nothing came back within `wait`. The read is then still blocked in the bridge: this connection is
+    /// not usable any more (a request on it waits behind the read), so the caller works on another one.
+    pub fn lo_read(&self, fd: i32, max: usize, wait: Duration) -> Result<Option<Vec<u8>>> {
         let mut b = Out::default();
         b.varint(fd as u32 as u64);
         b.varint(max as u64);
-        let reply = noting_reset(&self.reset, self.bridge.call(self.session, OP_LO_READ, &b.0, None))?;
-        Ok(In::new(&reply).bytes()?.to_vec())
+        match noting_reset(&self.reset, self.bridge.call(self.session, OP_LO_READ, &b.0, Some(wait))) {
+            Ok(reply) => Ok(Some(In::new(&reply).bytes()?.to_vec())),
+            Err(e) if e.downcast_ref::<WaitTimeout>().is_some() => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     fn simple(&self, op: u8, body: &[u8]) -> Result<()> {
