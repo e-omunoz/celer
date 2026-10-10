@@ -38,10 +38,12 @@ export function ResultCompare(props: { tab: SqlTab }) {
     return c && cmp()?.onlyDiff ? onlyDifferences(c) : c;
   });
 
-  // The primary key of either side's table, looked for once per pair of sides.
+  // The primary key of either side's table, looked for once per pair of sides. A memo, so that writing the key found
+  // (which replaces `compare`) does not run the effect again: that looped for a table tab as a side.
+  const pairKey = createMemo(() => (cmp() ? JSON.stringify([cmp()!.base, cmp()!.other]) : ""));
   createEffect(
     on(
-      () => (cmp() ? JSON.stringify([cmp()!.base, cmp()!.other]) : ""),
+      pairKey,
       (pair) => {
         // In a window of its own the comparison is a copy: the window it came from looked for the key already.
         if (pair && !isPanelWindow()) void detectCompareKey(props.tab.id);
