@@ -138,7 +138,7 @@ unsafe impl Sync for Api {}
 
 /// IBM Data Server Driver (CLI) library: libdb2.so / libdb2.dylib (db2cli64.dll on Windows).
 fn is_ibm_cli(path: &str) -> bool {
-    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase();
     name.starts_with("libdb2") || name.starts_with("db2cli") || name.starts_with("libdb2o")
 }
 
