@@ -71,7 +71,7 @@ export const AREAS = [
 export const ATTACHED_ERRORS = 5;
 
 export function blankDraft(kind: ReportKind, id: string, now = Date.now()): ReportDraft {
-  return { id, kind, title: "", happened: "", expected: "", steps: "", what: "", why: "", area: "", attachErrors: kind === "bug", images: [], updatedAt: now };
+  return { id, kind, title: "", happened: "", expected: "", steps: "", what: "", why: "", area: "", attachErrors: false, images: [], updatedAt: now };
 }
 
 /** Nothing typed and no image: not worth keeping as a draft. */

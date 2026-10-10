@@ -48,6 +48,13 @@ All notable changes to Celer are documented here. The format follows
   sections, «Editor» and «Resultados».
 - Esc in a confirmation shown over another dialog (Ajustes) closes only the confirmation.
 
+### Fixed
+- **Error log and reports** (#122, #112). The scrubber now also cleans the message at the head of UI error stacks, host
+  names and host:port, SQL Server duplicate-key values, EXEC/WITH statements and MySQL's «Can't connect» text. «Adjuntar
+  los últimos errores» is off unless you tick it (it starts ticked only on the report opened from an unexpected error),
+  and «Capturar la ventana» leaves hidden tabs out so it works with many tabs open.
+
+
 ## [2.2.0] - 2026-10-09
 
 ### Added

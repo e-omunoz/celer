@@ -210,7 +210,15 @@ export async function captureWindow() {
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const { toPng } = await import("html-to-image");
     const bg = getComputedStyle(document.body).backgroundColor;
-    const dataUrl = await toPng(root, { pixelRatio: Math.min(2, window.devicePixelRatio || 1), backgroundColor: bg, cacheBust: true });
+    // Hidden tabs (and their editors) are left out: with 20 tabs open the serialised page was 42 MB and failed to load.
+    const filter = (node: Node) => !(node instanceof HTMLElement) || (node.hidden === false && getComputedStyle(node).display !== "none");
+    const options = { backgroundColor: bg, cacheBust: true, filter };
+    let dataUrl: string;
+    try {
+      dataUrl = await toPng(root, { ...options, pixelRatio: Math.min(2, window.devicePixelRatio || 1) });
+    } catch {
+      dataUrl = await toPng(root, { ...options, pixelRatio: 1 });
+    }
     addImage({ name: `captura-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}`, dataUrl });
   } catch (err) {
     notify("No se pudo capturar la ventana", "error", errorText(err));

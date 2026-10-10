@@ -41,7 +41,7 @@ assert.equal(osFromUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605"),
 // ---- drafts
 const bug = blankDraft("bug", "d1", 1);
 assert.ok(draftIsEmpty(bug));
-assert.equal(bug.attachErrors, true, "a bug offers the last errors by default (shown in the preview first)");
+assert.equal(bug.attachErrors, false, "the last errors are opt-in: only the report opened after an error starts with them");
 assert.equal(blankDraft("idea", "d2").attachErrors, false);
 assert.deepEqual(draftProblems(bug), ["un título", "qué ha pasado", "los pasos"]);
 assert.deepEqual(draftProblems({ ...blankDraft("idea", "d3"), title: "x" }), ["qué te gustaría"]);
@@ -50,6 +50,7 @@ assert.deepEqual(draftProblems({ ...blankDraft("idea", "d3"), title: "x" }), ["q
 const env = { version: "2.3.0", os: "Windows 10/11", theme: "Celer Oscuro", engine: "PostgreSQL · nativo · PostgreSQL 17.2" };
 const filled = {
   ...bug,
+  attachErrors: true,
   title: "La exportación falla",
   happened: "Al exportar a C:\\Users\\oscar\\Desktop\\x.csv sale un error",
   expected: "Que exporte",
