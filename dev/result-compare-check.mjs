@@ -18,6 +18,17 @@ const H = `
   const until = async (fn, ms = 20000) => { const t = Date.now(); while (Date.now() - t < ms) { const v = fn(); if (v) return v; await sleep(50); } return null; };
   const inv = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const connRow = (name) => [...document.querySelectorAll('.tree-row.conn')].find((e) => e.querySelector('.tree-name')?.textContent === name || e.textContent.includes(name));
+  // The explorer draws only the rows in view: scroll it until the connection's row is there.
+  const findConn = async (name) => {
+    const tree = document.querySelector('.tree');
+    for (let top = 0; tree && top <= tree.scrollHeight; top += Math.max(100, tree.clientHeight / 2)) {
+      tree.scrollTop = top;
+      await sleep(80);
+      const row = connRow(name);
+      if (row) { row.scrollIntoView({ block: 'center' }); await sleep(80); return row; }
+    }
+    return null;
+  };
   const menuItem = (re) => until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => re.test(b.querySelector('.menu-label')?.textContent ?? b.textContent)), 4000);
   const pane = () => document.querySelector('.pane-host.active');
   const conn = async (name) => (await inv('list_connections')).find((x) => x.name === name);
@@ -50,7 +61,8 @@ function seed(kind) {
   const bool = { postgres: "boolean", mysql: "boolean", mssql: "bit", informix: "boolean", sqlite: "boolean" }[kind] ?? "boolean";
   const t = { postgres: "true", mysql: "1", mssql: "1", informix: "'t'", sqlite: "1" }[kind] ?? "1";
   const f = { postgres: "false", mysql: "0", mssql: "0", informix: "'f'", sqlite: "0" }[kind] ?? "0";
-  const date = (iso) => (kind === "informix" ? `DATE('${iso.slice(5, 7)}/${iso.slice(8)}/${iso.slice(0, 4)}')` : `'${iso}'`);
+  // MDY(): a date whatever DBDATE says (the JDBC bridge and DRDA read date strings differently).
+  const date = (iso) => (kind === "informix" ? `MDY(${Number(iso.slice(5, 7))}, ${Number(iso.slice(8))}, ${iso.slice(0, 4)})` : `'${iso}'`);
   return [
     kind === "mssql" ? "IF OBJECT_ID('rc_check') IS NOT NULL DROP TABLE rc_check" : kind === "informix" ? "DROP TABLE IF EXISTS rc_check" : "DROP TABLE IF EXISTS rc_check",
     `CREATE TABLE rc_check (id int NOT NULL PRIMARY KEY, nombre varchar(40), saldo decimal(10,2), activo ${bool}, alta date)`,
@@ -73,7 +85,8 @@ if (await js(`return !!document.querySelector('.onboarding');`)) await key("Esca
 
 const consoles = [];
 for (const name of CONNS) {
-  const kind = await js(`return (await conn(${JSON.stringify(name)}))?.kind ?? null;`);
+  // A generic ODBC source gets the SQL of the engine behind it.
+  const kind = await js(`const c = await conn(${JSON.stringify(name)}); if (!c) return null; const odbc = c.kind === 'odbc' ? c.odbcConnStr ?? '' : ''; return /sql server/i.test(odbc) ? 'mssql' : /postgres/i.test(odbc) ? 'postgres' : /mysql|maria/i.test(odbc) ? 'mysql' : c.kind;`);
   if (!kind) {
     check(`${name}: connection exists`, false, "not found");
     continue;
@@ -85,7 +98,7 @@ for (const name of CONNS) {
   if (seeded !== "ok") continue;
   // A console of this connection (its explorer menu), the table read and pinned.
   await js(`
-    const row = connRow(${JSON.stringify(name)});
+    const row = await findConn(${JSON.stringify(name)});
     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 200 }));
     (await menuItem(/^Nueva consola$/))?.click();
     await until(() => pane()?.querySelector('.cm-content'));
