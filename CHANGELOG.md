@@ -40,7 +40,8 @@ All notable changes to Celer are documented here. The format follows
   empty «columna A» to the columns and the mapping: without a range, the columns are those of the header row and
   the rows under it.
 - DECIMAL and NUMERIC values read through ODBC or Informix DRDA keep a decimal point: IBM's CLI driver on a Spanish
-  Windows wrote them with a comma (`12,50`), which the grid, compare and exports took as text.
+  Windows wrote them with a comma (`12,50`), and Microsoft's old «SQL Server» ODBC driver without the leading zero
+  (`.10`, `-.75`); both now read as plain numbers (`12.50`, `0.10`, `-0.75`).
 - Closing a console or tab whose result was still open (a large query read in part) on an ODBC or Informix DRDA
   connection freed the statement after its connection, which could crash Celer; the statement is now freed first.
 - Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row

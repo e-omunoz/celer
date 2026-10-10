@@ -494,10 +494,18 @@ struct ColPlan {
     decimal: bool,
 }
 
-/// A DECIMAL as the driver wrote it, with a point: "12,50" → "12.50" (a number written as text by the driver has no
-/// grouping, so a comma can only be the decimal separator).
+/// A DECIMAL as the driver wrote it, as a plain number: "12,50" → "12.50" (a number written as text by the driver
+/// has no grouping, so a comma can only be the decimal separator), and ".10" / "-.75" (Microsoft's old «SQL Server»
+/// driver) → "0.10" / "-0.75".
 pub(crate) fn decimal_point(s: String) -> String {
-    if s.contains(',') { s.replace(',', ".") } else { s }
+    let s = if s.contains(',') { s.replace(',', ".") } else { s };
+    if s.starts_with('.') {
+        format!("0{s}")
+    } else if let Some(rest) = s.strip_prefix("-.") {
+        format!("-0.{rest}")
+    } else {
+        s
+    }
 }
 
 /// "2024-03-15 10:20:30.123450" with `digits` fractional digits ("…30.12345"; none: "…30").
@@ -1176,6 +1184,9 @@ mod tests {
         assert_eq!(decimal_point("-0,75".into()), "-0.75");
         assert_eq!(decimal_point("1234.56".into()), "1234.56");
         assert_eq!(decimal_point("7".into()), "7");
+        assert_eq!(decimal_point(".10".into()), "0.10");
+        assert_eq!(decimal_point("-.75".into()), "-0.75");
+        assert_eq!(decimal_point("-,5".into()), "-0.5");
     }
 
     #[test]
