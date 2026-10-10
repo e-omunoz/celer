@@ -202,6 +202,10 @@ Doble clic en una tabla del explorador la abre.
     lectura** y desactivarlo al terminar; los cambios anteriores se siguen leyendo enteros.
   - Solo llega hasta el log más antiguo que queda en disco: el historial dice qué logs cubre y, si la fila ya existía
     antes o su clave cambió, lo marca como **parcial**. Nunca se rellena un valor que el log no tenga.
+  - El lector CDC del servidor a veces se queda parado en un log (le pasa tras una lectura que llegó al final de un log
+    mientras se escribía): Celer lo dice como historial **parcial** («el lector CDC del servidor no entrega el log N más
+    allá de…», «no respondió…») y nunca como «sin cambios». Un cambio de log lógico (`onmode -l`) o reiniciar Informix lo
+    recupera.
   - En los demás motores la opción aparece desactivada con «No disponible en …».
 
 Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,

@@ -15,6 +15,11 @@ All notable changes to Celer are documented here. The format follows
   with the reason (the row existed before the oldest log, its key changed, the read was stopped…), with the logs it
   covers. When the table has no full row logging, which the CDC API requires, Celer offers to turn it on only for the
   read and off again (never on a read-only connection). Other engines show the entry disabled with «No disponible en …».
+  The server's CDC reader can stop answering after earlier reads (it is stuck for good at the point where a read met the
+  end of a log while it was being written): every request to it has a time limit, a log it will not give past a point is
+  skipped and said as partial, a read cut short never claims the row had no changes, and full row logging that a
+  read left on by dying is turned off by the next one. The refusals for a read-only connection or a user without CDC
+  rights come before the offer to turn full row logging on. Engine test output no longer lands in the checkout.
 
 ## [2.2.0] - 2026-10-09
 

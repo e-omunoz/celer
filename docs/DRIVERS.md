@@ -195,8 +195,24 @@ CDC API (`syscdcv1`), on a JDBC connection of its own. Measured on Informix 15 (
 - An LSN offset is the log page number shifted 12 bits plus the byte in the page. The read is complete when the
   session has nothing more to give (a timeout) at or past the page being written when the read began. The API only
   hands over what its log reader has reached: when it waits 10 s without progress, the history says the latest changes
-  are not available yet (partial). On the test server a log reader stuck after sessions were killed mid-test stopped
-  at one position for minutes until Informix was restarted.
+  are not available yet (partial).
+- **The server's reader is not reliable across reads** (measured, Informix 15.0.1.0.3, repeated runs). A session that
+  reaches the end of a log while its last page is still being written leaves that log readable only up to that
+  position for every later session: they get only timeouts there, or nothing at all (a blocked `LO_READ` that never
+  returns), and the reader does not go on to the next log. A server restart clears it; so does a log switch for the
+  changes made after it. Errors on the records of dropped tables (-83790, -83800) abandon sessions abnormally and
+  leave the reader worse for the next read. What Celer does about it: every CDC request has a 30 s limit (a stuck one
+  is abandoned, and the clean-up, closing the session and turning full row logging off, goes through another
+  connection); a read stops at 120 s; no progress for 10 s in a log that is already complete is taken as such a
+  wall, remembered, and the read goes on from the next log, saying that part of that log could not be seen; a read cut
+  short never says «no changes» (that needs a read that reached the end). The history of a row is therefore complete
+  only when the reader was healthy for the whole range; otherwise it says what is missing. The engine test restarts a
+  restartable server (`CELER_INFORMIX_CONTAINER`) before it reads, since only the first read after a restart is
+  dependable; its partition numbers are reused after DROP TABLE, so it drops its table, switches the log and only then
+  creates the next.
+- Celer turns full row logging on only for a read. It notes the table in `informix-full-row-logging.txt` in its data
+  folder first and removes the note once the setting is off again, so a read that was cut short (Celer closed, the
+  connection lost) is put right by the next read of that table, which turns it off after reading and says so.
 - Values are decoded in Rust from the CDC format (big-endian integers, Informix packed decimals for DECIMAL, MONEY,
   DATETIME and INTERVAL, length-prefixed VARCHAR/LVARCHAR, text in the database's code set); the size Celer computes for
   each column must add up to the size the server announces, or the table is refused. TEXT, BYTE, BLOB, CLOB and user
