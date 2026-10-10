@@ -196,8 +196,9 @@ export function inferCell(text: string): SheetCell {
   if (/^(verdadero|true)$/i.test(s)) return true;
   if (/^(falso|false)$/i.test(s)) return false;
   if (/^-?\d+$/.test(s)) return /^-?0\d/.test(s) || s.replace("-", "").length > 15 ? text : Number(s);
-  // 1.234,56 · 1.234 (a thousand in Spanish Excel) · 1,234.56 · -12,5 · 12.5
+  // 1.234,56 · 1.234.567 · 1,234.56 · -12,5 · 12.5 · 0.125 (a single ".ddd" is a decimal, as Celer copies them)
   let m = /^(-?)(\d{1,3}(?:\.\d{3})+)(?:,(\d+))?$/.exec(s);
+  if (m && !m[3] && !/\..*\./.test(m[2])) m = null;
   if (m) return Number(`${m[1]}${m[2].replace(/\./g, "")}${m[3] ? `.${m[3]}` : ""}`);
   m = /^(-?)(\d{1,3}(?:,\d{3})+)\.(\d+)$/.exec(s);
   if (m) return Number(`${m[1]}${m[2].replace(/,/g, "")}.${m[3]}`);

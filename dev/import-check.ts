@@ -55,7 +55,9 @@ assert.equal(inferCell("1.234,56"), 1234.56, "Spanish thousands and decimal comm
 assert.equal(inferCell("1,234.56"), 1234.56, "English thousands and decimal point");
 assert.equal(inferCell("-12,5"), -12.5);
 assert.equal(inferCell("12.5"), 12.5);
-assert.equal(inferCell("1.234"), 1234, "a lone dot group is thousands in Spanish Excel");
+assert.equal(inferCell("1.234"), 1.234, "a lone dot group is a decimal, as Celer copies them");
+assert.equal(inferCell("0.125"), 0.125);
+assert.equal(inferCell("1.234.567"), 1234567, "several dot groups are thousands");
 assert.equal(inferCell("007"), "007", "codes with leading zeros stay text");
 assert.equal(inferCell("1234567890123456789"), "1234567890123456789", "long digit strings stay exact");
 assert.deepEqual(inferCell("15/03/2024"), { d: "2024-03-15" });
