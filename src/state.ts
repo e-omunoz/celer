@@ -1573,6 +1573,8 @@ async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   const moved = state.tabs[tabIndex(tab.id)];
   if (moved?.kind === "sql" && moved.sessionId) return moved;
   if (!state.sessions[tab.connId]) await connect(tab.connId);
+  // connect() returns at once when another call (the console's warm-up) is already connecting: wait for that one.
+  for (let i = 0; i < 600 && !state.sessions[tab.connId] && state.connecting[tab.connId]; i++) await new Promise((r) => setTimeout(r, 100));
   if (!state.sessions[tab.connId]) throw new Error("Sin conexión");
   const fresh = state.tabs[tabIndex(tab.id)];
   if (!fresh || fresh.kind !== "sql") throw new Error("La pestaña ya no existe");
