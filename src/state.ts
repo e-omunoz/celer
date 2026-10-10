@@ -2238,7 +2238,8 @@ export async function openTable(
     const restored = existing.kind === "table" && existing.restored;
     if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}), ...(query ?? {}) });
     if (!options.background) selectTab(existing.id);
-    if (section !== "data") patchTab(existing.id, { section });
+    // A filter or ordering is data: show the data section even if the tab was left on DDL or another section.
+    if (section !== "data" || filters.length || query) patchTab(existing.id, { section });
     if (restored) {
       void reloadTable(existing.id, true);
     } else if (filters.length && (await guardDirty(existing.id))) {
