@@ -177,8 +177,10 @@ CDC API (`syscdcv1`), on a JDBC connection of its own. Measured on Informix 15 (
   from a client.
 - A CDC session (`cdc_opensess`, `cdc_startcapture` for the table's capturable columns, `cdc_activatesess` from the
   start of the oldest log on disk) returns committed inserts, update before/after pairs and deletes with full values,
-  also for changes made **before** full row logging was turned on (Informix logged whole rows for every update
-  tested, up to rows spanning pages). The records are read as a smart large object whose descriptor is the session id,
+  also for changes made **before** full row logging was turned on (Informix logged whole rows for the updates
+  tested of tables with a variable-length column, up to rows spanning pages; a table with only fixed-length columns
+  logs its updates as partial `HUPDAT` records that the CDC API does not send at all when full row logging was off at the
+  time: Celer compares the end of the history with the row as it is now and labels the history partial if they differ). The records are read as a smart large object whose descriptor is the session id,
   which only SQLI offers: JDBC (the bridge's `LO_READ`) yes, DRDA no; the Client SDK path is not wired.
 - `cdc_startcapture` refuses a table without full row logging (-83706). Its state is bit `0x04000000` of
   `sysmaster:sysptnhdr.flags`. Celer never turns it on by itself: the user may allow it for one read, and Celer turns

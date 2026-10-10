@@ -51,6 +51,9 @@ All notable changes to Celer are documented here. The format follows
   - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
 
 ### Fixed
+- **Row history on Informix** (#123): updates of tables with only fixed-length columns made while full row logging was off
+  are not sent by the CDC API; the history is now compared with the row as it is now and labelled partial when its last
+  value differs. A failed clean-up (server restarted mid-read) no longer also says full row logging was turned off.
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
   closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
   *mayúsculas / regexp / palabra completa* toggles, which light up when on (#88).

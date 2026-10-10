@@ -7,7 +7,10 @@
 //! still on disk. Its records (begin, insert, update before/after, delete, commit…) are read as a smart large object
 //! whose descriptor is the session id: only SQLI offers that, so only Informix over JDBC (the bridge's LO_READ).
 //! `cdc_startcapture` needs full row logging on the table; changes logged before it was turned on still come with
-//! their full before and after images, so Celer may turn it on for the read and off again, when the user agrees.
+//! their full before and after images (measured only for tables with a variable-length column: updates of a table with only
+//! fixed-length columns are logged as partial records the CDC API does not send, so the end of the history is checked
+//! against the row as it is now and a difference is said), so Celer may turn it on for the read and off again, when the
+//! user agrees.
 //!
 //! Preconditions, each reported instead of guessed: a logged database, not a RAW table, `syscdcv1` created by a DBA,
 //! a user who may run the CDC routines (an ordinary user gets -674), and the logs still on disk (the oldest one is
@@ -705,6 +708,28 @@ pub fn same_value(ty: &Ty, logged: &str, shown: &str) -> bool {
     false
 }
 
+/// A logged value and the one the table holds now are the same (the grid's and the log's spellings of dates, booleans
+/// and numbers differ in trailing zeros and separators, not in value).
+fn same_now(ty: &Ty, logged: Option<&str>, now: &Cell) -> bool {
+    let shown = match now {
+        Cell::Null => return logged.is_none(),
+        Cell::Bool(b) => b.to_string(),
+        other => text(other),
+    };
+    let Some(logged) = logged else { return false };
+    if same_value(ty, logged, &shown) {
+        return true;
+    }
+    match ty {
+        Ty::Bool => matches!((logged, shown.as_str()), ("true", "t" | "1") | ("false", "f" | "0")),
+        Ty::DateTime(_) | Ty::Interval(_) | Ty::Date => {
+            let digits = |v: &str| v.chars().filter(|c| c.is_ascii_digit()).collect::<String>().trim_end_matches('0').to_string();
+            digits(logged) == digits(&shown)
+        }
+        _ => false,
+    }
+}
+
 /// "+001.500" → "1.5", "-0" → "0": the same number written the same way, or None if it is not a plain number.
 fn normal_number(s: &str) -> Option<String> {
     let s = s.trim();
@@ -911,6 +936,32 @@ impl Builder {
             Rec::Other => {}
         }
         Ok(())
+    }
+
+    /// The row as the table holds it now (None: no such row) against the end of the history. Some changes never reach
+    /// the CDC session: with full row logging off when they were made, the server logs an update of a table with only
+    /// fixed-length columns as a partial record, which it does not send. The last change read must leave the row as it
+    /// is now; if not, the history misses changes. Returns what differs, in words.
+    pub fn disagrees_with(&self, now: Option<&[Cell]>) -> Option<String> {
+        let layout = self.layout.as_ref()?;
+        let last = self.events.last();
+        let expected = last.and_then(|e| e.after.as_ref());
+        match (expected, now) {
+            (None, None) => None,
+            (None, Some(_)) if last.is_none() => None, // "no changes at all" has its own message
+            (None, Some(_)) => Some("la fila existe hoy, pero el último cambio leído fue un borrado".into()),
+            (Some(_), None) => Some("la fila ya no existe, pero el último cambio leído no la borra".into()),
+            (Some(after), Some(now)) => {
+                let diff: Vec<&str> = layout
+                    .cols
+                    .iter()
+                    .zip(after.iter().zip(now))
+                    .filter(|(c, (a, n))| !same_now(&c.1, a.as_deref(), n))
+                    .map(|(c, _)| c.0.as_str())
+                    .collect();
+                (!diff.is_empty()).then(|| format!("el último valor leído de {} no es el que tiene la fila hoy", diff.join(", ")))
+            }
+        }
     }
 
     /// The history: the changes and every reason it may not be complete.
@@ -1479,7 +1530,24 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         if !stalled && stopped.is_none() && !skipped_from.is_empty() {
             RESUME.lock().insert(remembered_key, skipped_from.clone());
         }
+        // The history against the row as it is now: a change the server never sent shows up as a difference.
+        let disagreement = if stopped.is_none() && !b.columns().is_empty() {
+            let names = b.columns();
+            let cond = req.key.iter().map(|k| format!("{} = {}", k.column, lit(&k.value))).collect::<Vec<_>>().join(" AND ");
+            match conn.query_all(&format!("SELECT {} FROM {full_name} WHERE {cond}", names.join(", "))) {
+                Ok(rows) if rows.len() <= 1 => b.disagrees_with(rows.first().map(|r| r.as_slice())),
+                Ok(_) => None,
+                Err(e) => Some(format!("no se pudo leer la fila actual para compararla con el log ({e})")),
+            }
+        } else {
+            None
+        };
         let mut h = b.finish(from, stopped, walls_hit.iter().map(|w| wall_text(*w)).collect());
+        if let Some(d) = disagreement {
+            h.partial.push(format!(
+                "Faltan cambios en el historial: {d}. Con full row logging desactivado, el servidor registra las modificaciones de una tabla sin columnas de longitud variable como registros parciales y no los entrega por la API CDC. Puede ser también un cambio posterior a la lectura."
+            ));
+        }
         h.stalled = stalled;
         h.skipped = skipped.clone();
         h.range = Some(LogRange {
@@ -1562,6 +1630,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             ledger_forget(env.ledger, &ledger_key);
         } else {
             let mut h = result?;
+            h.notes.retain(|n| !n.contains("se ha vuelto a desactivar"));
             h.notes.push(format!(
                 "No se pudo volver a desactivar full row logging en «{full_name}»: hazlo con EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full_name}', 0)."
             ));
@@ -1937,6 +2006,20 @@ mod tests {
         assert_eq!(recreated.events.len(), 2);
         assert!(recreated.notes.iter().any(|n| n.contains("Se descartaron 2")), "{:?}", recreated.notes);
         assert!(recreated.partial.iter().any(|p| p.contains("ya existía")), "{:?}", recreated.partial);
+    }
+
+    #[test]
+    fn the_end_of_the_history_is_checked_against_the_row_now() {
+        let mut b = Builder::new(vec![("id".into(), "1".into())], 0, HashMap::new(), Codeset::Latin1);
+        let (recs, _) = parse_records(&spike_stream()).unwrap();
+        for r in recs {
+            b.feed(r).unwrap();
+        }
+        let c = |v: &[&str]| v.iter().map(|x| Cell::Text(x.to_string())).collect::<Vec<_>>();
+        assert_eq!(b.disagrees_with(Some(&c(&["1", "12", "1.75", "alpha-2"]))), None);
+        let late = b.disagrees_with(Some(&c(&["1", "30", "3.00", "alpha-2"]))).unwrap();
+        assert!(late.contains("qty, price"), "{late}");
+        assert!(b.disagrees_with(None).is_some());
     }
 
     #[test]

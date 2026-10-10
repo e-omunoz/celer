@@ -1162,20 +1162,27 @@ fn informix_jdbc_row_history() {
     // the dropped one (-83800) when a read covers them, which leaves its server-side reader stuck for the next run
     // (measured). So the old table is dropped, the log switched, and only then the new one created: the read starts
     // in a log after the drop.
-    for sql in ["DROP TABLE IF EXISTS rh_t", "DROP TABLE IF EXISTS rh_raw", "DROP TABLE IF EXISTS rh_fill"] {
+    for sql in ["DROP TABLE IF EXISTS rh_t", "DROP TABLE IF EXISTS rh_raw", "DROP TABLE IF EXISTS rh_fill", "DROP TABLE IF EXISTS rh_fix"] {
         d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
     }
     switch_log();
     d.execute("CREATE TABLE rh_t (id INT PRIMARY KEY, nombre VARCHAR(40), qty INT, precio DECIMAL(10,2), momento DATETIME YEAR TO SECOND, notas TEXT)", 10).unwrap();
+    d.execute("CREATE TABLE rh_fix (id INT PRIMARY KEY, q INT, d DECIMAL(8,2), v DATETIME YEAR TO SECOND)", 10).unwrap();
     let id1 = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() % 2_000_000_000).to_string();
     let id2 = (id1.parse::<u64>().unwrap() + 1).to_string();
+    let id3 = (id1.parse::<u64>().unwrap() + 2).to_string();
     for sql in [
         format!("INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES ({id1}, 'alfa', 10, 1.50, DATETIME(2024-03-15 10:20:30) YEAR TO SECOND)"),
         format!("INSERT INTO rh_t (id, nombre, qty, precio) VALUES ({id2}, 'beta', 20, 2.50)"),
+        format!("INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES ({id3}, 'gamma', 5, 0.25, DATETIME(2024-02-29 23:59:59) YEAR TO SECOND)"),
         format!("UPDATE rh_t SET qty = 11 WHERE id = {id1}"),
         format!("UPDATE rh_t SET nombre = 'alfa-2', precio = 1.75 WHERE id = {id1}"),
         format!("UPDATE rh_t SET qty = 12, momento = NULL WHERE id = {id1}"),
         format!("DELETE FROM rh_t WHERE id = {id2}"),
+        // Fixed-length columns only: the server logs these updates as partial records, not as full images.
+        format!("INSERT INTO rh_fix VALUES ({id1}, 10, 1.00, DATETIME(2024-02-29 23:59:59) YEAR TO SECOND)"),
+        format!("UPDATE rh_fix SET q = 20, d = 2.00 WHERE id = {id1}"),
+        format!("UPDATE rh_fix SET q = 30, d = 3.00 WHERE id = {id1}"),
         "CREATE RAW TABLE rh_raw (id INT)".to_string(),
         // The CDC API reads complete log pages only: a busy server fills them, this one is idle, so the log is pushed
         // past the changes above with some logged traffic.
@@ -1256,6 +1263,13 @@ fn informix_jdbc_row_history() {
     let gone = ask("rh_t", &id2, true);
     assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"]);
     assert_eq!(gone.events[1].before, Some(s(&[&id2, "20", "2.50", "NULL", "beta"])));
+    let fix = ask("rh_fix", &id1, true);
+    // The two updates are logged as partial records the CDC API does not send: the history must not pass as complete.
+    assert_eq!(fix.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert"], "{fix:?}");
+    assert!(fix.partial.iter().any(|p| p.contains("Faltan cambios") && p.contains("q, d")), "{:?}", fix.partial);
+    // A row whose history is complete (with a DATETIME and a VARCHAR) is not flagged.
+    let whole = ask("rh_t", &id3, true);
+    assert!(whole.events.len() == 1 && whole.partial.iter().all(|p| p.contains("no entrega el log")), "{whole:?}");
     // A key with no change in the logs: nothing invented, and said to be partial.
     let none = ask("rh_t", "99", true);
     assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");
