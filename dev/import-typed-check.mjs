@@ -15,6 +15,17 @@ const H = `
   const until = async (fn, ms = 20000) => { const t = Date.now(); while (Date.now() - t < ms) { const v = fn(); if (v) return v; await sleep(50); } return null; };
   const inv = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const connRow = (name) => [...document.querySelectorAll('.tree-row.conn')].find((e) => e.querySelector('.tree-name')?.textContent === name || e.textContent.includes(name));
+  // The explorer draws only the rows in view: scroll it until the connection's row is there.
+  const findConn = async (name) => {
+    const tree = document.querySelector('.tree');
+    for (let top = 0; tree && top <= tree.scrollHeight; top += Math.max(100, tree.clientHeight / 2)) {
+      tree.scrollTop = top;
+      await sleep(80);
+      const row = connRow(name);
+      if (row) { row.scrollIntoView({ block: 'center' }); await sleep(80); return row; }
+    }
+    return null;
+  };
   const menuItem = (re) => until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => re.test(b.textContent)), 4000);
   const pane = () => document.querySelector('.pane-host.active');
   const dlg = () => document.querySelector('.import-dialog');
@@ -72,7 +83,8 @@ await js(`await until(() => document.querySelector('.app.ready') && !document.qu
 if (await js(`return !!document.querySelector('.onboarding');`)) await key("Escape");
 
 for (const name of CONNS) {
-  const kind = await js(`return (await conn(${JSON.stringify(name)}))?.kind ?? null;`);
+  // A generic ODBC source gets the DDL of the engine behind it.
+  const kind = await js(`const c = await conn(${JSON.stringify(name)}); if (!c) return null; const odbc = c.kind === 'odbc' ? c.odbcConnStr ?? '' : ''; return /sql server/i.test(odbc) ? 'mssql' : /postgres/i.test(odbc) ? 'postgres' : /mysql|maria/i.test(odbc) ? 'mysql' : c.kind;`);
   if (!kind) {
     check(`${name}: connection exists`, false, "not found");
     continue;
@@ -84,9 +96,10 @@ for (const name of CONNS) {
   if (created !== "ok") continue;
   // Connected and refreshed, so «Ir a tabla» (Ctrl+N) finds the new table; its tab has the import button.
   const opened = await js(`
-    const row = connRow(${JSON.stringify(name)});
-    if (!row.classList.contains('connected')) { row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await until(() => connRow(${JSON.stringify(name)}).classList.contains('connected'), 30000); }
-    connRow(${JSON.stringify(name)}).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 200 }));
+    const row = await findConn(${JSON.stringify(name)});
+    if (!row) return false;
+    if (!row.classList.contains('connected')) { row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await until(() => connRow(${JSON.stringify(name)})?.classList.contains('connected'), 30000); }
+    (await findConn(${JSON.stringify(name)})).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 200 }));
     (await menuItem(/^Actualizar/))?.click();
     await sleep(1500);
     return true;
@@ -139,7 +152,7 @@ for (const name of CONNS) {
     ["2", "Luis Peña", "2023-01-02", "false", "0.1", null],
     ["3", "Marta Gil", null, null, "1234.56", null],
   ];
-  check(`${name}: dates, decimals, booleans, timestamps and NULLs read back`, JSON.stringify(rows) === JSON.stringify(want), JSON.stringify(back));
+  check(`${name}: dates, decimals, booleans, timestamps and NULLs read back`, JSON.stringify(rows) === JSON.stringify(want), JSON.stringify(back) + " " + (await js(`return [...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ');`)));
 
   // ---- a block pasted from Excel (Spanish formats) into the wizard
   await js(`await sql(${JSON.stringify(name)}, "DELETE FROM import_tipos");`);
@@ -179,7 +192,7 @@ for (const name of CONNS) {
   `);
   check(`${name}: paste into the grid: 2 rows edited and 1 new (pending)`, /\b(3|4|5|6)\b/.test(pending), pending);
   await js(`
-    const discard = [...pane().querySelectorAll('.tb-btn, .tb-icon')].find((b) => /Descartar|Deshacer/.test(b.title || b.textContent));
+    const discard = [...pane().querySelectorAll('button')].find((b) => /^(Revertir|Descartar)/.test(b.textContent.trim()) || /Descartar|Deshacer/.test(b.title));
     discard?.click();
     await sleep(300);
   `);
