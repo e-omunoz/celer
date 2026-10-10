@@ -1171,6 +1171,7 @@ fn informix_jdbc_row_history() {
     let id1 = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() % 2_000_000_000).to_string();
     let id2 = (id1.parse::<u64>().unwrap() + 1).to_string();
     let id3 = (id1.parse::<u64>().unwrap() + 2).to_string();
+    let (id4, id5) = ((id1.parse::<u64>().unwrap() + 3).to_string(), (id1.parse::<u64>().unwrap() + 4).to_string());
     for sql in [
         format!("INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES ({id1}, 'alfa', 10, 1.50, DATETIME(2024-03-15 10:20:30) YEAR TO SECOND)"),
         format!("INSERT INTO rh_t (id, nombre, qty, precio) VALUES ({id2}, 'beta', 20, 2.50)"),
@@ -1179,6 +1180,9 @@ fn informix_jdbc_row_history() {
         format!("UPDATE rh_t SET nombre = 'alfa-2', precio = 1.75 WHERE id = {id1}"),
         format!("UPDATE rh_t SET qty = 12, momento = NULL WHERE id = {id1}"),
         format!("DELETE FROM rh_t WHERE id = {id2}"),
+        // A key moved away: the old key's history ends with that update, and nothing is missing.
+        format!("INSERT INTO rh_t (id, nombre, qty, precio) VALUES ({id4}, 'delta', 4, 4.00)"),
+        format!("UPDATE rh_t SET id = {id5} WHERE id = {id4}"),
         // Fixed-length columns only: the server logs these updates as partial records, not as full images.
         format!("INSERT INTO rh_fix VALUES ({id1}, 10, 1.00, DATETIME(2024-02-29 23:59:59) YEAR TO SECOND)"),
         format!("UPDATE rh_fix SET q = 20, d = 2.00 WHERE id = {id1}"),
@@ -1270,6 +1274,12 @@ fn informix_jdbc_row_history() {
     // A row whose history is complete (with a DATETIME and a VARCHAR) is not flagged.
     let whole = ask("rh_t", &id3, true);
     assert!(whole.events.len() == 1 && whole.partial.iter().all(|p| p.contains("no entrega el log")), "{whole:?}");
+    let moved = ask("rh_t", &id4, true);
+    assert_eq!(moved.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"], "{moved:?}");
+    assert!(moved.partial.iter().all(|p| p.contains("no entrega el log")), "the key moved away is not a missing change: {:?}", moved.partial);
+    let moved_in = ask("rh_t", &id5, true);
+    assert!(moved_in.partial.iter().any(|p| p.contains("clave primaria") && p.contains(&id4)), "{:?}", moved_in.partial);
+    assert!(!moved_in.partial.iter().any(|p| p.contains("Faltan cambios")), "{:?}", moved_in.partial);
     // A key with no change in the logs: nothing invented, and said to be partial.
     let none = ask("rh_t", "99", true);
     assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");

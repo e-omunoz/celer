@@ -941,14 +941,18 @@ impl Builder {
     /// The row as the table holds it now (None: no such row) against the end of the history. Some changes never reach
     /// the CDC session: with full row logging off when they were made, the server logs an update of a table with only
     /// fixed-length columns as a partial record, which it does not send. The last change read must leave the row as it
-    /// is now; if not, the history misses changes. Returns what differs, in words.
+    /// is now; if not, the history misses changes. Returns what differs, in words. A last change that moved the key
+    /// away (an update whose after-image has another key) leaves no row under this key, like a delete.
     pub fn disagrees_with(&self, now: Option<&[Cell]>) -> Option<String> {
         let layout = self.layout.as_ref()?;
         let last = self.events.last();
-        let expected = last.and_then(|e| e.after.as_ref());
+        let expected = last.and_then(|e| e.after.as_ref()).filter(|a| self.matches(a));
         match (expected, now) {
             (None, None) => None,
             (None, Some(_)) if last.is_none() => None, // "no changes at all" has its own message
+            (None, Some(_)) if last.is_some_and(|e| e.after.is_some()) => {
+                Some("la fila existe hoy, pero el último cambio leído le cambió la clave".into())
+            }
             (None, Some(_)) => Some("la fila existe hoy, pero el último cambio leído fue un borrado".into()),
             (Some(_), None) => Some("la fila ya no existe, pero el último cambio leído no la borra".into()),
             (Some(after), Some(now)) => {
@@ -2047,6 +2051,38 @@ mod tests {
         // Following the old key shows the row until it moved.
         let old = history(&s, "5", 0);
         assert_eq!(old.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"]);
+    }
+
+    /// A last change that moved the key away leaves no row under the old key: nothing is missing when there is none
+    /// now, and a row under the old key now is a change the history did not see.
+    #[test]
+    fn a_key_moved_away_is_not_a_missing_change() {
+        let mut s = schema();
+        s.extend(begin(40, 200, 2000));
+        let five = ["00000005", "00000001", "c10132000000", "02616c"].concat();
+        let six = ["00000006", "00000001", "c10132000000", "02616c"].concat();
+        s.extend(change(40, 40, 0x100, &five, &[3]));
+        s.extend(commit(40, 2000, 0x110));
+        s.extend(begin(41, 200, 2001));
+        s.extend(change(42, 41, 0x200, &five, &[3]));
+        s.extend(change(43, 41, 0x201, &six, &[3]));
+        s.extend(commit(41, 2001, 0x210));
+        let fed = |key: &str| {
+            let mut b = Builder::new(vec![("id".into(), key.into())], 0, HashMap::new(), Codeset::Latin1);
+            for r in parse_records(&s).unwrap().0 {
+                b.feed(r).unwrap();
+            }
+            b
+        };
+        let c = |v: &[&str]| v.iter().map(|x| Cell::Text(x.to_string())).collect::<Vec<_>>();
+        let old = fed("5");
+        assert_eq!(old.disagrees_with(None), None);
+        let back = old.disagrees_with(Some(&c(&["5", "1", "1.50", "al"]))).unwrap();
+        assert!(back.contains("cambió la clave"), "{back}");
+        // The new key still compares its values.
+        let new = fed("6");
+        assert_eq!(new.disagrees_with(Some(&c(&["6", "1", "1.50", "al"]))), None);
+        assert!(new.disagrees_with(None).is_some());
     }
 
     /// A read cut short (a stuck reader, the time limit) never claims the row had no changes: nothing was seen is not
