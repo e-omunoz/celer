@@ -83,7 +83,7 @@ function McpActivity(props: { status: McpStatus; close: () => void; inside: (nod
       <div class="mcp-pop-list">
         <For each={entries() ?? []} fallback={<p class="mcp-pop-note">{entries.loading ? "Cargando…" : "Sin actividad todavía."}</p>}>
           {(entry) => (
-            <div class="mcp-act" classList={{ bad: !entry.ok, app: actsInApp(entry.tool) }} title={`${new Date(entry.at).toLocaleString()}\n${entry.tool}${entry.error ? `\n${entry.error}` : entry.detail ? `\n${entry.detail}` : ""}`}>
+            <div class="mcp-act" classList={{ bad: !entry.ok, "mcp-act-app": actsInApp(entry.tool) }} title={`${new Date(entry.at).toLocaleString()}\n${entry.tool}${entry.error ? `\n${entry.error}` : entry.detail ? `\n${entry.detail}` : ""}`}>
               <div class="mcp-act-head">
                 <b>{toolLabel(entry)}</b>
                 <Show when={entry.connName}><span>{entry.connName}</span></Show>

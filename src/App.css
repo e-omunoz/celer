@@ -1250,7 +1250,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .mcp-act time { color: var(--text-faint); font-variant-numeric: tabular-nums; flex: none; }
 .mcp-act code { color: var(--text-muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcp-act small { color: var(--text-faint); font-size: 10.5px; }
-.mcp-act.app b { color: var(--accent); }
+.mcp-act.mcp-act-app b { color: var(--accent); }
 .mcp-act.bad b, .mcp-act.bad code { color: var(--danger); }
 
 /* An assistant opened it (MCP «Controlar la aplicación»): a badge, and a short highlight when it appears */
