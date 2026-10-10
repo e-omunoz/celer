@@ -43,15 +43,26 @@ await js(`await until(() => pane()?.querySelector('.cm-content'), 20000); pane()
 await key("a", 2);
 await app.send("Input.insertText", { text: sql });
 await key("Enter", 2);
+// Measured only on the whole result: the run over (no «Detener»), every row read («Cargar todo» until the bar shows
+// ROWS rows without «+»). A slow engine (SQL Server builds 100k × 200 more slowly) must not be measured mid-load.
 const loaded = await js(`
-  await until(() => pane().querySelector('.grid-canvas') && /filas/.test(pane().querySelector('.results-head, .result-bar, .rbar')?.textContent ?? pane().textContent));
-  await sleep(500);
-  const all = [...pane().querySelectorAll('button')].find((b) => /Cargar todo/.test(b.textContent));
-  if (all) { all.click(); await until(() => ![...pane().querySelectorAll('button')].some((b) => /Cargar todo/.test(b.textContent)), 300000); }
+  const count = () => {
+    const m = /^([\\d.,\\s]+)(\\+?)\\s*filas?/.exec((pane().querySelector('.results-head .muted.small')?.textContent ?? '').trim());
+    return m ? { n: Number(m[1].replace(/\\D/g, '')), more: Boolean(m[2]) } : null;
+  };
+  const idle = () => !pane().querySelector('.tb-btn.stop') && !document.querySelector('.tab.on .tab-spinner');
+  await until(() => pane().querySelector('.grid-canvas') && idle() && count(), 300000);
+  if (count()?.more) [...pane().querySelectorAll('button')].find((b) => /Cargar todo/.test(b.textContent))?.click();
+  await until(() => idle() && count() && !count().more, 600000);
   await sleep(800);
   const r = pane().querySelector('.grid-scroll').getBoundingClientRect();
-  return { x: r.left, y: r.top, w: r.width, h: r.height };
+  return { x: r.left, y: r.top, w: r.width, h: r.height, rows: count()?.n ?? 0 };
 `);
+if (loaded.rows !== ROWS) {
+  console.log(`FAIL  the result has ${loaded.rows} rows, not ${ROWS}: not measured`);
+  app.close();
+  process.exit(1);
+}
 // A 100k x 200 result leaves the engine with a lot of garbage: major GC / heap compaction tasks of 70-170 ms fire
 // seconds after the load whether or not anything is dragged. Wait until the main thread has had no long task for 8 s
 // (at most 40 s) so the drag is measured on its own and not on the load's aftermath.
