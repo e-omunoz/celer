@@ -76,6 +76,12 @@ if ($Engines -or ($new -and -not $Fresh -and $Slot -gt 0)) {
 } elseif ($new -and -not $Fresh -and (Test-Path $installed)) {
   Copy-Item $installed "$DataDir\connections.json"
 }
+# Informix needs the IBM CLI driver and the JDBC jar, which Celer keeps in <data>\drivers: a slot's folder gets a copy
+# of the usual one's (downloaded once there), so its Informix connections work from the start.
+$sharedDrivers = "D:\celer-devdata\drivers"
+if ($Slot -gt 0 -and -not (Test-Path "$DataDir\drivers") -and (Test-Path $sharedDrivers)) {
+  Copy-Item $sharedDrivers "$DataDir\drivers" -Recurse
+}
 $env:CELER_DATA_DIR = $DataDir
 $env:WEBVIEW2_USER_DATA_FOLDER = "$DataDir\webview"
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port"
