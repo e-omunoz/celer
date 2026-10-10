@@ -135,7 +135,9 @@ export function importArea(): { r1: number; c1: number; r2: number; c2: number }
 
 /** First data row of a sheet: after the header, from the range's top (or the data found, without a range). */
 function dataStart(area: { r1: number }) {
-  const top = importer.range.trim() ? area.r1 : Math.max(area.r1, importer.autoStart);
+  // Without a header the detected header row is data (autoStart is the row after it); title rows above stay skipped.
+  const start = importer.headerRow < 0 && importer.detectedHeader >= 0 ? importer.detectedHeader : importer.autoStart;
+  const top = importer.range.trim() ? area.r1 : Math.max(area.r1, start);
   return importer.headerRow >= 0 ? Math.max(importer.headerRow + 1, top) : top;
 }
 
