@@ -158,7 +158,7 @@ function RunOnForm(props: { scriptId: string }) {
         </fieldset>
         <Show when={action() === "run" && production().length}>
           <p class="field-warn">
-            {production().map((c) => `«${c!.name}»`).join(", ")} {production().length === 1 ? "es de producción" : "son de producción"}: las sentencias que modifican datos o la estructura
+            {production().map((c) => `«${c!.name}»`).join(", ")} {production().length === 1 ? "es de producción" : "son de producción"}: las sentencias que cambian la estructura o modifican datos sin WHERE
             piden confirmación en cada destino.
           </p>
         </Show>

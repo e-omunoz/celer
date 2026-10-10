@@ -74,6 +74,7 @@ All notable changes to Celer are documented here. The format follows
   - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
 
 ### Fixed
+- **Library «Ejecutar en…»** (#99): a run on a connection that is still connecting waits for it instead of failing with «Sin conexión»; the multi-target summary no longer counts failed runs as executed.
 - **IA activity list** (#100): the entries for app actions (open_table, add_library_script...) were invisible (a CSS class clash made them transparent).
 - **Informix over DRDA on Windows** (#100): catalog names padded with NULs no longer break open_table, open_object and the E-R diagram.
 - **E-R diagram on generic ODBC sources** (#100): no longer fails with «Aquí no hay una carpeta de tablas».

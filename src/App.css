@@ -945,7 +945,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .lib-engine.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
 .lib-engine.guess { border-style: dashed; }
 .lib-engine .engine-icon { flex: none; }
-.lib-engine-warn { font-size: 10px; }
+.lib-engine-warn { font-size: 10px; white-space: nowrap; }
 .history-item small .lib-engine { margin-right: 2px; }
 .runon-engine-warn { grid-column: 1 / -1; order: 10; }
 .runon-vars { grid-column: 1 / -1; order: 11; margin: 0; font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
