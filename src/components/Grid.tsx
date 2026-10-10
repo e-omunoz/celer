@@ -1240,8 +1240,8 @@ export function DataGrid(props: GridProps) {
     ];
     const history = props.rowHistory;
     if (history) {
-      const at = focus();
-      const source = at ? ordered()[at.row] : undefined;
+      // The row under the pointer: the focus is only set once a click has selected something (not on the first right-click).
+      const source = ordered()[target.row];
       const why = history.blocked ?? (source === undefined ? "Ninguna fila elegida" : (history.rowBlocked?.(source) ?? null));
       items.push({ label: "Historial de la fila", icon: "history", disabled: Boolean(why), note: why ?? undefined, run: () => source !== undefined && history.open(source) });
     }

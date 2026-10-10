@@ -67,9 +67,10 @@ export function userText(event: RowHistoryEvent): string {
 
 /** The logs the history covers, in words. */
 export function rangeText(range: NonNullable<RowHistory["range"]>): string {
-  const logs = range.firstLog === range.currentLog ? `log ${range.firstLog}` : `logs ${range.firstLog} a ${range.currentLog}`;
+  const single = range.firstLog === range.currentLog;
+  const logs = single ? `del log ${range.firstLog}` : `de los logs ${range.firstLog} a ${range.currentLog}`;
   const filled = range.firstLogFilled ? `; el ${range.firstLog}, el más antiguo, se llenó el ${timeText(range.firstLogFilled)}` : "";
-  return `Leído de los ${logs} que quedan en disco (posición ${range.fromLsn} a ${range.readUntil})${filled}. Lo anterior ya no está en los logs.`;
+  return `Leído ${logs}${single ? "" : " que quedan en disco"} (posición ${range.fromLsn} a ${range.readUntil})${filled}. Lo anterior ya no está en los logs.`;
 }
 
 /** The text of an unavailable history: the engine reasons already say «No disponible…»; the rest get the prefix. */

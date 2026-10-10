@@ -61,6 +61,9 @@ const range = rangeText({ firstLog: 64, firstLogFilled: null, currentLog: 73, fr
 assert.match(range, /logs 64 a 73 que quedan en disco \(posición 64:0x0 a 73:0x1a20c8\)\. Lo anterior ya no está en los logs\./);
 assert.match(rangeText({ firstLog: 9, firstLogFilled: 1791561745, currentLog: 9, fromLsn: "9:0x0", readUntil: "9:0x10", readAt: 0 }), /log 9 .*el 9, el más antiguo, se llenó el /);
 
+assert.match(rangeText({ firstLog: 88, firstLogFilled: null, currentLog: 88, fromLsn: "88:0x0", readUntil: "88:0x10", readAt: 0 }), /^Leído del log 88 \(posición/);
+assert.match(range, /^Leído de los logs 64 a 73 /);
+
 // «No se puede reconstruir: …» unless the reason already says it is not available.
 assert.equal(unavailableText("la base de datos «x» no tiene log."), "No se puede reconstruir: la base de datos «x» no tiene log.");
 assert.equal(unavailableText("No disponible en PostgreSQL: …"), "No disponible en PostgreSQL: …");
