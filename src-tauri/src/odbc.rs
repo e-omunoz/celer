@@ -738,9 +738,11 @@ impl Stmt {
             let n = *b.fetched;
             // An indicator array is filled 4 bytes per row by a driver with a 32-bit SQLLEN (IBM's CLI) and 8 by the
             // others, whatever the platform: from two rows on, the last slot is still the sentinel when the entries
-            // were narrow. With one row both layouts agree on the low 4 bytes.
+            // were narrow. With one row the slot is only half overwritten: its high 4 bytes still hold the sentinel's.
             let narrow = (self.api.len32 && !cfg!(windows))
-                || (n >= 2 && b.inds.iter().any(|i| i[n - 1] == IND_SENTINEL));
+                || (n >= 2 && b.inds.iter().any(|i| i[n - 1] == IND_SENTINEL))
+                || (n == 1
+                    && b.inds.iter().any(|i| (i[0] as u64) >> 32 == (IND_SENTINEL as u64) >> 32));
             for r in 0..n {
                 let mut row = Vec::with_capacity(self.plans.len());
                 for (c, p) in self.plans.iter().enumerate() {
