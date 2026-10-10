@@ -60,6 +60,9 @@ All notable changes to Celer are documented here. The format follows
   - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
 
 ### Fixed
+- **IA activity list** (#100): the entries for app actions (open_table, add_library_script...) were invisible (a CSS class clash made them transparent).
+- **Informix over DRDA on Windows** (#100): catalog names padded with NULs no longer break open_table, open_object and the E-R diagram.
+- **E-R diagram on generic ODBC sources** (#100): no longer fails with «Aquí no hay una carpeta de tablas».
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
   closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
   *mayúsculas / regexp / palabra completa* toggles, which light up when on (#88).
