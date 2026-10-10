@@ -1695,17 +1695,17 @@ export function DataGrid(props: GridProps) {
     let max: number | null = null;
     const distinct = new Set<string>();
     const budget = 250_000;
-    const slice = 20_000;
+    const sliceMs = 4; // a slice never holds the main thread for more than a frame's slack, whatever the cell types
     let vr = s.r1;
     const step = () => {
       if (run !== statsRun) return;
-      const until = cells + slice;
+      const deadline = performance.now() + sliceMs;
       for (; vr <= s.r2; vr++) {
         if (cells > budget) {
           vr = s.r2 + 1;
           break;
         }
-        if (cells >= until) break;
+        if ((vr & 255) === 0 && performance.now() > deadline) break;
         const row = data[rows[vr]];
         for (let c = s.c1; c <= s.c2; c++) {
           cells++;
