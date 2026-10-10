@@ -52,6 +52,14 @@ const loaded = await js(`
   const r = pane().querySelector('.grid-scroll').getBoundingClientRect();
   return { x: r.left, y: r.top, w: r.width, h: r.height };
 `);
+// A 100k x 200 result leaves the engine with a lot of garbage: major GC / heap compaction tasks of 70-170 ms fire
+// seconds after the load whether or not anything is dragged. Wait until the main thread has had no long task for 8 s
+// (at most 40 s) so the drag is measured on its own and not on the load's aftermath.
+await js(`
+  const lts = []; new PerformanceObserver((l) => { for (const e of l.getEntries()) lts.push(performance.now()); }).observe({ type: 'longtask' });
+  const t0 = performance.now();
+  while (performance.now() - t0 < 40000 && performance.now() - Math.max(t0, lts.at(-1) ?? 0) < 8000) await sleep(250);
+`);
 console.log(`result on show: ${COLS} columns × ${ROWS.toLocaleString()} rows; grid ${Math.round(loaded.w)}×${Math.round(loaded.h)}`);
 
 // Frame recorder: rAF intervals and long tasks.
