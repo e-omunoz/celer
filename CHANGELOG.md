@@ -31,6 +31,7 @@ All notable changes to Celer are documented here. The format follows
   rows past the last one.
 
 ### Fixed
+- **Compare** (#119): «Cargar todo» while comparing a result with over 120,000 rows only in B no longer ends in a stack overflow that left the console on «Ejecutando…»; decimals written with a comma (Informix DRDA on Windows, `12,50`) equal their dot form.
 - **Informix over DRDA on Windows** (#119, #120): the IBM CLI driver's indicator arrays are read the way the driver wrote them (4 or 8 bytes per row, detected on each block), so names are no longer cut or padded with NULs and NULLs are no longer read as empty text.
 - Result grid (#109): loading the rest of a very large result (200 columns, 100,000 rows) no longer freezes the window
   for about 700 ms per page, and pressing or dropping a column header no longer works the column's statistics out in
