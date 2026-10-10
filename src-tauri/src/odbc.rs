@@ -26,6 +26,8 @@ const SQL_ERROR: i16 = -1;
 const SQL_INVALID_HANDLE: i16 = -2;
 const SQL_NTS: i16 = -3;
 const SQL_NULL_DATA: isize = -1;
+/// Prefilled into the indicator arrays before a block fetch; no driver writes it (see `fetch_block`).
+const IND_SENTINEL: isize = 0x5A5A_5A5A_5A5A_5A5A;
 const SQL_NO_TOTAL: isize = -4;
 const SQL_ATTR_ODBC_VERSION: i32 = 200;
 const SQL_ATTR_AUTOCOMMIT: i32 = 102;
@@ -211,12 +213,14 @@ impl Api {
             drivers: opt!("SQLDriversW"),
             data_sources: opt!("SQLDataSourcesW"),
             _lib: lib,
-            len32: !cfg!(windows) && is_ibm_cli(path),
+            len32: is_ibm_cli(path),
         })
     }
 
     /// A length or indicator as the driver wrote it: with a 32-bit SQLLEN only the low 4 bytes are its own (the
-    /// variable was zeroed before the call), and -1 / -4 arrive as 0xFFFFFFFF / 0xFFFFFFFC there.
+    /// variable was zeroed before the call), and -1 / -4 arrive as 0xFFFFFFFF / 0xFFFFFFFC there. Reading the low 4
+    /// bytes is also right for a 64-bit driver (every length fits, -1 / -4 keep their sign), so IBM's CLI driver is
+    /// always read this way, on Windows too: its Windows build was seen padding names with NULs like the Linux one.
     fn len(&self, raw: isize) -> isize {
         if self.len32 {
             raw as i32 as isize
@@ -713,6 +717,11 @@ impl Stmt {
         if self.finished {
             return Ok(());
         }
+        if let Some(b) = &mut self.bound {
+            for ind in &mut b.inds {
+                ind.fill(IND_SENTINEL);
+            }
+        }
         let rc = unsafe { (self.api.fetch)(self.h) };
         match rc {
             SQL_NO_DATA => {
@@ -727,11 +736,16 @@ impl Stmt {
         }
         if let Some(b) = &self.bound {
             let n = *b.fetched;
+            // An indicator array is filled 4 bytes per row by a driver with a 32-bit SQLLEN (IBM's CLI) and 8 by the
+            // others, whatever the platform: from two rows on, the last slot is still the sentinel when the entries
+            // were narrow. With one row both layouts agree on the low 4 bytes.
+            let narrow = (self.api.len32 && !cfg!(windows))
+                || (n >= 2 && b.inds.iter().any(|i| i[n - 1] == IND_SENTINEL));
             for r in 0..n {
                 let mut row = Vec::with_capacity(self.plans.len());
                 for (c, p) in self.plans.iter().enumerate() {
                     // A 32-bit SQLLEN driver fills the indicator array 4 bytes per row.
-                    let ind = if self.api.len32 {
+                    let ind = if narrow {
                         // SAFETY: the array holds `rows` isize values, room for `rows` i32 ones; r < fetched <= rows.
                         unsafe { *(b.inds[c].as_ptr() as *const i32).add(r) as isize }
                     } else {
