@@ -16,7 +16,7 @@
         border: 2px dashed var(--accent, #d97757);
         background: color-mix(in srgb, var(--bg, #1a1918) 78%, transparent);
         box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
-        animation: in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        animation: in calc(160ms * var(--motion-scale, 1)) cubic-bezier(0.2, 0.8, 0.2, 1);
       }
       .bar { display: flex; align-items: flex-end; height: 32px; padding: 0 10px; border-bottom: 1px solid color-mix(in srgb, var(--border, #47443e) 80%, transparent); }
       .tab {
@@ -58,6 +58,7 @@
           if (typeof value === "string" && value.length < 200 && !/url\(|[;{}]/i.test(value)) root.style.setProperty(`--${name}`, value);
         }
         if (data.reduce) root.dataset.motion = "reduce";
+        if (typeof data.scale === "number" && data.scale >= 0 && data.scale <= 4) root.style.setProperty("--motion-scale", String(data.scale));
         document.getElementById("title").textContent = String(data.title ?? "");
         document.getElementById("preview").textContent = String(data.preview ?? "");
         if (data.label) document.getElementById("label").textContent = String(data.label);
