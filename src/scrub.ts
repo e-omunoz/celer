@@ -21,6 +21,13 @@ const RULES: Rule[] = [
   [/^(\s*LINE \d+:).*$/gm, "$1 ‹SQL›"],
   [/^\s*\^\s*$\n?/gm, ""],
   [/near '.*' at line (\d+)/g, "near '…' at line $1"],
+  [/\b(\w+n)'t\b/gi, "$1’t"],
+  [/\b(server on|host|to) '[^'\n]*'/gi, "$1 '…'"],
+  [/^[\w.-]+(: (?:host|no such host|name or service|nodename|unknown host|temporary failure))/gim, "‹host›$1"],
+  [/\b[a-z0-9_-]+(?:\.[a-z0-9_-]+){2,}\b(?::\d+)?/g, "‹host›"],
+  [/\b[a-z0-9_-]+(?:\.[a-z0-9_-]+)+:\d{2,5}\b/g, "‹host›"],
+  [/\b(duplicate key value is|duplicate key row in object [^\n]*? with unique index [^\n]*?\. The duplicate key value is) \([^\n]*\)/gi, "$1 (…)"],
+  [/\b(?:exec(?:ute)?\s+[\w.\[\]]+[^\n]*@\w[^\n]*|with\s+\w+(?:\s*\([^)\n]*\))?\s+as\s*\(?[^\n]*)/gi, "‹SQL›"],
   [
     /\b(?:select\b[^\n]*\bfrom\b|insert\s+into\b|update\b[^\n]*\bset\b|delete\s+from\b|merge\s+into\b|create\s+(?:or\s+replace\s+)?(?:table|view|index|procedure|function|trigger)\b|alter\s+table\b|drop\s+(?:table|view|index)\b|truncate\s+table\b)[^\n]*/gi,
     "‹SQL›",
@@ -31,7 +38,7 @@ const RULES: Rule[] = [
   [/"[^"\n]*"/g, '"…"'],
   [/`[^`\n]*`/g, "`…`"],
   [/«[^»\n]*»/g, "«…»"],
-  [/\(([^()\s]*[a-z][^()\s]*)\)/g, "(…)"],
+  [/\(([^()\s]*[a-z][^()\s]*)\)/gi, "(…)"],
   [/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "‹ip›"],
   [/[\w.+-]+@[\w-]+\.[\w.-]+/g, "‹email›"],
 ];
@@ -55,5 +62,9 @@ export function scrubPaths(text: string, user?: string | null): string {
 
 /** A stack keeps its frames: only user paths, the user's name and quoted text go. */
 export function scrubStack(text: string, user?: string | null): string {
-  return withoutUser(apply(apply(text, PATH_RULES), [RULES[11], RULES[12]]), user);
+  // Up to the first frame, a JS stack is "Error: <message>": that part is a message and gets every rule.
+  const m = /^\s+at |@\S+:\d+:\d+$/m.exec(text);
+  const cut = m ? m.index : text.length;
+  const quoted = RULES.filter((r) => r[1] === "'…'" || r[1] === '"…"');
+  return withoutUser(scrubText(text.slice(0, cut)) + apply(apply(text.slice(cut), PATH_RULES), quoted), user);
 }

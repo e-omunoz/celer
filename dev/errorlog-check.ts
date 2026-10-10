@@ -25,6 +25,8 @@ assert.equal(scrubPaths("/home/ana/celer y /Users/ana/x"), "/home/…/celer y /U
 const stack = scrubStack("Error: x\n    at run (http://tauri.localhost/assets/index-AbC.js:12:34)\n    at C:\\Users\\ana\\x.js:1:2");
 assert.ok(stack.includes("at run (http://tauri.localhost/assets/index-AbC.js:12:34)"), stack);
 assert.ok(!stack.includes("ana"), stack);
+const leaky = scrubStack("Error: password=hunter2 y SELECT * FROM nominas WHERE dni=1\n    at run (http://x/a.js:1:2)");
+assert.ok(!leaky.includes("hunter2") && !leaky.includes("nominas") && leaky.includes("at run (http://x/a.js:1:2)"), leaky);
 
 // The text «Copiar» puts on the clipboard (and the report attaches).
 const entries: ErrorEntry[] = [

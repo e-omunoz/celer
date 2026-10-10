@@ -2,115 +2,283 @@
   {
     "engine": "PostgreSQL: unique violation with its key",
     "text": "db error: ERROR: duplicate key value violates unique constraint \"users_email_key\"\nDETAIL: Key (email)=(ana.ruiz@example.com) already exists.",
-    "gone": ["ana.ruiz@example.com", "users_email_key", "(email)"],
-    "kept": ["duplicate key value violates unique constraint", "already exists"]
+    "gone": [
+      "ana.ruiz@example.com",
+      "users_email_key",
+      "(email)"
+    ],
+    "kept": [
+      "duplicate key value violates unique constraint",
+      "already exists"
+    ]
   },
   {
     "engine": "PostgreSQL: a value that is not a number",
     "text": "db error: ERROR: invalid input syntax for type integer: \"celer-secret-42\"",
-    "gone": ["celer-secret-42"],
-    "kept": ["invalid input syntax for type integer"]
+    "gone": [
+      "celer-secret-42"
+    ],
+    "kept": [
+      "invalid input syntax for type integer"
+    ]
   },
   {
     "engine": "PostgreSQL: syntax error with the statement",
     "text": "db error: ERROR: syntax error at or near \"FROMM\"\nLINE 1: SELECT secret_col FROMM clientes WHERE pwd = 'hunter2'\n                          ^",
-    "gone": ["hunter2", "secret_col", "clientes"],
-    "kept": ["syntax error at or near"]
+    "gone": [
+      "hunter2",
+      "secret_col",
+      "clientes"
+    ],
+    "kept": [
+      "syntax error at or near"
+    ]
   },
   {
     "engine": "PostgreSQL: failing row",
     "text": "db error: ERROR: new row for relation \"orders\" violates check constraint \"total_positive\"\nDETAIL: Failing row contains (7, celer-secret-42, -5.00).",
-    "gone": ["celer-secret-42", "-5.00"],
-    "kept": ["violates check constraint"]
+    "gone": [
+      "celer-secret-42",
+      "-5.00"
+    ],
+    "kept": [
+      "violates check constraint"
+    ]
   },
   {
     "engine": "PostgreSQL: login",
     "text": "error connecting to server: connection to server at \"db.internal.example\" (10.1.2.3), port 5432 failed: FATAL:  password authentication failed for user \"oscar\"",
-    "gone": ["db.internal.example", "10.1.2.3", "\"oscar\""],
-    "kept": ["password authentication failed for user"]
+    "gone": [
+      "db.internal.example",
+      "10.1.2.3",
+      "\"oscar\""
+    ],
+    "kept": [
+      "password authentication failed for user"
+    ]
   },
   {
     "engine": "MySQL: duplicate entry",
     "text": "MySqlError { ERROR 1062 (23000): Duplicate entry 'celer-secret-42' for key 'users.email' }",
-    "gone": ["celer-secret-42", "users.email"],
-    "kept": ["ERROR 1062 (23000)", "Duplicate entry"]
+    "gone": [
+      "celer-secret-42",
+      "users.email"
+    ],
+    "kept": [
+      "ERROR 1062 (23000)",
+      "Duplicate entry"
+    ]
   },
   {
     "engine": "MySQL: syntax error quoting the statement (quotes inside)",
     "text": "MySqlError { ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'FROMM t WHERE pwd = 'hunter2'' at line 1 }",
-    "gone": ["hunter2", "FROMM t WHERE"],
-    "kept": ["ERROR 1064 (42000)", "at line 1"]
+    "gone": [
+      "hunter2",
+      "FROMM t WHERE"
+    ],
+    "kept": [
+      "ERROR 1064 (42000)",
+      "at line 1"
+    ]
   },
   {
     "engine": "MariaDB: access denied",
     "text": "MySqlError { ERROR 1045 (28000): Access denied for user 'celer'@'172.17.0.1' (using password: YES) }",
-    "gone": ["'celer'", "172.17.0.1"],
-    "kept": ["Access denied for user", "ERROR 1045 (28000)"]
+    "gone": [
+      "'celer'",
+      "172.17.0.1"
+    ],
+    "kept": [
+      "Access denied for user",
+      "ERROR 1045 (28000)"
+    ]
   },
   {
     "engine": "SQL Server: conversion with the value (tiberius wraps the message in quotes)",
     "text": "Token error: 'Conversion failed when converting the varchar value 'celer-secret-42' to data type int.' on server 3f2a9c1d7e5b executing  on line 1 (code: 245, state: 1, class: 16)",
-    "gone": ["celer-secret-42", "3f2a9c1d7e5b"],
-    "kept": ["Conversion failed when converting the varchar value", "code: 245"]
+    "gone": [
+      "celer-secret-42",
+      "3f2a9c1d7e5b"
+    ],
+    "kept": [
+      "Conversion failed when converting the varchar value",
+      "code: 245"
+    ]
   },
   {
     "engine": "SQL Server: login",
     "text": "Token error: 'Login failed for user 'sa'.' on server mssql-prod executing  on line 1 (code: 18456, state: 1, class: 14)",
-    "gone": ["'sa'", "mssql-prod"],
-    "kept": ["Login failed for user", "code: 18456"]
+    "gone": [
+      "'sa'",
+      "mssql-prod"
+    ],
+    "kept": [
+      "Login failed for user",
+      "code: 18456"
+    ]
   },
   {
     "engine": "Informix over DRDA: unknown table",
     "text": "[42S02] [IBM][CLI Driver][IDS/UNIX64] The specified table (celer_secret_42) is not in the database. SQLSTATE=42S02",
-    "gone": ["celer_secret_42"],
-    "kept": ["[IBM][CLI Driver][IDS/UNIX64]", "The specified table", "SQLSTATE=42S02"]
+    "gone": [
+      "celer_secret_42"
+    ],
+    "kept": [
+      "[IBM][CLI Driver][IDS/UNIX64]",
+      "The specified table",
+      "SQLSTATE=42S02"
+    ]
   },
   {
     "engine": "Informix over JDBC: connection URL with the password",
     "text": "java.sql.SQLException: Connection refused: jdbc:informix-sqli://10.0.0.5:9088/celer:INFORMIXSERVER=informix;user=informix;password=in4mix",
-    "gone": ["in4mix", "10.0.0.5", "user=informix"],
-    "kept": ["java.sql.SQLException", "Connection refused"]
+    "gone": [
+      "in4mix",
+      "10.0.0.5",
+      "user=informix"
+    ],
+    "kept": [
+      "java.sql.SQLException",
+      "Connection refused"
+    ]
   },
   {
     "engine": "Informix over JDBC: column not found",
     "text": "java.sql.SQLException: Column (celer_secret_42) not found in any table in the query (or SLV is undefined).",
-    "gone": ["celer_secret_42"],
-    "kept": ["not found in any table in the query"]
+    "gone": [
+      "celer_secret_42"
+    ],
+    "kept": [
+      "not found in any table in the query"
+    ]
   },
   {
     "engine": "SQLite: constraint with a value",
     "text": "UNIQUE constraint failed: users.email (value 'celer-secret-42')",
-    "gone": ["celer-secret-42"],
-    "kept": ["UNIQUE constraint failed"]
+    "gone": [
+      "celer-secret-42"
+    ],
+    "kept": [
+      "UNIQUE constraint failed"
+    ]
   },
   {
     "engine": "ODBC: psqlODBC with its connection string",
     "text": "[08001] could not connect: Driver={PostgreSQL Unicode};Server=db.example.com;Port=5432;Database=ventas;Uid=oscar;Pwd=hunter2;",
-    "gone": ["hunter2", "Uid=oscar", "db.example.com", "ventas"],
-    "kept": ["[08001] could not connect"]
+    "gone": [
+      "hunter2",
+      "Uid=oscar",
+      "db.example.com",
+      "ventas"
+    ],
+    "kept": [
+      "[08001] could not connect"
+    ]
   },
   {
     "engine": "ODBC: relation in quotes",
     "text": "[42P01] ERROR: relation \"celer_secret_42\" does not exist;\nError while executing the query",
-    "gone": ["celer_secret_42"],
-    "kept": ["[42P01]", "does not exist"]
+    "gone": [
+      "celer_secret_42"
+    ],
+    "kept": [
+      "[42P01]",
+      "does not exist"
+    ]
   },
   {
     "engine": "Paths with the user name (Windows, macOS, Linux)",
     "text": "No se pudo cargar C:\\Users\\oscar.munoz\\AppData\\Roaming\\es.celer.app\\drivers\\db2app64.dll; also /home/oscar/celer-drivers/x.so and /Users/oscar/Library/x and file:///C:/Users/oscar/x.sql",
-    "gone": ["oscar"],
-    "kept": ["No se pudo cargar", "AppData", "db2app64.dll"]
+    "gone": [
+      "oscar"
+    ],
+    "kept": [
+      "No se pudo cargar",
+      "AppData",
+      "db2app64.dll"
+    ]
   },
   {
     "engine": "URL with credentials and a password field",
     "text": "postgres://admin:s3cret@db.example.com:5432/app failed; password: hunter2; api_key=sk-ant-123",
-    "gone": ["s3cret", "admin:", "hunter2", "sk-ant-123", "db.example.com"],
-    "kept": ["postgres://", "failed"]
+    "gone": [
+      "s3cret",
+      "admin:",
+      "hunter2",
+      "sk-ant-123",
+      "db.example.com"
+    ],
+    "kept": [
+      "postgres://",
+      "failed"
+    ]
   },
   {
     "engine": "Statement text in a message",
     "text": "No se pudo ejecutar: UPDATE clientes SET saldo = 1000 WHERE id = 42",
-    "gone": ["clientes", "saldo", "1000"],
-    "kept": ["No se pudo ejecutar"]
+    "gone": [
+      "clientes",
+      "saldo",
+      "1000"
+    ],
+    "kept": [
+      "No se pudo ejecutar"
+    ]
+  },
+  {
+    "engine": "Probe: unknown host",
+    "text": "db-ana.corp.local: Host desconocido.",
+    "gone": [
+      "db-ana",
+      "corp.local"
+    ],
+    "kept": [
+      "Host desconocido"
+    ]
+  },
+  {
+    "engine": "SQL Server: duplicate key values",
+    "text": "Cannot insert duplicate key row in object 'dbo.t' with unique index 'ix'. The duplicate key value is (Ana García, 42).",
+    "gone": [
+      "Ana",
+      "García",
+      "42"
+    ],
+    "kept": [
+      "Cannot insert duplicate key row"
+    ]
+  },
+  {
+    "engine": "SQL Server: duplicate key, a number",
+    "text": "Violation of UNIQUE KEY constraint. The duplicate key value is (600123456).",
+    "gone": [
+      "600123456"
+    ],
+    "kept": [
+      "Violation of UNIQUE KEY"
+    ]
+  },
+  {
+    "engine": "MySQL: Can't connect",
+    "text": "Can't connect to MySQL server on 'db.corp.local:3306' (111)",
+    "gone": [
+      "db.corp.local",
+      "3306"
+    ],
+    "kept": [
+      "connect to MySQL server"
+    ]
+  },
+  {
+    "engine": "SQL Server: exec",
+    "text": "Error en exec sp_x @p1=42, @p2='abc'",
+    "gone": [
+      "sp_x",
+      "42",
+      "abc"
+    ],
+    "kept": [
+      "Error en"
+    ]
   }
 ]

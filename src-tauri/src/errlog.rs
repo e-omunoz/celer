@@ -163,6 +163,15 @@ fn rules() -> &'static [Rule] {
             rule(r"(?m)^(\s*LINE \d+:).*$", "${1} ‹SQL›"),
             rule(r"(?m)^\s*\^\s*$\n?", ""),
             rule(r"near '.*' at line (\d+)", "near '…' at line ${1}"),
+            // Hosts: "server on 'host:port'" (its apostrophe in Can't breaks the quote pairing below), the probe's
+            // "host: <os error>" lead, host:port and dotted names (two dots or more; one would hit table.column).
+            rule(r"(?i)\b(\w+n)'t\b", "${1}’t"),
+            rule(r"(?i)\b(server on|host|to) '[^'\n]*'", "${1} '…'"),
+            rule(r"(?im)^[\w.-]+(: (?:host|no such host|name or service|nodename|unknown host|temporary failure))", "‹host›${1}"),
+            rule(r"\b[a-z0-9_-]+(?:\.[a-z0-9_-]+){2,}\b(?::\d+)?", "‹host›"),
+            rule(r"\b[a-z0-9_-]+(?:\.[a-z0-9_-]+)+:\d{2,5}\b", "‹host›"),
+            rule(r"(?i)\b(duplicate key value is|duplicate key row in object [^\n]*? with unique index [^\n]*?\. The duplicate key value is) \([^\n]*\)", "${1} (…)"),
+            rule(r"(?i)\b(?:exec(?:ute)?\s+[\w.\[\]]+[^\n]*@\w[^\n]*|with\s+\w+(?:\s*\([^)\n]*\))?\s+as\s*\(?[^\n]*)", "‹SQL›"),
             rule(
                 r"(?i)\b(?:select\b[^\n]*\bfrom\b|insert\s+into\b|update\b[^\n]*\bset\b|delete\s+from\b|merge\s+into\b|create\s+(?:or\s+replace\s+)?(?:table|view|index|procedure|function|trigger)\b|alter\s+table\b|drop\s+(?:table|view|index)\b|truncate\s+table\b)[^\n]*",
                 "‹SQL›",
@@ -174,7 +183,7 @@ fn rules() -> &'static [Rule] {
             rule(r"\x22[^\x22\n]*\x22", "\"…\""),
             rule(r"`[^`\n]*`", "`…`"),
             rule(r"«[^»\n]*»", "«…»"),
-            rule(r"\(([^()\s]*[a-z][^()\s]*)\)", "(…)"),
+            rule(r"(?i)\(([^()\s]*[a-z][^()\s]*)\)", "(…)"),
             // Machines and people.
             rule(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "‹ip›"),
             rule(r"[\w.+-]+@[\w-]+\.[\w.-]+", "‹email›"),
@@ -231,8 +240,13 @@ pub fn scrub_as(text: &str, user: Option<&str>) -> String {
 
 /// A stack trace keeps its frames (function, file, line): only user paths, the user's name and quoted text go.
 pub fn scrub_stack(text: &str) -> String {
+    // Up to the first frame, a JS stack is "Error: <message>": that part is a message and gets every rule.
     let quoted = [rule(r"'(?:[^'\n]|'')*'", "'…'"), rule(r"\x22[^\x22\n]*\x22", "\"…\"")];
-    without_user(apply(&apply(text, path_rules()), &quoted), user_name().as_deref())
+    let frame = rule(r"(?m)^\s+at |@\S+:\d+:\d+$", "");
+    let split = frame.re.find(text).map_or(text.len(), |m| m.start());
+    let (head, frames) = text.split_at(split);
+    let out = format!("{}{}", scrub_as(head, None), apply(&apply(frames, path_rules()), &quoted));
+    without_user(out, user_name().as_deref())
 }
 
 /// Engine tests: the error a real server gave carries `secret` (so the check means something), and its log entry does
@@ -286,6 +300,8 @@ mod tests {
         let out = scrub_stack(stack);
         assert!(out.contains("at run (http://tauri.localhost/assets/index-AbC.js:12:34)"), "{out}");
         assert!(!out.contains("ana"), "{out}");
+        let leaky = scrub_stack("Error: password=hunter2 y SELECT * FROM nominas WHERE dni=1\n    at run (http://x/a.js:1:2)");
+        assert!(!leaky.contains("hunter2") && !leaky.contains("nominas") && leaky.contains("at run (http://x/a.js:1:2)"), "{leaky}");
     }
 
     #[test]
