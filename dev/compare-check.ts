@@ -41,6 +41,8 @@ assert.deepEqual(compareResults(rs(["id", "v"], [[1, 2]]), rs(["id", "v"], [[1, 
 assert.equal(canonicalNumber("12.50"), "12.5");
 assert.equal(canonicalNumber(12.5), "12.5");
 assert.equal(canonicalNumber("+007"), "7");
+assert.equal(canonicalNumber("12,50"), "12.5");
+assert.equal(canonicalNumber("0,00"), "0");
 assert.equal(canonicalNumber("-0.000"), "0");
 assert.equal(canonicalNumber(".5"), "0.5");
 assert.equal(canonicalNumber("1.5E3"), "1500");

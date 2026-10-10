@@ -29,7 +29,9 @@ const NULL_KEY = "\u0000NULL";
 export function canonicalNumber(cell: Cell): string | null {
   if (typeof cell === "number") return Number.isFinite(cell) ? String(cell === 0 ? 0 : cell) : String(cell);
   if (typeof cell !== "string") return null;
-  const text = cell.trim();
+  let text = cell.trim();
+  // Spanish decimal comma (Informix DRDA on Windows: '12,50'); a lone comma between digits is the separator.
+  if (/^[+-]?\d*,\d+$/.test(text)) text = text.replace(",", ".");
   const match = /^([+-])?(\d*)(?:\.(\d*))?$/.exec(text);
   if (!match || (!match[2] && !match[3])) {
     // Exponent notation (1.5E3): through a JavaScript number.
@@ -193,7 +195,7 @@ export function compareResults(before: ResultSet, after: ResultSet, key: string[
     }
   }
   const newFrom = rows.length;
-  rows.push(...added);
+  for (const row of added) rows.push(row); // a spread of 120k+ rows overflows the stack
   return {
     columns: after.columns,
     rows,
