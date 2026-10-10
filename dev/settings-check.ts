@@ -120,3 +120,9 @@ assert.equal(formatSql("select a from t where x = 1", "postgres", "lower"), "sel
 assert.equal(formatSql("select a from t where x = 1", "postgres"), "SELECT a\nFROM t\nWHERE x = 1");
 
 console.log("settings-check: ok");
+
+// resetPatch must not need structuredClone (store proxies and plain objects alike)
+{
+  const p = resetPatch(SETTINGS_SECTIONS.find((s) => s.id === "keymap") ?? SETTINGS_SECTIONS[0]) as Record<string, unknown>;
+  assert.doesNotThrow(() => JSON.stringify(p));
+}

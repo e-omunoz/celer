@@ -129,7 +129,7 @@ export function searchSettings(query: string, sections: SettingsSectionInfo[] = 
 /** The defaults of a section's settings, ready for saveSettings. */
 export function resetPatch(section: SettingsSectionInfo): Partial<Settings> {
   const patch: Record<string, unknown> = {};
-  for (const key of section.keys) patch[key] = structuredClone(defaultSettings[key]);
+  for (const key of section.keys) patch[key] = JSON.parse(JSON.stringify(defaultSettings[key]));
   return patch as Partial<Settings>;
 }
 

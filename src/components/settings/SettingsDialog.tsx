@@ -40,6 +40,9 @@ export const SECTION_VIEWS: Record<string, () => JSX.Element> = {
 
 const sections = () => SETTINGS_SECTIONS.filter((section) => SECTION_VIEWS[section.id]);
 
+/** A copy detached from the Solid store proxies (structuredClone cannot clone them). */
+const plainClone = <T,>(v: T): T => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
+
 export function SettingsDialog() {
   const [query, setQuery] = createSignal("");
   const section = () => sections().find((item) => item.id === state.settingsSection) ?? sections()[0];
@@ -67,7 +70,7 @@ export function SettingsDialog() {
 
   const reset = (info: SettingsSectionInfo) => {
     const before: Partial<Settings> = {};
-    for (const key of info.keys) (before as Record<string, unknown>)[key] = structuredClone(state.settings[key]);
+    for (const key of info.keys) (before as Record<string, unknown>)[key] = plainClone(state.settings[key]);
     void saveSettings(resetPatch(info)).then(() =>
       notify(`«${info.label}» vuelve a los valores de serie`, "success", info.resetNote, { label: "Deshacer", run: () => void saveSettings(before) }),
     );
@@ -167,7 +170,7 @@ async function importFromFile() {
       return;
     }
     const before: Partial<Settings> = {};
-    for (const key of Object.keys(patch) as (keyof Settings)[]) (before as Record<string, unknown>)[key] = structuredClone(state.settings[key]);
+    for (const key of Object.keys(patch) as (keyof Settings)[]) (before as Record<string, unknown>)[key] = plainClone(state.settings[key]);
     await saveSettings(patch);
     notify(
       `${count} ${count === 1 ? "ajuste importado" : "ajustes importados"}`,
