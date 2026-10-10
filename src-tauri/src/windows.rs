@@ -426,11 +426,11 @@ pub fn window_quit(app: AppHandle) {
 /// Empieza el arrastre de una pestaña: las otras ventanas preparan su barra de pestañas para recibirla y, con
 /// `ghost` (título, vista previa, colores del tema), fuera de las ventanas se ve el contorno de la ventana nueva.
 #[tauri::command]
-pub fn tab_drag_start(app: AppHandle, window: WebviewWindow, windows: State<'_, Windows>, tab: String, title: String, ghost: Option<Value>) {
+pub fn tab_drag_start(app: AppHandle, window: WebviewWindow, windows: State<'_, Windows>, tab: String, title: String, ghost: Option<Value>, card: Option<Value>) {
     let source = window.label().to_string();
     *windows.drag.lock() = Some(Drag { source: source.clone(), claim: None });
     let generation = windows.drag_gen.fetch_add(1, Ordering::SeqCst) + 1;
-    let _ = app.emit("celer://drag", json!({ "active": true, "source": source, "tab": tab, "title": title }));
+    let _ = app.emit("celer://drag", json!({ "active": true, "source": source, "tab": tab, "title": title, "card": card }));
     if let Some(style) = ghost {
         follow_with_ghost(app, generation, style);
     }
