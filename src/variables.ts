@@ -127,6 +127,26 @@ export function variableLiteral(variable: Variable, dialect?: string): string {
   return paramLiteral(variable.value, Boolean(variable.raw), dialect);
 }
 
+/**
+ * The lines describing the variables of a SQL for the AI assistant. Values are data: they are included only when
+ * `allowValues` (the connection's AI access level lets it read rows), otherwise only the names and scopes.
+ */
+export function aiVariableLines(
+  names: string[],
+  resolved: Map<string, ResolvedVar>,
+  allowValues: boolean,
+  scopeLabel: (variable: ResolvedVar) => string,
+  dialect?: string,
+): string[] {
+  return names.map((name) => {
+    const variable = resolved.get(name);
+    if (!variable) return `${name}: sin valor (Celer lo pide al ejecutar)`;
+    return allowValues
+      ? `${name} = ${variableLiteral(variable, dialect)} (${scopeLabel(variable)})`
+      : `${name}: con valor (${scopeLabel(variable)}); el valor no se envía`;
+  });
+}
+
 export interface Substitution {
   /** The SQL with every defined variable replaced (what is sent, kept in the history and the output log). */
   sql: string;

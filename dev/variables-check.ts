@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { findParams } from "../src/snippets.ts";
 import {
+  aiVariableLines,
   findVariables,
   migrateVariables,
   normalizeVariables,
@@ -73,5 +74,14 @@ assert.deepEqual(variableAt("SELECT ${cliente} x", 9), { name: "cliente", from: 
 assert.equal(variableAt("SELECT ${cliente} x", 18), null);
 assert.equal(variableAt("SELECT '${cliente}'", 10), null, "not inside strings");
 assert.deepEqual(findVariables("${a}${b}").map((r) => r.name), ["a", "b"]);
+
+// The AI sees values only where the access level allows data.
+const secret = resolveVariables({ global: [{ name: "nota", value: "O'Brien secreto" }] });
+const scope = () => "global";
+const withheld = aiVariableLines(["nota", "otra"], secret, false, scope, "postgres").join("\n");
+assert.ok(!withheld.includes("secreto") && !withheld.includes("Brien"), "no value below the read level");
+assert.ok(withheld.includes("nota: con valor (global); el valor no se envía") && withheld.includes("otra: sin valor"));
+const shown = aiVariableLines(["nota"], secret, true, scope, "postgres").join("\n");
+assert.ok(shown.includes("nota = 'O''Brien secreto' (global)"), shown);
 
 console.log("variables-check: all good");

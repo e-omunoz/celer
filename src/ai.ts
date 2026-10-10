@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { api, errorText } from "./api";
 import { activeSql, connectionById, notify, openInspector, setState, state } from "./state";
 import { engineOf } from "./types";
-import { findVariables, variableLiteral } from "./variables";
+import { aiVariableLines, findVariables } from "./variables";
 import { resolvedFor, scopeText } from "./variableStore";
 
 export type AiModel = "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-4-5";
@@ -80,11 +80,7 @@ async function variablesContext(): Promise<string> {
   if (!names.length) return "";
   const resolved = resolvedFor(tab);
   const values = await dataAllowed(tab.connId);
-  const lines = names.map((name) => {
-    const variable = resolved.get(name);
-    if (!variable) return `${name}: sin valor (Celer lo pide al ejecutar)`;
-    return values ? `${name} = ${variableLiteral(variable, kind)} (${scopeText(variable, tab.connId)})` : `${name}: con valor (${scopeText(variable, tab.connId)}); el valor no se envía`;
-  });
+  const lines = aiVariableLines(names, resolved, values, (variable) => scopeText(variable, tab.connId), kind);
   return `<variables nota="\${nombre} es una variable de Celer: se sustituye por su valor al ejecutar">\n${lines.join("\n")}\n</variables>`;
 }
 
