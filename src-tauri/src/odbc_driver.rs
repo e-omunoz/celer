@@ -1317,6 +1317,15 @@ impl<L: Link> Driver for LinkDriver<L> {
                     columns: vec![],
                 });
             }
+            // Column names too: masking of protected columns relies on them (a generic source has no other catalog).
+            if let Ok(cols) = self.odbc()?.catalog_columns("", "", "%") {
+                for r in cols.iter().take(100_000) {
+                    let (s, t, c) = (cell_str(&r[1]), cell_str(&r[2]), cell_str(&r[3]));
+                    if let Some(tb) = out.tables.iter_mut().find(|x| x.schema == s && x.name == t) {
+                        tb.columns.push(c);
+                    }
+                }
+            }
             return Ok(out);
         }
         let d = self.ifx_db(database);
