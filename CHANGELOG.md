@@ -69,6 +69,7 @@ All notable changes to Celer are documented here. The format follows
   - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
 
 ### Fixed
+- **Tabs** (#108): dragging a tab over another Celer window keeps the ghost card (title and preview) under the pointer there too.
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
   closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
   *mayúsculas / regexp / palabra completa* toggles, which light up when on (#88).

@@ -1,3 +1,4 @@
+import type { GhostContent } from "./dnd";
 // Several windows of one Celer. Each window is its own page with its own state.ts: its tabs and their sessions,
 // its explorer, its panels and its focus. What they share (connections, settings, the library, Gib's memory) has
 // one owner: the core writes the files and tells every window (events "celer://shared"). The core also keeps the
@@ -147,7 +148,7 @@ const [openWindows, setOpenWindows] = createSignal<WindowInfo[]>([{ label: windo
 /** The full window that had the focus last (panels do not count). */
 const [focusedWindow, setFocusedWindow] = createSignal(isFullWindow(windowLabel) ? windowLabel : "");
 /** A tab is being dragged out of another window: this one's tab bar takes it. */
-const [incomingDrag, setIncomingDrag] = createSignal<{ source: string; title: string } | null>(null);
+const [incomingDrag, setIncomingDrag] = createSignal<{ source: string; title: string; card?: GhostContent } | null>(null);
 export { incomingDrag, openWindows };
 
 /** The other full windows, the main one first. */
@@ -209,8 +210,8 @@ export function startWindows() {
     if (!openWindows().some((w) => w.label === label)) void refreshWindows();
   });
   void listen<null>("celer://windows", () => void refreshWindows());
-  void listen<{ active: boolean; source?: string; title?: string }>("celer://drag", (drag) =>
-    setIncomingDrag(drag.active && drag.source && drag.source !== windowLabel && !panelKind ? { source: drag.source, title: drag.title ?? "" } : null),
+  void listen<{ active: boolean; source?: string; title?: string; card?: GhostContent | null }>("celer://drag", (drag) =>
+    setIncomingDrag(drag.active && drag.source && drag.source !== windowLabel && !panelKind ? { source: drag.source, title: drag.title ?? "", card: drag.card ?? undefined } : null),
   );
   void listen<{ name: string; value?: unknown; from: string }>("celer://shared", (change) => {
     if (change.from !== windowLabel) applyShared(change.name, change.value);
@@ -491,11 +492,11 @@ function ghostColors(strip?: string): Record<string, string> {
  * A tab starts to be dragged: the other windows' tab bars get ready to take it, and outside every window the
  * outline of the new window follows the pointer with the tab's title and a preview.
  */
-export function startTabDrag(tabId: string, title: string, ghost: { preview?: string; color?: string } = {}) {
+export function startTabDrag(tabId: string, title: string, ghost: { preview?: string; color?: string } = {}, card?: GhostContent) {
   if (!isTauri() || panelKind) return;
   dragging = tabId;
   const style = { title, preview: ghost.preview ?? "", label: "Soltar para abrir en una ventana nueva", colors: ghostColors(ghost.color), reduce: document.documentElement.dataset.motion === "reduce", scale: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--motion-scale")) || 1 };
-  void invoke("tab_drag_start", { tab: tabId, title, ghost: style }).catch(() => {});
+  void invoke("tab_drag_start", { tab: tabId, title, ghost: style, card }).catch(() => {});
 }
 
 /** The tab was dropped on this window's tab bar while it came from another window. */

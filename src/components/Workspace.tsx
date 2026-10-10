@@ -123,7 +123,7 @@ import { withShortcut } from "../commands";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
 import { flipList, leaveOnCleanup } from "../motion";
-import { followDragGhost, previewLines } from "../dnd";
+import { followDragGhost, ghostCard, previewLines } from "../dnd";
 import { hintOnce } from "../hints";
 import { insertionGap, reorderTarget, windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
@@ -185,16 +185,33 @@ function TabBar() {
       setGap(null);
       return;
     }
+    // The dragged tab's card follows the pointer over this window too (the source window draws it over its own).
+    const content = incomingDrag()?.card;
+    const card = content ? ghostCard(content) : undefined;
+    if (card) {
+      card.style.display = "none";
+      document.body.appendChild(card);
+    }
     const over = (event: DragEvent) => {
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
       setGap(gapAt(event));
+      if (card) {
+        card.style.display = "";
+        card.style.left = `${event.clientX + 14}px`;
+        card.style.top = `${event.clientY + 14}px`;
+      }
     };
-    const leave = (event: DragEvent) => !event.relatedTarget && setGap(null);
+    const leave = (event: DragEvent) => {
+      if (event.relatedTarget) return;
+      setGap(null);
+      if (card) card.style.display = "none";
+    };
     const drop = (event: DragEvent) => {
       event.preventDefault();
       claimTabDrop(gapAt(event));
       setGap(null);
+      card?.remove();
     };
     window.addEventListener("dragover", over);
     window.addEventListener("dragleave", leave);
@@ -203,6 +220,7 @@ function TabBar() {
       window.removeEventListener("dragover", over);
       window.removeEventListener("dragleave", leave);
       window.removeEventListener("drop", drop);
+      card?.remove();
     });
   });
 
@@ -277,9 +295,10 @@ function TabBar() {
                 // and a few lines of what it holds.
                 const preview = tab.kind === "sql" ? tab.sql : `${tab.qualified}\n${tab.rows.length.toLocaleString()} filas cargadas`;
                 const where = [conn()?.name, tab.database].filter(Boolean).join(" · ") || "Sin conexión";
-                followDragGhost(event, { title: tab.title, detail: where, preview, color: tab.connId ? connColor(conn()) : undefined });
-                // Out of the window it goes to another one, or to a new one where it is let go.
-                startTabDrag(tab.id, tab.title, { preview: previewLines(preview), color: tab.connId ? connColor(conn()) : undefined });
+                const card = { title: tab.title, detail: where, preview, color: tab.connId ? connColor(conn()) : undefined };
+                followDragGhost(event, card);
+                // Out of the window it goes to another one, or to a new one where it is let go (the window it passes over draws the card).
+                startTabDrag(tab.id, tab.title, { preview: previewLines(preview), color: tab.connId ? connColor(conn()) : undefined }, card);
               }}
               onDragEnd={() => {
                 setDragFrom(-1);
