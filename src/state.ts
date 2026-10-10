@@ -1868,7 +1868,8 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
     offerDriverHelp(full, null);
-    return true;
+    // The run failed: callers counting executed targets (library «Ejecutar en…») must not count it.
+    return false;
   }
 }
 
