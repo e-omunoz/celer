@@ -1107,3 +1107,30 @@ fn informix_jdbc_reconnects() {
     let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
     informix_reconnect_suite("JDBC", &connect, &mut admin);
 }
+
+/// Closing a console with a result still open (a big SELECT read in part) drops its ODBC statement before the
+/// connection it belongs to: the other way round freed a statement handle the driver had already released with the
+/// connection (a crash on Windows when tabs were closed after a large query).
+#[test]
+fn odbc_open_result_is_freed_before_its_connection() {
+    let mut cases: Vec<(&str, ConnConfig, String, &str)> = vec![];
+    if let Some((cfg, lib)) = informix_cfg() {
+        cases.push(("DRDA", cfg, lib, "SELECT a.tabname, b.tabname FROM systables a, systables b"));
+    }
+    if let Ok(s) = std::env::var("CELER_ODBC_TEST") {
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: s, ..Default::default() };
+        cases.push(("ODBC", cfg, crate::odbc::system_manager().into(), "SELECT g, md5(g::text) FROM generate_series(1, 200000) g"));
+    }
+    for (via, cfg, lib, sql) in cases {
+        for i in 0..40 {
+            let mut d = crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone()).unwrap_or_else(|e| panic!("{via}: {e}"));
+            let out = d.execute(sql, 200).unwrap_or_else(|e| panic!("{via}: {e}"));
+            assert!(out.results[0].has_more, "{via}: the result must still be open when the console closes");
+            if i % 2 == 1 {
+                d.fetch(500).unwrap();
+            }
+            drop(d);
+        }
+        eprintln!("{via}: 40 consoles closed with an open result");
+    }
+}

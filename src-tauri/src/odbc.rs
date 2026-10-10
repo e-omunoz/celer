@@ -736,7 +736,8 @@ impl Stmt {
             }
         }
         if let Some(b) = &self.bound {
-            let n = *b.fetched;
+            // Never more than the arrays hold, whatever the driver wrote (the unsafe read below relies on it).
+            let n = (*b.fetched).min(b.inds.first().map_or(0, |i| i.len()));
             // An indicator array is filled 4 bytes per row by a driver with a 32-bit SQLLEN (IBM's CLI) and 8 by the
             // others, whatever the platform: from two rows on, the last slot is still the sentinel when the entries
             // were narrow. With one row the slot is only half overwritten: its high 4 bytes still hold the sentinel's.
