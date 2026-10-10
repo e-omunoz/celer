@@ -81,6 +81,17 @@ const newConsole = async (name, ms = 30000) => {
 /** Tabs of this window: [{ title, active }]. */
 const tabs = () => [...document.querySelectorAll(".tab")].map((t) => ({ title: txt(t.querySelector(".tab-title")) ?? txt(t), active: t.classList.contains("on") }));
 const closeActive = () => document.querySelector(".tab.on .tab-close")?.click();
+/** Right-clicks the active tab and picks the menu item matching `re` (e.g. /^Mover a una ventana nueva/). */
+const tabMenu = async (re) => {
+  const t = document.querySelector(".tab.on");
+  if (!t) return false;
+  const r = t.getBoundingClientRect();
+  t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r.left + 20, clientY: r.top + 8 }));
+  const item = await until(() => [...document.querySelectorAll(".menu .menu-item")].find((b) => re.test(b.textContent)), 2000);
+  item?.click();
+  await sleep(250);
+  return !!item;
+};
 /** Visible toasts: [{ kind, text }]. */
 const toasts = () => [...document.querySelectorAll(".toasts .toast")].map((t) => ({ kind: t.className.replace("toast", "").trim(), text: txt(t.querySelector(".toast-body")) }));
 
