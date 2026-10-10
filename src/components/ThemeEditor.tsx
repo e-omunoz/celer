@@ -66,6 +66,9 @@ function validColor(value: string): boolean {
   return isSafeColor(value) && (typeof CSS === "undefined" || CSS.supports("color", value));
 }
 
+/** A copy detached from the Solid store proxies (structuredClone cannot clone them). */
+const plainClone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
+
 const same = (a: CustomTheme | null, b: CustomTheme | null) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Ajustes › Editor de tema (a section of its own in the General group; Apariencia opens it on a theme). */
@@ -81,7 +84,7 @@ export function ThemeEditor() {
   const first = (target !== "new" && ((target && customThemeById(target)) || activeCustomTheme())) || fresh(currentTheme().base);
   /** The theme as last saved (null: new, not saved yet). */
   const [saved, setSaved] = createSignal<CustomTheme | null>(customThemeById(first.id) ?? null);
-  const [draft, setDraft] = createSignal<CustomTheme>(structuredClone(first));
+  const [draft, setDraft] = createSignal<CustomTheme>(plainClone(first));
   const [group, setGroup] = createSignal("general");
   const [values, setValues] = createSignal<Record<string, string>>({});
   const [bad, setBad] = createSignal<Record<string, string>>({});
@@ -89,7 +92,7 @@ export function ThemeEditor() {
 
   // Live: the whole interface shows the draft, and the colours it comes to are read back for the fields.
   createEffect(() => {
-    const next = structuredClone(draft());
+    const next = plainClone(draft());
     untrack(() => {
       setThemeDraft(next);
       applyTheme();
@@ -122,7 +125,7 @@ export function ThemeEditor() {
   async function switchTo(theme: CustomTheme, isSaved: boolean) {
     if (!(await leaveChanges())) return;
     setSaved(isSaved ? theme : null);
-    setDraft(structuredClone(theme));
+    setDraft(plainClone(theme));
     setBad({});
   }
 
@@ -130,7 +133,7 @@ export function ThemeEditor() {
     const theme = { ...draft(), name: uniqueThemeName(draft().name, names(draft().id)) };
     await saveCustomTheme(theme, use);
     setDraft(theme);
-    setSaved(structuredClone(theme));
+    setSaved(plainClone(theme));
   }
 
   async function remove() {
@@ -139,13 +142,13 @@ export function ThemeEditor() {
       // Never saved: there is nothing to delete, only the draft to drop.
       const other = state.settings.customThemes[0];
       setSaved(other ?? null);
-      setDraft(other ? structuredClone(other) : fresh(draft().base));
+      setDraft(other ? plainClone(other) : fresh(draft().base));
       return;
     }
     if (!(await deleteCustomTheme(current))) return;
     const other = state.settings.customThemes[0];
     setSaved(other ?? null);
-    setDraft(other ? structuredClone(other) : fresh(current.base));
+    setDraft(other ? plainClone(other) : fresh(current.base));
   }
 
   async function back() {
@@ -186,7 +189,7 @@ export function ThemeEditor() {
           const theme = await importCustomTheme();
           if (theme) {
             setSaved(theme);
-            setDraft(structuredClone(theme));
+            setDraft(plainClone(theme));
           }
         })()}><Upload size={15} /></button>
         <button type="button" class="icon-btn" title="Exportar a un fichero (JSON)" onClick={() => void exportCustomTheme(draft())}><Download size={15} /></button>
@@ -342,7 +345,7 @@ export function ThemeEditor() {
       <footer class="te-foot">
         <span class="muted small">{dirty() ? "Cambios sin guardar: lo que ves es una vista previa." : saved() ? "Guardado." : ""}</span>
         <span class="spacer" />
-        <button type="button" class="btn" disabled={!dirty() || !saved()} onClick={() => saved() && setDraft(structuredClone(saved()!))}>Descartar cambios</button>
+        <button type="button" class="btn" disabled={!dirty() || !saved()} onClick={() => saved() && setDraft(plainClone(saved()!))}>Descartar cambios</button>
         <button type="button" class="btn" disabled={!dirty()} onClick={() => void save(false)}>Guardar</button>
         <button type="button" class="btn primary" disabled={!dirty() && state.settings.theme === choiceOf(draft())} onClick={() => void save(true)}>Guardar y usar</button>
       </footer>
