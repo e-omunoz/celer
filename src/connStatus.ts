@@ -63,14 +63,16 @@ export function tabLink(tab: Tab): LinkInfo {
 
 export function markConn(connId: string, link: Link, patch: Partial<Omit<LinkInfo, "link" | "at">> = {}) {
   const before = links.conns[connId] ?? EMPTY;
+  const was = before.link; // read first: `before` is a live store proxy that setLinks mutates
   setLinks("conns", connId, { ...before, ...patch, link, at: Date.now() });
-  tellGib(before.link, link, connId);
+  tellGib(was, link, connId);
 }
 
 export function markTab(tabId: string, link: Link, patch: Partial<Omit<LinkInfo, "link" | "at">> = {}) {
   const before = links.tabs[tabId] ?? EMPTY;
+  const was = before.link; // read first: `before` is a live store proxy that setLinks mutates
   setLinks("tabs", tabId, { ...before, ...patch, link, at: Date.now() });
-  tellGib(before.link, link, state.tabs.find((tab) => tab.id === tabId)?.connId);
+  tellGib(was, link, state.tabs.find((tab) => tab.id === tabId)?.connId);
 }
 
 /** A connection that dropped (or came back on its own): Gib reacts (he ignores repeats from several tabs at once). */
