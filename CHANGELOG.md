@@ -39,6 +39,8 @@ All notable changes to Celer are documented here. The format follows
 - Importing a workbook whose title sits in column A above a table that starts in column B (#120) no longer adds an
   empty «columna A» to the columns and the mapping: without a range, the columns are those of the header row and
   the rows under it.
+- DECIMAL and NUMERIC values read through ODBC or Informix DRDA keep a decimal point: IBM's CLI driver on a Spanish
+  Windows wrote them with a comma (`12,50`), which the grid, compare and exports took as text.
 - Closing a console or tab whose result was still open (a large query read in part) on an ODBC or Informix DRDA
   connection freed the statement after its connection, which could crash Celer; the statement is now freed first.
 - Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row

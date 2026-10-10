@@ -489,6 +489,15 @@ struct ColPlan {
     lob: bool,
     /// Timestamps and times: the column's fractional digits (the text is cut to them; DRDA sends six).
     frac: Option<u8>,
+    /// DECIMAL / NUMERIC read as text: a driver that writes it with the system's decimal comma (IBM's CLI on a
+    /// Spanish Windows: `12,50`) gets it back as a point.
+    decimal: bool,
+}
+
+/// A DECIMAL as the driver wrote it, with a point: "12,50" → "12.50" (a number written as text by the driver has no
+/// grouping, so a comma can only be the decimal separator).
+pub(crate) fn decimal_point(s: String) -> String {
+    if s.contains(',') { s.replace(',', ".") } else { s }
 }
 
 /// "2024-03-15 10:20:30.123450" with `digits` fractional digits ("…30.12345"; none: "…30").
@@ -820,6 +829,7 @@ impl Stmt {
                     let s = String::from_utf16_lossy(&out);
                     Ok(Cell::Text(match p.frac {
                         Some(digits) => fit_fraction(s, digits),
+                        None if p.decimal => decimal_point(s),
                         None => s,
                     }))
                 }
@@ -929,12 +939,14 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
         elem: (chars + 1) * 2,
         lob: false,
         frac: None,
+        decimal: false,
     };
     let wlob = ColPlan {
         ctype: SQL_C_WCHAR,
         elem: 0,
         lob: true,
         frac: None,
+        decimal: false,
     };
     match dtype {
         -7 => (
@@ -943,6 +955,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 1,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Bool,
         ),
@@ -952,6 +965,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 8,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Number,
         ),
@@ -961,16 +975,18 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 8,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Number,
         ),
-        2 | 3 => (wchar(size.clamp(1, 100) + 3), ColKind::Number),
+        2 | 3 => (ColPlan { decimal: true, ..wchar(size.clamp(1, 100) + 3) }, ColKind::Number),
         -2 | -3 if size > 0 && size <= 8000 => (
             ColPlan {
                 ctype: SQL_C_BINARY,
                 elem: size,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Binary,
         ),
@@ -980,6 +996,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 0,
                 lob: true,
                 frac: None,
+                decimal: false,
             },
             ColKind::Binary,
         ),
@@ -1062,6 +1079,9 @@ fn decode(p: &ColPlan, data: &[u8], ind: isize) -> Cell {
             let mut s = String::from_utf16_lossy(&u);
             if let Some(digits) = p.frac {
                 s = fit_fraction(s, digits);
+            }
+            if p.decimal {
+                s = decimal_point(s);
             }
             if trunc {
                 s.push('…');
@@ -1148,7 +1168,15 @@ const _: i16 = SQL_ERROR;
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_fraction, is_ibm_cli};
+    use super::{decimal_point, fit_fraction, is_ibm_cli};
+
+    #[test]
+    fn decimals_keep_a_point() {
+        assert_eq!(decimal_point("12,50".into()), "12.50");
+        assert_eq!(decimal_point("-0,75".into()), "-0.75");
+        assert_eq!(decimal_point("1234.56".into()), "1234.56");
+        assert_eq!(decimal_point("7".into()), "7");
+    }
 
     #[test]
     fn fractions_fit_the_column() {
