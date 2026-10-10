@@ -54,16 +54,19 @@ function ddl(kind) {
   ];
 }
 
-/** A server value as plain text to compare (dates and booleans written differently by each engine). */
-const norm = (v) => {
-  if (v === null || v === undefined) return null;
-  if (v === true || v === false) return String(v);
-  const s = String(v).replace("T", " ").replace(/\.0+$/, "");
-  if (/^(t|1)$/i.test(s)) return "true";
-  if (/^(f|0)$/i.test(s)) return "false";
-  if (/^-?\d+\.\d+$/.test(s)) return String(Number(s));
-  return s;
+/**
+ * A server value as plain text to compare, by what the column holds: each engine and driver writes dates, booleans
+ * and decimals its own way (2024-03-15T00:00:00, t / 1 / true, 12.50), but a decimal always with a point.
+ */
+const as = {
+  id: (v) => (v === null || v === undefined ? null : String(Number(v))),
+  text: (v) => (v === null || v === undefined ? null : String(v)),
+  date: (v) => (v === null || v === undefined ? null : String(v).replace("T", " ").slice(0, 10)),
+  bool: (v) => (v === null || v === undefined ? null : /^(t|true|1|y|yes)$/i.test(String(v)) ? "true" : /^(f|false|0|n|no)$/i.test(String(v)) ? "false" : `?${v}`),
+  dec: (v) => (v === null || v === undefined ? null : /^-?\d+(\.\d+)?$/.test(String(v)) ? String(Number(v)) : `?${v}`),
+  stamp: (v) => (v === null || v === undefined ? null : String(v).replace("T", " ").slice(0, 19)),
 };
+const norm = (row, kinds) => row.map((v, i) => as[kinds[i]](v));
 
 await js(`await until(() => document.querySelector('.app.ready') && !document.querySelector('.splash'), 20000);`);
 if (await js(`return !!document.querySelector('.onboarding');`)) await key("Escape");
@@ -130,13 +133,13 @@ for (const name of CONNS) {
   `);
   check(`${name}: imported`, done, "dialog still open");
   const back = await js(`return (await sql(${JSON.stringify(name)}, "SELECT id, nombre, alta, activo, saldo, momento FROM import_tipos ORDER BY id")).results[0].rows;`);
-  const rows = (back ?? []).map((r) => r.map(norm));
+  const rows = (back ?? []).map((r) => norm(r, ["id", "text", "date", "bool", "dec", "stamp"]));
   const want = [
     ["1", "Ana Ruiz", "2024-03-15", "true", "12.5", "2024-03-15 10:20:00"],
     ["2", "Luis Peña", "2023-01-02", "false", "0.1", null],
     ["3", "Marta Gil", null, null, "1234.56", null],
   ];
-  check(`${name}: dates, decimals, booleans, timestamps and NULLs read back`, JSON.stringify(rows.map((r) => [String(r[0]), r[1], r[2] && r[2].slice(0, 10), r[3], r[4], r[5] && r[5].slice(0, 19)])) === JSON.stringify(want), JSON.stringify(back));
+  check(`${name}: dates, decimals, booleans, timestamps and NULLs read back`, JSON.stringify(rows) === JSON.stringify(want), JSON.stringify(back));
 
   // ---- a block pasted from Excel (Spanish formats) into the wizard
   await js(`await sql(${JSON.stringify(name)}, "DELETE FROM import_tipos");`);
@@ -154,8 +157,8 @@ for (const name of CONNS) {
   `);
   check(`${name}: pasted block: header found, 2 rows, mapped`, /Pegado del portapapeles/.test(p?.file ?? "") && /2 filas · 6 columnas/.test(p.file) && p.mapped.join() === "0,1,2,3,4,5", JSON.stringify(p));
   const pasted = await js(`return (await sql(${JSON.stringify(name)}, "SELECT id, alta, activo, saldo, momento FROM import_tipos ORDER BY id")).results[0].rows;`);
-  const prow = (pasted ?? []).map((r) => r.map(norm));
-  check(`${name}: pasted values typed (dd/mm/aaaa, 1.234,50, VERDADERO)`, JSON.stringify(prow.map((r) => [String(r[0]), r[1] && r[1].slice(0, 10), r[2], r[3], r[4] && r[4].slice(0, 19)])) === JSON.stringify([["10", "2024-03-05", "true", "1234.5", "2024-03-05 08:30:00"], ["11", null, "false", "-0.75", null]]), JSON.stringify(pasted));
+  const prow = (pasted ?? []).map((r) => norm(r, ["id", "date", "bool", "dec", "stamp"]));
+  check(`${name}: pasted values typed (dd/mm/aaaa, 1.234,50, VERDADERO)`, JSON.stringify(prow) === JSON.stringify([["10", "2024-03-05", "true", "1234.5", "2024-03-05 08:30:00"], ["11", null, "false", "-0.75", null]]), JSON.stringify(pasted));
 
   // ---- a block pasted into the table viewer: edits on the rows there, the rest as new rows (not saved)
   const grid = await js(`
