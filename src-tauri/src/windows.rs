@@ -57,7 +57,8 @@ pub const GHOST: &str = "drag-ghost";
 /// Dónde queda el puntero dentro del contorno, en píxeles físicos: lo mismo que `DROP_OFFSET` en windowModel.ts,
 /// así el contorno está justo donde se abrirá la ventana nueva.
 const GHOST_OFFSET: (f64, f64) = (120.0, 18.0);
-const GHOST_SIZE: (f64, f64) = (320.0, 200.0);
+/// The size of the window that opens (see `window_open`, "full"), in logical pixels.
+const GHOST_SIZE: (f64, f64) = (1280.0, 820.0);
 
 /// Una ventana con pestañas (la principal o `win-N`), no un panel.
 fn is_full(label: &str) -> bool {
@@ -207,7 +208,8 @@ pub async fn window_open(app: AppHandle, windows: State<'_, Windows>, request: O
         }
     };
     if let Some([x, y]) = request.at {
-        let _ = window.set_position(tauri::PhysicalPosition::new(x.round() as i32, y.round() as i32));
+        let (x, y) = clamp_to_work_area(&window, x.round() as i32, y.round() as i32);
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
     }
     // Red de seguridad: se muestra igualmente si la interfaz no lo ha hecho al poco.
     let shown = window.clone();
@@ -434,6 +436,22 @@ pub fn tab_drag_start(app: AppHandle, window: WebviewWindow, windows: State<'_, 
     }
 }
 
+/// Mueve la esquina (`x`, `y`) de `window` lo justo para que quepa en el área de trabajo del monitor que hay bajo ella
+/// (una ventana soltada junto al borde derecho o inferior no se abre casi fuera de la pantalla).
+fn clamp_to_work_area(window: &WebviewWindow, x: i32, y: i32) -> (i32, i32) {
+    let Ok(size) = window.outer_size() else { return (x, y) };
+    let Ok(Some(monitor)) = window.monitor_from_point(x as f64 + 120.0, y as f64 + 18.0) else { return (x, y) };
+    let area = monitor.work_area();
+    clamp_corner((x, y), (size.width as i32, size.height as i32), (area.position.x, area.position.y, area.size.width as i32, area.size.height as i32))
+}
+
+/// La esquina más cercana a `corner` con la ventana de `size` dentro de `area` (x, y, ancho, alto); si no cabe, su esquina superior izquierda.
+fn clamp_corner(corner: (i32, i32), size: (i32, i32), area: (i32, i32, i32, i32)) -> (i32, i32) {
+    let x = corner.0.min(area.0 + area.2 - size.0).max(area.0);
+    let y = corner.1.min(area.1 + area.3 - size.1).max(area.1);
+    (x, y)
+}
+
 /// Un rectángulo de ventana en píxeles físicos del escritorio.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Area {
@@ -606,7 +624,7 @@ pub fn tab_drag_end(app: AppHandle, window: WebviewWindow, windows: State<'_, Wi
 
 #[cfg(test)]
 mod tests {
-    use super::{compose, ghost_corner, inside, Area, GHOST_OFFSET};
+    use super::{clamp_corner, compose, ghost_corner, inside, Area, GHOST_OFFSET};
     use serde_json::json;
 
     #[test]
@@ -614,6 +632,13 @@ mod tests {
         // The pointer stays on the ghost's tab strip, at the same spot as the new window's (windowModel.ts).
         assert_eq!(ghost_corner((1000.0, 500.0)), ((1000.0 - GHOST_OFFSET.0) as i32, (500.0 - GHOST_OFFSET.1) as i32));
         assert_eq!(ghost_corner((10.4, 5.6)), (-110, -12), "near the screen's corner it may start off screen");
+    }
+
+    #[test]
+    fn a_dropped_window_is_kept_on_the_screen() {
+        assert_eq!(clamp_corner((1800, 900), (1280, 820), (0, 0, 1920, 1040)), (640, 220));
+        assert_eq!(clamp_corner((-50, 10), (1280, 820), (0, 0, 1920, 1040)), (0, 10));
+        assert_eq!(clamp_corner((10, 10), (2000, 1200), (0, 0, 1920, 1040)), (0, 0));
     }
 
     #[test]

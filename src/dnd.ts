@@ -73,3 +73,34 @@ export function hideDragImage(event: DragEvent) {
 export function countLabel(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
+
+/**
+ * The ghost card of a dragged tab, drawn in the page and following the pointer while it is over the window. The
+ * browser's own drag image would also stay visible outside the windows, on top of the new window's outline
+ * (drag-ghost.html), so it is replaced by a blank one.
+ */
+export function followDragGhost(event: DragEvent, content: GhostContent) {
+  hideDragImage(event);
+  const card = ghostCard(content);
+  card.style.display = "none";
+  document.body.appendChild(card);
+  const move = (e: DragEvent) => {
+    card.style.display = "";
+    card.style.left = `${e.clientX + 14}px`;
+    card.style.top = `${e.clientY + 14}px`;
+  };
+  const leave = (e: DragEvent) => {
+    if (!e.relatedTarget) card.style.display = "none";
+  };
+  const done = () => {
+    document.removeEventListener("dragover", move, true);
+    document.removeEventListener("dragleave", leave, true);
+    document.removeEventListener("dragend", done, true);
+    document.removeEventListener("drop", done, true);
+    card.remove();
+  };
+  document.addEventListener("dragover", move, true);
+  document.addEventListener("dragleave", leave, true);
+  document.addEventListener("dragend", done, true);
+  document.addEventListener("drop", done, true);
+}

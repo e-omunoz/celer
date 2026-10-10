@@ -123,7 +123,7 @@ import { withShortcut } from "../commands";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
 import { flipList, leaveOnCleanup } from "../motion";
-import { previewLines, setDragGhost } from "../dnd";
+import { followDragGhost, previewLines } from "../dnd";
 import { hintOnce } from "../hints";
 import { insertionGap, reorderTarget, windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
@@ -277,7 +277,7 @@ function TabBar() {
                 // and a few lines of what it holds.
                 const preview = tab.kind === "sql" ? tab.sql : `${tab.qualified}\n${tab.rows.length.toLocaleString()} filas cargadas`;
                 const where = [conn()?.name, tab.database].filter(Boolean).join(" · ") || "Sin conexión";
-                setDragGhost(event, { title: tab.title, detail: where, preview, color: tab.connId ? connColor(conn()) : undefined });
+                followDragGhost(event, { title: tab.title, detail: where, preview, color: tab.connId ? connColor(conn()) : undefined });
                 // Out of the window it goes to another one, or to a new one where it is let go.
                 startTabDrag(tab.id, tab.title, { preview: previewLines(preview), color: tab.connId ? connColor(conn()) : undefined });
               }}
