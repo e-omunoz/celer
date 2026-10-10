@@ -120,7 +120,9 @@ fn read_range(path: &str, sheet: Option<&str>, stop: &AtomicBool, progress: &dyn
         let name = pick(&sheets)?;
         let mut reader = book.worksheet_cells_reader(&name).map_err(|e| anyhow!("No se pudo leer la hoja «{name}»: {e}"))?;
         let dims = reader.dimensions();
-        let total = dims.end.0.saturating_sub(dims.start.0) + 1;
+        // A workbook that declares <dimension ref="A1"> (writers that do not track the used area) says nothing about
+        // the row count: no total, so the progress is not shown as "N de 1".
+        let total = if dims.end == (0, 0) { 0 } else { dims.end.0.saturating_sub(dims.start.0) + 1 };
         let mut cells: Vec<Cell<Data>> = Vec::new();
         let mut last_report = 0u32;
         let mut count = 0u64;
@@ -137,7 +139,7 @@ fn read_range(path: &str, sheet: Option<&str>, stop: &AtomicBool, progress: &dyn
             let done = row.saturating_sub(dims.start.0);
             if done >= last_report + 2000 {
                 last_report = done;
-                progress(done, total);
+                progress(done, total.max(done));
             }
             cells.push(Cell::new((row, col), value));
         }

@@ -75,7 +75,7 @@ export function ImportDialog() {
                 </Show>
               </span>
               <span class="spacer" />
-              <div class="mini-progress"><i style={{ width: `${reading().total ? (reading().rows / reading().total) * 100 : 0}%` }} /></div>
+              <div class="mini-progress"><i style={{ width: `${reading().total ? Math.min(100, (reading().rows / reading().total) * 100) : 0}%` }} /></div>
             </div>
           )}
         </Show>
