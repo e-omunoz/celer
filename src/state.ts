@@ -741,6 +741,9 @@ export interface ErState {
   shown: string[];
   /** Every table of the schema (up to ER_LIMIT) has its columns read: going back to the whole schema needs no reading. */
   whole: boolean;
+  /** An assistant opened this diagram (MCP, #100): when and for which client, for the badge. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 const ER_LIMIT = 250;
@@ -768,6 +771,11 @@ function erTable(obj: ObjectRef, columns: TableColumn[], fkCols: Set<string>): E
  * the keys of every table of its schema (there is no per-table query for it), so those are read first, without
  * the columns, which are read only for the tables on show.
  */
+/** Marks the diagram on show as opened by an assistant. */
+export function markErFromAi(client: string) {
+  if (state.er) setState("er", { aiOpenedAt: Date.now(), aiClient: client || undefined });
+}
+
 export async function openErDiagram(connId: string, path: string[], focus?: ObjectRef) {
   const token = ++erToken;
   // "main · main" (SQLite, MySQL: database and schema share the name) reads as just "main".
@@ -1692,7 +1700,10 @@ export function formatMs(ms: number | null | undefined) {
 
 /** Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive). */
 /** Runs in the active console, or in the console `tabId` (an assistant's, which may be in the background). */
-export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string, tabId?: string) {
+/** An assistant's run waits this long for the user's confirmation; the core gives up on the assistant's call at 145 s. */
+const AI_CONFIRM_MS = 120_000;
+
+export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string, tabId?: string, fromAi = "") {
   const byId = tabId ? state.tabs[tabIndex(tabId)] : undefined;
   const current = tabId ? (byId?.kind === "sql" ? byId : undefined) : activeSql();
   if (!current || current.running) return;
@@ -1719,17 +1730,19 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   if (conn?.production && state.settings.confirmMutations && (needsProductionConfirm(sql, conn.kind) || hasUnfilteredWrite(sql, conn.kind))) {
     const ok = await confirmDialog(
       `Ejecutar en ${conn.name} (producción)`,
-      "La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.",
+      `${fromAi ? `La IA${fromAi === "ai" ? "" : ` (${fromAi})`} pide ejecutar esta sentencia. ` : ""}La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.`,
       "Ejecutar de todos modos",
       true,
+      fromAi ? AI_CONFIRM_MS : 0,
     );
     if (!ok) return;
   } else if (state.settings.confirmNoWhere && hasUnfilteredWrite(sql, conn?.kind)) {
     const ok = await confirmDialog(
       "DELETE / UPDATE sin WHERE",
-      "La sentencia no tiene WHERE: afectará a todas las filas de la tabla.",
+      `${fromAi ? `La IA${fromAi === "ai" ? "" : ` (${fromAi})`} pide ejecutar esta sentencia. ` : ""}La sentencia no tiene WHERE: afectará a todas las filas de la tabla.`,
       "Ejecutar de todos modos",
       true,
+      fromAi ? AI_CONFIRM_MS : 0,
     );
     if (!ok) return;
   }
@@ -2139,6 +2152,8 @@ const sessionDatabase = new Map<string, string>();
 /** A side session (a table, a count, a comparison…), straight in `database` when one is given. */
 export async function openSessionFor(connId: string, database?: string) {
   if (!state.sessions[connId]) await connect(connId);
+  // connect() returns at once when another call (an AI console's warm-up, say) is already connecting: wait for that one.
+  for (let i = 0; i < 600 && !state.sessions[connId] && state.connecting[connId]; i++) await new Promise((r) => setTimeout(r, 100));
   if (!state.sessions[connId]) return null;
   const generation = connectGeneration(connId);
   const opened = await api()
@@ -2911,9 +2926,16 @@ export async function clearHistory() {
 
 // ---------------------------------------------------------------- dialogs
 
-export function confirmDialog(title: string, body: string, confirmLabel: string, danger = false) {
+export function confirmDialog(title: string, body: string, confirmLabel: string, danger = false, expireMs = 0) {
   dismissConfirm();
   return new Promise<boolean>((resolve) => {
+    // An assistant is waiting on this answer (#100): left unanswered, it closes as «no» before the assistant gives up.
+    if (expireMs) {
+      const mine = resolve;
+      window.setTimeout(() => {
+        if (confirmResolve === mine) dismissConfirm();
+      }, expireMs);
+    }
     confirmResolve = resolve;
     setState("confirm", {
       title,

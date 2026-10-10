@@ -10,7 +10,7 @@ import { api, errorText } from "./api";
 import { addLibraryScriptFromAi, revealLibraryScript } from "./library";
 import { aiTabTitle, isTyping } from "./mcpModel";
 import { refreshMcpStatus } from "./mcpStatus";
-import { connectionById, erSchemaPath, notify, openErDiagram, openQuery, openTable, patchTab, runActive, selectTab, state, type TableTab } from "./state";
+import { connectionById, erSchemaPath, markErFromAi, notify, openErDiagram, openQuery, openTable, patchTab, runActive, selectTab, state, type TableTab } from "./state";
 import type { ObjectRef } from "./types";
 import { windowName } from "./windowModel";
 import { focusThisWindow, windowLabel } from "./windows";
@@ -84,7 +84,7 @@ async function act(action: string, args: Record<string, unknown>, client: string
       const title = state.tabs.find((tab) => tab.id === tabId)?.title ?? "";
       announce(`la consola «${title}»`, tabId, background, client);
       const out: Record<string, unknown> = { ...where(), tabId, title, background };
-      if (args.run === true) Object.assign(out, await runIn(tabId, sql));
+      if (args.run === true) Object.assign(out, await runIn(tabId, sql, client));
       return out;
     }
     case "open_table": {
@@ -112,6 +112,7 @@ async function act(action: string, args: Record<string, unknown>, client: string
         return { ...where(), opened: false, offered: true, reason: "El usuario estaba escribiendo: se le ha ofrecido abrirlo con un aviso" };
       }
       const loading = openErDiagram(connId, path, obj);
+      markErFromAi(client);
       notify(`La IA ha abierto ${what} en ${windowName(windowLabel)}`, "info", client || undefined, { label: "Ir", run: () => void focusThisWindow() });
       await loading;
       return { ...where(), opened: true, ...(state.er?.error ? { error: state.er.error } : { tables: state.er?.tables.length ?? 0 }) };
@@ -128,10 +129,10 @@ async function act(action: string, args: Record<string, unknown>, client: string
 }
 
 /** Runs a console's SQL the way «Ejecutar» does (confirmations on production included) and says how it went. */
-async function runIn(tabId: string, sql: string): Promise<Record<string, unknown>> {
+async function runIn(tabId: string, sql: string, client: string): Promise<Record<string, unknown>> {
   const before = state.tabs.find((tab) => tab.id === tabId);
   const outputs = before?.kind === "sql" ? before.output.length : 0;
-  await runActive("script", sql, tabId);
+  await runActive("script", sql, tabId, client || "ai");
   const tab = state.tabs.find((item) => item.id === tabId);
   if (tab?.kind !== "sql") return { ran: false, reason: "La consola se cerró" };
   const last = tab.output.length > outputs ? tab.output[tab.output.length - 1] : null;
