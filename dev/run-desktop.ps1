@@ -28,13 +28,24 @@ if ($Stop) { Write-Host "slot $Slot stopped"; return }
 if (-not $env:JAVA_HOME -and (Test-Path "C:\Program Files\Java\jdk-21")) { $env:JAVA_HOME = "C:\Program Files\Java\jdk-21" }
 if (-not $env:JAVA_HOME) { Write-Warning "JAVA_HOME is not set: this build will have no JDBC bridge (Informix JDBC untestable)" }
 
+# Git on Windows when there is one; otherwise WSL's (this machine drives the Windows checkout from WSL), with the
+# paths translated (C:\x -> /mnt/c/x).
+$winGit = Get-Command git -ErrorAction SilentlyContinue
+function Git([string]$dir) {
+  if ($winGit) { & git -C $dir @args }
+  else {
+    $tr = { param($p) if ($p -match '^([A-Za-z]):\\(.*)$') { "/mnt/$($Matches[1].ToLower())/$($Matches[2] -replace '\\', '/')" } else { $p } }
+    & wsl.exe -e git -C (& $tr $dir) @($args | ForEach-Object { & $tr $_ })
+  }
+}
+
 $src = $root
 if ($Ref) {
   if ($Slot -eq 0) { throw "-Ref needs -Slot 1 or more: slot 0 builds this checkout as it is" }
   $src = "D:\celer-slots\$Slot"
-  git -C $root fetch origin --quiet
-  if (-not (Test-Path "$src\.git")) { git -C $root worktree add --detach $src $Ref | Out-Null }
-  git -C $src checkout --detach --force $Ref --quiet
+  Git $root fetch origin --quiet
+  if (-not (Test-Path "$src\.git")) { Git $root worktree add --quiet --detach $src $Ref }
+  Git $src checkout --detach --force $Ref --quiet
   if ($LASTEXITCODE -ne 0) { throw "could not check out $Ref in $src" }
   # Dependencies follow the branch: reinstalled when its package-lock.json changes.
   $lock = (Get-FileHash "$src\package-lock.json").Hash
@@ -43,7 +54,7 @@ if ($Ref) {
     if (-not $ok) { throw "npm ci failed in $src" }
     Set-Content "$src\.slot-lock" $lock
   }
-  Write-Host "slot $Slot at $Ref ($(git -C $src rev-parse --short HEAD))"
+  Write-Host "slot $Slot at $Ref ($(Git $src rev-parse --short HEAD))"
 }
 if (-not $NoBuild) {
   Push-Location $src
