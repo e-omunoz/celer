@@ -50,7 +50,80 @@ and shown in the settings.
 
 - **Claude Desktop**: Settings › IA y MCP › Configurar (merges into `claude_desktop_config.json`, keeps a `.bak`), then
   restart Claude Desktop.
-- **Claude Code**: copy the shown command, e.g. `claude mcp add celer -- "C:\…\celer.exe" --mcp`.
+- **Claude Code**: copy the shown command, e.g. `claude mcp add --scope user celer -- "C:\…\celer.exe" --mcp`. The
+  settings say whether it is registered, and flag a registration that points to another path of `celer.exe` (after a
+  reinstall to another folder): run the command again.
+- **Claude Code inside WSL**: see below.
 - **Other clients**: command `celer.exe`, argument `--mcp`.
 
 Files (in `%APPDATA%\es.celer.app`): `mcp.json` (permissions), `mcp-audit.jsonl` (log).
+
+### Claude Code inside WSL
+
+A WSL distro runs Windows programs through interop with their stdin and stdout piped, so Claude Code inside the
+distro starts `/mnt/c/…/celer.exe --mcp` and talks to it over stdio like any MCP server. It is still the Windows
+process: it reads the Windows `mcp.json`, takes passwords from the Windows credential store and writes the Windows
+audit log, so the connections, levels, masking and limits are exactly the ones set in Settings. Verified from Ubuntu
+on WSL 2: the release build (GUI subsystem) answers `initialize` and `tools/list` over interop stdio, and a debug
+build with its own data folder (`CELER_DATA_DIR` passed through `WSLENV`) runs `list_connections`, `list_tables` and
+`run_query` with passwords from the Windows credential store. No relay is needed.
+
+Settings › IA y MCP › *Claude Code en WSL* lists the installed distros (`wsl.exe -l -q`; Docker Desktop's own ones are
+left out). A running distro is looked into right away; a stopped one only on *Comprobar*, which starts it. For each:
+
+- whether Windows interop is on (`[interop] enabled` in `/etc/wsl.conf` and the binfmt entry WSL registers), and
+  where Claude Code is (`command -v claude`, then `~/.local/bin/claude` and the other usual places);
+- the command, with `celer.exe` converted to the distro's path, honouring `[automount] root`:
+  `claude mcp add --scope user celer -- '/mnt/c/…/celer.exe' --mcp --client=wsl:<distro>`;
+- *Registrar en WSL*: shows that exact command, asks for confirmation and runs it inside the distro
+  (`wsl.exe -d <distro> -e sh -lc …`; an earlier `celer` entry of user scope is removed first);
+- whether it is registered, read from the distro's `~/.claude.json` (through `\\wsl.localhost\<distro>\…`, or
+  `cat` inside the distro): user scope or any project. An entry whose command is another path of `celer.exe` is
+  flagged *registrado con otra ruta* with a *Volver a registrar* button.
+
+`--client=wsl:<distro>` tells the audit log where the client runs: each entry records the client (`Windows`,
+`WSL (Ubuntu)`, `Linux`) and the client program from `initialize` (`claude-code`…), and the settings show it.
+
+### Status bar indicator
+
+While MCP is on, the status bar shows «MCP · Windows + WSL (Ubuntu)»: where the registered clients are (Claude Desktop
+and Claude Code on Windows, Claude Code in each WSL distro). Its tooltip lists the clients, the last call (when, which
+tool, from where) and warns about a registration with an old path. A click opens «Actividad de la IA»: the last 30
+calls of the audit log (what, on which connection, when, from which client; refused ones in red) and a button to
+Settings › IA y MCP. It is hidden while MCP is off. The WSL distros are read in the background at most every two
+minutes.
+
+### Controlling the app («Controlar la aplicación»)
+
+Off by default. With it on, the assistant can also work with the running Celer; with it off, `tools/list` does not
+include any of these tools and calling one is refused. Sub-switches: *Abrir pestañas*, *Escribir en la biblioteca*,
+*Ejecutar lo que abre* (off by default).
+
+| Tool | Needs | Does |
+|---|---|---|
+| `get_app_state` | the switch | the windows and their tabs (which window has the focus, the active tab, connection and database of each). Tabs of connections at level *Sin acceso* show only their kind; console SQL and table filters only at *Lectura* or more |
+| `list_library`, `get_library_script` | the switch | the script library (name, folder, tags, notes, connection; the SQL with `get_library_script`). Scripts of connections at *Sin acceso* are left out |
+| `add_library_script` | *Escribir en la biblioteca*; *Solo esquema* on its connection, if any | adds a script (name made unique, marked as the AI's, with its notes) |
+| `open_console` | *Abrir pestañas*; *Solo esquema* | a console with the SQL written, on a connection and database |
+| `open_console` with `run` | *Ejecutar lo que abre*; *Lectura* for one read statement (the `run_query` filter and masking checks), *Lectura y escritura* for one modifying statement (the `execute_statement` filter; never production or read-only) | runs it in that console, as «Ejecutar» does (the production and no-WHERE confirmations still ask); the AI gets whether it ran and the summary line, not the rows |
+| `open_table` | *Abrir pestañas*; *Lectura* | a table or view in the viewer, optionally with a WHERE filter and ORDER BY, which are checked as a `run_query` of `SELECT * FROM t WHERE … ORDER BY …` |
+| `open_object` | *Abrir pestañas*; *Solo esquema* | a table or view on its DDL, columns, indexes or keys |
+| `open_er_diagram` | *Abrir pestañas*; *Solo esquema* | the diagram of a table and its relations, or of a schema |
+
+Every check (switches, levels, read filter, masking) happens in the MCP process before anything reaches the app, and
+every call, refused or not, is in `mcp-audit.jsonl` (a run is marked `[ejecutar]`). The running query in a console is
+not wrapped in a read-only transaction the way `run_query` is: at *Lectura* the lexical read filter is what stops a
+write, as it is for a read-only connection in the app.
+
+**The local channel.** The running Celer listens on a loopback TCP port chosen by the system and writes `mcp-app.json`
+(port, random token, process id) in its data folder; `celer --mcp` reads it, checks that a Celer answers (a hello
+line), sends one request with the token and waits for the answer. When Celer is not open the tools say so
+(«Celer no está abierto…»); the database tools keep working. The file is removed when Celer closes. From WSL the MCP
+process is still a Windows process, so it reaches the same loopback.
+
+**What the user sees.** The request goes to the last focused Celer window. A tab the AI opened carries a ✦ badge
+(«Abierto por la IA · hace N min», with the client) and flashes briefly; a notice says «La IA ha abierto «X» en la
+ventana Y» with «Ir». Nothing takes the focus: while the user is typing (a key in the last 4 s) the tab opens in the
+background and the notice says so; an E-R diagram, which covers the workspace, is offered in a notice instead of
+opened; a Celer window in the background gets its taskbar button flashed. Library scripts the AI added show the badge
+and their notes in the library.

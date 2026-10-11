@@ -15,6 +15,10 @@ export interface LibraryScript {
   updatedAt: number;
   /** Last time it was opened or run from the library. */
   usedAt?: number;
+  /** What it does, in a few words (an assistant that adds a script writes them). */
+  notes?: string;
+  /** Added by an assistant through MCP: who ("claude-code · WSL (Ubuntu)"). */
+  addedBy?: string;
 }
 
 export interface LibraryData {

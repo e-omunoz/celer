@@ -417,6 +417,8 @@ export interface McpConfig {
   timeoutSecs: number;
   redactPattern: string;
   connections: Record<string, { level: McpLevel; maxRows?: number | null }>;
+  /** «Controlar la aplicación» (#100): what an assistant may do in the running Celer. */
+  appControl: { enabled: boolean; openTabs: boolean; writeLibrary: boolean; runOpened: boolean };
 }
 
 export interface McpAuditEntry {
@@ -429,6 +431,10 @@ export interface McpAuditEntry {
   rows?: number | null;
   ms?: number | null;
   error?: string | null;
+  /** Where the assistant ran: "Windows", "WSL (Ubuntu)"… (older entries: none). */
+  client?: string | null;
+  /** The MCP client program ("claude-code"…). */
+  clientApp?: string | null;
 }
 
 export interface McpClientInfo {
@@ -437,4 +443,46 @@ export interface McpClientInfo {
   claudeDesktopConfigPath: string;
   claudeDesktopConfigured: boolean;
   claudeCodeCommand: string;
+  /** Claude Code on this system: "yes", "stale" (registered with another path) or "no". */
+  claudeCodeRegistered: "yes" | "stale" | "no";
+  /** Windows: the WSL section applies. */
+  wslSupported: boolean;
+}
+
+/** A WSL distro as Settings › IA y MCP shows it (src-tauri/src/mcp_wsl.rs). */
+export interface WslDistro {
+  name: string;
+  default: boolean;
+  running: boolean;
+  /** Looked into (it was running, or the user asked). */
+  checked: boolean;
+  interop: boolean | null;
+  home: string;
+  /** Where `claude` is in the distro ("" when not found). */
+  claude: string;
+  automountRoot: string;
+  /** celer.exe as the distro sees it (/mnt/c/…). */
+  exePath: string;
+  command: string;
+  registered: "yes" | "stale" | "no" | "unknown";
+  registeredCommand: string;
+  error: string;
+}
+
+export interface WslInfo {
+  available: boolean;
+  distros: WslDistro[];
+  error: string;
+  checkedAt: number;
+}
+
+/** The status bar's MCP indicator. */
+export interface McpStatus {
+  enabled: boolean;
+  /** «Controlar la aplicación» is on. */
+  appControl: boolean;
+  clients: { name: string; place: string; state: "yes" | "stale" }[];
+  /** The WSL distros have been read (it takes a moment after start). */
+  wslChecked: boolean;
+  lastCall: McpAuditEntry | null;
 }

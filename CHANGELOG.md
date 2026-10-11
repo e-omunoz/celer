@@ -7,27 +7,6 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- **SSH tunnels** (#115): «Túnel SSH» in the connection form reaches PostgreSQL, MySQL/MariaDB, SQL Server and Informix
-  (DRDA and JDBC) through a bastion, with a password, a private key (file or pasted, OpenSSH/PEM/PuTTY, with its
-  passphrase) or the SSH agent (Pageant, the OpenSSH agent of Windows, ssh-agent), and optional jump hosts. The Rust
-  core forwards a local port (one tunnel per connection, shared by its sessions) and rebuilds it when the bastion
-  drops: the next query reconnects through the session guard. An unknown host key is shown with its fingerprint and
-  «Confiar en esta clave», and a changed one is refused. «Probar conexión» reports the SSH step and the forward apart
-  from the database's. The SSH password, passphrase and key go to the OS credential store (long keys in parts), never
-  to connections.json; exports carry only the tunnel's settings, and DBeaver/DbVisualizer imports bring them too.
-  Hidden, with a note why, for SQLite and ODBC.
-- **Export connections with their passwords** (#101): «Exportar» opens a dialog with «Incluir contraseñas», off by
-  default (the file is then exactly the v1 file as before). With it on, a passphrase typed twice seals every secret
-  (database password, SSH password, passphrase and pasted key, secret entries of the ODBC string and "Parámetros
-  extra") with Argon2id + AES-256-GCM in the Rust core, so the secrets never reach the interface on export; the file
-  (format v2) says on top that it carries encrypted passwords. «Sin cifrar» exists only behind an explicit warning.
-  Importing a v2 file asks for the passphrase, refuses a wrong one without importing any secret (try again, or import
-  without passwords), and saves the secrets to the OS credential store, never to connections.json. v1 files import as
-  before.
-
-- **«Mantener viva la conexión»** (advanced options of a connection, off by default): the minutes after which the
-  server ends idle sessions; Celer checks idle sessions a bit before (80 %), so they are not cut (#97).
-
 ### Changed
 - **The E-R diagram reads a schema's foreign keys in one catalog query** (#98) instead of asking table by table: the
   diagram of one table no longer shows «Buscando las relaciones de … n/1557» on large schemas. On a 1,500-table
@@ -62,6 +41,52 @@ All notable changes to Celer are documented here. The format follows
   a trigger's `PRINT` after an `INSERT`, and a message sent after a result read in pages. Severity 11 and up still
   fails the batch as before. Celer now builds with a patched copy of `tiberius` that hands those messages over
   (`src-tauri/vendor/tiberius/PATCHES.md`).
+- **Informix DRDA on Windows** (#124, #100): text values and catalog names no longer come back truncated or empty (the IBM CLI driver packs block indicators 4 bytes apiece).
+- **Masking on generic ODBC sources** (#100, #124): column names are read from the ODBC catalog, so protected columns are hidden in expressions and filters too.
+- **AI «ejecutar» on a connection that is still connecting** (#100): the console waits for the connection instead of failing with «Sin conexión».
+
+- **SSH tunnels** (#115): «Túnel SSH» in the connection form reaches PostgreSQL, MySQL/MariaDB, SQL Server and Informix
+  (DRDA and JDBC) through a bastion, with a password, a private key (file or pasted, OpenSSH/PEM/PuTTY, with its
+  passphrase) or the SSH agent (Pageant, the OpenSSH agent of Windows, ssh-agent), and optional jump hosts. The Rust
+  core forwards a local port (one tunnel per connection, shared by its sessions) and rebuilds it when the bastion
+  drops: the next query reconnects through the session guard. An unknown host key is shown with its fingerprint and
+  «Confiar en esta clave», and a changed one is refused. «Probar conexión» reports the SSH step and the forward apart
+  from the database's. The SSH password, passphrase and key go to the OS credential store (long keys in parts), never
+  to connections.json; exports carry only the tunnel's settings, and DBeaver/DbVisualizer imports bring them too.
+  Hidden, with a note why, for SQLite and ODBC.
+- **Export connections with their passwords** (#101): «Exportar» opens a dialog with «Incluir contraseñas», off by
+  default (the file is then exactly the v1 file as before). With it on, a passphrase typed twice seals every secret
+  (database password, SSH password, passphrase and pasted key, secret entries of the ODBC string and "Parámetros
+  extra") with Argon2id + AES-256-GCM in the Rust core, so the secrets never reach the interface on export; the file
+  (format v2) says on top that it carries encrypted passwords. «Sin cifrar» exists only behind an explicit warning.
+  Importing a v2 file asks for the passphrase, refuses a wrong one without importing any secret (try again, or import
+  without passwords), and saves the secrets to the OS credential store, never to connections.json. v1 files import as
+  before.
+
+- **«Mantener viva la conexión»** (advanced options of a connection, off by default): the minutes after which the
+  server ends idle sessions; Celer checks idle sessions a bit before (80 %), so they are not cut (#97).
+
+  whether Windows interop is on in each and where Claude Code is, and shows the `claude mcp add` command with
+  `celer.exe` as the distro sees it (`/mnt/c/…`, honouring a custom `automount.root`). "Registrar en WSL" shows that
+  command, asks for confirmation, runs it inside the distro and then reads the distro's `~/.claude.json` to confirm
+  it; a registration that points to an old path of Celer is flagged with "Volver a registrar". The WSL client is the
+  same Windows process (interop stdio), so it gets the same per-connection levels, masking, limits and audit. Claude
+  Code on Windows also shows whether it is registered.
+- **The MCP audit log records the client** (#124): Windows or WSL and the distro, and the client program
+  (`claude-code`…), shown in Settings › IA y MCP.
+- **MCP indicator in the status bar** (#124): «MCP · Windows + WSL (Ubuntu)» while MCP is on, with the registered
+  clients, the last call and a warning for an old registration in its tooltip. Hidden while MCP is off. A click shows
+  «Actividad de la IA» (#100): the last calls of the audit log, and the way to Settings › IA y MCP.
+- **The AI can act in the app** (#100): Settings › IA y MCP › "Controlar la aplicación" (off by default; sub-switches
+  "Abrir pestañas", "Escribir en la biblioteca", "Ejecutar lo que abre") adds MCP tools that work with the running
+  Celer through a local channel: `get_app_state` (windows and tabs, limited by each connection's level),
+  `list_library` / `get_library_script` / `add_library_script`, `open_console` (SQL written; run only when allowed and
+  within the connection's level, through the same read filter and masking as `run_query`), `open_table` (with filter
+  and order), `open_object` and `open_er_diagram`. With it off none of them is listed; with Celer closed they say so.
+  Every action is in the audit log. Tabs the AI opens carry a ✦ badge («Abierto por la IA · hace N min») and a short
+  highlight, a notice says what was opened and where with «Ir», and the focus is never taken: while the user types
+  the tab opens in the background, and a Celer window in the background flashes its taskbar button. Scripts the AI
+  adds to the library show the badge and their notes.
 
 ## [2.2.0] - 2026-10-09
 
@@ -93,6 +118,9 @@ All notable changes to Celer are documented here. The format follows
   - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
 
 ### Fixed
+- **IA activity list** (#100): the entries for app actions (open_table, add_library_script...) were invisible (a CSS class clash made them transparent).
+- **Informix over DRDA on Windows** (#100): catalog names padded with NULs no longer break open_table, open_object and the E-R diagram.
+- **E-R diagram on generic ODBC sources** (#100): no longer fails with «Aquí no hay una carpeta de tablas».
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
   closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
   *mayúsculas / regexp / palabra completa* toggles, which light up when on (#88).

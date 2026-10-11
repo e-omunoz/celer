@@ -271,6 +271,40 @@ export function cancelNaming() {
   setLibrary("naming", null);
 }
 
+/**
+ * A script an assistant adds through MCP (#100; the MCP process checked the switch and the connection): its name made
+ * unique, marked as the AI's. Returns it as saved.
+ */
+export async function addLibraryScriptFromAi(input: { name: string; sql: string; folder?: string; tags?: string[]; notes?: string; connId?: string | null }, client: string) {
+  await loadLibrary();
+  const now = Date.now();
+  const script: LibraryScript = {
+    id: uid(),
+    name: freeName(input.name.trim() || "Script de la IA", library.scripts.map((s) => s.name)),
+    sql: input.sql,
+    connId: input.connId && connectionById(input.connId) ? input.connId : null,
+    folder: normalizeFolder(input.folder ?? ""),
+    tags: normalizeTags(input.tags ?? []),
+    createdAt: now,
+    updatedAt: now,
+    ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
+    addedBy: client || "IA",
+  };
+  setLibrary("scripts", (list) => [...list, script]);
+  setLibrary("folders", (list) => withParents(list, [script]));
+  await persist();
+  return script;
+}
+
+/** Shows a script in the library panel (selected, its folder open). */
+export function revealLibraryScript(id: string) {
+  const script = scriptById(id);
+  if (!script) return;
+  if (script.folder) toggleFolder(script.folder, true);
+  setLibrary("selected", `s:${id}`);
+  openInspector("library");
+}
+
 // ---------------------------------------------------------------- opening and running
 
 /** Opens a library script in a console (on its connection when it still exists); `run` also runs all of it. */

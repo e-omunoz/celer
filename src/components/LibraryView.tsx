@@ -1,6 +1,6 @@
 // The script library panel (Inspector › Biblioteca): a tree of folders and scripts with search, tags, drag and drop,
 // a context menu and keyboard shortcuts. The actions live in library.ts.
-import { BookmarkPlus, ChevronRight, Ellipsis, FileCode2, Folder, FolderOpen, FolderPlus, Pencil, Play, Search, X } from "lucide-solid";
+import { BookmarkPlus, ChevronRight, Ellipsis, FileCode2, Folder, FolderOpen, FolderPlus, Pencil, Play, Search, Sparkles, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, on, onMount, Show } from "solid-js";
 import { shortcutLabel, withShortcut } from "../commands";
 import {
@@ -358,7 +358,7 @@ export function LibraryView() {
           role="treeitem"
           aria-level={props.row.depth + 1}
           aria-selected={library.selected === key()}
-          title={`${script().name}\n\n${script().sql.slice(0, 600)}${script().sql.length > 600 ? "…" : ""}\n\nClic: abrir · Ctrl+Intro: abrir y ejecutar · Arrástralo al editor para pegar su SQL`}
+          title={`${script().name}${script().notes ? `\n${script().notes}` : ""}${script().addedBy ? `\nAñadido por la IA (${script().addedBy})` : ""}\n\n${script().sql.slice(0, 600)}${script().sql.length > 600 ? "…" : ""}\n\nClic: abrir · Ctrl+Intro: abrir y ejecutar · Arrástralo al editor para pegar su SQL`}
           draggable={!renaming()}
           onDragStart={(event) => {
             event.dataTransfer?.setData(SCRIPT_MIME, script().id);
@@ -384,6 +384,9 @@ export function LibraryView() {
               </Show>
               <Show when={dirty()}>
                 <i class="lib-dirty" title="La consola tiene cambios sin guardar en la biblioteca" />
+              </Show>
+              <Show when={script().addedBy}>
+                <span class="ai-badge" title={`Añadido por la IA (${script().addedBy})`}><Sparkles size={10} /></span>
               </Show>
             </div>
             <code class="lib-preview">{preview(script().sql)}</code>

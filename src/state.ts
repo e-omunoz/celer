@@ -95,6 +95,9 @@ export interface SqlTab {
   activePinned: string | null;
   /** A pinned result compared with the current one (key: columns that match rows; null: guessed). */
   compare: { pinId: string; key: string[] | null } | null;
+  /** Opened by an assistant through MCP (#100): when, and who ("claude-code · WSL (Ubuntu)"). Not saved. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 export interface PinnedResult {
@@ -140,6 +143,9 @@ export interface TableTab {
   inserts: (string | null)[][];
   /** Restored from the last session and not loaded yet: it loads (and connects) when it is first shown. */
   restored?: boolean;
+  /** Opened by an assistant through MCP (#100): when, and who. Not saved. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 export type Tab = SqlTab | TableTab;
@@ -743,6 +749,9 @@ export interface ErState {
   shown: string[];
   /** Every table of the schema (up to ER_LIMIT) has its columns read: going back to the whole schema needs no reading. */
   whole: boolean;
+  /** An assistant opened this diagram (MCP, #100): when and for which client, for the badge. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 const ER_LIMIT = 250;
@@ -809,6 +818,11 @@ async function erKeys(sessionId: string, path: string[], nodes: MetaNode[], limi
  * ways (what points to a table is only known from the keys of the whole schema), with the columns read only for the
  * tables on show.
  */
+/** Marks the diagram on show as opened by an assistant. */
+export function markErFromAi(client: string) {
+  if (state.er) setState("er", { aiOpenedAt: Date.now(), aiClient: client || undefined });
+}
+
 export async function openErDiagram(connId: string, path: string[], focus?: ObjectRef) {
   const token = ++erToken;
   // "main · main" (SQLite, MySQL: database and schema share the name) reads as just "main".
@@ -832,8 +846,10 @@ export async function openErDiagram(connId: string, path: string[], focus?: Obje
   }
   try {
     if (path[0]) await api().useDatabase(opened.sessionId, path[0]).catch(() => {});
-    const folders = await api().metaChildren(opened.sessionId, path);
-    const folder = folders.find((node) => node.kind === "folder" && (node.path[node.path.length - 1] === "tables" || /^(tablas|tables)$/i.test(node.name)));
+    const isTables = (node: MetaNode) => node.kind === "folder" && (node.path[node.path.length - 1] === "tables" || /^(tablas|tables)$/i.test(node.name));
+    let folder = (await api().metaChildren(opened.sessionId, path).catch(() => [] as MetaNode[])).find(isTables);
+    // A generic ODBC source has no database level: its tree starts at the folders (Tablas, Vistas).
+    if (!folder && kindOf(connId) === "odbc" && path.length) folder = (await api().metaChildren(opened.sessionId, [])).find(isTables);
     if (!folder) throw new Error("Aquí no hay una carpeta de tablas");
     const all = (await api().metaChildren(opened.sessionId, folder.path)).filter((node) => node.obj?.kind === "table");
     if (!current()) return;
@@ -1518,7 +1534,11 @@ export async function refreshNode(connId: string, path: string[]) {
 
 // ---------------------------------------------------------------- consoles
 
-export function openQuery(connId: string | null, sql = "", title?: string) {
+/**
+ * A new console. `background`: added without becoming the active tab (an assistant opened it while the user was
+ * typing); `database`: the one it starts in, instead of the connection's.
+ */
+export function openQuery(connId: string | null, sql = "", title?: string, options: { background?: boolean; database?: string } = {}) {
   const conn = connectionById(connId);
   const tab = blankSql(uid(), connId, sql, title ?? conn?.name ?? CONSOLE_TITLE);
   const session = connId ? state.sessions[connId] : undefined;
@@ -1526,8 +1546,9 @@ export function openQuery(connId: string | null, sql = "", title?: string) {
     tab.database = session.database;
     tab.serverInfo = session.serverInfo;
   }
+  if (connId && options.database) tab.database = options.database;
   setState("tabs", [...state.tabs, tab]);
-  setState("activeTabId", tab.id);
+  if (!options.background) setState("activeTabId", tab.id);
   persistSoon();
   warmSqlSession(tab.id);
   return tab.id;
@@ -1631,6 +1652,8 @@ async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   const moved = state.tabs[tabIndex(tab.id)];
   if (moved?.kind === "sql" && moved.sessionId) return moved;
   if (!state.sessions[tab.connId]) await connect(tab.connId);
+  // connect() returns at once when another call (the console's warm-up) is already connecting: wait for that one.
+  for (let i = 0; i < 600 && !state.sessions[tab.connId] && state.connecting[tab.connId]; i++) await new Promise((r) => setTimeout(r, 100));
   if (!state.sessions[tab.connId]) throw new Error("Sin conexión");
   const fresh = state.tabs[tabIndex(tab.id)];
   if (!fresh || fresh.kind !== "sql") throw new Error("La pestaña ya no existe");
@@ -1747,8 +1770,13 @@ export function formatMs(ms: number | null | undefined) {
 }
 
 /** Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive). */
-export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string) {
-  const current = activeSql();
+/** Runs in the active console, or in the console `tabId` (an assistant's, which may be in the background). */
+/** An assistant's run waits this long for the user's confirmation; the core gives up on the assistant's call at 145 s. */
+const AI_CONFIRM_MS = 120_000;
+
+export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string, tabId?: string, fromAi = "") {
+  const byId = tabId ? state.tabs[tabIndex(tabId)] : undefined;
+  const current = tabId ? (byId?.kind === "sql" ? byId : undefined) : activeSql();
   if (!current || current.running) return;
   const conn = connectionById(current.connId);
   let sql = text?.trim() || current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
@@ -1773,17 +1801,19 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   if (conn?.production && state.settings.confirmMutations && (needsProductionConfirm(sql, conn.kind) || hasUnfilteredWrite(sql, conn.kind))) {
     const ok = await confirmDialog(
       `Ejecutar en ${conn.name} (producción)`,
-      "La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.",
+      `${fromAi ? `La IA${fromAi === "ai" ? "" : ` (${fromAi})`} pide ejecutar esta sentencia. ` : ""}La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.`,
       "Ejecutar de todos modos",
       true,
+      fromAi ? AI_CONFIRM_MS : 0,
     );
     if (!ok) return;
   } else if (state.settings.confirmNoWhere && hasUnfilteredWrite(sql, conn?.kind)) {
     const ok = await confirmDialog(
       "DELETE / UPDATE sin WHERE",
-      "La sentencia no tiene WHERE: afectará a todas las filas de la tabla.",
+      `${fromAi ? `La IA${fromAi === "ai" ? "" : ` (${fromAi})`} pide ejecutar esta sentencia. ` : ""}La sentencia no tiene WHERE: afectará a todas las filas de la tabla.`,
       "Ejecutar de todos modos",
       true,
+      fromAi ? AI_CONFIRM_MS : 0,
     );
     if (!ok) return;
   }
@@ -2195,6 +2225,8 @@ const sessionDatabase = new Map<string, string>();
 /** A side session (a table, a count, a comparison…), straight in `database` when one is given. */
 export async function openSessionFor(connId: string, database?: string) {
   if (!state.sessions[connId]) await connect(connId);
+  // connect() returns at once when another call (an AI console's warm-up, say) is already connecting: wait for that one.
+  for (let i = 0; i < 600 && !state.sessions[connId] && state.connecting[connId]; i++) await new Promise((r) => setTimeout(r, 100));
   if (!state.sessions[connId]) return null;
   const generation = connectGeneration(connId);
   const opened = await api()
@@ -2260,22 +2292,37 @@ export async function followForeignKey(tab: TableTab, fk: ForeignKey, row?: Reco
   await openTable(tab.connId, fk.target, "data", filters);
 }
 
-export async function openTable(connId: string, obj: ObjectRef, section: TableTab["section"] = "data", filters: ColumnFilter[] = []) {
+/**
+ * Opens a table (or brings its tab forward). `options` are an assistant's (#100): `background` adds the tab without
+ * making it active, `where` / `orderBy` start it filtered and ordered. Returns the tab's id.
+ */
+export async function openTable(
+  connId: string,
+  obj: ObjectRef,
+  section: TableTab["section"] = "data",
+  filters: ColumnFilter[] = [],
+  options: { background?: boolean; where?: string; orderBy?: string } = {},
+): Promise<string | undefined> {
   if (forwardFromPanel("open-table", { connId, obj, section, filters })) return;
+  const query = options.where !== undefined || options.orderBy !== undefined ? { where: options.where ?? "", orderBy: options.orderBy ?? "", filters: [] as ColumnFilter[], sort: null } : null;
   const existing = state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
   if (existing) {
     // A restored tab not loaded yet loads once here (with the filters, if any), not again when it is shown.
     const restored = existing.kind === "table" && existing.restored;
-    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}) });
-    selectTab(existing.id);
-    if (section !== "data") patchTab(existing.id, { section });
+    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}), ...(query ?? {}) });
+    if (!options.background) selectTab(existing.id);
+    // A filter or ordering is data: show the data section even if the tab was left on DDL or another section.
+    if (section !== "data" || filters.length || query) patchTab(existing.id, { section });
     if (restored) {
       void reloadTable(existing.id, true);
     } else if (filters.length && (await guardDirty(existing.id))) {
       patchTab(existing.id, { filters, where: "", section: "data" });
       void reloadTable(existing.id);
+    } else if (query && (await guardDirty(existing.id))) {
+      patchTab(existing.id, query);
+      void reloadTable(existing.id);
     }
-    return;
+    return existing.id;
   }
   const opened = await openSessionFor(connId, obj.database).catch((err) => {
     notify(errorText(err), "error");
@@ -2284,10 +2331,12 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
   if (!opened) return;
   const id = uid();
   const tab = blankTable(id, connId, obj, opened.sessionId, obj.database || opened.database, section, filters);
+  if (query) Object.assign(tab, query);
   setState("tabs", [...state.tabs, tab]);
   persistSoon();
-  setState("activeTabId", id);
+  if (!options.background) setState("activeTabId", id);
   await reloadTable(id, true);
+  return id;
 }
 
 export async function reloadTable(tabId: string, full = false) {
@@ -2951,9 +3000,16 @@ export async function clearHistory() {
 
 // ---------------------------------------------------------------- dialogs
 
-export function confirmDialog(title: string, body: string, confirmLabel: string, danger = false) {
+export function confirmDialog(title: string, body: string, confirmLabel: string, danger = false, expireMs = 0) {
   dismissConfirm();
   return new Promise<boolean>((resolve) => {
+    // An assistant is waiting on this answer (#100): left unanswered, it closes as «no» before the assistant gives up.
+    if (expireMs) {
+      const mine = resolve;
+      window.setTimeout(() => {
+        if (confirmResolve === mine) dismissConfirm();
+      }, expireMs);
+    }
     confirmResolve = resolve;
     setState("confirm", {
       title,

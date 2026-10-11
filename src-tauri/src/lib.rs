@@ -5,6 +5,8 @@ mod export;
 mod guard;
 mod jdbc;
 mod mcp;
+mod mcp_app;
+mod mcp_wsl;
 mod migrate;
 mod model;
 mod mssql;
@@ -1449,6 +1451,27 @@ fn mcp_install_claude_desktop() -> CmdResult<String> {
     mcp::install_claude_desktop()
 }
 
+/// The status bar's MCP indicator: on or off, the clients registered (Windows and WSL) and the last call.
+#[tauri::command(async)]
+fn mcp_status(state: State<'_, Arc<AppState>>) -> mcp::McpStatus {
+    mcp::status(&state.store)
+}
+
+/// The WSL distros, whether interop is on, the command for each and whether Celer is registered there. `check`:
+/// also look into this stopped distro (which starts it).
+#[tauri::command]
+async fn mcp_wsl_info(check: Option<String>) -> CmdResult<mcp_wsl::WslInfo> {
+    let exe = mcp::exe_path_pub();
+    tauri::async_runtime::spawn_blocking(move || mcp_wsl::info(&exe, check.as_deref())).await.map_err(err)
+}
+
+/// Runs `claude mcp add` inside a distro (the interface showed the command and the user confirmed it).
+#[tauri::command]
+async fn mcp_wsl_register(distro: String) -> CmdResult<String> {
+    let exe = mcp::exe_path_pub();
+    tauri::async_runtime::spawn_blocking(move || mcp_wsl::register(&exe, &distro)).await.map_err(err)?
+}
+
 /// Ejecuta una herramienta MCP con los permisos actuales (sin exigir `enabled` y sin auditar).
 /// Devuelve `{ isError, text, json }`: `text` es exactamente lo que recibiría el asistente.
 #[tauri::command]
@@ -1534,7 +1557,7 @@ pub fn run() {
             let store = Store::new(dir.clone());
             let mut conns = store.load_connections();
             move_inline_passwords(&store, &mut conns);
-            let mcp = mcp::McpServer::new(dir, true);
+            let mcp = mcp::McpServer::new(dir.clone(), true);
             // The window starts hidden and the UI shows it after its first paint (no white flash).
             // Safety net: show it anyway if the UI has not done so shortly after start.
             if let Some(window) = app.get_webview_window("main") {
@@ -1555,6 +1578,13 @@ pub fn run() {
                 exports: Mutex::new(HashMap::new()),
             }));
             app.manage(windows::Windows::default());
+            // The channel `celer --mcp` uses for the tools that act in the app (they check the permissions first).
+            let pending = Arc::new(mcp_app::Pending::default());
+            app.manage(pending.clone());
+            let handler = Arc::new(windows::McpAppHandler { app: app.handle().clone(), pending });
+            if let Err(e) = mcp_app::start(&dir, handler) {
+                eprintln!("celer: no se pudo abrir el canal local para MCP: {e}");
+            }
             Ok(())
         })
         .on_window_event(windows::on_event)
@@ -1624,6 +1654,9 @@ pub fn run() {
             mcp_clear_audit,
             mcp_client_info,
             mcp_install_claude_desktop,
+            mcp_status,
+            mcp_wsl_info,
+            mcp_wsl_register,
             mcp_test_tool,
             ai_key_status,
             ai_key_set,
@@ -1642,7 +1675,15 @@ pub fn run() {
             windows::tab_drag_start,
             windows::tab_drag_claim,
             windows::tab_drag_end,
+            windows::mcp_app_reply,
         ])
-        .run(tauri::generate_context!())
-        .expect("error al iniciar Celer");
+        .build(tauri::generate_context!())
+        .expect("error al iniciar Celer")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    mcp_app::stop(&state.store.dir);
+                }
+            }
+        });
 }

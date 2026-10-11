@@ -129,8 +129,9 @@ pub struct Api {
     get_info: FnGetInfo,
     drivers: Option<FnEnum>,
     data_sources: Option<FnEnum>,
-    /// SQLLEN is 32 bits: IBM's CLI driver outside Windows (built without ODBC64) writes 4-byte lengths and
-    /// indicators where the ODBC headers of a 64-bit system say 8. Windows and unixODBC use 8.
+    /// SQLLEN is 32 bits: IBM's CLI driver (built without ODBC64, on Windows too: db2cli64.dll packs the indicators of
+    /// a bound block 4 bytes apiece) writes 4-byte lengths and indicators where the ODBC headers of a 64-bit system
+    /// say 8. Other drivers use 8.
     len32: bool,
 }
 
@@ -139,7 +140,7 @@ unsafe impl Sync for Api {}
 
 /// IBM Data Server Driver (CLI) library: libdb2.so / libdb2.dylib (db2cli64.dll on Windows).
 fn is_ibm_cli(path: &str) -> bool {
-    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let name = path.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(path).to_lowercase();
     name.starts_with("libdb2") || name.starts_with("db2cli") || name.starts_with("libdb2o")
 }
 
@@ -215,7 +216,7 @@ impl Api {
             drivers: opt!("SQLDriversW"),
             data_sources: opt!("SQLDataSourcesW"),
             _lib: lib,
-            len32: !cfg!(windows) && is_ibm_cli(path),
+            len32: is_ibm_cli(path),
         })
     }
 
@@ -822,7 +823,9 @@ impl Stmt {
                             return Ok(Cell::Text(s));
                         }
                     }
-                    let s = String::from_utf16_lossy(&out);
+                    // The IBM CLI driver on Windows pads some catalog values with NULs.
+                    let mut s = String::from_utf16_lossy(&out);
+                    s.truncate(s.trim_end_matches('\0').len());
                     Ok(Cell::Text(match p.frac {
                         Some(digits) => fit_fraction(s, digits),
                         None => s,
@@ -1065,6 +1068,7 @@ fn decode(p: &ColPlan, data: &[u8], ind: isize) -> Cell {
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let mut s = String::from_utf16_lossy(&u);
+            s.truncate(s.trim_end_matches('\0').len());
             if let Some(digits) = p.frac {
                 s = fit_fraction(s, digits);
             }

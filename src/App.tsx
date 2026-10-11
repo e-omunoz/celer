@@ -16,6 +16,8 @@ import { revealWindow, WindowControls } from "./components/WindowControls";
 import { PanelApp, WindowAskDialog } from "./components/Windows";
 import { gibHere, openNewWindow, panelKind, prepareWindow, startWindows, windowLabel } from "./windows";
 import { EngineIcon } from "./icons";
+import { McpIndicator } from "./components/McpIndicator";
+import { startMcpApp } from "./mcpApp";
 import { loadLibrary } from "./library";
 import {
   activeTab,
@@ -52,6 +54,8 @@ export default function App() {
   });
   onMount(() => {
     startWindows();
+    // Requests of an assistant (MCP «Controlar la aplicación») come through the windows' inbox.
+    startMcpApp();
     // Gib's start-up hop is the main window's; another window starts with him where he is.
     if (windowLabel !== "main") setSplashDone(true);
     void boot().then(() => {
@@ -242,6 +246,7 @@ function StatusBar() {
         <span class="st-item muted">{formatMs((tab() as { elapsedMs: number | null }).elapsedMs)}</span>
       </Show>
       <Show when={conn()}><span class="st-item muted">{engineOf(conn()!.kind).label}</span></Show>
+      <McpIndicator />
       <span class="st-item muted">{isTauri() ? "" : "demo navegador · "}UTF-8</span>
       <Show when={updateChipVisible()}>
         <button

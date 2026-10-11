@@ -16,7 +16,7 @@ import type {
   SshHostKeyInfo,
   TableColumn,
 } from "./types";
-import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
+import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, McpStatus, UpdateInfo, WslInfo } from "./types";
 import type { MigrationSource } from "./migrate";
 import type { ImportedSecrets, SecretRequest } from "./connTree";
 import { createDemoBackend } from "./demo";
@@ -121,6 +121,14 @@ export interface Backend {
   mcpClearAudit(): Promise<void>;
   mcpClientInfo(): Promise<McpClientInfo>;
   mcpInstallClaudeDesktop(): Promise<string>;
+  /** MCP on or off, the clients registered (Windows and WSL) and the last call: the status bar's indicator. */
+  mcpStatus(): Promise<McpStatus>;
+  /** The WSL distros and Celer's registration in each; `check` also looks into that stopped distro (starting it). */
+  mcpWslInfo(check?: string): Promise<WslInfo>;
+  /** Runs `claude mcp add` inside a WSL distro; returns what it said. */
+  mcpWslRegister(distro: string): Promise<string>;
+  /** This window's answer to an assistant's request (MCP «Controlar la aplicación», see mcpApp.ts). */
+  mcpAppReply(id: string, ok: boolean, result: unknown, error?: string): Promise<boolean>;
   mcpTestTool(name: string, args: Record<string, unknown>): Promise<unknown>;
   /** `defaultName`: the file name the dialog proposes. */
   pickSavePath(filters: { name: string; extensions: string[] }[], defaultName?: string): Promise<string | null>;
@@ -216,6 +224,10 @@ function tauriBackend(): Backend {
     mcpClearAudit: () => invoke("mcp_clear_audit"),
     mcpClientInfo: () => invoke("mcp_client_info"),
     mcpInstallClaudeDesktop: () => invoke("mcp_install_claude_desktop"),
+    mcpStatus: () => invoke("mcp_status"),
+    mcpWslInfo: (check) => invoke("mcp_wsl_info", { check: check ?? null }),
+    mcpWslRegister: (distro) => invoke("mcp_wsl_register", { distro }),
+    mcpAppReply: (id, ok, result, error) => invoke("mcp_app_reply", { id, ok, result: result ?? null, error: error ?? null }),
     mcpTestTool: (name, args) => invoke("mcp_test_tool", { name, args }),
     pickSavePath: async (filters, defaultName) => {
       const { save } = await import("@tauri-apps/plugin-dialog");

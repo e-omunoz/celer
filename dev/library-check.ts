@@ -161,4 +161,10 @@ assert.deepEqual(parseSqlFile("vacío.sql", "  \n"), []);
 const odd = parseSqlFile("x.sql", 'SELECT 0;\n-- @celer-script {roto\nSELECT 1\n-- @celer-script {"name":"  "}\nSELECT 2');
 assert.deepEqual(odd.map((s) => [s.name, s.sql]), [["x", "SELECT 0;"], ["x 1", "SELECT 1"], ["x 2", "SELECT 2"]], "text before the first mark, damaged marks and empty names");
 
+// A script an assistant added (MCP, #100) keeps its notes and who added it through a save and a read.
+const byAi = migrateLibrary({ version: 2, scripts: [{ id: "a", name: "IA", sql: "SELECT 1", folder: "IA", tags: ["ia"], notes: "Ventas por mes", addedBy: "claude-code · WSL (Ubuntu)", createdAt: 1, updatedAt: 1 }] });
+const reread = migrateLibrary(JSON.parse(JSON.stringify(serializeLibrary(byAi))));
+assert.equal(reread.scripts[0].notes, "Ventas por mes");
+assert.equal(reread.scripts[0].addedBy, "claude-code · WSL (Ubuntu)");
+
 console.log("library-check: all good");

@@ -476,6 +476,88 @@ pub fn tab_drag_end(app: AppHandle, window: WebviewWindow, windows: State<'_, Wi
     DragEnd { claim, cursor, windows: rects }
 }
 
+// ───────────── Requests of an assistant (MCP, "Controlar la aplicación") ─────────────
+
+/// The full window an assistant's request goes to: the last one with the focus, else the main one, else any.
+fn target_window(app: &AppHandle) -> Option<String> {
+    let windows = app.webview_windows();
+    let focused = app.try_state::<Windows>().map(|w| w.focused.lock().clone()).unwrap_or_default();
+    if is_full(&focused) && windows.contains_key(&focused) {
+        return Some(focused);
+    }
+    if windows.contains_key("main") {
+        return Some("main".into());
+    }
+    let mut full: Vec<String> = windows.into_keys().filter(|l| is_full(l)).collect();
+    full.sort();
+    full.into_iter().next()
+}
+
+/// What is on screen, from the layout every window reports: each full window with its tabs and which one has the
+/// focus. mcp.rs keeps from it what the assistant may see.
+pub fn app_state(app: &AppHandle) -> Value {
+    let Some(windows) = app.try_state::<Windows>() else { return json!({ "windows": [] }) };
+    let focused = target_window(app).unwrap_or_default();
+    let open = app.webview_windows();
+    let layout = windows.layout.lock();
+    let mut list: Vec<&(String, Value)> = layout.iter().filter(|(label, _)| is_full(label) && open.contains_key(label)).collect();
+    list.sort_by_key(|(label, _)| (rank(label), label.clone()));
+    let out: Vec<Value> = list
+        .into_iter()
+        .map(|(label, entry)| {
+            let name = if label == "main" {
+                "ventana principal".to_string()
+            } else {
+                format!("ventana {}", label.trim_start_matches("win-"))
+            };
+            json!({
+                "label": label,
+                "name": name,
+                "focused": *label == focused,
+                "activeTabId": entry.get("activeTabId"),
+                "tabs": entry.get("tabs").cloned().unwrap_or_else(|| json!([])),
+            })
+        })
+        .collect();
+    json!({ "windows": out })
+}
+
+/// Hands an assistant's request to a window and waits for its answer (see mcp_app.rs). A window in the background
+/// is not raised: its taskbar button flashes once it has done it.
+pub struct McpAppHandler {
+    pub app: AppHandle,
+    pub pending: Arc<crate::mcp_app::Pending>,
+}
+
+impl crate::mcp_app::Handler for McpAppHandler {
+    fn handle(&self, action: &str, args: Value, client: &str) -> Result<Value, String> {
+        if action == "state" {
+            return Ok(app_state(&self.app));
+        }
+        let label = target_window(&self.app).ok_or_else(|| "No hay ninguna ventana de Celer abierta".to_string())?;
+        let windows = self.app.try_state::<Windows>().ok_or_else(|| "Celer todavía se está abriendo".to_string())?;
+        let (id, rx) = self.pending.open();
+        windows.deliver(&self.app, &label, vec![json!({ "kind": "mcp", "id": id, "action": action, "args": args, "client": client })]);
+        let answer = rx.recv_timeout(crate::mcp_app::REQUEST_TIMEOUT - std::time::Duration::from_secs(5));
+        self.pending.close(&id);
+        let answer = answer.unwrap_or_else(|_| Err("La ventana de Celer no respondió a tiempo".into()));
+        if answer.is_ok() {
+            if let Some(window) = self.app.get_webview_window(&label) {
+                if !window.is_focused().unwrap_or(true) {
+                    let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+                }
+            }
+        }
+        answer
+    }
+}
+
+/// A window's answer to an assistant's request.
+#[tauri::command]
+pub fn mcp_app_reply(pending: State<'_, Arc<crate::mcp_app::Pending>>, id: String, ok: bool, result: Value, error: Option<String>) -> bool {
+    pending.answer(&id, if ok { Ok(result) } else { Err(error.unwrap_or_else(|| "La ventana no pudo hacerlo".into())) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::compose;

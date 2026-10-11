@@ -1,4 +1,5 @@
-import { Download, ExternalLink, Maximize2, Minus, Plus, Search, X } from "lucide-solid";
+import { Download, ExternalLink, Maximize2, Minus, Plus, Search, Sparkles, X } from "lucide-solid";
+import { aiBadgeTitle } from "../mcpApp";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { api, isTauri } from "../api";
 import { columnY, edgePath, ER, erHidden, erNeighbours, layoutEr, type ErBox, type ErTable } from "../erLayout";
@@ -190,6 +191,7 @@ export function ErDiagram() {
     <div class="er-view" role="dialog" aria-label={focusName() ? `Diagrama de ${focusName()} y sus relaciones` : `Diagrama ${er().title}`}>
       <header class="er-head">
         <b>Diagrama</b>
+        <Show when={er().aiOpenedAt}><span class="ai-badge" title={aiBadgeTitle(er())}><Sparkles size={10} /></span></Show>
         <span class="er-title" title={er().title}>{focusName() ? `${focusName()} y sus relaciones` : er().title}</span>
         <span class="muted small">
           {tables().length} {tables().length === 1 ? "tabla" : "tablas"} · {edges().length} {edges().length === 1 ? "relación" : "relaciones"}
