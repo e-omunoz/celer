@@ -2,6 +2,7 @@ import { For } from "solid-js";
 import { themeChoices } from "../../commands";
 import { applyTheme, saveSettings, state } from "../../state";
 import { ACCENTS, type ThemeName } from "../../types";
+import { GibSettings } from "../GibSettings";
 import { Field, NumberStepper } from "./controls";
 
 /** Ajustes › Apariencia: theme, accent, density, interface size, Gib and animations. */
@@ -46,13 +47,6 @@ export function AppearanceSection() {
         <Field label="Tamaño de la interfaz">
           <NumberStepper value={s().fontSize} min={11} max={18} onChange={(value) => void saveSettings({ fontSize: value })} />
         </Field>
-        <Field label="Compañero (Gib)">
-          <select value={s().companion} onChange={(event) => void saveSettings({ companion: event.currentTarget.value as "off" | "quiet" | "normal" })}>
-            <option value="normal">Normal</option>
-            <option value="quiet">Silencioso</option>
-            <option value="off">Apagado</option>
-          </select>
-        </Field>
         <Field label="Animaciones">
           <select value={s().motion} onChange={(event) => void saveSettings({ motion: event.currentTarget.value as "system" | "reduce" | "full" })}>
             <option value="system">Como el sistema</option>
@@ -61,6 +55,8 @@ export function AppearanceSection() {
           </select>
         </Field>
       </div>
+      <h4 data-setting="Gib">Gib</h4>
+      <GibSettings />
     </>
   );
 }

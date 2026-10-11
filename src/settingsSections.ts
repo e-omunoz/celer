@@ -2,6 +2,7 @@
 // «Restablecer sección» puts back. The dialog (src/components/settings/) draws each section with its own component,
 // looked up by id: a new section is one entry here and one component there.
 import { defaultSettings, type Settings } from "./types.ts";
+import { normalizeGibPrefs } from "./gib/prefs.ts";
 
 export interface SettingsSectionInfo {
   id: string;
@@ -18,8 +19,8 @@ export const SETTINGS_SECTIONS: SettingsSectionInfo[] = [
   {
     id: "appearance",
     label: "Apariencia",
-    items: ["Tema", "Color de acento", "Densidad", "Tamaño de la interfaz", "Compañero (Gib)", "Animaciones"],
-    keys: ["theme", "accent", "density", "fontSize", "companion", "motion"],
+    items: ["Tema", "Color de acento", "Densidad", "Tamaño de la interfaz", "Animaciones", "Gib", "Compañero (Gib)", "Nombre de Gib", "Accesorios de Gib", "Color de Gib"],
+    keys: ["theme", "accent", "density", "fontSize", "motion", "gib"],
   },
   {
     id: "editor",
@@ -151,7 +152,6 @@ export function exportSettings(settings: Settings, appVersion: string, now = new
 
 const ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   theme: ["system", "light", "dark", "darcula", "contrast", "contrast-light", "fjord", "sand"],
-  companion: ["off", "quiet", "normal"],
   density: ["compact", "comfortable"],
   motion: ["system", "reduce", "full"],
   connSort: ["manual", "alpha"],
@@ -231,6 +231,12 @@ export function sanitizeSettings(body: Record<string, unknown>): { patch: Partia
       (s): s is { name: string; description: string; body: string } =>
         Boolean(s) && typeof s === "object" && typeof (s as { name?: unknown }).name === "string" && typeof (s as { body?: unknown }).body === "string",
     ).map((s) => ({ name: s.name, description: typeof s.description === "string" ? s.description : "", body: s.body }));
+  }
+  // Gib's preferences made valid; a file from before them may carry the old «Compañero» setting instead.
+  if (patch.gib || "companion" in body) {
+    patch.gib = normalizeGibPrefs(patch.gib, body.companion);
+    const at = ignored.indexOf("companion");
+    if (at >= 0) ignored.splice(at, 1);
   }
   if (patch.keymap) {
     const clean: Record<string, string[]> = {};

@@ -7,7 +7,12 @@ declare module "sql.js" {
     run(sql: string): Database;
     exec(sql: string): QueryExecResult[];
     getRowsModified(): number;
+    prepare(sql: string): Statement;
     close(): void;
+  }
+  export interface Statement {
+    getColumnNames(): string[];
+    free(): boolean;
   }
   export interface SqlJsStatic {
     Database: new (data?: ArrayLike<number> | null) => Database;

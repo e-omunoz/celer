@@ -12,6 +12,8 @@ import {
   erSchemaPath,
   formatActive,
   gib,
+  gibName,
+  gibShows,
   notify,
   openActivity,
   openConnDialog,
@@ -83,6 +85,8 @@ const missing = (feature: Feature, connId: () => string | null | undefined = () 
 };
 
 export function commands(): Command[] {
+  // Gib under the name the user gave him (still found by "Gib").
+  const who = gibName() === "Gib" ? "Gib" : `${gibName()} (Gib)`;
   const list: Command[] = [
     { id: "run", label: "Ejecutar sentencia o selección", group: "Consulta", run: () => void runActive("statement"), enabled: sqlOnly },
     { id: "run-script", label: "Ejecutar script completo", group: "Consulta", run: () => void runActive("script"), enabled: sqlOnly },
@@ -146,9 +150,9 @@ export function commands(): Command[] {
     { id: "font-up", label: "Aumentar tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.min(24, state.settings.editorFontSize + 1) }) },
     { id: "font-down", label: "Reducir tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.max(10, state.settings.editorFontSize - 1) }) },
     { id: "guide", label: "Guía de inicio", group: "Ayuda", run: () => setState("onboardingOpen", true) },
-    { id: "gib-tip", label: "Gib: un consejo", group: "Ayuda", run: () => gib("tip"), enabled: () => state.settings.companion !== "off" },
-    { id: "gib-play", label: "Gib: haz algo", group: "Ayuda", run: () => gib("show-off"), enabled: () => state.settings.companion !== "off" },
-    { id: "gib-reset", label: "Gib: volver a contar los consejos desde el principio", group: "Ayuda", run: () => { resetGibTips(); notify("Gib volverá a darte sus consejos", "success", "Los que ya viste cuentan como nuevos."); } },
+    { id: "gib-tip", label: `${who}: un consejo`, group: "Ayuda", run: () => gib("tip"), enabled: () => gibShows("companion") },
+    { id: "gib-play", label: `${who}: haz algo`, group: "Ayuda", run: () => gib("show-off"), enabled: () => gibShows("companion") },
+    { id: "gib-reset", label: `${who}: volver a contar los consejos desde el principio`, group: "Ayuda", run: () => { resetGibTips(); notify(`${gibName()} volverá a darte sus consejos`, "success", "Los que ya viste cuentan como nuevos."); } },
     { id: "error-log", label: "Registro de errores", hint: "Lo que ha fallado en este equipo, sin datos ni contraseñas. No se envía a ningún sitio.", group: "Ayuda", run: () => void openErrorLog() },
     { id: "report-bug", label: "Reportar un fallo…", hint: "Prepara un issue para GitHub; ves exactamente lo que se envía antes de abrirlo.", group: "Ayuda", run: () => void openReport("bug") },
     { id: "report-idea", label: "Sugerir una mejora…", group: "Ayuda", run: () => void openReport("idea") },

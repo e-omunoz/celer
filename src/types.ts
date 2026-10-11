@@ -1,3 +1,5 @@
+import { defaultGibPrefs, type GibPrefs } from "./gib/prefs.ts";
+
 export type Cell = null | boolean | number | string;
 
 export type ColKind = "number" | "text" | "bool" | "date" | "binary" | "other";
@@ -246,8 +248,6 @@ export interface ExportOptions {
 
 export type ThemeName = "system" | "light" | "dark" | "darcula" | "contrast" | "contrast-light" | "fjord" | "sand";
 
-export type CompanionMode = "off" | "quiet" | "normal";
-
 export const ACCENTS = [
   { name: "Clay", value: "#D97757" },
   { name: "Ember", value: "#F26B1D" },
@@ -271,7 +271,6 @@ export interface Settings {
   sidebarWidth: number;
   inspectorWidth: number;
   editorRatio: number;
-  companion: CompanionMode;
   density: "compact" | "comfortable";
   zebra: boolean;
   confirmMutations: boolean;
@@ -356,6 +355,8 @@ export interface Settings {
   toastSeconds: number;
   /** Desktop notification when a query longer than this many seconds ends while Celer is in the background (0: off). */
   notifyAfter: number;
+  /** Gib: how he looks and how present he is (Settings › Apariencia › Gib; src/gib/prefs.ts). */
+  gib: GibPrefs;
 }
 
 export type KeywordCase = "upper" | "lower";
@@ -401,7 +402,6 @@ export const defaultSettings: Settings = {
   sidebarWidth: 280,
   inspectorWidth: 320,
   editorRatio: 0.45,
-  companion: "normal",
   density: "compact",
   zebra: true,
   confirmMutations: true,
@@ -445,6 +445,7 @@ export const defaultSettings: Settings = {
   historyDays: 0,
   toastSeconds: 4.5,
   notifyAfter: 0,
+  gib: defaultGibPrefs,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {

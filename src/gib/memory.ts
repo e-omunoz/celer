@@ -6,6 +6,10 @@ interface Memory {
   seen: string[];
   /** How many times each piece of advice was given. */
   advice: Record<string, number>;
+  /** The day of the last query ("2026-10-09"), for "first query of the day". */
+  lastQueryDay: string;
+  /** Reactions said once a day / night (reactions.ts, `once`), newest last. */
+  said: string[];
 }
 export const memory: Memory = loadMemory();
 /** Advice given in this session (warnings are not repeated within a session). */
@@ -13,15 +17,17 @@ export const sessionAdvice = new Set<string>();
 
 function loadMemory(): Memory {
   try {
-    const raw = JSON.parse(localStorage.getItem(MEMORY_KEY) ?? "null") as { seen?: unknown; advice?: unknown } | null;
+    const raw = JSON.parse(localStorage.getItem(MEMORY_KEY) ?? "null") as { seen?: unknown; advice?: unknown; lastQueryDay?: unknown; said?: unknown } | null;
     const seen = raw?.seen;
     const advice = raw?.advice;
     return {
       seen: Array.isArray(seen) ? seen.filter((id): id is string => typeof id === "string") : [],
       advice: advice && typeof advice === "object" && !Array.isArray(advice) ? { ...(advice as Record<string, number>) } : {},
+      lastQueryDay: typeof raw?.lastQueryDay === "string" ? raw.lastQueryDay : "",
+      said: Array.isArray(raw?.said) ? raw.said.filter((id): id is string => typeof id === "string").slice(-40) : [],
     };
   } catch {
-    return { seen: [], advice: {} };
+    return { seen: [], advice: {}, lastQueryDay: "", said: [] };
   }
 }
 
@@ -33,6 +39,8 @@ if (typeof window !== "undefined") {
     const fresh = loadMemory();
     memory.seen = fresh.seen;
     memory.advice = fresh.advice;
+    memory.lastQueryDay = fresh.lastQueryDay;
+    memory.said = fresh.said;
   });
 }
 
