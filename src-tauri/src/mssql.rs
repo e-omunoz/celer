@@ -34,7 +34,7 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::*;
-use crate::session::{first_keyword, Canceller, Driver, Progress};
+use crate::session::{first_keyword, Canceller, Driver, FkColumn, Progress};
 
 type Cli = Client<Compat<TcpStream>>;
 
@@ -54,6 +54,19 @@ enum Item {
     Row(Vec<Cell>),
     Count(i64),
     Error(String),
+    /// A message of the server that is not an error: PRINT, RAISERROR with severity 10 or less, warnings.
+    Info(String),
+}
+
+/// The server's informational message as the Output area shows it: PRINT as it is, the others with their number
+/// (like SSMS). "Changed database context / language setting" (5701, 5703) are left out: they only echo a USE or a
+/// SET LANGUAGE.
+fn info_text(m: &tiberius::ServerMessage) -> Option<String> {
+    match m.number {
+        5701 | 5703 => None,
+        0 => Some(m.message.clone()),
+        n => Some(format!("Msg {n}, nivel {}: {}", m.class, m.message)),
+    }
 }
 
 struct Cursor {
@@ -557,6 +570,8 @@ pub struct MssqlDriver {
     notes: Vec<String>,
     /// Lo que se supo después en segundo plano (cómo se cortó la conexión que se dejó): sale en la sentencia siguiente.
     late: Arc<Mutex<Vec<String>>>,
+    /// The batch being read sent an error (its messages may be PRINT output only).
+    errored: bool,
     /// La conexión de reserva de la sesión, abriéndose o abierta, para seguir al momento si se deja un resultado.
     reserve: Option<oneshot::Receiver<Option<Idle>>>,
     /// Mientras se lee el resto de un resultado para conservar la sesión, para `progress`.
@@ -591,6 +606,7 @@ impl MssqlDriver {
             info: String::new(),
             notes: Vec::new(),
             late: Arc::new(Mutex::new(Vec::new())),
+            errored: false,
             reserve: None,
             drain: Arc::new(Mutex::new(None)),
             batches: VecDeque::new(),
@@ -860,7 +876,11 @@ impl MssqlDriver {
                     }
                     results.push(ResultSet::count(n));
                 }
-                Some(Item::Error(m)) => messages.push(m),
+                Some(Item::Error(m)) => {
+                    self.errored = true;
+                    messages.push(m);
+                }
+                Some(Item::Info(m)) => messages.push(m),
                 None => {
                     if let Some(rs) = current.take() {
                         results.push(rs);
@@ -1235,6 +1255,23 @@ impl MssqlDriver {
         }
         Ok(build_table_ddl(self.engine, &self.qualified_name(o), &parts))
     }
+}
+
+/// Every foreign key of the tables of schema `schema` (a literal) in database `db` (bracketed), one row per column
+/// pair in key order: key id, name, table, column, referenced schema, table and column.
+fn schema_fks_sql(db: &str, schema: &str) -> String {
+    format!(
+        "SELECT fk.object_id, fk.name, t.name, pc.name, rs.name, rt.name, rc.name \
+         FROM {db}.sys.foreign_keys fk \
+         JOIN {db}.sys.tables t ON t.object_id = fk.parent_object_id \
+         JOIN {db}.sys.schemas s ON s.schema_id = t.schema_id \
+         JOIN {db}.sys.foreign_key_columns k ON k.constraint_object_id = fk.object_id \
+         JOIN {db}.sys.columns pc ON pc.object_id = k.parent_object_id AND pc.column_id = k.parent_column_id \
+         JOIN {db}.sys.objects rt ON rt.object_id = fk.referenced_object_id \
+         JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id \
+         JOIN {db}.sys.columns rc ON rc.object_id = k.referenced_object_id AND rc.column_id = k.referenced_column_id \
+         WHERE s.name = {schema} ORDER BY t.name, fk.name, fk.object_id, k.constraint_column_id"
+    )
 }
 
 /// Junta en listas "a, b, c" las columnas que llegan como filas (grupo, columna) ya ordenadas. Sustituye a
@@ -1614,6 +1651,9 @@ async fn stream_query(
     if dml {
         return match client.execute(sql, &[]).await {
             Ok(r) => {
+                for m in r.messages().iter().filter_map(info_text) {
+                    let _ = tx.send(Item::Info(m)).await;
+                }
                 let _ = tx.send(Item::Count(r.total() as i64)).await;
                 Outcome::Ok(None)
             }
@@ -1650,6 +1690,10 @@ async fn stream_query(
                 tx.send(Item::Meta(cols)).await.is_ok()
             }
             Ok(Some(QueryItem::Row(r))) => tx.send(Item::Row(row_to_cells(r))).await.is_ok(),
+            Ok(Some(QueryItem::Info(m))) => match info_text(&m) {
+                Some(text) => tx.send(Item::Info(text)).await.is_ok(),
+                None => true,
+            },
             Ok(None) => return Outcome::Ok(None),
             Err(e) => {
                 let fatal = is_fatal(&e);
@@ -1979,8 +2023,10 @@ impl MssqlDriver {
         }
         let first_ms = sent.elapsed().as_millis();
         let mut out = ExecOutput::default();
+        self.errored = false;
         out.results = self.pump(fetch.max(1), &mut out.messages);
-        if out.results.is_empty() && !out.messages.is_empty() && self.cursor.is_none() {
+        // Only errors make the batch fail: PRINT and other messages alone are its output.
+        if out.results.is_empty() && self.errored && self.cursor.is_none() {
             let msg = out.messages.join("\n");
             self.refresh_tx_state();
             bail!(msg);
@@ -2046,11 +2092,12 @@ impl MssqlDriver {
                     self.close_cursor()?;
                     bail!(m);
                 }
+                // PRINT while the rows are read (between two results, or from a procedure): told with this page.
+                Some(Item::Info(m)) => out.messages.push(m),
                 Some(other) => {
                     // Empieza otro resultado del mismo lote.
                     self.peek_back(other);
-                    let mut msgs = Vec::new();
-                    out.extra = self.pump(n, &mut msgs);
+                    out.extra = self.pump(n, &mut out.messages);
                     return Ok(out);
                 }
                 None => {
@@ -2461,6 +2508,26 @@ impl Driver for MssqlDriver {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// One catalog query: sys.foreign_keys with their columns (sys.foreign_key_columns) of the schema's tables, one
+    /// row per column pair in key order. Synapse dedicated has no foreign keys (nor the folder for them); Fabric
+    /// Warehouse's (NOT ENFORCED) are in the same views.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        self.synapse_enter(db)?;
+        if !self.has_table_folder("fks") {
+            return Ok(vec![]);
+        }
+        let rows = self.query_rows(&schema_fks_sql(&qi(db), &ql(schema)))?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| FkColumn {
+            key: cell_i64(&r[0]).to_string(),
+            name: cell_str(&r[1]),
+            table: ObjectRef::new(db, schema, &cell_str(&r[2]), "table"),
+            column: cell_str(&r[3]),
+            target: ObjectRef::new(db, &cell_str(&r[4]), &cell_str(&r[5]), "table"),
+            target_column: cell_str(&r[6]),
+        })))
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {

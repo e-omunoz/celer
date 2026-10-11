@@ -56,6 +56,7 @@ engine_env() {
   export CELER_IBM_LIB="$D/clidriver/lib/libdb2.so" LD_LIBRARY_PATH="$D/clidriver/lib:$D/compat"
   # Generic ODBC: PostgreSQL through unixODBC and psqlODBC (setup.sh installs odbc-postgresql).
   if odbcinst -q -d 2>/dev/null | grep -q 'PostgreSQL Unicode'; then
+    export CELER_ODBC_LIB=/usr/lib/x86_64-linux-gnu/libodbc.so.2
     export CELER_ODBC_TEST="Driver={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer;"
   fi
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"

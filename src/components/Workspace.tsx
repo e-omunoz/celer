@@ -116,6 +116,7 @@ import { engineOf, type Cell } from "../types";
 import { api, isTauri } from "../api";
 import { CodeView, SqlEditor } from "./Editor";
 import { TabLink } from "./LinkDot";
+import { RECONNECTING_TEXT, markTab, tabLink } from "../connStatus";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
@@ -397,19 +398,30 @@ function SqlPane(props: { tab: SqlTab }) {
     });
   });
   // What the session does besides the statement (SQL Server reading the rest of the previous result to keep a
-  // transaction or #temp tables): asked every half second while it runs.
+  // transaction or #temp tables; any engine opening a new connection after a cut): asked every half second while it
+  // runs. While it reconnects the tab's dot says so too; the run's answer then says how it went.
   const [progress, setProgress] = createSignal<string | null>(null);
   createEffect(() => {
     const sessionId = props.tab.running ? props.tab.sessionId : null;
+    const tabId = props.tab.id;
     setProgress(null);
     if (!sessionId) return;
     const timer = window.setInterval(() => {
       void api()
         .sessionProgress(sessionId)
-        .then((text) => setProgress(props.tab.running ? text : null))
+        .then((text) => {
+          const running = props.tab.running;
+          setProgress(running ? text : null);
+          if (running && text === RECONNECTING_TEXT && tabLink(props.tab).link !== "reconnecting") markTab(tabId, "reconnecting", { note: "" });
+        })
         .catch(() => setProgress(null));
     }, 500);
-    onCleanup(() => window.clearInterval(timer));
+    onCleanup(() => {
+      window.clearInterval(timer);
+      // Ended without a word on the connection (an error of the statement itself): it is up again.
+      const tab = state.tabs.find((t) => t.id === tabId);
+      if (tab && tabLink(tab).link === "reconnecting") markTab(tabId, "on");
+    });
   });
 
   function resize(event: MouseEvent) {

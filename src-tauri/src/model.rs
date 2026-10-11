@@ -135,6 +135,8 @@ pub struct FetchOutput {
     #[serde(rename = "hasMore")]
     pub has_more: bool,
     pub extra: Vec<ResultSet>,
+    /// Messages of the server that came with these rows (SQL Server: PRINT between two results).
+    pub messages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -185,6 +187,10 @@ pub struct ConnConfig {
     /// Sentencias que se ejecutan en cada sesión nueva nada más conectar (SET search_path…, SET LOCK_TIMEOUT…).
     #[serde(default)]
     pub startup_sql: String,
+    /// Keepalive (#97): the server ends sessions idle for this many minutes; Celer checks idle sessions a bit before
+    /// (src/connWatch.ts → `keep_alive_session`). 0: off.
+    #[serde(default)]
+    pub keepalive_min: u32,
     /// SSH tunnel to reach the server through a bastion (src/ssh.rs). Left out of the file while it is unused.
     #[serde(default, skip_serializing_if = "SshConfig::is_unset")]
     pub ssh: SshConfig,
@@ -287,6 +293,7 @@ impl Default for ConnConfig {
             folder: String::new(),
             file_path: String::new(),
             startup_sql: String::new(),
+            keepalive_min: 0,
             ssh: SshConfig::default(),
         }
     }
@@ -440,6 +447,19 @@ pub struct ObjectRef {
     pub name: String,
     /// table | view | procedure | function | ...
     pub kind: String,
+}
+
+/// A foreign key of a schema, as `Driver::schema_foreign_keys` reads them all at once (the E-R diagram): the table
+/// that has it and its columns, and the table and columns it references, in key order. Names are as the catalog
+/// has them (unquoted).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaForeignKey {
+    pub name: String,
+    pub table: ObjectRef,
+    pub columns: Vec<String>,
+    pub target: ObjectRef,
+    pub target_columns: Vec<String>,
 }
 
 /// Información para autocompletado: tablas y sus columnas.

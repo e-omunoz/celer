@@ -25,6 +25,28 @@ All notable changes to Celer are documented here. The format follows
   without passwords), and saves the secrets to the OS credential store, never to connections.json. v1 files import as
   before.
 
+- **«Mantener viva la conexión»** (advanced options of a connection, off by default): the minutes after which the
+  server ends idle sessions; Celer checks idle sessions a bit before (80 %), so they are not cut (#97).
+
+### Changed
+- **The E-R diagram reads a schema's foreign keys in one catalog query** (#98) instead of asking table by table: the
+  diagram of one table no longer shows «Buscando las relaciones de … n/1557» on large schemas. On a 1,500-table
+  Informix schema it opens in about 0.1 s over JDBC and DRDA (about 6 s before on a local server, much more over a
+  slow link); the whole-schema diagram reads its keys the same way. Every engine has its own query (PostgreSQL,
+  MySQL/MariaDB, SQL Server, Informix, SQLite; `SQLForeignKeys` on generic ODBC), and the engine tests check it gives
+  exactly the keys read table by table.
+- **E-R diagram of a table on a generic ODBC connection**: it opens on the source's tables (it could not find a
+  table folder before), and the explorer shows each table's foreign keys under «Claves foráneas».
+- SQLite: a key declared as `REFERENCES t` without columns shows t's primary-key columns instead of nothing.
+- **Recovering from a connection the server or a firewall dropped while idle takes about 1.5 s, not 10-12 s** (#97):
+  a session idle for a minute is checked before use with a bounded round trip; if the connection does not answer in
+  1.5 s and the session has nothing to lose, Celer opens another one at once instead of waiting for the system's TCP
+  timeout (with a transaction, temporary tables or `SET` it still waits and says what was lost). Idle sessions are
+  also checked when Celer's window gets focus. While the new connection opens, the tab's dot pulses amber and the
+  running timer says «Reconectando…». Informix over JDBC logs in with `LOGINTIMEOUT` (8 s unless set). Measured on
+  every engine (`*_silent_cut` and `*_kill_and_requery` engine tests); generic ODBC sources are checked with a
+  catalog call now (before, a cut was only noticed by its error).
+
 ### Fixed
 - MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
 - Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
@@ -35,6 +57,11 @@ All notable changes to Celer are documented here. The format follows
   come through. An empty host or database in the tool no longer hides the one in the URL, DBeaver's driver properties
   and SSL settings apply to every engine (not only Informix), `jdbc:odbc:<DSN>` becomes an ODBC connection, and the list
   says what was left out. dbvis.xml is read by Celer's own XML reader.
+- **SQL Server `PRINT` and low-severity `RAISERROR` messages are shown** (#67): `PRINT 'hola'; SELECT 1` shows «hola»
+  in the Output area next to the result, as SSMS does, and so do `RAISERROR('…', 0, 1) WITH NOWAIT` from a procedure,
+  a trigger's `PRINT` after an `INSERT`, and a message sent after a result read in pages. Severity 11 and up still
+  fails the batch as before. Celer now builds with a patched copy of `tiberius` that hands those messages over
+  (`src-tauri/vendor/tiberius/PATCHES.md`).
 
 ## [2.2.0] - 2026-10-09
 

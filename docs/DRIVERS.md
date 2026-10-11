@@ -100,13 +100,42 @@ Each driver declares what it supports so the UI only shows what works:
 | Informix Client SDK, other ODBC drivers | Installed by the user | Vendor licences |
 | SQLite, DuckDB | Bundled (compiled in) | Public domain / MIT |
 
+## A schema's foreign keys in one query
+
+The E-R diagram reads every foreign key of a schema at once (`Driver::schema_foreign_keys`, command
+`schema_foreign_keys`): constraint, table and columns, referenced table and columns, in key order, names unquoted.
+One catalog query per engine, limited to the tables of the explorer's Tablas folder:
+
+| Engine | Catalog |
+|---|---|
+| PostgreSQL | `pg_constraint` (`contype = 'f'`) with `unnest(conkey, confkey) WITH ORDINALITY`; no partitions |
+| MySQL / MariaDB | `information_schema.KEY_COLUMN_USAGE` (base and system-versioned tables) |
+| SQL Server, Fabric Warehouse | `sys.foreign_keys` + `sys.foreign_key_columns`; Synapse dedicated has none (no folder either) |
+| Informix (DRDA and JDBC) | `sysconstraints` + `sysreferences` + `sysindexes` + `syscolumns`, both sides in one `UNION ALL`, columns ordered by the index parts |
+| SQLite | `pragma_foreign_key_list` joined to `sqlite_schema`; `REFERENCES t` without columns resolved to t's primary key |
+| Generic ODBC | `SQLForeignKeys` with no table where the driver allows it, otherwise table by table (the explorer gets a Claves foráneas folder) |
+
+`session::per_table_foreign_keys` reads the same through each table's "fks" folder (what the diagram did before,
+and the default for a driver without its own query); the engine tests compare both on every engine and run the join
+of each key's tables (`dev/engine-sql.ts`). On a 1,500-table Informix schema the diagram of one table goes from about
+6 s locally (one call per table, far more over a slow link) to about 0.1 s (`informix_large_schema_fks`).
+
+## SQL Server: the patched `tiberius`
+
+Celer builds against its own copy of `tiberius` 0.13.0 in `src-tauri/vendor/tiberius` (MIT / Apache-2.0, licences
+kept), wired in with `[patch.crates-io]` in `src-tauri/Cargo.toml`. Upstream reads the TDS `INFO` tokens and only
+logs them; the patch hands them to the caller as `QueryItem::Info` on the query stream and as
+`ExecuteResult::messages()` (#67). So `PRINT`, `RAISERROR` with severity 10 or less (`WITH NOWAIT` too) and server
+warnings appear in the Output area, in order, as in SSMS: `PRINT` text as it is, the rest as `Msg n, nivel c: …`.
+"Changed database context" and "Changed language setting" (5701, 5703) are left out: they only echo a `USE` or a
+`SET LANGUAGE`. A message that arrives while the rows of a result are read in pages comes with that page
+(`FetchOutput.messages`). Errors (severity 11 and up) still fail the batch with their `Msg` number. What changed and
+how to move to a newer `tiberius` is in `vendor/tiberius/PATCHES.md`; the engine test `mssql_engine` checks it.
+
 ## SQL Server: known limits
 
-- `PRINT` and `RAISERROR` messages of severity 10 or less are not shown: `tiberius` reads the TDS `INFO` tokens
-  that carry them but does not hand them to the caller. Errors (severity 11 and up) are shown with their `Msg` number.
-  Showing them needs a patched `tiberius` that exposes `INFO` tokens on the query stream (#67).
-- For the same reason a batch of several statements run as a query reports no row counts; a batch of a single
-  `INSERT`/`UPDATE`/`DELETE`/`MERGE` reports its count.
+- A batch of several statements run as a query reports no row counts (`tiberius` keeps the TDS `DONE` tokens to
+  itself); a batch of a single `INSERT`/`UPDATE`/`DELETE`/`MERGE` reports its count.
 - `money` is shown exact with its 4 decimals up to ±450,359,962,737 (2^52 ten-thousandths): `tiberius` decodes it
   to an `f64`, from which Celer takes the integer back. Beyond that the last digit may already be rounded (#68).
 - Scripts are split on `GO` lines (`GO n` repeats a batch), as SSMS and sqlcmd do; other sqlcmd commands (`:r`,
@@ -133,6 +162,21 @@ There is no connection string keyword for it, only `enableACR` in the `<acr>` se
 that database to its own `drivers/db2dsdriver.cfg` in its data folder (no passwords; `enableACR` false) and points
 `DB2DSDRIVER_CFG_PATH` to it (`drivers.rs`, `cli_acr_off`). A `db2dsdriver.cfg` of the user's (that variable already
 set, or the file in the driver's `cfg/` folder) is left as it is and wins. SQLI (Client SDK) and JDBC are not affected.
+
+**After the server drops an idle connection (#97).** Measured with the engine tests (`informix_recovery_measured`,
+Informix 15 in Docker): when the server ends the session and its close reaches Celer (`onmode -z`), the dead socket
+fails at once (DRDA 0.5 ms, JDBC 5 ms), a new login takes 14 ms (DRDA) / 18 ms (JDBC), and the guard's check, new
+connection and replay of the database and transaction mode bring the next query back in 15-20 ms. The 10-12 s seen
+come from a connection cut without a word (a firewall or NAT, or a server whose close never arrives): the first
+round trip gets no answer and no error until the operating system gives up on the socket (about 10-20 s on Windows,
+minutes on Linux). So `guard.rs` checks a session idle for a minute with a bounded round trip: without state to lose
+it waits at most 1.5 s, then leaves that connection on its own thread and opens another, so the query answers in
+about 1.5 s plus a login (`*_silent_cut` tests, every engine, through a proxy that goes quiet: 1.51-1.60 s). With a
+transaction, temporary tables or `SET` of its own the real answer is waited for (reconnecting would lose them).
+JDBC logins time out after `LOGINTIMEOUT` (8 s unless set in Parámetros extra); `IFX_SOC_TIMEOUT` is not set, as it
+would bound every read of the socket and cut long queries too. «Mantener viva» in a connection's advanced options
+(off by default) takes the minutes after which the server ends idle sessions, and Celer checks idle sessions at 80 %
+of that, so they are never cut.
 
 ### The JDBC bridge
 

@@ -154,8 +154,14 @@ contraseñas guardadas.
 Una conexión puede caerse con el equipo suspendido, un corte de VPN o un servidor que cierra las sesiones paradas.
 Celer lo detecta y vuelve a conectar solo:
 
-- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse; además, el sistema
-  mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con keepalive de TCP.
+- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse (y también al volver a
+  la ventana de Celer); además, el sistema mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con
+  keepalive de TCP. Si la conexión no contesta en segundo y medio (un cortafuegos o un servidor que la cortó sin
+  avisar), Celer no espera más: abre otra y la consulta sigue, salvo que la sesión tenga algo que perder.
+- **Mantener viva la conexión** (*Opciones avanzadas* del formulario): si el servidor corta las sesiones paradas
+  (Informix con un tiempo de inactividad, un cortafuegos), pon a los cuántos minutos lo hace y Celer comprobará las
+  sesiones paradas un poco antes, para que no lleguen a cortarse. Desactivado (0) por defecto.
+- Mientras abre la conexión nueva, la pestaña lo dice («Ejecutando… · Reconectando…») y su punto late en ámbar.
 - Al volver de una suspensión o de un corte de red, Celer comprueba todas las sesiones abiertas.
 - Si se cortó y no había nada que perder, la consulta sigue en la conexión nueva y la salida lo dice («Conexión
   recuperada…»). Una sentencia que modifica datos no se repite nunca, porque no se sabe si llegó a ejecutarse: Celer
@@ -194,6 +200,8 @@ en una tabla o una exportación en curso, lo pregunta antes.
   (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R).
 - **Ficheros**: Ctrl+O abre un `.sql`, Ctrl+S lo guarda en su sitio con la misma codificación y saltos de línea, y
   Ctrl+Mayús+S guarda como.
+- **Mensajes del servidor** en la pestaña *Salida*: los `NOTICE` de PostgreSQL, los avisos de MySQL y, en SQL Server,
+  `PRINT` y `RAISERROR` de gravedad 10 o menor (también `WITH NOWAIT` desde un procedimiento), en orden, como en SSMS.
 
 ### Resultados
 
@@ -250,7 +258,9 @@ UPSERT/MERGE, DELETE, DROP y su DDL.
   a ella). *Ampliar un nivel* añade las relacionadas con todas las que se ven; el **+N** de una tabla añade solo las
   suyas; el botón de mira que aparece al pasar el ratón por una tabla centra el diagrama en ella (también en el de un
   esquema entero), y *Todo el esquema* vuelve a verlas todas. Para saber qué tablas apuntan a la tuya, Celer lee las
-  claves de todas las del esquema (sin sus columnas), así que en esquemas muy grandes tarda un poco.
+  claves foráneas de todo el esquema en una sola consulta al catálogo, y las columnas solo de las tablas que se ven:
+  también en esquemas de miles de tablas se abre al momento. En una conexión ODBC genérica el diagrama abarca todas
+  las tablas de la fuente (su carpeta *Tablas*), y sus claves salen de `SQLForeignKeys`.
 - **Comparar esquemas**: en el menú de un esquema, *Marcar para comparar*; después, en el de otro (de la misma
   conexión o de otra), *Comparar con…*. Verás las tablas que solo están en un lado y las columnas con otro tipo o
   nulabilidad. *Script para igualar el destino* abre en una consola del destino el SQL que lo dejaría como el origen,

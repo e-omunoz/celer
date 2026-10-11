@@ -41,7 +41,12 @@ database connection. The UI sends jobs (closures) through a channel and awaits t
   round trip (`Driver::ping`) before use; a dropped connection is replaced by a new one in the same database and
   transaction mode, and the operation goes on if nothing was lost (reads run again, writes never). With a transaction,
   temporary tables or `SET` of its own, the session says so (`SESSION_LOST:`) instead of reconnecting in silence.
-  Transient connect failures are retried with a wait.
+  Transient connect failures are retried with a wait. Without state to lose, that check waits at most `PING_LIMIT`
+  (1.5 s): a connection cut without a word (a firewall, a server's idle timeout whose close never arrives) does not
+  answer, and the check gives it up on its own thread instead of waiting for the system's TCP timeout. While the new
+  connection opens, the session's `progress` says «Reconectando…». Connections with «Mantener viva» get the same
+  check from `src/connWatch.ts` (`keep_alive_session`) before their server's idle limit; idle sessions are also
+  checked when the window gets focus.
 - The connection of a session that closes without state of its own stays free for a few minutes for the next session
   with the same settings (`guard.rs` for every engine; SQL Server keeps its own pool of raw connections in `mssql.rs`).
 

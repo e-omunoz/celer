@@ -26,6 +26,8 @@ export interface FetchOutput {
   rows: Cell[][];
   hasMore: boolean;
   extra: ResultSet[];
+  /** Server messages that came with these rows (SQL Server: PRINT between two results). */
+  messages?: string[];
 }
 
 export type DbKind = "postgres" | "mysql" | "mssql" | "sqlite" | "informix" | "odbc";
@@ -68,6 +70,8 @@ export interface ConnConfig {
   filePath: string;
   /** Statements run on every new session right after connecting (SET search_path…, SET LOCK_TIMEOUT…). */
   startupSql?: string;
+  /** Keepalive: the server ends sessions idle this many minutes, and Celer checks idle ones a bit before (0: off). */
+  keepaliveMin?: number;
   /** SSH tunnel to the server (network engines only). Absent: none. */
   ssh?: SshConfig;
 }
@@ -123,6 +127,15 @@ export interface ObjectRef {
   schema: string;
   name: string;
   kind: string;
+}
+
+/** A foreign key of a schema, read with all the others in one catalog query (E-R diagram). Names unquoted. */
+export interface SchemaForeignKey {
+  name: string;
+  table: ObjectRef;
+  columns: string[];
+  target: ObjectRef;
+  targetColumns: string[];
 }
 
 export interface TableColumn {

@@ -325,6 +325,43 @@ fn mssql_engine() {
     let err = d.execute("SELECT nope FROM dbo.celer_t", 10).unwrap_err().to_string();
     assert!(err.contains("Msg 207"), "{err}");
 
+    // PRINT and RAISERROR below severity 11 reach the Output area (the patched tiberius, #67); 11 and above fail.
+    let out = d.execute("PRINT 'hola'; SELECT 1 AS uno", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m == "hola"), "{:?}", out.messages);
+    assert_eq!(out.results.len(), 1);
+    assert_eq!(txt(&out.results[0].rows[0][0]), "1");
+    let out = d.execute("PRINT 'solo un mensaje'", 10).unwrap();
+    assert!(out.results.is_empty() && out.messages.iter().any(|m| m == "solo un mensaje"), "{:?}", out.messages);
+    d.execute("CREATE OR ALTER PROCEDURE dbo.celer_progreso AS BEGIN RAISERROR('progreso', 0, 1) WITH NOWAIT; SELECT 2 AS dos; PRINT 'fin del procedimiento'; END", 10).unwrap();
+    let out = d.execute("EXEC dbo.celer_progreso", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m == "Msg 50000, nivel 0: progreso"), "{:?}", out.messages);
+    assert!(out.messages.iter().any(|m| m == "fin del procedimiento"), "{:?}", out.messages);
+    assert_eq!(txt(&out.results[0].rows[0][0]), "2");
+    let err = d.execute("RAISERROR('fallo', 16, 1)", 10).unwrap_err().to_string();
+    assert!(err.contains("fallo") && err.contains("Msg 50000"), "{err}");
+    // USE's "Changed database context" is left out: it only echoes the USE.
+    let out = d.execute("USE celer_test; SELECT MAX(alta) FROM dbo.celer_t", 10).unwrap();
+    assert!(!out.messages.iter().any(|m| m.contains("5701") || m.contains("database context")), "{:?}", out.messages);
+    // A single INSERT goes as DML (a row count): a trigger's PRINT is still told.
+    d.execute("IF OBJECT_ID('dbo.celer_msg') IS NOT NULL DROP TABLE dbo.celer_msg; CREATE TABLE dbo.celer_msg (a int)", 10).unwrap();
+    d.execute("CREATE TRIGGER dbo.celer_msg_ins ON dbo.celer_msg AFTER INSERT AS PRINT 'fila insertada'", 10).unwrap();
+    let out = d.execute("INSERT INTO dbo.celer_msg VALUES (1)", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m == "fila insertada"), "{:?}", out.messages);
+    assert_eq!(out.results[0].rows_affected, Some(1));
+    // A PRINT after a result read in pages comes with the page that reaches it.
+    let out = d.execute("SELECT TOP 50 a.object_id FROM sys.all_objects a; PRINT 'tras el resultado'", 10).unwrap();
+    assert!(out.results[0].has_more);
+    let mut later = Vec::new();
+    loop {
+        let f = d.fetch(10).unwrap();
+        later.extend(f.messages);
+        if !f.has_more {
+            break;
+        }
+    }
+    assert!(later.iter().any(|m| m == "tras el resultado"), "{later:?}");
+    d.execute("DROP TABLE dbo.celer_msg; DROP PROCEDURE dbo.celer_progreso", 10).unwrap();
+
     // Dates: what the grid shows must be accepted back as it is (datetime is .003 precision).
     d.execute("IF OBJECT_ID('dbo.dt') IS NOT NULL DROP TABLE dbo.dt; CREATE TABLE dbo.dt (id int PRIMARY KEY, a datetime, b datetime2(7), c time(7), e smalldatetime, f datetimeoffset(7), g date);
                INSERT INTO dbo.dt VALUES (1, '2024-03-15 10:20:30.003', '2024-03-15 10:20:30.1234567', '08:30:00.5', '2024-03-15 10:20', '2024-03-15 10:20:30.25 +02:00', '2024-03-15'),
@@ -760,6 +797,8 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     assert!(columns[0].primary_key, "{columns:?}");
     assert!(d.ddl(&obj).unwrap().to_uppercase().contains("CREATE TABLE"));
     assert!(d.completion("celer").unwrap().tables.iter().any(|t| t.name == "celer_t"));
+    // Every key of the database at once (the E-R diagram), as the explorer gives them table by table.
+    informix_schema_fks(via, d);
     // Keys in the DDL: the primary key in its own order, UNIQUE and FOREIGN KEY constraints.
     d.execute("DROP TABLE IF EXISTS ddl_c; DROP TABLE IF EXISTS ddl_p; CREATE TABLE ddl_p (a INT, b INT, PRIMARY KEY (b, a));
                CREATE TABLE ddl_c (id INT PRIMARY KEY, code CHAR(5) UNIQUE, pb INT, pa INT, FOREIGN KEY (pb, pa) REFERENCES ddl_p ON DELETE CASCADE)", 10).unwrap();
@@ -1516,4 +1555,643 @@ fn ssh_tunnel_auth_jumps_and_refusals() {
     eprintln!("SSH ✔ clave cambiada rechazada: {e}");
     let _ = std::fs::remove_dir_all(&changed.dir);
     let _ = std::fs::remove_dir_all(&store.dir);
+// ───────────────────────────────────────────────────────────────── a schema's foreign keys at once (#98)
+
+use crate::model::SchemaForeignKey;
+
+/// A foreign key as a comparable tuple: the two tables (database, schema, name), its name and both column lists.
+type FkTuple = ([String; 3], String, Vec<String>, [String; 3], Vec<String>);
+
+fn fk_tuples(keys: &[SchemaForeignKey]) -> Vec<FkTuple> {
+    let obj = |o: &ObjectRef| [o.database.clone(), o.schema.clone(), o.name.clone()];
+    let mut out: Vec<FkTuple> = keys.iter().map(|k| (obj(&k.table), k.name.clone(), k.columns.clone(), obj(&k.target), k.target_columns.clone())).collect();
+    out.sort();
+    out
+}
+
+/// The schema's foreign keys read in one catalog query are exactly the ones the explorer gives table by table (its
+/// "fks" folder of each table: what the E-R diagram read before), and the SQL joining each key's tables column pair
+/// by column pair, written for the dialect by dev/engine-sql.ts, finds every row that has the key set.
+fn assert_schema_fks(d: &mut dyn Driver, kind: &str, path: &[&str]) -> Vec<SchemaForeignKey> {
+    let path: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+    let t0 = Instant::now();
+    let one = d.schema_foreign_keys(&path).unwrap_or_else(|e| panic!("{kind} {path:?}: {e}"));
+    let one_ms = t0.elapsed().as_millis();
+    let t1 = Instant::now();
+    let each = crate::session::per_table_foreign_keys(d, &path).unwrap();
+    println!("{kind} {path:?}: {} claves en una consulta ({one_ms} ms); tabla a tabla, {} ms", one.len(), t1.elapsed().as_millis());
+    assert_eq!(fk_tuples(&one), fk_tuples(&each), "{kind} {path:?}: una consulta frente a tabla a tabla");
+    // The joins the diagram's edges stand for, as the dialect writes them.
+    let shape: Vec<serde_json::Value> = one
+        .iter()
+        .map(|k| {
+            let (columns, target_columns): (Vec<String>, Vec<String>) = (k.columns.iter().map(|c| d.quote_ident(c)).collect(), k.target_columns.iter().map(|c| d.quote_ident(c)).collect());
+            let (qualified, target) = (d.qualified_name(&k.table), d.qualified_name(&k.target));
+            let set = columns.iter().map(|c| format!("{c} IS NOT NULL")).collect::<Vec<_>>().join(" AND ");
+            let rows: usize = scalar(d, &format!("SELECT COUNT(*) FROM {qualified} WHERE {set}")).trim().parse().unwrap();
+            json!({ "name": k.name, "qualified": qualified, "columns": columns, "targetQualified": target, "targetColumns": target_columns, "rows": rows })
+        })
+        .collect();
+    run_generated(d, &generated(json!({ "kind": kind, "fks": shape })));
+    one
+}
+
+/// The keys of the fixture every engine gets: a composite key whose order is not the table's column order, a key to
+/// the table itself and one to a table of another schema (or database).
+fn assert_fixture_keys(keys: &[SchemaForeignKey], hijo: &str, other: &str) {
+    let find = |table: &str, cols: &[&str]| keys.iter().find(|k| k.table.name.eq_ignore_ascii_case(table) && k.columns.iter().map(|c| c.to_lowercase()).eq(cols.iter().map(|c| c.to_string())));
+    let composite = find(hijo, &["x", "y"]).unwrap_or_else(|| panic!("clave compuesta de {hijo}: {keys:#?}"));
+    assert_eq!(composite.target_columns.iter().map(|c| c.to_lowercase()).collect::<Vec<_>>(), ["b", "a"], "en el orden de la clave");
+    assert!(composite.target.name.to_lowercase().ends_with("padre"));
+    let own = find(hijo, &["jefe"]).expect("clave a la propia tabla");
+    assert_eq!(own.target.name, own.table.name);
+    let outside = keys.iter().find(|k| k.target.name.eq_ignore_ascii_case(other)).unwrap_or_else(|| panic!("clave a {other}: {keys:#?}"));
+    assert_ne!((&outside.target.database, &outside.target.schema), (&outside.table.database, &outside.table.schema), "{outside:?}");
+}
+
+fn pg_cfg() -> Option<ConnConfig> {
+    let s = spec("CELER_PG_TEST")?;
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Postgres;
+    cfg.encryption = "off".into();
+    cfg.host = get(&s, "host");
+    cfg.port = get(&s, "port").parse().ok();
+    cfg.user = get(&s, "user");
+    cfg.password = Some(get(&s, "password"));
+    cfg.database = get(&s, "dbname");
+    Some(cfg)
+}
+
+fn mysql_cfg() -> Option<ConnConfig> {
+    let url = std::env::var("CELER_MYSQL_TEST").ok()?;
+    let rest = url.trim().strip_prefix("mysql://")?;
+    let (auth, hostdb) = rest.rsplit_once('@')?;
+    let (user, pass) = auth.split_once(':').unwrap_or((auth, ""));
+    let (hostport, db) = hostdb.split_once('/').unwrap_or((hostdb, ""));
+    let (host, port) = hostport.split_once(':').unwrap_or((hostport, "3306"));
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Mysql;
+    cfg.host = host.into();
+    cfg.port = port.parse().ok();
+    cfg.user = user.into();
+    cfg.password = Some(pass.into());
+    cfg.database = db.into();
+    cfg.encryption = "login".into();
+    Some(cfg)
+}
+
+#[test]
+fn pg_schema_foreign_keys() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    let d: &mut dyn Driver = &mut d;
+    d.execute(
+        "DROP SCHEMA IF EXISTS celer_fk CASCADE; CREATE SCHEMA celer_fk;
+         CREATE TABLE celer_fk.padre (a int NOT NULL, b varchar(10) NOT NULL, nombre text, PRIMARY KEY (b, a));
+         CREATE TABLE celer_fk.\"Hijo Raro\" (id int PRIMARY KEY, y int, x varchar(10), jefe int REFERENCES celer_fk.\"Hijo Raro\"(id),
+           CONSTRAINT hijo_padre FOREIGN KEY (x, y) REFERENCES celer_fk.padre (b, a));
+         CREATE TABLE celer_fk.nieto (id int PRIMARY KEY, hijo int REFERENCES celer_fk.\"Hijo Raro\"(id), cliente bigint REFERENCES public.customers(id));
+         INSERT INTO celer_fk.padre VALUES (1, 'uno', 'P1'), (2, 'dos', 'P2');
+         INSERT INTO celer_fk.\"Hijo Raro\" VALUES (1, 1, 'uno', NULL), (2, 2, 'dos', 1), (3, NULL, NULL, 1);
+         INSERT INTO celer_fk.nieto VALUES (1, 1, (SELECT min(id) FROM public.customers)), (2, NULL, NULL);",
+        10,
+    )
+    .unwrap();
+    let keys = assert_schema_fks(d, "postgres", &["celer", "celer_fk"]);
+    assert_fixture_keys(&keys, "Hijo Raro", "customers");
+    for schema in ["public", "sales"] {
+        assert_schema_fks(d, "postgres", &["celer", schema]);
+    }
+}
+
+#[test]
+fn mysql_schema_foreign_keys() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL/MariaDB");
+    let d: &mut dyn Driver = &mut d;
+    let info = d.server_info().unwrap();
+    d.execute(
+        "DROP TABLE IF EXISTS fk98_nieto; DROP TABLE IF EXISTS fk98_hijo; DROP TABLE IF EXISTS fk98_padre;
+         CREATE TABLE fk98_padre (a INT NOT NULL, b VARCHAR(10) NOT NULL, nombre VARCHAR(20), PRIMARY KEY (b, a));
+         CREATE TABLE fk98_hijo (id INT PRIMARY KEY, y INT, x VARCHAR(10), jefe INT,
+           CONSTRAINT fk98_hijo_jefe FOREIGN KEY (jefe) REFERENCES fk98_hijo (id),
+           CONSTRAINT fk98_hijo_padre FOREIGN KEY (x, y) REFERENCES fk98_padre (b, a));
+         CREATE TABLE fk98_nieto (id INT PRIMARY KEY, hijo INT, CONSTRAINT fk98_nieto_hijo FOREIGN KEY (hijo) REFERENCES fk98_hijo (id));
+         INSERT INTO fk98_padre VALUES (1, 'uno', 'P1'), (2, 'dos', 'P2');
+         INSERT INTO fk98_hijo VALUES (1, 1, 'uno', NULL), (2, 2, 'dos', 1), (3, NULL, NULL, 1);
+         INSERT INTO fk98_nieto VALUES (1, 1), (2, NULL);",
+        10,
+    )
+    .unwrap();
+    let keys = assert_schema_fks(d, "mysql", &[&db, &db]);
+    println!("{info}");
+    // The seed's second database ("shop") has keys of its own; a key to another database is drawn to it.
+    let composite = keys.iter().find(|k| k.name == "fk98_hijo_padre").expect("clave compuesta");
+    assert_eq!((composite.columns.join(","), composite.target_columns.join(",")), ("x,y".into(), "b,a".into()));
+    assert!(keys.iter().any(|k| k.name == "fk98_hijo_jefe" && k.target.name == "fk98_hijo"));
+    if d.databases().unwrap().iter().any(|n| n == "shop") {
+        assert_schema_fks(d, "mysql", &["shop", "shop"]);
+    }
+    d.execute("DROP TABLE fk98_nieto; DROP TABLE fk98_hijo; DROP TABLE fk98_padre", 10).unwrap();
+}
+
+#[test]
+fn mssql_schema_foreign_keys() {
+    let Some(mut master) = mssql("master") else { return };
+    master.execute("IF DB_ID('celer_test') IS NULL CREATE DATABASE celer_test", 10).unwrap();
+    drop(master);
+    let mut d = mssql("celer_test").unwrap();
+    let d: &mut dyn Driver = &mut d;
+    d.execute(
+        "IF SCHEMA_ID('fk98') IS NULL EXEC('CREATE SCHEMA fk98');
+         IF OBJECT_ID('fk98.nieto') IS NOT NULL DROP TABLE fk98.nieto;
+         IF OBJECT_ID('fk98.[Hijo Raro]') IS NOT NULL DROP TABLE fk98.[Hijo Raro];
+         IF OBJECT_ID('fk98.padre') IS NOT NULL DROP TABLE fk98.padre;
+         IF OBJECT_ID('dbo.fk98_otro') IS NOT NULL DROP TABLE dbo.fk98_otro;
+         CREATE TABLE dbo.fk98_otro (id int PRIMARY KEY);
+         CREATE TABLE fk98.padre (a int NOT NULL, b nvarchar(10) NOT NULL, nombre nvarchar(20), CONSTRAINT pk_fk98_padre PRIMARY KEY (b, a));
+         CREATE TABLE fk98.[Hijo Raro] (id int PRIMARY KEY, y int, x nvarchar(10), jefe int CONSTRAINT hijo_jefe REFERENCES fk98.[Hijo Raro](id),
+           CONSTRAINT hijo_padre FOREIGN KEY (x, y) REFERENCES fk98.padre (b, a));
+         CREATE TABLE fk98.nieto (id int PRIMARY KEY, hijo int CONSTRAINT nieto_hijo REFERENCES fk98.[Hijo Raro](id), otro int CONSTRAINT nieto_otro REFERENCES dbo.fk98_otro(id));
+         INSERT INTO dbo.fk98_otro VALUES (7);
+         INSERT INTO fk98.padre VALUES (1, N'uno', N'P1'), (2, N'dos', N'P2');
+         INSERT INTO fk98.[Hijo Raro] VALUES (1, 1, N'uno', NULL), (2, 2, N'dos', 1), (3, NULL, NULL, 1);
+         INSERT INTO fk98.nieto VALUES (1, 1, 7), (2, NULL, NULL);",
+        10,
+    )
+    .unwrap();
+    let keys = assert_schema_fks(d, "mssql", &["celer_test", "fk98"]);
+    assert_fixture_keys(&keys, "Hijo Raro", "fk98_otro");
+    assert_schema_fks(d, "mssql", &["celer_test", "dbo"]);
+    // The seeded demo database, when it is there.
+    if d.databases().unwrap().iter().any(|n| n == "celerdemo") {
+        assert_schema_fks(d, "mssql", &["celerdemo", "dbo"]);
+    }
+}
+
+#[test]
+fn sqlite_schema_foreign_keys() {
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Sqlite;
+    cfg.file_path = ":memory:".into();
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite en memoria");
+    let d: &mut dyn Driver = &mut d;
+    d.execute(
+        "PRAGMA foreign_keys = ON;
+         CREATE TABLE padre (a INTEGER NOT NULL, b TEXT NOT NULL, nombre TEXT, PRIMARY KEY (b, a));
+         CREATE TABLE \"Hijo Raro\" (id INTEGER PRIMARY KEY, y INTEGER, x TEXT, jefe INTEGER REFERENCES \"Hijo Raro\"(id),
+           CONSTRAINT hijo_padre FOREIGN KEY (x, y) REFERENCES padre (b, a));
+         CREATE TABLE nieto (id INTEGER PRIMARY KEY, hijo INTEGER REFERENCES \"Hijo Raro\", p_b TEXT, p_a INTEGER,
+           FOREIGN KEY (p_b, p_a) REFERENCES padre);
+         INSERT INTO padre VALUES (1, 'uno', 'P1'), (2, 'dos', 'P2');
+         INSERT INTO \"Hijo Raro\" VALUES (1, 1, 'uno', NULL), (2, 2, 'dos', 1), (3, NULL, NULL, 1);
+         INSERT INTO nieto VALUES (1, 1, 'dos', 2), (2, NULL, NULL, NULL);",
+        10,
+    )
+    .unwrap();
+    let keys = assert_schema_fks(d, "sqlite", &["main", "main"]);
+    let composite = keys.iter().find(|k| k.table.name == "Hijo Raro" && k.columns.len() == 2).expect("clave compuesta");
+    assert_eq!((composite.columns.clone(), composite.target_columns.clone()), (vec!["x".to_string(), "y".into()], vec!["b".to_string(), "a".into()]));
+    // REFERENCES without columns: the referenced table's primary key, in its order.
+    let implicit = keys.iter().find(|k| k.table.name == "nieto" && k.target.name == "padre").expect("clave sin columnas");
+    assert_eq!(implicit.target_columns, ["b", "a"]);
+    assert!(keys.iter().any(|k| k.table.name == "nieto" && k.target.name == "Hijo Raro" && k.target_columns == ["id"]));
+}
+
+/// Generic ODBC against PostgreSQL's ODBC driver (psqlODBC), when CELER_ODBC_TEST gives its connection string and
+/// CELER_ODBC_LIB the driver manager (unixODBC's libodbc.so.2; odbc32.dll on Windows).
+#[test]
+fn odbc_schema_foreign_keys() {
+    let (Ok(conn), Ok(lib)) = (std::env::var("CELER_ODBC_TEST"), std::env::var("CELER_ODBC_LIB")) else { return };
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Odbc;
+    cfg.odbc_conn_str = conn;
+    let mut d = crate::odbc_driver::OdbcDriver::connect(cfg, lib).expect("conexión ODBC");
+    let d: &mut dyn Driver = &mut d;
+    println!("ODBC: {}", d.server_info().unwrap());
+    let keys = assert_schema_fks(d, "odbc", &[]);
+    assert!(!keys.is_empty(), "las claves de la fuente");
+}
+
+/// Informix (DRDA and JDBC): the fixture's keys in database celer, compared with the per-table reading.
+fn informix_schema_fks(via: &str, d: &mut dyn Driver) {
+    d.execute(
+        "DROP TABLE IF EXISTS fk98_nieto; DROP TABLE IF EXISTS fk98_hijo; DROP TABLE IF EXISTS fk98_padre; DROP TABLE IF EXISTS fk98_otro;
+         CREATE TABLE fk98_padre (a INT NOT NULL, b VARCHAR(10) NOT NULL, nombre VARCHAR(20), PRIMARY KEY (b, a) CONSTRAINT fk98_padre_pk);
+         CREATE TABLE fk98_hijo (id INT PRIMARY KEY, y INT, x VARCHAR(10), jefe INT,
+           FOREIGN KEY (jefe) REFERENCES fk98_hijo (id) CONSTRAINT fk98_hijo_jefe,
+           FOREIGN KEY (x, y) REFERENCES fk98_padre (b, a) CONSTRAINT fk98_hijo_padre);
+         CREATE TABLE fk98_nieto (id INT PRIMARY KEY, hijo INT REFERENCES fk98_hijo (id) CONSTRAINT fk98_nieto_hijo);
+         INSERT INTO fk98_padre VALUES (1, 'uno', 'P1');
+         INSERT INTO fk98_padre VALUES (2, 'dos', 'P2');
+         INSERT INTO fk98_hijo VALUES (1, 1, 'uno', NULL);
+         INSERT INTO fk98_hijo VALUES (2, 2, 'dos', 1);
+         INSERT INTO fk98_hijo VALUES (3, NULL, NULL, 1);
+         INSERT INTO fk98_nieto VALUES (1, 1);
+         INSERT INTO fk98_nieto VALUES (2, NULL)",
+        10,
+    )
+    .unwrap_or_else(|e| panic!("{via}: {e}"));
+    let keys = assert_schema_fks(d, "informix", &["celer"]);
+    let composite = keys.iter().find(|k| k.name == "fk98_hijo_padre").unwrap_or_else(|| panic!("{via}: {keys:#?}"));
+    assert_eq!((composite.columns.join(","), composite.target_columns.join(",")), ("x,y".into(), "b,a".into()), "{via}");
+    assert!(keys.iter().any(|k| k.name == "fk98_hijo_jefe" && k.target.name == "fk98_hijo"), "{via}");
+    assert!(keys.iter().any(|k| k.table.name == "celer_t" && k.target.name == "celer_p"), "{via}: la clave del seed");
+    // The seeded demo database, when it is there.
+    if d.databases().unwrap().iter().any(|n| n.trim() == "celerdemo") {
+        assert_schema_fks(d, "informix", &["celerdemo"]);
+    }
+}
+
+/// A synthetic schema like the one of #98 (about 1,500 tables, a key every few tables), in its own database: the
+/// diagram of one table (big_0005, with a key to big_0004 and one to big_0000) reads every key of the schema in one
+/// query, then the columns of the tables on show. Built
+/// once (a few minutes); the timings of both protocols are printed and must stay near a second.
+#[test]
+fn informix_large_schema_fks() {
+    const TABLES: usize = 1500;
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let drda = drda_connect(lib);
+    let mut ifx_cfg = cfg.clone();
+    ifx_cfg.database = "sysmaster".into();
+    let mut admin = drda(ifx_cfg).expect("conexión a sysmaster");
+    let exists = scalar(admin.as_mut(), "SELECT COUNT(*) FROM sysdatabases WHERE name = 'celer_big'").trim() == "1";
+    drop(admin);
+    let mut big = cfg.clone();
+    big.database = "celer_big".into();
+    if !exists || {
+        let mut d = drda(big.clone()).unwrap();
+        scalar(d.as_mut(), "SELECT COUNT(*) FROM systables WHERE tabid >= 100 AND tabname LIKE 'big_%'").trim() != TABLES.to_string()
+    } {
+        let mut d = drda(cfg.clone()).unwrap();
+        let _ = d.execute("DROP DATABASE IF EXISTS celer_big", 10);
+        d.execute("CREATE DATABASE celer_big WITH LOG", 10).unwrap();
+        drop(d);
+        let mut d = drda(big.clone()).unwrap();
+        let t0 = Instant::now();
+        for i in 0..TABLES {
+            // Every fourth table points to the one before it, and every tenth to big_0000 (many keys to one table).
+            let mut cols = format!("id INT PRIMARY KEY, nombre VARCHAR(40), alta DATE, importe DECIMAL(10,2)");
+            if i % 4 == 1 {
+                cols.push_str(&format!(", prev INT REFERENCES big_{:04}(id)", i - 1));
+            }
+            if i % 10 == 5 {
+                cols.push_str(", raiz INT REFERENCES big_0000(id)");
+            }
+            d.execute(&format!("CREATE TABLE big_{i:04} ({cols})"), 10).unwrap();
+        }
+        println!("esquema sintético: {TABLES} tablas creadas en {:?}", t0.elapsed());
+    }
+    let jdbc = informix_jdbc_cfg().map(|(mut jcfg, rt)| {
+        jcfg.database = "celer_big".into();
+        (jcfg, jdbc_connect(rt))
+    });
+    let mut runs: Vec<(&str, ConnConfig, &Connect)> = vec![("DRDA", big.clone(), &drda)];
+    if let Some((jcfg, connect)) = jdbc.as_ref() {
+        runs.push(("JDBC", jcfg.clone(), connect));
+    }
+    for (via, cfg, connect) in runs {
+        let mut d = connect(cfg).unwrap_or_else(|e| panic!("{via}: {e}"));
+        let d = d.as_mut();
+        let centre = ObjectRef { database: "celer_big".into(), schema: "informix".into(), name: "big_0005".into(), kind: "table".into() };
+        // What openErDiagram does for one table: the folders, the tables, every key at once, then the columns of the
+        // table and its neighbours.
+        let t0 = Instant::now();
+        let folders = d.children(&["celer_big".to_string()]).unwrap();
+        let tables_path = folders.iter().find(|n| n.path.last().map(String::as_str) == Some("tables")).unwrap().path.clone();
+        let tables = d.children(&tables_path).unwrap();
+        let listed = t0.elapsed();
+        let t1 = Instant::now();
+        let keys = d.schema_foreign_keys(&["celer_big".to_string()]).unwrap();
+        let read_keys = t1.elapsed();
+        let around: Vec<ObjectRef> = keys
+            .iter()
+            .filter_map(|k| if k.table.name == centre.name { Some(k.target.clone()) } else if k.target.name == centre.name { Some(k.table.clone()) } else { None })
+            .collect();
+        let t2 = Instant::now();
+        d.table_columns(&centre).unwrap();
+        for obj in &around {
+            d.table_columns(obj).unwrap();
+        }
+        let columns = t2.elapsed();
+        let total = t0.elapsed();
+        println!(
+            "Informix por {via}, {} tablas: diagrama de big_0005 en {total:?} (lista de tablas {listed:?}; {} claves en una consulta {read_keys:?}; columnas de {} tablas {columns:?})",
+            tables.len(),
+            keys.len(),
+            around.len() + 1
+        );
+        assert!(tables.len() >= TABLES, "{via}: {}", tables.len());
+        assert_eq!(keys.len(), TABLES / 4 + TABLES / 10, "{via}");
+        // What the diagram did before: the keys of each table in turn (one explorer call per table).
+        let t3 = Instant::now();
+        let each = crate::session::per_table_foreign_keys(d, &["celer_big".to_string()]).unwrap();
+        println!("Informix por {via}: antes, tabla a tabla, {} claves en {:?}", each.len(), t3.elapsed());
+        assert_eq!(fk_tuples(&keys), fk_tuples(&each), "{via}");
+        assert!(read_keys < Duration::from_secs(5), "{via}: leer las claves tardó {read_keys:?}");
+    }
+}
+
+/// #97, measured: where the time goes when Informix ends an idle session (onmode -z, as a server's idle timeout
+/// does): noticing the dead connection, opening another and the guard's replay, and the whole next query.
+fn informix_recovery_breakdown(via: &str, connect: &Connector, admin: &mut dyn Driver) {
+    const SID: &str = "SELECT DBINFO('sessionid') FROM systables WHERE tabid = 1";
+    // Raw driver: how long a ping on the dead connection takes to fail.
+    let mut raw = connect().unwrap();
+    let sid = scalar(raw.as_mut(), SID);
+    if !informix_kill(admin, &sid) {
+        return;
+    }
+    let t = Instant::now();
+    let ping = raw.ping();
+    let detect = t.elapsed();
+    let t = Instant::now();
+    let q = raw.execute(SID, 10).map(|_| ());
+    let query_fail = t.elapsed();
+    drop(raw);
+    let t = Instant::now();
+    let fresh = connect().unwrap();
+    let reconnect = t.elapsed();
+    drop(fresh);
+    // Through the guard, as the app: idle for 5 minutes (checked before use), and in use (the query finds it).
+    let mut g = guarded(DbKind::Informix, connect, "", "celer");
+    let sid = scalar(&mut g, SID);
+    informix_kill(admin, &sid);
+    g.pretend_idle(Duration::from_secs(300));
+    let t = Instant::now();
+    let out = g.execute(SID, 10).unwrap();
+    let idle_total = t.elapsed();
+    let sid = scalar(&mut g, SID);
+    informix_kill(admin, &sid);
+    let t = Instant::now();
+    let out2 = g.execute(SID, 10).unwrap();
+    let busy_total = t.elapsed();
+    eprintln!(
+        "{via} #97: ping en la conexión muerta {detect:?} ({}); consulta en ella {query_fail:?} ({}); conexión nueva {reconnect:?}; \
+         con la sesión parada 5 min, la consulta siguiente {idle_total:?} {:?}; sin pausa {busy_total:?} {:?}",
+        ping.err().map(|e| e.to_string()).unwrap_or("¡respondió!".into()).replace('\n', " · "),
+        q.err().map(|e| e.to_string()).unwrap_or("¡respondió!".into()).replace('\n', " · "),
+        out.messages,
+        out2.messages
+    );
+}
+
+#[test]
+fn informix_recovery_measured() {
+    if let Some((cfg, lib)) = informix_cfg() {
+        let mut admin_cfg = cfg.clone();
+        admin_cfg.database = "sysadmin".into();
+        let mut admin = crate::odbc_driver::OdbcDriver::connect(admin_cfg, lib.clone()).expect("sysadmin");
+        let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+        informix_recovery_breakdown("DRDA", &connect, &mut admin);
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        let mut admin_cfg = cfg.clone();
+        admin_cfg.database = "sysadmin".into();
+        let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("sysadmin por JDBC");
+        let connect: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
+        informix_recovery_breakdown("JDBC", &connect, &mut admin);
+    }
+}
+
+// ───────────────────────────────────────────────────────────────── a connection cut without a word (#97)
+
+/// A TCP proxy for the tests, in front of a real server: `silence` makes every connection it carries so far go quiet
+/// (what arrives is swallowed both ways, the sockets stay open), as a firewall, a NAT or a server's idle timeout whose
+/// close never reaches the client. New connections go through as usual.
+struct Blackhole {
+    port: u16,
+    next: Arc<AtomicUsize>,
+    quiet_below: Arc<AtomicUsize>,
+    /// Both ends of every connection, closed when the proxy goes: a driver still waiting on a silenced one (the
+    /// guard left it on its own thread) then gets its error and ends, instead of keeping the process from exiting.
+    sockets: Arc<parking_lot::Mutex<Vec<std::net::TcpStream>>>,
+}
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+impl Blackhole {
+    fn to(target: String) -> Blackhole {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let next = Arc::new(AtomicUsize::new(0));
+        let quiet_below = Arc::new(AtomicUsize::new(0));
+        let sockets: Arc<parking_lot::Mutex<Vec<std::net::TcpStream>>> = Arc::default();
+        let (n, q, all) = (next.clone(), quiet_below.clone(), sockets.clone());
+        std::thread::spawn(move || {
+            for client in listener.incoming().flatten() {
+                let seq = n.fetch_add(1, Ordering::SeqCst);
+                let Ok(server) = std::net::TcpStream::connect(&target) else { continue };
+                all.lock().extend([client.try_clone().unwrap(), server.try_clone().unwrap()]);
+                for (mut from, mut to) in [(client.try_clone().unwrap(), server.try_clone().unwrap()), (server, client)] {
+                    let q = q.clone();
+                    std::thread::spawn(move || {
+                        use std::io::Read;
+                        let mut buf = [0u8; 16384];
+                        while let Ok(n) = from.read(&mut buf) {
+                            if n == 0 {
+                                let _ = to.shutdown(std::net::Shutdown::Write);
+                                break;
+                            }
+                            if seq < q.load(Ordering::SeqCst) {
+                                continue; // gone quiet: nothing passes, nothing is closed
+                            }
+                            if to.write_all(&buf[..n]).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+            }
+        });
+        Blackhole { port, next, quiet_below, sockets }
+    }
+
+    /// Every connection open now stops answering.
+    fn silence(&self) {
+        self.quiet_below.store(self.next.load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+}
+
+impl Drop for Blackhole {
+    fn drop(&mut self) {
+        for s in self.sockets.lock().drain(..) {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+/// What the silent-cut test needs of an engine: how to ask the session's database, and (optionally) a query that
+/// tells manual mode, with its answer there.
+struct SilentCase<'a> {
+    engine: &'a str,
+    kind: DbKind,
+    database: &'a str,
+    current_db: &'a str,
+    manual: Option<(&'a str, &'a str)>,
+}
+
+/// #97 on a real engine: a watched session idle for a while whose connection went quiet answers the next query in
+/// about PING_LIMIT plus a login (not after the system's TCP timeout), on a new connection in the same database and
+/// the same transaction mode.
+fn silent_cut_suite(case: SilentCase, connect: &Connector, proxy: &Blackhole) {
+    let SilentCase { engine, kind, database, current_db, manual } = case;
+    let mut g = guarded(kind, connect, "", database);
+    assert_eq!(scalar(&mut g, current_db).trim(), database, "{engine}: la base pedida");
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute(current_db, 10).unwrap_or_else(|e| panic!("{engine}: tras el corte silencioso → {e}"));
+    let took = t0.elapsed();
+    eprintln!("{engine} #97: conexión muda tras 5 min parada → resultado en {took:?}; {:?}", out.messages);
+    assert_eq!(txt(&out.results[0].rows[0][0]).trim(), database, "{engine}: en la misma base");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{engine}: {:?}", out.messages);
+    assert!(took < Duration::from_millis(2500), "{engine}: {took:?}");
+
+    // Manual mode is kept on the new connection.
+    g.set_autocommit(false).unwrap();
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute(current_db, 10).unwrap_or_else(|e| panic!("{engine}, modo manual: {e}"));
+    eprintln!("{engine} #97, modo manual: {:?}; {:?}", t0.elapsed(), out.messages);
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{engine}: {:?}", out.messages);
+    if let Some((sql, want)) = manual {
+        assert_eq!(scalar(&mut g, sql).trim(), want, "{engine}: sigue en modo manual");
+    }
+    g.rollback().unwrap();
+    g.set_autocommit(true).unwrap();
+    // «Mantener viva»: the check of a session idle long enough, as connWatch.ts asks for it.
+    g.pretend_idle(Duration::from_secs(250));
+    let h = g.keep_alive(Duration::from_secs(240)).expect("comprobada");
+    assert!(h.ok && !h.reconnected, "{engine}: {h:?}");
+}
+
+/// The same server reached through a Blackhole: `host`/`port` of the config point to the proxy.
+fn through(cfg: &ConnConfig, default_port: u16) -> (ConnConfig, Blackhole) {
+    let proxy = Blackhole::to(format!("{}:{}", if cfg.host == "localhost" { "127.0.0.1" } else { cfg.host.as_str() }, cfg.port.unwrap_or(default_port)));
+    let mut via = cfg.clone();
+    via.host = "127.0.0.1".into();
+    via.port = Some(proxy.port);
+    (via, proxy)
+}
+
+#[test]
+fn pg_silent_cut() {
+    let Some(cfg) = pg_cfg() else { return };
+    let (cfg, proxy) = through(&cfg, 5432);
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let case = SilentCase { engine: "PostgreSQL", kind: DbKind::Postgres, database: "celer", current_db: "SELECT current_database()", manual: Some(("SELECT (now() <> statement_timestamp())::text", "true")) };
+    silent_cut_suite(case, &connect, &proxy);
+}
+
+#[test]
+fn mysql_silent_cut() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let (cfg, proxy) = through(&cfg, 3306);
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mysql::MysqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let case = SilentCase { engine: "MySQL/MariaDB", kind: DbKind::Mysql, database: "shop", current_db: "SELECT DATABASE()", manual: Some(("SELECT @@autocommit", "0")) };
+    silent_cut_suite(case, &connect, &proxy);
+}
+
+#[test]
+fn mssql_silent_cut() {
+    let Some(cfg) = mssql_cfg("master") else { return };
+    let (cfg, proxy) = through(&cfg, 1433);
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mssql::MssqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let case = SilentCase { engine: "SQL Server", kind: DbKind::Mssql, database: "celer_test", current_db: "SELECT DB_NAME()", manual: Some(("SELECT @@OPTIONS & 2", "2")) };
+    silent_cut_suite(case, &connect, &proxy);
+}
+
+#[test]
+fn informix_silent_cut() {
+    const DB: &str = "SELECT TRIM(DBINFO('dbname')) FROM systables WHERE tabid = 1";
+    if let Some((cfg, lib)) = informix_cfg() {
+        let (mut cfg, proxy) = through(&cfg, 9089);
+        cfg.database = "celerdemo".into();
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+        silent_cut_suite(SilentCase { engine: "Informix DRDA", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None }, &connect, &proxy);
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        let (mut cfg, proxy) = through(&cfg, 9088);
+        cfg.database = "celerdemo".into();
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
+        silent_cut_suite(SilentCase { engine: "Informix JDBC", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None }, &connect, &proxy);
+    }
+}
+
+/// Generic ODBC (psqlODBC, CELER_ODBC_TEST with Server= and Port=): its check is a catalog call.
+#[test]
+fn odbc_silent_cut() {
+    let (Ok(conn), Ok(lib)) = (std::env::var("CELER_ODBC_TEST"), std::env::var("CELER_ODBC_LIB")) else { return };
+    let value = |key: &str| conn.split(';').find_map(|p| p.split_once('=').filter(|(k, _)| k.trim().eq_ignore_ascii_case(key)).map(|(_, v)| v.trim().to_string()));
+    let (Some(server), Some(port)) = (value("Server"), value("Port")) else { return };
+    let proxy = Blackhole::to(format!("{}:{port}", if server == "localhost" { "127.0.0.1" } else { server.as_str() }));
+    let via: String = conn.split(';').filter(|p| !p.trim().is_empty()).map(|p| match p.split_once('=') {
+        Some((k, _)) if k.trim().eq_ignore_ascii_case("Server") => "Server=127.0.0.1".to_string(),
+        Some((k, _)) if k.trim().eq_ignore_ascii_case("Port") => format!("Port={}", proxy.port),
+        _ => p.to_string(),
+    }).collect::<Vec<_>>().join(";");
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Odbc;
+    cfg.odbc_conn_str = via;
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+    let mut g = guarded(DbKind::Odbc, &connect, "", "");
+    assert_eq!(scalar(&mut g, "SELECT 1").trim(), "1");
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute("SELECT 1", 10).unwrap_or_else(|e| panic!("ODBC: {e}"));
+    eprintln!("ODBC #97: conexión muda → resultado en {:?}; {:?}", t0.elapsed(), out.messages);
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{:?}", out.messages);
+    assert!(t0.elapsed() < Duration::from_millis(2500));
+}
+
+/// Kill and requery on PostgreSQL and MySQL/MariaDB (SQL Server and Informix: mssql_reconnects,
+/// informix_reconnects): a session the server ended while idle answers its next query on a new connection, in the
+/// same database; ended mid-use (no check before), the read is not repeated (an administrator stopped it on purpose)
+/// and the one after works.
+fn kill_and_requery(engine: &str, kind: DbKind, connect: &Connector, database: &str, id_sql: &str, current_db: &str, kill: &mut dyn FnMut(&str)) {
+    let mut g = guarded(kind, connect, "", database);
+    let id = scalar(&mut g, id_sql);
+    kill(&id);
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let out = g.execute(id_sql, 10).unwrap_or_else(|e| panic!("{engine}: {e}"));
+    eprintln!("{engine} #97: sesión terminada en el servidor y parada → {:?}; {:?}", t0.elapsed(), out.messages);
+    assert_ne!(txt(&out.results[0].rows[0][0]), id, "{engine}: otra conexión");
+    assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{engine}: {:?}", out.messages);
+    assert!(t0.elapsed() < Duration::from_secs(2), "{engine}");
+    assert_eq!(scalar(&mut g, current_db).trim(), database, "{engine}: misma base");
+    let id = scalar(&mut g, id_sql);
+    kill(&id);
+    let e = g.execute(id_sql, 10).unwrap_err().to_string();
+    assert!(e.starts_with("CONN_RESET:"), "{engine}: {e}");
+    assert_ne!(scalar(&mut g, id_sql), id, "{engine}: la siguiente, en otra conexión");
+}
+
+#[test]
+fn pg_kill_and_requery() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut admin = crate::postgres::PostgresDriver::connect(cfg.clone()).unwrap();
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let mut kill = |pid: &str| {
+        admin.execute(&format!("SELECT pg_terminate_backend({pid})"), 10).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    kill_and_requery("PostgreSQL", DbKind::Postgres, &connect, "celer", "SELECT pg_backend_pid()::text", "SELECT current_database()", &mut kill);
+}
+
+#[test]
+fn mysql_kill_and_requery() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let mut admin = crate::mysql::MysqlDriver::connect(cfg.clone()).unwrap();
+    let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mysql::MysqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+    let mut kill = |id: &str| {
+        admin.execute(&format!("KILL {id}"), 10).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    kill_and_requery("MySQL/MariaDB", DbKind::Mysql, &connect, "shop", "SELECT CONNECTION_ID()", "SELECT DATABASE()", &mut kill);
 }

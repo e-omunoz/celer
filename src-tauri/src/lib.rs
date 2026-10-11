@@ -719,6 +719,18 @@ fn cancel(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<()> 
     Ok(())
 }
 
+/// Keepalive of a session (#97): checked (and reconnected if it was cut) when it has been idle for `idle_secs`;
+/// `None` when it was not idle that long, has a result open, or is busy (the check waits for nothing: a session at
+/// work answers when its statement ends).
+#[tauri::command]
+async fn keep_alive_session(state: State<'_, Arc<AppState>>, session_id: String, idle_secs: u64) -> CmdResult<Option<Health>> {
+    let h = state.sessions.get(&session_id).map_err(err)?;
+    if h.busy() {
+        return Ok(None);
+    }
+    h.run(move |d| Ok(d.keep_alive(std::time::Duration::from_secs(idle_secs)))).await.map_err(err)
+}
+
 /// What a session is doing besides the statement itself (reading the rest of a result to keep the session), while
 /// it runs.
 #[tauri::command]
@@ -756,6 +768,17 @@ async fn meta_children(
 ) -> CmdResult<Vec<MetaNode>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     h.run(move |d| d.children(&path)).await.map_err(err)
+}
+
+/// Every foreign key of a schema (its explorer path) in one go, for the E-R diagram.
+#[tauri::command]
+async fn schema_foreign_keys(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    path: Vec<String>,
+) -> CmdResult<Vec<SchemaForeignKey>> {
+    let h = state.sessions.get(&session_id).map_err(err)?;
+    h.run(move |d| d.schema_foreign_keys(&path)).await.map_err(err)
 }
 
 #[tauri::command]
@@ -1551,6 +1574,7 @@ pub fn run() {
             open_secrets,
             open_session,
             check_session,
+            keep_alive_session,
             close_session,
             close_connection_sessions,
             read_spreadsheet,
@@ -1563,6 +1587,7 @@ pub fn run() {
             commit,
             rollback,
             meta_children,
+            schema_foreign_keys,
             table_columns,
             object_ddl,
             completion,

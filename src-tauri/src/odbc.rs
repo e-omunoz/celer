@@ -94,6 +94,8 @@ type FnCatalog4 = unsafe extern "system" fn(
 ) -> i16;
 type FnCatalog3 =
     unsafe extern "system" fn(H, *const u16, i16, *const u16, i16, *const u16, i16) -> i16;
+/// SQLForeignKeys: catalog, schema and table of the primary key's side, then of the foreign key's.
+type FnCatalog6 = unsafe extern "system" fn(H, *const u16, i16, *const u16, i16, *const u16, i16, *const u16, i16, *const u16, i16, *const u16, i16) -> i16;
 type FnGetInfo = unsafe extern "system" fn(H, u16, *mut c_void, i16, *mut i16) -> i16;
 type FnEnum =
     unsafe extern "system" fn(H, u16, *mut u16, i16, *mut i16, *mut u16, i16, *mut i16) -> i16;
@@ -123,6 +125,7 @@ pub struct Api {
     tables: FnCatalog4,
     columns: FnCatalog4,
     primary_keys: FnCatalog3,
+    foreign_keys: Option<FnCatalog6>,
     get_info: FnGetInfo,
     drivers: Option<FnEnum>,
     data_sources: Option<FnEnum>,
@@ -207,6 +210,7 @@ impl Api {
             tables: sym!("SQLTablesW"),
             columns: sym!("SQLColumnsW"),
             primary_keys: sym!("SQLPrimaryKeysW"),
+            foreign_keys: opt!("SQLForeignKeysW"),
             get_info: sym!("SQLGetInfoW"),
             drivers: opt!("SQLDriversW"),
             data_sources: opt!("SQLDataSourcesW"),
@@ -442,6 +446,25 @@ impl OdbcConn {
                 0,
             )
         };
+        self.api.check(rc, SQL_HANDLE_STMT, st.h)?;
+        st.collect_all()
+    }
+
+    /// SQLForeignKeys: the keys of table `fk` ([catalog, schema, table]; `None` = not given), as ODBC lists them
+    /// (FK_NAME in column 12, PK and FK table and column in 1-4 and 5-8, KEY_SEQ in 9). With no table at all some
+    /// drivers list every key of the source; the standard says that is an error (HY009).
+    /// The driver has SQLForeignKeys.
+    pub fn has_foreign_keys(&self) -> bool {
+        self.api.foreign_keys.is_some()
+    }
+
+    pub fn catalog_fks(&self, fk: [Option<&str>; 3]) -> Result<Vec<Vec<Cell>>> {
+        let f = self.api.foreign_keys.ok_or_else(|| anyhow!("El driver ODBC no tiene SQLForeignKeys"))?;
+        let mut st = self.alloc_stmt()?;
+        let a = fk.map(|s| s.filter(|s| !s.is_empty()).map(wide));
+        let p = |w: &Option<Vec<u16>>| w.as_ref().map(|v| v.as_ptr()).unwrap_or(null());
+        let l = |w: &Option<Vec<u16>>| if w.is_some() { SQL_NTS } else { 0 };
+        let rc = unsafe { f(st.h, null(), 0, null(), 0, null(), 0, p(&a[0]), l(&a[0]), p(&a[1]), l(&a[1]), p(&a[2]), l(&a[2])) };
         self.api.check(rc, SQL_HANDLE_STMT, st.h)?;
         st.collect_all()
     }

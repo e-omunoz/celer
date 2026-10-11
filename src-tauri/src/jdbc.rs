@@ -70,6 +70,9 @@ pub const FET_BUF_SIZE: u32 = 256 << 10;
 
 const MAX_FRAME: usize = 512 << 20;
 
+/// Informix JDBC's LOGINTIMEOUT unless the user sets one (milliseconds).
+pub const LOGIN_TIMEOUT_MS: u32 = 8000;
+
 /// SQLSTATE of the bridge's "the connection was cut after a cancel": it has to be opened again.
 const RESET_STATE: &str = "CELER-RESET";
 
@@ -666,6 +669,13 @@ pub fn jdbc_props(cfg: &ConnConfig) -> Vec<(String, String)> {
     if !has("INFORMIXCONTIME") {
         props.push(("INFORMIXCONTIME".into(), "20".into()));
     }
+    // How long the driver waits for the server's port before giving up on a login (ms): a reconnect after a cut
+    // (#97) fails in seconds when the server is not there, not after INFORMIXCONTIME. IFX_SOC_TIMEOUT is not set:
+    // it bounds every read of the socket, so it would also cut long queries; a dead idle connection is caught by
+    // guard.rs's bounded check instead.
+    if !has("LOGINTIMEOUT") {
+        props.push(("LOGINTIMEOUT".into(), LOGIN_TIMEOUT_MS.to_string()));
+    }
     props.extend(extra);
     props
 }
@@ -1113,6 +1123,8 @@ mod tests {
         assert_eq!(get(&props, "password"), vec!["s3cr;et"]);
         assert_eq!(get(&props, "FET_BUF_SIZE"), vec![FET_BUF_SIZE.to_string()]);
         assert_eq!(get(&props, "INFORMIXCONTIME"), vec!["20"]);
+        assert_eq!(get(&props, "LOGINTIMEOUT"), vec![LOGIN_TIMEOUT_MS.to_string()]);
+        assert!(get(&props, "IFX_SOC_TIMEOUT").is_empty(), "it would cut long queries too");
         assert!(get(&props, "DELIMIDENT").is_empty());
 
         cfg.extra = " DB_LOCALE=es_ES.819 ; FET_BUF_SIZE=65536;IFX_LOCK_MODE_WAIT=10;;OPT=a=b ".into();
@@ -1121,6 +1133,8 @@ mod tests {
         assert_eq!(get(&props, "FET_BUF_SIZE"), vec!["65536"], "the user's value, once");
         assert_eq!(get(&props, "IFX_LOCK_MODE_WAIT"), vec!["10"]);
         assert_eq!(get(&props, "OPT"), vec!["a=b"]);
+        cfg.extra = "LOGINTIMEOUT=30000".into();
+        assert_eq!(get(&jdbc_props(&cfg), "LOGINTIMEOUT"), vec!["30000"], "the user's value, once");
     }
 
     /// A JVM warning on stdout (DBeaver's JRE has no base CDS archive) is shown, not dropped.
