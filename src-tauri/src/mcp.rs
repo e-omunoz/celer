@@ -1784,6 +1784,8 @@ impl McpServer {
                             "level": lvl.as_str(),
                             "database": database,
                             "production": c.production,
+                            // dev | test | staging | prod | custom ("" when none): an old production flag is "prod".
+                            "environment": if c.environment.is_empty() && c.production { "prod" } else { c.environment.as_str() },
                             "readOnly": c.read_only,
                         })
                     })

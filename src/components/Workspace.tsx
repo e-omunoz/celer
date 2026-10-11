@@ -132,6 +132,8 @@ import { aiBadgeTitle } from "../mcpApp";
 import { windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
+import { EnvChip, EnvStrip, TxIndicator, TxTabBadge } from "./ConsoleSafety";
+import { envOf } from "../environment";
 
 export function Workspace() {
   return (
@@ -199,7 +201,8 @@ function TabBar() {
       <For each={state.tabs}>
         {(tab, index) => {
           const conn = () => connectionById(tab.connId);
-          const dirty = () => (tab.kind === "table" ? tableDirty(tab) : tab.inTransaction);
+          const dirty = () => tab.kind === "table" && tableDirty(tab);
+          const tx = () => tab.kind === "sql" && tab.inTransaction;
           const busy = () => (tab.kind === "sql" ? tab.running : tab.loading);
           return (
             <div
@@ -207,7 +210,7 @@ function TabBar() {
               role="tab"
               data-id={tab.id}
               aria-selected={tab.id === state.activeTabId}
-              classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index(), "ai-opened": Boolean(tab.aiOpenedAt) }}
+              classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index(), "ai-opened": Boolean(tab.aiOpenedAt), env: Boolean(tab.connId && envOf(conn())) }}
               draggable={renaming() !== tab.id}
               onDragStart={(event) => {
                 setDragFrom(index());
@@ -238,7 +241,7 @@ function TabBar() {
               }}
               onDblClick={() => tab.kind === "sql" && setRenaming(tab.id)}
               onContextMenu={(event) => menu(event, tab)}
-              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${tab.database ? ` · ${tab.database}` : ""}`}
+              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${envOf(conn()) ? ` · ${envOf(conn())!.label}` : ""}${tab.database ? ` · ${tab.database}` : ""}`}
             >
               <span class="tab-strip" style={{ background: tab.connId ? connColor(conn()) : "transparent" }} />
               <ObjIcon kind={tab.kind === "table" ? (tab.obj.kind === "view" ? "view" : "table") : tab.title.endsWith(".sql") ? "file" : "console"} size={14} />
@@ -264,7 +267,8 @@ function TabBar() {
               </Show>
               <Show when={tab.aiOpenedAt}><span class="ai-badge" title={aiBadgeTitle(tab)}><Sparkles size={10} /></span></Show>
               <Show when={busy()}><span class="tab-spinner" /></Show>
-              <Show when={dirty() && !busy()}><span class="tab-dirty" title={tab.kind === "table" ? "Cambios sin guardar" : "Transacción abierta"} /></Show>
+              <Show when={dirty() && !busy()}><span class="tab-dirty" title="Cambios sin guardar" /></Show>
+              <Show when={tx()}><TxTabBadge tab={tab as SqlTab} /></Show>
               <button
                 type="button"
                 class="tab-close"
@@ -339,7 +343,7 @@ function ConnectionPicker(props: { tab: SqlTab }) {
           <ChevronDown size={12} />
         </button>
       </Show>
-      <Show when={conn()?.production}><span class="tag prod">PROD</span></Show>
+      <EnvChip conn={conn()} />
       <Show when={conn()?.readOnly}><span class="tag">Solo lectura</span></Show>
       <Show when={conn() && !session() && !state.connecting[conn()!.id]}>
         <button type="button" class="btn tiny" onClick={() => void connect(conn()!.id)}>Conectar</button>
@@ -455,6 +459,7 @@ function SqlPane(props: { tab: SqlTab }) {
 
   return (
     <div class="pane" ref={paneRef}>
+      <EnvStrip conn={connectionById(props.tab.connId)} />
       <div class="pane-toolbar">
         <Show
           when={!props.tab.running}
@@ -491,7 +496,7 @@ function SqlPane(props: { tab: SqlTab }) {
         <button type="button" class="tb-icon rollback" title={withShortcut("Rollback", "rollback")} disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>
           <Undo2 size={16} />
         </button>
-        <Show when={props.tab.inTransaction}><span class="tag warn">Transacción abierta</span></Show>
+        <TxIndicator tab={props.tab} />
         <span class="tb-sep" />
         <button type="button" class="tb-icon secondary" title={withShortcut("Formatear SQL", "format")} onClick={formatActive}>
           <AlignLeft size={16} />
@@ -748,6 +753,7 @@ function TablePane(props: { tab: TableTab }) {
 
   return (
     <div class="pane">
+      <EnvStrip conn={conn()} />
       <div class="pane-toolbar">
         <ObjIcon kind={props.tab.obj.kind === "view" ? "view" : "table"} size={16} />
         <strong class="obj-title">{props.tab.qualified}</strong>
@@ -756,6 +762,7 @@ function TablePane(props: { tab: TableTab }) {
           <span class="muted small">
             <span class="picker-dot" style={{ background: connColor(conn()) }} /> {conn()!.name}
           </span>
+          <EnvChip conn={conn()} tiny />
         </Show>
         <span class="spacer" />
         <div class="seg">

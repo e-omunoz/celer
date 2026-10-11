@@ -64,7 +64,16 @@ export interface ConnConfig {
   odbcConnStr: string;
   extra: string;
   color: string;
+  /**
+   * Confirmations before dangerous statements, the MCP's write cap and stricter transaction warnings. Always true for
+   * the "prod" environment and false for the other built-in ones (src/environment.ts); a custom one keeps its own.
+   */
   production: boolean;
+  /** "" (none) | dev | test | staging | prod | custom: colours the consoles, tabs and explorer node (environment.ts). */
+  environment?: string;
+  /** A custom environment's name and colour. */
+  envLabel?: string;
+  envColor?: string;
   readOnly: boolean;
   folder: string;
   filePath: string;
@@ -291,6 +300,14 @@ export interface Settings {
   favoriteConns: string[];
   /** Explorer: the connections connected to last, newest first. */
   recentConns: { id: string; at: number }[];
+  /** Manual transactions: seconds open before the console's indicator turns amber, then red (src/txWatch.ts). */
+  txWarnSecs: number;
+  txAlertSecs: number;
+  /** The same on production connections (stricter). */
+  txProdWarnSecs: number;
+  txProdAlertSecs: number;
+  /** A reminder (Gib, or a notice when he is off) once a transaction passes the red threshold, and again each time. */
+  txRemind: boolean;
 }
 
 /** A live template for the SQL editor (see src/snippets.ts). */
@@ -349,6 +366,11 @@ export const defaultSettings: Settings = {
   connSort: "manual",
   favoriteConns: [],
   recentConns: [],
+  txWarnSecs: 60,
+  txAlertSecs: 300,
+  txProdWarnSecs: 30,
+  txProdAlertSecs: 120,
+  txRemind: true,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
@@ -373,6 +395,9 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     extra: "",
     color: "",
     production: false,
+    environment: "",
+    envLabel: "",
+    envColor: "",
     readOnly: false,
     folder: "",
     filePath: kind === "sqlite" ? "" : "",

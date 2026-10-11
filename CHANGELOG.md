@@ -168,6 +168,31 @@ All notable changes to Celer are documented here. The format follows
   cells the same way (header found, Spanish formats such as `1.234,50`, `15/03/2024` or `VERDADERO` read as numbers,
   dates and booleans). In the table viewer, Ctrl+V pastes the block from the active cell as pending edits, with new
   rows past the last one.
+- **Informix over DRDA on Windows: database names and the explorer** (#117). IBM's CLI driver on Windows writes
+  32-bit lengths like on Linux and macOS, so names came back padded with invisible characters or empty, and an empty
+  one made the explorer stop updating until Celer restarted (stale environment chips, a connection still shown
+  connected and «Cargando…» after disconnecting). Names now read correctly, and an odd name from any driver can no
+  longer stop the explorer.
+
+- **Open manual transactions are timed and never left behind** (#116). In Manual mode the console shows
+  «Transacción abierta · N min · M sentencias» next to Commit/Rollback, and its tab a «TX N min» badge, amber after
+  the first threshold and red after the second (1 min / 5 min by default, 30 s / 2 min on production; *Ajustes ›
+  Seguridad › Transacciones manuales*). Past the red one Gib (or a notice, when he is off) reminds you without taking
+  the focus, and again each time that much more goes by. The status bar lists this window's open transactions; a
+  click goes to the console. Closing a console or a window, disconnecting, deleting the connection, changing the
+  console's connection or database, going back to Auto or quitting with a transaction open asks Commit / Rollback /
+  Cancelar, and Celer never commits on its own: a session closed with a transaction still open is rolled back first
+  (the generic ODBC and IBM CLI drivers and the Informix JDBC bridge are now told so; the other engines' servers undo
+  it when the connection goes), checked live on every engine.
+- **Environments: the whole window wears the connection's colour** (#117). Each connection has an environment
+  (Desarrollo, Pruebas, Preproducción, Producción, or a name and colour of your own) chosen in its form. Its consoles
+  and tables get a coloured band on top and a chip with icon and label (not only colour) in the toolbar and the status
+  bar; its tabs, its explorer node and the same consoles in other windows wear the same colour, production red and
+  preproduction amber by default, with contrast checked in every theme including high contrast. Production keeps its
+  confirmations, and the form suggests read-only and explains the stricter transaction warnings. A connection saved
+  as production before is Producción, read from connections.json as it was (the file changes only when the
+  connection is saved again); DBeaver's dev/test/prod types come in as the same environments, and the MCP server
+  lists each connection's environment.
 
 ## [2.2.0] - 2026-10-09
 

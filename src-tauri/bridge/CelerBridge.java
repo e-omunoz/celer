@@ -447,6 +447,12 @@ public final class CelerBridge {
             for (Cursor c : cursors.values()) c.finish();
             cursors.clear();
             if (conn != null) {
+                // Closing never commits: JDBC leaves an open transaction at close to the driver, so it is undone first.
+                try {
+                    if (!conn.getAutoCommit()) conn.rollback();
+                } catch (Throwable ignored) {
+                    // a broken connection: the server undoes it when the connection goes
+                }
                 try {
                     conn.close();
                 } catch (Throwable ignored) {

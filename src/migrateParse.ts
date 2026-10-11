@@ -617,6 +617,8 @@ export function parseDbeaver(source: MigrationSource): Candidate[] {
     cfg.folder = c.folder ? `DBeaver · ${c.folder}` : "DBeaver";
     cfg.user = given(conf.user) ?? "";
     cfg.production = conf.type === "prod";
+    // DBeaver's connection types dev / test / prod are Celer's environments of the same name.
+    if (conf.type === "dev" || conf.type === "test" || conf.type === "prod") cfg.environment = conf.type;
     cfg.readOnly = Boolean(c["read-only"]);
     const notes: string[] = [];
     const type = (given(conf.configurationType) ?? given(conf["configuration-type"]) ?? "").toUpperCase();

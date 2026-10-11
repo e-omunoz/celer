@@ -38,6 +38,15 @@ for (const theme of Object.keys(themes)) {
   atLeast(theme, "--run-fg", "--run", 4.5);
   atLeast(theme, "--danger-fg", "--danger", 4.5);
 }
+// Connection environments (src/environment.ts): the chip's label reads on its fill, and the window strip, tab strip
+// and explorer dot stand out from the surfaces they sit on (3:1, non-text). Every theme defines its own.
+for (const theme of Object.keys(themes)) {
+  for (const env of ["dev", "test", "staging", "prod"]) {
+    if (theme !== "dark") assert.ok(block(`:root[data-theme="${theme}"]`)[`--env-${env}`], `${theme}: no --env-${env}`);
+    atLeast(theme, `--env-${env}-fg`, `--env-${env}`, 4.5);
+    for (const bg of ["--bg", "--panel", "--surface"]) atLeast(theme, `--env-${env}`, bg, 3);
+  }
+}
 for (const theme of ["contrast", "contrast-light"]) {
   for (const token of Object.keys(themes[theme]).filter((t) => t.startsWith("--syntax-") || t.startsWith("--obj-"))) {
     atLeast(theme, token, "--surface", 4.5);

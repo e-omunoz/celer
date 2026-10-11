@@ -145,7 +145,7 @@ assert.equal(informix.cfg.extra, "DB_LOCALE=en_US.819;CLIENT_LOCALE=en_US.819", 
 const listed = dbeaver(
   {
     "postgres-jdbc-1": { provider: "postgresql", driver: "postgres-jdbc", name: "Ventas", "save-password": true, configuration: { host: "pg", port: "5432", database: "ventas" } },
-    "mysql-2": { provider: "mysql", driver: "mysql8", name: "Web", configuration: { host: "my", port: "3306", database: "web", user: "lector" } },
+    "mysql-2": { provider: "mysql", driver: "mysql8", name: "Web", configuration: { host: "my", port: "3306", database: "web", user: "lector", type: "prod" } },
   },
   "/ws/General/.dbeaver/data-sources.json",
 );
@@ -155,6 +155,9 @@ assert.equal(listed[0].savedPassword, true);
 assert.equal(listed[0].sourceId, "postgres-jdbc-1");
 assert.equal(listed[1].cfg.user, "lector", "the plain user is kept");
 assert.equal(listed[1].savedPassword, false);
+// DBeaver's connection type is the environment: prod is Producción (and production), none is none.
+assert.deepEqual([listed[1].cfg.environment, listed[1].cfg.production], ["prod", true]);
+assert.deepEqual([listed[0].cfg.environment, listed[0].cfg.production], ["", false]);
 const toHex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 const fromHex = (hex: string) => new Uint8Array(hex.match(/../g)!.map((h) => parseInt(h, 16)));
 const key = await crypto.subtle.importKey("raw", fromHex("babb4a9f774ab853c96c2d653dfe544a"), { name: "AES-CBC" }, false, ["encrypt"]);
