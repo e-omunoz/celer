@@ -7,6 +7,8 @@ $ErrorActionPreference = "Continue"
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $node = "$env:LOCALAPPDATA\celer-tools\node-v22.20.0-win-x64\node.exe"
+# The portable node of CLAUDE.md, or the one on PATH when this machine has an installed one instead.
+if (-not (Test-Path $node)) { $node = (Get-Command node -ErrorAction Stop).Source }
 $env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path
 if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = "D:\celer-target" }
 $results = @()
