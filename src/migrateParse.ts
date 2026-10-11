@@ -468,7 +468,7 @@ function readConnection(cfg: ConnConfig, hint: DbKind | null, rawUrl: string, fi
   const odbc = /^jdbc:odbc:(.+)$/i.exec(rawUrl.trim());
   if (odbc || (hint === "odbc" && !rawUrl.trim())) {
     const dsn = odbc?.[1].split(";")[0].trim() || fields.database || fields.host || "";
-    Object.assign(cfg, { ...emptyConn("odbc"), host: "", name: cfg.name, folder: cfg.folder, user: cfg.user, production: cfg.production, readOnly: cfg.readOnly, odbcConnStr: dsn ? `DSN=${dsn}` : "" });
+    Object.assign(cfg, { ...emptyConn("odbc"), host: "", name: cfg.name, folder: cfg.folder, user: cfg.user, production: cfg.production, environment: cfg.environment, readOnly: cfg.readOnly, odbcConnStr: dsn ? `DSN=${dsn}` : "" });
     return "odbc";
   }
   const parsedUrl = rawUrl.trim() ? parseJdbc(rawUrl) : null;
@@ -494,7 +494,7 @@ function readConnection(cfg: ConnConfig, hint: DbKind | null, rawUrl: string, fi
   }
   // The tool's own user field wins over one in the URL; without either, the engine's usual one.
   const user = cfg.user || info.user || emptyConn(kind).user;
-  Object.assign(cfg, { ...emptyConn(kind), name: cfg.name, folder: cfg.folder, user, production: cfg.production, readOnly: cfg.readOnly });
+  Object.assign(cfg, { ...emptyConn(kind), name: cfg.name, folder: cfg.folder, user, production: cfg.production, environment: cfg.environment, readOnly: cfg.readOnly });
   applyJdbcInfo(cfg, info, notes);
   if (info.password) notes.push("La URL traía una contraseña: no se copia.");
   return kind;
