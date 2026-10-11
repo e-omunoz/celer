@@ -22,7 +22,16 @@ Seeds (`dev\wsl.ps1 db seed`): `dev/seed-postgres.sql`, `seed-mysql.sql` (MySQL 
 ## How to run it
 - Cargo tests on every engine: `powershell -ExecutionPolicy Bypass -File dev\wsl.ps1 test -Ref <branch>`
   (starts the containers if needed). On GitHub: `gh workflow run engines.yml --ref <branch>` for SQL Server + Informix.
-- In the app: `dev\wsl.ps1 db up`, then `dev\run-desktop.ps1`, create one connection per row of the table (keep them
-  in `D:\celer-devdata`), and walk the feature on each, taking a screenshot per engine into `review-out/<topic>/`.
+- In the app: `dev\wsl.ps1 db up`, then `dev\run-desktop.ps1 -Slot <n> -Ref origin/<branch>`: a build of that branch
+  in its own worktree (`D:\celer-slots\<n>`), target, data folder (`D:\celer-devdata-slot<n>`) and DevTools port
+  (9333+n), with one connection per row of the table already in it (`dev/devdata-connections.mjs`; `-Engines` resets
+  them). Several slots run side by side; the Windows checkout is never switched. Walk the feature on each engine,
+  taking a screenshot per engine into `review-out/<topic>/`.
+- Driving it: `node dev/cdp.mjs --slot <n> windows | eval -h "<js>" | shot | click | drag | key …`, with
+  `--window <label|title>` for a torn-off window; in-page helpers in `dev/cdp-helpers.js`; `connect`, `connectAll`
+  and `watchErrors` in `dev/cdp-lib.mjs` for scripted checks across windows.
+- Shared engines: tables a check creates carry its slot or topic in the name, and seeded data is read-only (re-seed
+  with `dev\wsl.ps1 db seed` if a check had to change it). `engines.sh test` runs every engine to the end and prints
+  a per-engine summary; a failure there is reported with its module, never as "the same as main" without checking.
 - Engine-specific SQL the UI writes is checked per dialect in `dev/engine-sql.ts` and `src-tauri/src/engine_tests.rs`:
   a change to generated SQL extends both.

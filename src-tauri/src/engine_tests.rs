@@ -391,19 +391,21 @@ fn mssql_engine() {
     let dt_obj = ObjectRef { database: "celer_test".into(), schema: "dbo".into(), name: "dt".into(), kind: "table".into() };
     let mut shape = json!({ "kind": "mssql", "t": table_shape(d, &obj), "dt": table_shape(d, &dt_obj) });
     // Schema comparison: two schemas with known differences.
+    // Drops in a batch of their own: SQL Server compiles a whole batch first, so an INSERT next to them would be
+    // checked against a table of another shape left by an earlier run (Msg 213) before the DROP ran.
     d.execute("IF SCHEMA_ID('sc_a') IS NULL EXEC('CREATE SCHEMA sc_a'); IF SCHEMA_ID('sc_b') IS NULL EXEC('CREATE SCHEMA sc_b');
                IF OBJECT_ID('sc_a.cli') IS NOT NULL DROP TABLE sc_a.cli; IF OBJECT_ID('sc_b.cli') IS NOT NULL DROP TABLE sc_b.cli;
                IF OBJECT_ID('sc_a.fac') IS NOT NULL DROP TABLE sc_a.fac; IF OBJECT_ID('sc_b.fac') IS NOT NULL DROP TABLE sc_b.fac;
-               IF OBJECT_ID('sc_b.old') IS NOT NULL DROP TABLE sc_b.old;
-               CREATE TABLE sc_a.cli (id int NOT NULL PRIMARY KEY, nombre nvarchar(120) NOT NULL, email nvarchar(200) NULL, vip bit NULL);
+               IF OBJECT_ID('sc_b.old') IS NOT NULL DROP TABLE sc_b.old;", 10).unwrap();
+    d.execute("CREATE TABLE sc_a.cli (id int NOT NULL PRIMARY KEY, nombre nvarchar(120) NOT NULL, email nvarchar(200) NULL, vip bit NULL);
                CREATE TABLE sc_a.fac (id int NOT NULL PRIMARY KEY, importe decimal(12,2) NOT NULL);
                CREATE TABLE sc_b.cli (id int NOT NULL PRIMARY KEY, nombre nvarchar(100) NOT NULL, email nvarchar(200) NOT NULL, legacy nvarchar(10) NULL);
                CREATE TABLE sc_b.old (id bigint NOT NULL PRIMARY KEY);
                INSERT INTO sc_b.cli VALUES (1, N'Ana', N'ana@x.es', N'L1');", 10).unwrap();
     shape["schemas"] = schema_shape(d, "celer_test", "sc_a", "sc_b");
     // Data comparison: same structure, different rows; the target has an identity key.
-    d.execute("IF OBJECT_ID('dbo.dc_a') IS NOT NULL DROP TABLE dbo.dc_a; IF OBJECT_ID('dbo.dc_b') IS NOT NULL DROP TABLE dbo.dc_b;
-               CREATE TABLE dbo.dc_a (id int NOT NULL PRIMARY KEY, nombre nvarchar(50), activo bit, alta datetime2(3), importe decimal(10,2));
+    d.execute("IF OBJECT_ID('dbo.dc_a') IS NOT NULL DROP TABLE dbo.dc_a; IF OBJECT_ID('dbo.dc_b') IS NOT NULL DROP TABLE dbo.dc_b;", 10).unwrap();
+    d.execute("CREATE TABLE dbo.dc_a (id int NOT NULL PRIMARY KEY, nombre nvarchar(50), activo bit, alta datetime2(3), importe decimal(10,2));
                CREATE TABLE dbo.dc_b (id int IDENTITY(1,1) NOT NULL PRIMARY KEY, nombre nvarchar(50), activo bit, alta datetime2(3), importe decimal(10,2));
                INSERT INTO dbo.dc_a VALUES (1, N'Ana', 1, '2024-01-01 10:00:00.125', 1.50), (2, N'Luis', 0, NULL, NULL), (4, N'Zoë 李', NULL, '2024-12-31', -2.25);
                SET IDENTITY_INSERT dbo.dc_b ON; INSERT INTO dbo.dc_b (id, nombre, activo, alta, importe) VALUES (1, N'Ana', 1, '2024-01-01 10:00:00.125', 1.50), (2, N'Luís', 1, NULL, 3.00), (3, N'Viejo', 1, NULL, NULL); SET IDENTITY_INSERT dbo.dc_b OFF;", 10).unwrap();

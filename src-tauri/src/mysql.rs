@@ -747,6 +747,9 @@ pub struct MysqlDriver {
     in_tx: bool,
     /// Solo MySQL (sin `@@in_transaction`): hubo sentencias desde el último COMMIT/ROLLBACK.
     dirty: bool,
+    /// Solo MySQL: a START TRANSACTION / BEGIN not yet ended. `@@autocommit` stays 1 inside one, so `dirty` and
+    /// `@@autocommit` alone miss it.
+    explicit_tx: bool,
     /// Statements of a script dropped with its open result, told in the next execute's messages.
     discarded: usize,
     database: String,
@@ -839,6 +842,7 @@ impl MysqlDriver {
             autocommit: true,
             in_tx: false,
             dirty: false,
+            explicit_tx: false,
             discarded: 0,
             database: db.to_string(),
             mariadb: false,
@@ -1047,7 +1051,7 @@ impl MysqlDriver {
 
     fn refresh_tx_state(&mut self) {
         if self.cursor.is_some() {
-            if !self.autocommit {
+            if !self.autocommit || (!self.mariadb && self.explicit_tx) {
                 self.in_tx = true;
             }
             return;
@@ -1068,7 +1072,7 @@ impl MysqlDriver {
                 self.in_tx = if self.mariadb {
                     r.get(1).is_some_and(|c| cell_i64(c) != 0)
                 } else {
-                    self.dirty && !self.autocommit
+                    (self.dirty && !self.autocommit) || self.explicit_tx
                 };
             }
         }
@@ -1080,6 +1084,21 @@ impl MysqlDriver {
         } else {
             self.current_database().unwrap_or_default()
         }
+    }
+}
+
+/// How a statement changes an explicit transaction on MySQL: `Some(true)` opens one (START TRANSACTION, BEGIN),
+/// `Some(false)` ends it (COMMIT, ROLLBACK without TO, and the statements that commit implicitly), `None` neither.
+fn explicit_tx_change(stmt: &str) -> Option<bool> {
+    let upper = stmt.to_ascii_uppercase();
+    let words: Vec<&str> = upper.split_whitespace().take(3).collect();
+    match first_keyword(stmt).as_str() {
+        "START" | "BEGIN" => Some(true),
+        "COMMIT" => Some(false),
+        "ROLLBACK" => (words.get(1) != Some(&"TO") && words.get(2) != Some(&"TO")).then_some(false),
+        "CREATE" | "DROP" if words.get(1) == Some(&"TEMPORARY") => None,
+        "ALTER" | "CREATE" | "DROP" | "RENAME" | "TRUNCATE" | "GRANT" | "REVOKE" | "LOCK" => Some(false),
+        _ => None,
     }
 }
 
@@ -1107,6 +1126,11 @@ impl Driver for MysqlDriver {
                 .any(|s| matches!(first_keyword(s).as_str(), "START" | "BEGIN"))
         {
             self.dirty = true;
+        }
+        for s in &stmts {
+            if let Some(open) = explicit_tx_change(s) {
+                self.explicit_tx = open;
+            }
         }
         self.start(stmts)?;
         let (results, error) = self.pump(fetch.max(1), &mut out.messages);
@@ -1195,6 +1219,7 @@ impl Driver for MysqlDriver {
     fn commit(&mut self) -> Result<bool> {
         self.query("COMMIT")?;
         self.dirty = false;
+        self.explicit_tx = false;
         self.refresh_tx_state();
         Ok(self.in_tx)
     }
@@ -1202,6 +1227,7 @@ impl Driver for MysqlDriver {
     fn rollback(&mut self) -> Result<bool> {
         self.query("ROLLBACK")?;
         self.dirty = false;
+        self.explicit_tx = false;
         self.refresh_tx_state();
         Ok(self.in_tx)
     }
@@ -1867,7 +1893,8 @@ mod tests {
         assert!(rs.has_more);
         assert_eq!(rs.columns[0].name, "id");
         assert_eq!(rs.columns[0].kind, ColKind::Number);
-        assert_eq!(rs.columns[6].type_name, "text"); // JSON en MariaDB = LONGTEXT
+        // JSON en MariaDB = LONGTEXT; MySQL has a JSON type.
+        assert_eq!(rs.columns[6].type_name, if d.mariadb { "text" } else { "json" });
         let mut total = rs.rows.len();
         let mut last_id = cell_i64(&rs.rows[99][0]);
         let extra;
@@ -2079,6 +2106,19 @@ mod tests {
     }
 
     #[test]
+    fn explicit_transactions_are_tracked() {
+        assert_eq!(explicit_tx_change("START TRANSACTION"), Some(true));
+        assert_eq!(explicit_tx_change(" begin work"), Some(true));
+        assert_eq!(explicit_tx_change("COMMIT"), Some(false));
+        assert_eq!(explicit_tx_change("rollback"), Some(false));
+        assert_eq!(explicit_tx_change("ROLLBACK TO SAVEPOINT a"), None);
+        assert_eq!(explicit_tx_change("ROLLBACK WORK TO a"), None);
+        assert_eq!(explicit_tx_change("CREATE TABLE t (id INT)"), Some(false));
+        assert_eq!(explicit_tx_change("CREATE TEMPORARY TABLE t (id INT)"), None);
+        assert_eq!(explicit_tx_change("INSERT INTO t VALUES (1)"), None);
+    }
+
+    #[test]
     fn it_handles_transactions() {
         let Some(mut d) = connect() else { return };
         d.execute("CREATE TEMPORARY TABLE tx_t (id INT PRIMARY KEY) ENGINE=InnoDB", 10)
@@ -2100,6 +2140,10 @@ mod tests {
         let out = d.execute("START TRANSACTION; INSERT INTO tx_t VALUES (4)", 10).unwrap();
         assert!(out.in_transaction);
         assert!(!d.rollback().unwrap());
+        // Ended by a COMMIT written in the console, not only by the Commit button.
+        assert!(d.execute("BEGIN; INSERT INTO tx_t VALUES (5)", 10).unwrap().in_transaction);
+        assert!(!d.execute("COMMIT", 10).unwrap().in_transaction);
+        d.execute("DELETE FROM tx_t WHERE id = 5", 10).unwrap();
         // Como saveTable: un lote cuya segunda sentencia falla es un error y el ROLLBACK lo deshace todo.
         d.execute("CREATE TEMPORARY TABLE tx_nn (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB; \
                    INSERT INTO tx_nn VALUES (1, 1), (2, 2)", 10)
