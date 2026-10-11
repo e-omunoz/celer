@@ -55,17 +55,17 @@
 ## Next — from the open issues
 
 Delivered in the latest sprint (integrated in one PR, see [STATUS.md](../STATUS.md)): working tools (library on any
-database #99, variables #118, typed Excel import #120, pinned result compare #119, transaction timer #116, E-R
-foreign keys in one query #98); connections (SSH tunnel #115, export with secrets #101, whole-window environment
-colours #117, JDBC URL parsing #102); AI (MCP from WSL #124, MCP acting in the app #100); look and feel (theme editor
-#107, tear-off hint #108, column drag #109, animations #110, Gib #103, #104, #105, settings review #106); drivers
-(SQL Server PRINT / RAISERROR #67, Informix idle-drop recovery #97, Informix row history #123); support (error log
-#122, report from the app #112).
+database #99, engine compatibility indicator #113, variables #118, typed Excel import #120, pinned result compare
+#119, transaction timer #116, E-R foreign keys in one query #98); connections (SSH tunnel #115, export with secrets
+#101, whole-window environment colours #117, JDBC URL parsing #102); AI (MCP from WSL #124, MCP acting in the app
+#100); look and feel (column drag #109, Gib #103, #104, #105, settings review #106); drivers (SQL Server PRINT /
+RAISERROR #67, Informix idle-drop recovery #97); support (error log #122, report from the app #112).
 
 Next sprints, from what is still open (refreshed at the end of each sprint):
 
-- **Simplify** — apply the reorganisation proposal for overgrown menus, toolbars, dialogs and settings (#111)
-- **Working tools** — engine compatibility indicator (#113)
+- **Simplify** — apply the approved reorganisation of overgrown menus, toolbars, dialogs and settings (#111)
+- **Look and feel** — theme editor (#107), tear-off hint (#108), animations (#110)
+- **Drivers** — Informix point-in-time row history from the logical logs (#123)
 
 ## Phase 4 — Tier 2 drivers (analytics and cloud)
 - [ ] DuckDB (including CSV / Parquet / JSON files)

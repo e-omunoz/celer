@@ -7,63 +7,6 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-
-### Changed
-- **The E-R diagram reads a schema's foreign keys in one catalog query** (#98) instead of asking table by table: the
-  diagram of one table no longer shows «Buscando las relaciones de … n/1557» on large schemas. On a 1,500-table
-  Informix schema it opens in about 0.1 s over JDBC and DRDA (about 6 s before on a local server, much more over a
-  slow link); the whole-schema diagram reads its keys the same way. Every engine has its own query (PostgreSQL,
-  MySQL/MariaDB, SQL Server, Informix, SQLite; `SQLForeignKeys` on generic ODBC), and the engine tests check it gives
-  exactly the keys read table by table.
-- **E-R diagram of a table on a generic ODBC connection**: it opens on the source's tables (it could not find a
-  table folder before), and the explorer shows each table's foreign keys under «Claves foráneas».
-- SQLite: a key declared as `REFERENCES t` without columns shows t's primary-key columns instead of nothing.
-- **Recovering from a connection the server or a firewall dropped while idle takes about 1.5 s, not 10-12 s** (#97):
-  a session idle for a minute is checked before use with a bounded round trip; if the connection does not answer in
-  1.5 s and the session has nothing to lose, Celer opens another one at once instead of waiting for the system's TCP
-  timeout (with a transaction, temporary tables or `SET` it still waits and says what was lost). Idle sessions are
-  also checked when Celer's window gets focus. While the new connection opens, the tab's dot pulses amber and the
-  running timer says «Reconectando…». Informix over JDBC logs in with `LOGINTIMEOUT` (8 s unless set). Measured on
-  every engine (`*_silent_cut` and `*_kill_and_requery` engine tests); generic ODBC sources are checked with a
-  catalog call now (before, a cut was only noticed by its error).
-
-- **Moving a result column lifts the whole column** (#109): dragging a header picks up the column with its visible
-  cells as a semi-transparent ghost with a shadow, and the other columns slide aside live to open the gap where it will
-  land (no drop line any more). Near the edges the grid scrolls by itself; dropping lets the column settle into its
-  place and Esc flies it back where it was. With "Animaciones: Reducidas" (or the system's reduced motion) the columns
-  jump instead of sliding. Only the rows on screen are drawn, so it stays smooth on wide, long results.
-
-- The settings dialog is split into one component per section (`src/components/settings/`), registered in
-  `src/settingsSections.ts`, so new sections plug in without touching the dialog. «Editor y resultados» is now two
-  sections, «Editor» and «Resultados».
-- Esc in a confirmation shown over another dialog (Ajustes) closes only the confirmation.
-
-- **Shorter texts in Settings** (Editor y resultados, Seguridad, IA y MCP, Drivers) and a tighter user guide: the
-  explorer's multi-selection, quick connect, reconnection and column moving read in half the words; the guide gains
-  *Historial* and *Exportar e importar* sections and names the *IA y MCP* and *Drivers* settings (#111).
-- **Docs**: what each area of the app is for (`docs/ARCHITECTURE.md › Areas`), `STATUS.md` and `docs/ROADMAP.md`
-  rewritten from what exists today and from the open issues, and the README lists several windows, connection
-  organisation and every download Celer can make (#111, #121).
-
-### Fixed
-- MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
-- Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
-- **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
-  «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
-  `jdbc:informix-sqli` without a port, SQL Server URLs with nothing after `//` (`serverName`, `instanceName`,
-  `portNumber`, `databaseName`) and multi-host PostgreSQL/MySQL URLs (the first server, and a note about the others)
-  come through. An empty host or database in the tool no longer hides the one in the URL, DBeaver's driver properties
-  and SSL settings apply to every engine (not only Informix), `jdbc:odbc:<DSN>` becomes an ODBC connection, and the list
-  says what was left out. dbvis.xml is read by Celer's own XML reader.
-- **SQL Server `PRINT` and low-severity `RAISERROR` messages are shown** (#67): `PRINT 'hola'; SELECT 1` shows «hola»
-  in the Output area next to the result, as SSMS does, and so do `RAISERROR('…', 0, 1) WITH NOWAIT` from a procedure,
-  a trigger's `PRINT` after an `INSERT`, and a message sent after a result read in pages. Severity 11 and up still
-  fails the batch as before. Celer now builds with a patched copy of `tiberius` that hands those messages over
-  (`src-tauri/vendor/tiberius/PATCHES.md`).
-- **Informix DRDA on Windows** (#124, #100): text values and catalog names no longer come back truncated or empty (the IBM CLI driver packs block indicators 4 bytes apiece).
-- **Masking on generic ODBC sources** (#100, #124): column names are read from the ODBC catalog, so protected columns are hidden in expressions and filters too.
-- **AI «ejecutar» on a connection that is still connecting** (#100): the console waits for the connection instead of failing with «Sin conexión».
-
 - **SSH tunnels** (#115): «Túnel SSH» in the connection form reaches PostgreSQL, MySQL/MariaDB, SQL Server and Informix
   (DRDA and JDBC) through a bastion, with a password, a private key (file or pasted, OpenSSH/PEM/PuTTY, with its
   passphrase) or the SSH agent (Pageant, the OpenSSH agent of Windows, ssh-agent), and optional jump hosts. The Rust
@@ -81,10 +24,9 @@ All notable changes to Celer are documented here. The format follows
   Importing a v2 file asks for the passphrase, refuses a wrong one without importing any secret (try again, or import
   without passwords), and saves the secrets to the OS credential store, never to connections.json. v1 files import as
   before.
-
 - **«Mantener viva la conexión»** (advanced options of a connection, off by default): the minutes after which the
   server ends idle sessions; Celer checks idle sessions a bit before (80 %), so they are not cut (#97).
-
+- **MCP from Claude Code inside WSL** (#124): Settings › IA y MCP › "Claude Code en WSL" lists the installed distros,
   whether Windows interop is on in each and where Claude Code is, and shows the `claude mcp add` command with
   `celer.exe` as the distro sees it (`/mnt/c/…`, honouring a custom `automount.root`). "Registrar en WSL" shows that
   command, asks for confirmation, runs it inside the distro and then reads the distro's `~/.claude.json` to confirm
@@ -106,7 +48,6 @@ All notable changes to Celer are documented here. The format follows
   highlight, a notice says what was opened and where with «Ir», and the focus is never taken: while the user types
   the tab opens in the background, and a Celer window in the background flashes its taskbar button. Scripts the AI
   adds to the library show the badge and their notes.
-
 - **Script library as a working tool** (#99):
   - **«Ejecutar en…»** (Shift+Enter, a button on each script, its menu and the palette) picks where a script runs
     without changing the connection it was saved with: a connection and, where the engine has them, a database (the
@@ -143,22 +84,6 @@ All notable changes to Celer are documented here. The format follows
   table): the execution plan (not on Informix or generic ODBC), the real plan (PostgreSQL and MariaDB), server
   activity (not on SQLite or generic ODBC), and the E-R diagram and schema comparison (not on generic ODBC), in the
   console's toolbar, the explorer's menus, the palette and the shortcuts.
-- **Compare** (#119): «Cargar todo» while comparing a result with over 120,000 rows only in B no longer ends in a stack overflow that left the console on «Ejecutando…»; decimals written with a comma (Informix DRDA on Windows, `12,50`) equal their dot form.
-- **Informix over DRDA on Windows** (#117, #119, #120): the IBM CLI driver's indicator arrays are read the way the driver wrote them (4 or 8 bytes per row, detected on each block), so names are no longer cut or padded with NULs and NULLs are no longer read as empty text.
-- Result grid (#109): loading the rest of a very large result (200 columns, 100,000 rows) no longer freezes the window
-  for about 700 ms per page, and pressing or dropping a column header no longer works the column's statistics out in
-  one go, so dragging a header stays smooth.
-- Importing a workbook whose title sits in column A above a table that starts in column B (#120) no longer adds an
-  empty «columna A» to the columns and the mapping: without a range, the columns are those of the header row and
-  the rows under it.
-- DECIMAL and NUMERIC values read through ODBC or Informix DRDA keep a decimal point: IBM's CLI driver on a Spanish
-  Windows wrote them with a comma (`12,50`), and Microsoft's old «SQL Server» ODBC driver without the leading zero
-  (`.10`, `-.75`); both now read as plain numbers (`12.50`, `0.10`, `-0.75`).
-- Closing a console or tab whose result was still open (a large query read in part) on an ODBC or Informix DRDA
-  connection freed the statement after its connection, which could crash Celer; the statement is now freed first.
-- Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row
-  in each batch, and dates go into Informix DATE columns as `MDY(…)` whatever DBDATE says.
-
 - **Compare any two results** (#119): «Comparar con…» in the results bar (and «Comparar resultado con…» in the
   palette) sets the result on show against another one: a result or pinned result of the same console, of another
   console or another connection, or the rows a table tab has loaded. Rows are matched by the primary key when a side
@@ -181,12 +106,6 @@ All notable changes to Celer are documented here. The format follows
   cells the same way (header found, Spanish formats such as `1.234,50`, `15/03/2024` or `VERDADERO` read as numbers,
   dates and booleans). In the table viewer, Ctrl+V pastes the block from the active cell as pending edits, with new
   rows past the last one.
-- **Informix over DRDA on Windows: database names and the explorer** (#117). IBM's CLI driver on Windows writes
-  32-bit lengths like on Linux and macOS, so names came back padded with invisible characters or empty, and an empty
-  one made the explorer stop updating until Celer restarted (stale environment chips, a connection still shown
-  connected and «Cargando…» after disconnecting). Names now read correctly, and an odd name from any driver can no
-  longer stop the explorer.
-
 - **Open manual transactions are timed and never left behind** (#116). In Manual mode the console shows
   «Transacción abierta · N min · M sentencias» next to Commit/Rollback, and its tab a «TX N min» badge, amber after
   the first threshold and red after the second (1 min / 5 min by default, 30 s / 2 min on production; *Ajustes ›
@@ -206,11 +125,6 @@ All notable changes to Celer are documented here. The format follows
   as production before is Producción, read from connections.json as it was (the file changes only when the
   connection is saved again); DBeaver's dev/test/prod types come in as the same environments, and the MCP server
   lists each connection's environment.
-- **Error log and reports** (#122, #112). The scrubber now also cleans the message at the head of UI error stacks, host
-  names and host:port, SQL Server duplicate-key values, EXEC/WITH statements and MySQL's «Can't connect» text. «Adjuntar
-  los últimos errores» is off unless you tick it (it starts ticked only on the report opened from an unexpected error),
-  and «Capturar la ventana» leaves hidden tabs out so it works with many tabs open.
-
 - **Settings reviewed and extended** (#106). Ajustes has a search box that finds any setting by name and takes you to it,
   «Restablecer sección» on every section (with undo), and «Exportar ajustes…» / «Importar ajustes…» as JSON (an import
   applies only the keys it understands, with valid values, and lists the rest). New settings, all applied without a
@@ -245,16 +159,6 @@ All notable changes to Celer are documented here. The format follows
   copied. Drafts are kept offline and «Mis reportes» lists the reports sent, with their links. The issue forms in
   `.github/ISSUE_TEMPLATE` match the window's fields, and CONTRIBUTING.md describes the triage flow
   (`status:triage` → `status:ready`).
-- **Browser preview**: a SELECT that finds no rows shows an empty grid with its columns, as every engine does,
-  instead of «0 filas afectadas».
-- **Gib's eyes, in every pose, mood and activity** (#103): the pupils are clipped to the eye whites and their movement
-  is clamped to the room each pose's eyes have, so they never leave the eye (an error face used to shrink them towards
-  the corner of the drawing and throw them off the face); the lids are flaps that slide down to close, so a blink
-  always shuts the eye completely and a wide-open or happy face keeps a sliver of lid instead of losing it; every pose
-  (standing, laptop, Monday, head only) now has lids, and its eyes and lids sit in the head group, so they move with the
-  head. The animation lab (`#giblab?grid` in the dev server) shows every pose × mood × activity at once, at every size
-  and theme, and `dev/gib-lab-shots.mjs --grid` captures it and checks the eyes' geometry.
-
 - **Gib reacts to what happens, and only as much as you want** (#104): a long query that finally works, an error (and
   a run of them), an empty result (he scratches his head), a big export, a connection that drops or comes back, the
   first query of the day, two hours without a break, Friday afternoon (careful on production) and late nights. Idle
@@ -270,6 +174,92 @@ All notable changes to Celer are documented here. The format follows
   pose that move with his head and leave his eyes alone), the name he uses in his messages and the palette (default
   «Gib») and the companion's pose (standing, Monday, head only, with the laptop). The look applies to every Gib in the
   app; the lab takes `acc=` and `tint=` to check the eyes with each accessory.
+
+### Changed
+- **The E-R diagram reads a schema's foreign keys in one catalog query** (#98) instead of asking table by table: the
+  diagram of one table no longer shows «Buscando las relaciones de … n/1557» on large schemas. On a 1,500-table
+  Informix schema it opens in about 0.1 s over JDBC and DRDA (about 6 s before on a local server, much more over a
+  slow link); the whole-schema diagram reads its keys the same way. Every engine has its own query (PostgreSQL,
+  MySQL/MariaDB, SQL Server, Informix, SQLite; `SQLForeignKeys` on generic ODBC), and the engine tests check it gives
+  exactly the keys read table by table.
+- **E-R diagram of a table on a generic ODBC connection**: it opens on the source's tables (it could not find a
+  table folder before), and the explorer shows each table's foreign keys under «Claves foráneas».
+- SQLite: a key declared as `REFERENCES t` without columns shows t's primary-key columns instead of nothing.
+- **Recovering from a connection the server or a firewall dropped while idle takes about 1.5 s, not 10-12 s** (#97):
+  a session idle for a minute is checked before use with a bounded round trip; if the connection does not answer in
+  1.5 s and the session has nothing to lose, Celer opens another one at once instead of waiting for the system's TCP
+  timeout (with a transaction, temporary tables or `SET` it still waits and says what was lost). Idle sessions are
+  also checked when Celer's window gets focus. While the new connection opens, the tab's dot pulses amber and the
+  running timer says «Reconectando…». Informix over JDBC logs in with `LOGINTIMEOUT` (8 s unless set). Measured on
+  every engine (`*_silent_cut` and `*_kill_and_requery` engine tests); generic ODBC sources are checked with a
+  catalog call now (before, a cut was only noticed by its error).
+- **Moving a result column lifts the whole column** (#109): dragging a header picks up the column with its visible
+  cells as a semi-transparent ghost with a shadow, and the other columns slide aside live to open the gap where it will
+  land (no drop line any more). Near the edges the grid scrolls by itself; dropping lets the column settle into its
+  place and Esc flies it back where it was. With "Animaciones: Reducidas" (or the system's reduced motion) the columns
+  jump instead of sliding. Only the rows on screen are drawn, so it stays smooth on wide, long results.
+- The settings dialog is split into one component per section (`src/components/settings/`), registered in
+  `src/settingsSections.ts`, so new sections plug in without touching the dialog. «Editor y resultados» is now two
+  sections, «Editor» and «Resultados».
+- Esc in a confirmation shown over another dialog (Ajustes) closes only the confirmation.
+- **Shorter texts in Settings** (Editor y resultados, Seguridad, IA y MCP, Drivers) and a tighter user guide: the
+  explorer's multi-selection, quick connect, reconnection and column moving read in half the words; the guide gains
+  *Historial* and *Exportar e importar* sections and names the *IA y MCP* and *Drivers* settings (#111).
+- **Docs**: what each area of the app is for (`docs/ARCHITECTURE.md › Areas`), `STATUS.md` and `docs/ROADMAP.md`
+  rewritten from what exists today and from the open issues, and the README lists several windows, connection
+  organisation and every download Celer can make (#111, #121).
+
+### Fixed
+- MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
+- Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
+- **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
+  «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
+  `jdbc:informix-sqli` without a port, SQL Server URLs with nothing after `//` (`serverName`, `instanceName`,
+  `portNumber`, `databaseName`) and multi-host PostgreSQL/MySQL URLs (the first server, and a note about the others)
+  come through. An empty host or database in the tool no longer hides the one in the URL, DBeaver's driver properties
+  and SSL settings apply to every engine (not only Informix), `jdbc:odbc:<DSN>` becomes an ODBC connection, and the list
+  says what was left out. dbvis.xml is read by Celer's own XML reader.
+- **SQL Server `PRINT` and low-severity `RAISERROR` messages are shown** (#67): `PRINT 'hola'; SELECT 1` shows «hola»
+  in the Output area next to the result, as SSMS does, and so do `RAISERROR('…', 0, 1) WITH NOWAIT` from a procedure,
+  a trigger's `PRINT` after an `INSERT`, and a message sent after a result read in pages. Severity 11 and up still
+  fails the batch as before. Celer now builds with a patched copy of `tiberius` that hands those messages over
+  (`src-tauri/vendor/tiberius/PATCHES.md`).
+- **Informix DRDA on Windows** (#124, #100): text values and catalog names no longer come back truncated or empty (the IBM CLI driver packs block indicators 4 bytes apiece).
+- **Masking on generic ODBC sources** (#100, #124): column names are read from the ODBC catalog, so protected columns are hidden in expressions and filters too.
+- **AI «ejecutar» on a connection that is still connecting** (#100): the console waits for the connection instead of failing with «Sin conexión».
+- **Compare** (#119): «Cargar todo» while comparing a result with over 120,000 rows only in B no longer ends in a stack overflow that left the console on «Ejecutando…»; decimals written with a comma (Informix DRDA on Windows, `12,50`) equal their dot form.
+- **Informix over DRDA on Windows** (#117, #119, #120): the IBM CLI driver's indicator arrays are read the way the driver wrote them (4 or 8 bytes per row, detected on each block), so names are no longer cut or padded with NULs and NULLs are no longer read as empty text.
+- Result grid (#109): loading the rest of a very large result (200 columns, 100,000 rows) no longer freezes the window
+  for about 700 ms per page, and pressing or dropping a column header no longer works the column's statistics out in
+  one go, so dragging a header stays smooth.
+- Importing a workbook whose title sits in column A above a table that starts in column B (#120) no longer adds an
+  empty «columna A» to the columns and the mapping: without a range, the columns are those of the header row and
+  the rows under it.
+- DECIMAL and NUMERIC values read through ODBC or Informix DRDA keep a decimal point: IBM's CLI driver on a Spanish
+  Windows wrote them with a comma (`12,50`), and Microsoft's old «SQL Server» ODBC driver without the leading zero
+  (`.10`, `-.75`); both now read as plain numbers (`12.50`, `0.10`, `-0.75`).
+- Closing a console or tab whose result was still open (a large query read in part) on an ODBC or Informix DRDA
+  connection freed the statement after its connection, which could crash Celer; the statement is now freed first.
+- Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row
+  in each batch, and dates go into Informix DATE columns as `MDY(…)` whatever DBDATE says.
+- **Informix over DRDA on Windows: database names and the explorer** (#117). IBM's CLI driver on Windows writes
+  32-bit lengths like on Linux and macOS, so names came back padded with invisible characters or empty, and an empty
+  one made the explorer stop updating until Celer restarted (stale environment chips, a connection still shown
+  connected and «Cargando…» after disconnecting). Names now read correctly, and an odd name from any driver can no
+  longer stop the explorer.
+- **Error log and reports** (#122, #112). The scrubber now also cleans the message at the head of UI error stacks, host
+  names and host:port, SQL Server duplicate-key values, EXEC/WITH statements and MySQL's «Can't connect» text. «Adjuntar
+  los últimos errores» is off unless you tick it (it starts ticked only on the report opened from an unexpected error),
+  and «Capturar la ventana» leaves hidden tabs out so it works with many tabs open.
+- **Browser preview**: a SELECT that finds no rows shows an empty grid with its columns, as every engine does,
+  instead of «0 filas afectadas».
+- **Gib's eyes, in every pose, mood and activity** (#103): the pupils are clipped to the eye whites and their movement
+  is clamped to the room each pose's eyes have, so they never leave the eye (an error face used to shrink them towards
+  the corner of the drawing and throw them off the face); the lids are flaps that slide down to close, so a blink
+  always shuts the eye completely and a wide-open or happy face keeps a sliver of lid instead of losing it; every pose
+  (standing, laptop, Monday, head only) now has lids, and its eyes and lids sit in the head group, so they move with the
+  head. The animation lab (`#giblab?grid` in the dev server) shows every pose × mood × activity at once, at every size
+  and theme, and `dev/gib-lab-shots.mjs --grid` captures it and checks the eyes' geometry.
 
 ## [2.2.0] - 2026-10-09
 

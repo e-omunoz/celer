@@ -58,9 +58,9 @@ one has today.
   routines, reactions, tips learned from use and advice about the query just run; quiet or off in Settings.
 - **Safety**: read-only connections enforced in the Rust core, production connections confirm risky statements,
   passwords only in the OS credential store, damaged data files set aside instead of overwritten.
-- **Tests**: `cargo test --lib` has 136 tests, the live ones run against every engine when its `CELER_*_TEST`
-  variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix); 22 pure logic
-  checks (`dev/*-check.ts`); 22 end-to-end scripts that drive the desktop app over CDP (`dev/*-check.mjs`) plus
+- **Tests**: `cargo test --lib` has 219 tests, the live ones run against every engine when its `CELER_*_TEST`
+  variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix); 30 pure logic
+  checks (`dev/*-check.ts`); 26 end-to-end scripts that drive the desktop app over CDP (`dev/*-check.mjs`) plus
   `dev/e2e.mjs`, all run by `dev/check-all.ps1`.
 - **Performance** (debug build, PostgreSQL, 6 columns): first page of 200k rows in 3 ms; loading all 200,000 rows in
   1.3 s with a 54 MB JS heap; scrolling the grid at ~7 ms per frame.
@@ -71,17 +71,20 @@ one has today.
 Implemented in the current sprint (one branch per package, integrated in one PR; listed here so the docs match the
 code): Gib's animations, colour, accessories and reactions (#103, #104, #105); SSH tunnels, export with secrets and
 JDBC URL parsing in the import (#115, #101, #102); transaction timer and whole-window environment colours (#116,
-#117); library on any database and variables (#99, #118); MCP acting in the app and from WSL (#100, #124); results
-grid column drag, pinned result compare and typed Excel import (#109, #119, #120); settings review, error log and
-bug reports from the app (#106, #122, #112); theme editor, tear-off hint and animations (#107, #108, #110); SQL Server
-PRINT messages, Informix idle-drop recovery and E-R foreign keys in one query (#67, #97, #98); Informix point-in-time
-row history (#123).
+#117); library on any database, engine compatibility indicator and variables (#99, #113, #118); MCP acting in the app
+and from WSL (#100, #124); results grid column drag, pinned result compare and typed Excel import (#109, #119, #120);
+settings review, error log and bug reports from the app (#106, #122, #112); SQL Server PRINT messages, Informix
+idle-drop recovery and E-R foreign keys in one query (#67, #97, #98); docs refresh (#111, #121).
 
 Still open (see [docs/ROADMAP.md](docs/ROADMAP.md) for the longer view):
 
-1. **Simplify**: apply the reorganisation proposed for overgrown menus, toolbars, dialogs and settings (#111).
-2. **Working tools**: engine compatibility indicator (#113).
-3. **Docs**: keep this file and the roadmap refreshed at the end of each sprint (#121).
+1. **Simplify**: apply the reorganisation of overgrown menus, toolbars, dialogs and settings proposed on #111 (the four
+   groups were approved; one follow-up PR each).
+2. **Look and feel**: theme editor, tear-off hint and animations (#107, #108, #110), held back from this sprint
+   because the tear-off outline could hang off-screen on large displays.
+3. **Drivers**: Informix point-in-time row history (#123), held back because its transaction numbers do not identify
+   a transaction and a cancelled read was reported as «Sin cambios».
+4. **Docs**: keep this file and the roadmap refreshed at the end of each sprint (#121).
 
 ## Development
 ```powershell
