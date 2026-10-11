@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
-import { raw } from "./raw";
+import { asRaw, raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
 import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
 import type {
@@ -98,11 +98,31 @@ export interface SqlTab {
   pinned: PinnedResult[];
   /** The pinned result on show instead of the current ones (null: the current ones). */
   activePinned: string | null;
-  /** A pinned result compared with the current one (key: columns that match rows; null: guessed). */
-  compare: { pinId: string; key: string[] | null } | null;
+  /** Two results compared in this console's results area, until closed. */
+  compare: ResultComparison | null;
   /** Opened by an assistant through MCP (#100): when, and who ("claude-code · WSL (Ubuntu)"). Not saved. */
   aiOpenedAt?: number;
   aiClient?: string;
+}
+
+/**
+ * A result that can be compared: one of a console's results (`index` -1: the one on show, whatever runs next), a
+ * pinned one, or the rows a table tab has loaded.
+ */
+export type ResultRef = { kind: "result"; tabId: string; index: number } | { kind: "pin"; tabId: string; pinId: string } | { kind: "table"; tabId: string };
+
+/**
+ * `base` (the first result, "A") against `other` (the second, "B", whose columns the comparison shows). `key`: the
+ * columns that match rows (null: automatic, the primary key when one was found, else a unique column); `pk`: the
+ * primary key found for either side's table.
+ */
+export interface ResultComparison {
+  base: ResultRef;
+  other: ResultRef;
+  key: string[] | null;
+  pk: string[] | null;
+  /** Only the rows that differ are listed. */
+  onlyDiff: boolean;
 }
 
 export interface PinnedResult {
@@ -111,6 +131,8 @@ export interface PinnedResult {
   sql: string;
   at: number;
   result: ResultSet;
+  /** The result had pages not loaded yet when it was pinned: only the rows loaded then are in it. */
+  partial?: boolean;
 }
 
 export interface TableTab {
@@ -2243,7 +2265,7 @@ function concatRows(current: Cell[][], extra: Cell[][]): Cell[][] {
   const out = new Array<Cell[]>(base.length + extra.length);
   for (let i = 0; i < base.length; i++) out[i] = base[i];
   for (let i = 0; i < extra.length; i++) out[base.length + i] = extra[i];
-  return out;
+  return asRaw(out);
 }
 
 export async function changeAutocommit(on: boolean) {
@@ -2682,6 +2704,32 @@ export function insertTableRow(tabId: string, from?: number) {
   patchTab(tab.id, { inserts: [...tab.inserts, row] });
 }
 
+/**
+ * A block pasted into the table viewer (copied from Excel or another grid): each cell becomes a pending edit, and
+ * rows past the last one become new rows. `row` counts loaded rows first, then the new ones. One update for all.
+ */
+export function pasteTableCells(tabId: string, cells: { row: number; col: number; value: string | null }[]) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "table" || !cells.length) return;
+  const loaded = tab.rows.length;
+  const inserts = tab.inserts.map((line) => line.slice());
+  const edits = { ...tab.edits };
+  const deleted = new Set(tab.deleted);
+  for (const { row, col, value } of cells) {
+    if (col < 0 || col >= tab.columnsMeta.length || deleted.has(row)) continue;
+    if (row >= loaded) {
+      while (inserts.length <= row - loaded) inserts.push(tab.columnsMeta.map(() => null));
+      inserts[row - loaded][col] = value;
+      continue;
+    }
+    const original = tab.rows[row]?.[col];
+    const same = (original === null && value === null) || (original !== null && original !== undefined && value !== null && String(original) === value);
+    if (same) delete edits[`${row}:${col}`];
+    else edits[`${row}:${col}`] = value;
+  }
+  patchTab(tab.id, { edits, inserts });
+}
+
 /** Undoes pending changes: one cell's edit, or everything on a row (edits, its deletion, or the new row itself). */
 export function revertTableChange(tabId: string, row: number, col: number | null) {
   const tab = state.tabs[tabIndex(tabId)];
@@ -3012,6 +3060,7 @@ export function pinResult(tabId: string) {
     sql: exportStatement(tab.resultsSql || tab.lastSql, kindOf(tab.connId), grids.indexOf(result), grids.length) ?? (tab.resultsSql || tab.lastSql),
     at: Date.now(),
     result: { ...result, hasMore: false },
+    partial: result.hasMore,
   };
   patchTab(tabId, { pinned: [...tab.pinned, pin], activePinned: pin.id });
   if (result.hasMore) notify("Resultado fijado con las filas cargadas", "info", "Las páginas pendientes no se incluyen: usa «Cargar todo» antes de fijar si las necesitas.");
@@ -3021,20 +3070,40 @@ export function showPinned(tabId: string, pinId: string) {
   patchTab(tabId, { activePinned: pinId, activePlan: false, compare: null });
 }
 
+const refersTo = (ref: ResultRef, tabId: string, pinId: string) => ref.kind === "pin" && ref.tabId === tabId && ref.pinId === pinId;
+
 export function unpinResult(tabId: string, pinId: string) {
   const tab = state.tabs[tabIndex(tabId)];
   if (tab?.kind !== "sql") return;
   patchTab(tabId, {
     pinned: tab.pinned.filter((pin) => pin.id !== pinId),
     activePinned: tab.activePinned === pinId ? null : tab.activePinned,
-    compare: tab.compare?.pinId === pinId ? null : tab.compare,
   });
+  // A comparison with it (in any console of this window) has nothing left to compare.
+  for (const other of state.tabs) {
+    if (other.kind === "sql" && other.compare && (refersTo(other.compare.base, tabId, pinId) || refersTo(other.compare.other, tabId, pinId))) patchTab(other.id, { compare: null });
+  }
 }
 
 /** The result a pinned one is compared with: the current result on show, else the first one with rows. */
 export function currentResultOf(tab: SqlTab): ResultSet | undefined {
   const active = tab.activeResult >= 0 ? tab.results[tab.activeResult] : undefined;
   return active?.columns.length ? active : tab.results.find((r) => r.columns.length);
+}
+
+/** What a console has on show, as a result to compare: a pinned result, or one of its results. */
+export function shownResultRef(tab: SqlTab): ResultRef | null {
+  if (tab.activePinned && tab.pinned.some((pin) => pin.id === tab.activePinned)) return { kind: "pin", tabId: tab.id, pinId: tab.activePinned };
+  if (tab.activeResult >= 0 && tab.results[tab.activeResult]?.columns.length) return { kind: "result", tabId: tab.id, index: tab.activeResult };
+  return null;
+}
+
+/** Compares two results in the results area of console `tabId` (until closed): `base` is A, `other` is B. */
+export function openComparison(tabId: string, base: ResultRef, other: ResultRef, key: string[] | null = null) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql") return;
+  const compare: ResultComparison = { base, other, key, pk: null, onlyDiff: false };
+  patchTab(tabId, { compare, activePinned: null, activePlan: false });
 }
 
 /** Compares a pinned result with the current one (in the results area, until closed). */
@@ -3045,13 +3114,17 @@ export function compareWithCurrent(tabId: string, pinId: string) {
     notify("No hay un resultado actual con filas para comparar", "warning", "Ejecuta la consulta (otra vez, o una distinta) y compara el resultado fijado con el nuevo.");
     return;
   }
-  patchTab(tabId, { compare: { pinId, key: null }, activePinned: null, activePlan: false });
+  openComparison(tabId, { kind: "pin", tabId, pinId }, { kind: "result", tabId, index: -1 });
+}
+
+export function patchCompare(tabId: string, patch: Partial<ResultComparison>) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql" || !tab.compare) return;
+  patchTab(tabId, { compare: { ...tab.compare, ...patch } });
 }
 
 export function setCompareKey(tabId: string, key: string[] | null) {
-  const tab = state.tabs[tabIndex(tabId)];
-  if (tab?.kind !== "sql" || !tab.compare) return;
-  patchTab(tabId, { compare: { ...tab.compare, key } });
+  patchCompare(tabId, { key });
 }
 
 export function closeCompare(tabId: string) {

@@ -144,8 +144,9 @@ impl LinkStmt for Stmt {
 pub struct LinkDriver<L: Link> {
     cfg: ConnConfig,
     dialect: Dialect,
-    conn: L,
+    /// Before `conn`: fields drop in order, and a statement must be freed while its connection is still open.
     stmt: Option<L::Stmt>,
+    conn: L,
     /// Statements of a batch still to run (Informix runs one statement per call: the batch is split).
     pending: VecDeque<String>,
     /// Statements of a script dropped with its open result, told in the next execute's messages.
@@ -157,6 +158,14 @@ pub struct LinkDriver<L: Link> {
     /// usuario la cambia).
     db_known: bool,
     quote: String,
+}
+
+impl<L: Link> Drop for LinkDriver<L> {
+    /// A console closed with a result still open: its statement goes first. Freed after the connection, the handle
+    /// was one the driver had already released with it (a crash when tabs were closed after a large query).
+    fn drop(&mut self) {
+        self.stmt = None;
+    }
 }
 
 pub type OdbcDriver = LinkDriver<OdbcConn>;

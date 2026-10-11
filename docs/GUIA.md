@@ -212,12 +212,29 @@ Los resultados llegan por páginas desde un cursor abierto: aunque la consulta d
 las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
 
 - **Filtro rápido** sobre las filas cargadas.
-- **Fijar un resultado** lo conserva al volver a ejecutar; **Comparar** lo enfrenta al resultado actual y marca las
-  celdas cambiadas, las filas nuevas y las que desaparecen.
+- **Fijar resultado** (la chincheta) lo conserva al volver a ejecutar: queda en su propia pestaña de resultado, con
+  la chincheta, y el nuevo resultado aparece al lado. El botón de comparar de esa pestaña lo enfrenta al resultado
+  actual.
+- **Comparar con…** (en la barra de resultados o en la paleta) enfrenta el resultado que ves (B) con otro que eliges
+  (A): otro resultado o uno fijado de esta consola, de otra consola (también de otra conexión, por ejemplo producción
+  frente a preproducción) o las filas cargadas de una tabla abierta.
+  - Las filas se emparejan por la **clave primaria** cuando un lado es una tabla (una pestaña de tabla o un
+    `SELECT … FROM tabla` sencillo); si no, por una columna única. En *Clave* puedes elegir una o varias columnas, o
+    comparar filas enteras.
+  - Verás cuántas filas son iguales, cuántas cambian y cuántas están solo en A o solo en B; las celdas cambiadas se
+    marcan (al pasar el ratón, su valor en A), las filas que solo están en A aparecen tachadas y las de B al final.
+    *Solo diferencias* oculta las iguales e *Intercambiar* cambia A y B.
+  - *Exportar* guarda lo que ves en CSV o JSON, con una columna *estado* y, por cada columna con cambios, su valor en A.
+  - Los valores se comparan por lo que significan: 12.50 y 12.5, true y 1, o una fecha escrita de dos formas son
+    iguales, así que se pueden comparar resultados de dos motores distintos.
+  - Se comparan las filas cargadas (hasta 200.000 por lado). Si un lado tiene más, se avisa y se ofrece *Cargar todo*;
+    un resultado fijado antes de cargar todas sus páginas se queda con las que tenía.
 - **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
-- **Mover columnas**: arrastra la cabecera de una columna y suéltala donde quieras; una línea marca dónde caerá y, cerca
-  del borde, la rejilla se desplaza sola. Esc durante el arrastre la deja donde estaba. Un clic en la cabecera sigue
-  seleccionando la columna y Mayús+clic (o Mayús y arrastrar) selecciona varias.
+- **Mover columnas**: arrastra la cabecera de una columna y la columna entera se levanta (semitransparente, con
+  sombra); las demás se apartan para abrirle hueco donde caerá y, cerca del borde, la rejilla se desplaza sola. Al
+  soltarla se acomoda en su sitio; Esc durante el arrastre la devuelve a donde estaba. Con *Animaciones: Reducidas*
+  las columnas saltan en lugar de deslizarse. Un clic en la cabecera sigue seleccionando la columna y Mayús+clic (o
+  Mayús y arrastrar) selecciona varias.
   - Todo sigue el orden de la pantalla: la selección, las flechas y Tab, **Copiar** (con cabeceras y en todos los
     formatos), la búsqueda, el panel de registro y **Exportar**, que escribe las columnas en ese orden aunque vuelva a
     leer la consulta del servidor.
@@ -242,8 +259,19 @@ Doble clic en una tabla del explorador la abre.
 - **Claves foráneas**: las columnas FK llevan ↗ en la cabecera. Ctrl+clic en un valor abre la fila referenciada.
 - **Columnas**: se mueven arrastrando la cabecera, como en los resultados; la edición, la copia y la exportación siguen
   ese orden.
-- **Importar datos** (menú de la tabla): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con mapeo de columnas y
-  todo en una transacción.
+- **Importar datos** (menú de la tabla o botón de la pestaña): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con
+  mapeo de columnas y todo en una transacción.
+  - En una hoja, Celer busca la **fila de cabeceras** (salta un título o notas que haya encima); en *Cabeceras* puedes
+    elegir otra fila o ninguna. En *Rango* puedes limitar las celdas como en Excel: `B3:F200`, `B3:F` (hasta la
+    última fila), `B:F` o vacío para todo.
+  - Fechas, números y booleanos se importan **con su tipo** y se convierten al de cada columna: una fecha con hora en
+    una columna DATE se queda con la fecha y los decimales no pasan por texto.
+  - Un libro grande se lee con progreso y se puede cancelar; las filas se importan por tramos.
+  - **Pegar desde Excel**: copia las celdas en Excel y pulsa Ctrl+V en el asistente (o *Pegar celdas copiadas de
+    Excel*). Se leen como una hoja: con sus cabeceras, y `1.234,50`, `15/03/2024` o `VERDADERO` como número, fecha y
+    booleano.
+- **Pegar en la tabla**: Ctrl+V en la rejilla de una tabla pega el bloque copiado desde la celda activa como cambios
+  pendientes (las filas que sobran pasan a ser filas nuevas); se guardan con *Guardar*, como cualquier edición.
 
 Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,
 UPSERT/MERGE, DELETE, DROP y su DDL.

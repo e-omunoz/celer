@@ -26,6 +26,12 @@ All notable changes to Celer are documented here. The format follows
   every engine (`*_silent_cut` and `*_kill_and_requery` engine tests); generic ODBC sources are checked with a
   catalog call now (before, a cut was only noticed by its error).
 
+- **Moving a result column lifts the whole column** (#109): dragging a header picks up the column with its visible
+  cells as a semi-transparent ghost with a shadow, and the other columns slide aside live to open the gap where it will
+  land (no drop line any more). Near the edges the grid scrolls by itself; dropping lets the column settle into its
+  place and Esc flies it back where it was. With "Animaciones: Reducidas" (or the system's reduced motion) the columns
+  jump instead of sliding. Only the rows on screen are drawn, so it stays smooth on wide, long results.
+
 ### Fixed
 - MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
 - Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
@@ -124,6 +130,44 @@ All notable changes to Celer are documented here. The format follows
   table): the execution plan (not on Informix or generic ODBC), the real plan (PostgreSQL and MariaDB), server
   activity (not on SQLite or generic ODBC), and the E-R diagram and schema comparison (not on generic ODBC), in the
   console's toolbar, the explorer's menus, the palette and the shortcuts.
+- **Compare** (#119): «Cargar todo» while comparing a result with over 120,000 rows only in B no longer ends in a stack overflow that left the console on «Ejecutando…»; decimals written with a comma (Informix DRDA on Windows, `12,50`) equal their dot form.
+- **Informix over DRDA on Windows** (#117, #119, #120): the IBM CLI driver's indicator arrays are read the way the driver wrote them (4 or 8 bytes per row, detected on each block), so names are no longer cut or padded with NULs and NULLs are no longer read as empty text.
+- Result grid (#109): loading the rest of a very large result (200 columns, 100,000 rows) no longer freezes the window
+  for about 700 ms per page, and pressing or dropping a column header no longer works the column's statistics out in
+  one go, so dragging a header stays smooth.
+- Importing a workbook whose title sits in column A above a table that starts in column B (#120) no longer adds an
+  empty «columna A» to the columns and the mapping: without a range, the columns are those of the header row and
+  the rows under it.
+- DECIMAL and NUMERIC values read through ODBC or Informix DRDA keep a decimal point: IBM's CLI driver on a Spanish
+  Windows wrote them with a comma (`12,50`), and Microsoft's old «SQL Server» ODBC driver without the leading zero
+  (`.10`, `-.75`); both now read as plain numbers (`12.50`, `0.10`, `-0.75`).
+- Closing a console or tab whose result was still open (a large query read in part) on an ODBC or Informix DRDA
+  connection freed the statement after its connection, which could crash Celer; the statement is now freed first.
+- Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row
+  in each batch, and dates go into Informix DATE columns as `MDY(…)` whatever DBDATE says.
+
+- **Compare any two results** (#119): «Comparar con…» in the results bar (and «Comparar resultado con…» in the
+  palette) sets the result on show against another one: a result or pinned result of the same console, of another
+  console or another connection, or the rows a table tab has loaded. Rows are matched by the primary key when a side
+  is a table (a table tab, or a plain `SELECT … FROM table`), else by a unique column, or by the key columns chosen
+  (several at once, or the whole row). The comparison shows A and B with their console and connection, counts
+  (equal, changed, only in A, only in B), changed cells marked with A's value on hover, «Solo diferencias» to list
+  only what differs, «Intercambiar» and an export of what is on show to CSV or JSON (a state column and, for each
+  changed column, its value in A). Values are compared by what they mean, so the same data from two engines matches
+  (12.50 and 12.5, true and 1, `2024-03-15T00:00:00` and `2024-03-15`). It works on the loaded rows: when a side has
+  more, the view says so and offers «Cargar todo»; at most 200,000 rows per side are compared. «Fijar resultado» is
+  also in the palette, and a result pinned before all its pages arrived says so.
+- **Excel import with types, header row and range** (#120): the import wizard finds the header row of a sheet
+  (skipping a title or notes above it; any row can be chosen, or none) and takes a cell range (`B3:F200`, `B3:F`,
+  `B:F`). Dates, numbers and booleans arrive with their type and are written for each column's type (a date-time into
+  a DATE keeps the date, a serial number into a date column is a date, no text round trip that breaks decimals);
+  mapping, examples, required-column warnings and the single transaction are the same as for CSV. The sheet is read
+  by the core with progress and «Cancelar», and imported in chunks, so a 100,000-row workbook never sits in the window
+  as text.
+- **Paste from Excel** (#120): Ctrl+V (or «Pegar celdas copiadas de Excel») in the import wizard imports the copied
+  cells the same way (header found, Spanish formats such as `1.234,50`, `15/03/2024` or `VERDADERO` read as numbers,
+  dates and booleans). In the table viewer, Ctrl+V pastes the block from the active cell as pending edits, with new
+  rows past the last one.
 
 ## [2.2.0] - 2026-10-09
 

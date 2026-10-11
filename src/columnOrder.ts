@@ -62,3 +62,56 @@ export function dropGap(xs: readonly number[], x: number): number {
 export function inOrder<T>(items: readonly T[], order: readonly number[]): T[] {
   return order.map((index) => items[index]);
 }
+
+/**
+ * While a column is dragged the others slide to open a gap for it: the gap where the column at screen position
+ * `from`, its ghost's left edge at `left`, would drop. `widths` are the screen columns' widths and `start` the left
+ * edge of the first (after the gutter). The column takes the slot among the others (packed without it) whose left
+ * edge is nearest to the ghost's: it passes a neighbour once it has covered half of that neighbour's width, either
+ * way, and the result depends only on where the ghost is (no flicker back and forth).
+ */
+export function slideGap(widths: readonly number[], from: number, left: number, start = 0): number {
+  if (from < 0 || from >= widths.length) return Math.max(0, from);
+  let x = start;
+  let slot = 0;
+  for (let col = 0; col < widths.length; col++) {
+    if (col === from) continue;
+    if (left <= x + widths[col] / 2) break;
+    slot++;
+    x += widths[col];
+  }
+  // `slot` is the place it takes among the others; as a gap of the current order (see moveColumn).
+  return slot <= from ? slot : slot + 1;
+}
+
+/**
+ * Left edge of each query column (indexed by query column, not by screen position) when the screen order is
+ * `order` and `widthOf(query column)` gives the widths: where the columns slide to while a move is previewed.
+ */
+export function layoutByColumn(order: readonly number[], widthOf: (col: number) => number, start = 0): Float64Array {
+  const xs = new Float64Array(order.length);
+  let x = start;
+  for (const col of order) {
+    xs[col] = x;
+    x += widthOf(col);
+  }
+  return xs;
+}
+
+/**
+ * One frame of the slide: each position eases towards its target (exponentially, `tau` ms) and snaps once within
+ * half a pixel; `instant` (reduced motion) jumps straight there. True while anything is still moving.
+ */
+export function easeTowards(current: Float64Array, target: Float64Array, dt: number, tau = 45, instant = false): boolean {
+  const k = instant ? 1 : 1 - Math.exp(-Math.max(0, dt) / tau);
+  let moving = false;
+  for (let i = 0; i < current.length; i++) {
+    const diff = target[i] - current[i];
+    if (k >= 1 || Math.abs(diff) < 0.5) current[i] = target[i];
+    else {
+      current[i] += diff * k;
+      moving = true;
+    }
+  }
+  return moving;
+}
