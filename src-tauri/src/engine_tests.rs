@@ -1773,6 +1773,8 @@ fn ssh_tunnel_auth_jumps_and_refusals() {
     eprintln!("SSH ✔ clave cambiada rechazada: {e}");
     let _ = std::fs::remove_dir_all(&changed.dir);
     let _ = std::fs::remove_dir_all(&store.dir);
+}
+
 // ───────────────────────────────────────────────────────────────── a schema's foreign keys at once (#98)
 
 use crate::model::SchemaForeignKey;
