@@ -59,8 +59,9 @@ pub fn request(dir: &Path, action: &str, args: Value, client: &str, timeout: Dur
     let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|_| NOT_RUNNING.to_string())?;
     let _ = stream.set_nodelay(true);
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?.take(MAX_LINE));
-    // A Celer says hello at once; anything else on that port is not one.
-    stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
+    // A Celer says hello at once; anything else on that port is not one. The timeouts go on the handle that reads:
+    // on Windows a cloned socket handle does not see a timeout set on the other one (a silent port hung for ever).
+    reader.get_ref().get_ref().set_read_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
     let mut hello = String::new();
     if reader.read_line(&mut hello).is_err() || serde_json::from_str::<Value>(&hello).ok().and_then(|v| v.get(HELLO).cloned()).is_none() {
         return Err(NOT_RUNNING.to_string());
@@ -69,7 +70,7 @@ pub fn request(dir: &Path, action: &str, args: Value, client: &str, timeout: Dur
     writer.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
     let body = json!({"token": ep.token, "action": action, "args": args, "client": client});
     writeln!(writer, "{body}").and_then(|_| writer.flush()).map_err(|_| NOT_RUNNING.to_string())?;
-    stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    reader.get_ref().get_ref().set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
     let mut line = String::new();
     match reader.read_line(&mut line) {
         Ok(n) if n > 0 => {}
