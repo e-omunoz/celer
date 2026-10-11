@@ -17,16 +17,40 @@ import {
   normalizeTags,
   parseSqlFile,
   parentFolder,
+  normalizeEngine,
+  normalizeTargets,
   removeFolder,
   renameFolder,
+  schemaSetupSql,
+  scriptIdOf,
   serializeLibrary,
+  targetHasDatabase,
   withParents,
+  type EngineTag,
   type LibraryData,
   type LibraryScript,
   type LibrarySort,
+  type RunTarget,
+  type ScriptParam,
 } from "./libraryModel";
-import { activeSql, connectionById, isDefaultConsoleTitle, notify, openInspector, openQuery, patchTab, persistSoon, runActive, selectTab, state, uid } from "./state";
-import type { SqlTab } from "./state";
+import { guessEngines, kindLabel, needsEngineConfirm, type EngineGuess } from "./engineCompat";
+import {
+  activeSql,
+  confirmDialog,
+  connectionById,
+  isDefaultConsoleTitle,
+  notify,
+  openInspector,
+  openQuery,
+  patchTab,
+  persistSoon,
+  prepareConsoleSession,
+  runActive,
+  selectTab,
+  state,
+  uid,
+} from "./state";
+import type { ParamAnswer, SqlTab } from "./state";
 import { forwardFromPanel } from "./windows";
 
 export type { LibraryScript } from "./libraryModel";
@@ -37,17 +61,20 @@ interface LibraryView {
   sort: LibrarySort;
   /** Only the scripts of the active console's connection (and those of none). */
   onlyConn: boolean;
+  /** Only the scripts that fit the active console's engine (engineCompat.ts). */
+  onlyCompat: boolean;
   collapsed: string[];
 }
 
 function loadView(): LibraryView {
-  const fallback: LibraryView = { sort: "name", onlyConn: false, collapsed: [] };
+  const fallback: LibraryView = { sort: "name", onlyConn: false, onlyCompat: false, collapsed: [] };
   try {
     const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null") as Partial<LibraryView> | null;
     if (!raw) return fallback;
     return {
       sort: raw.sort === "recent" ? "recent" : "name",
       onlyConn: raw.onlyConn === true,
+      onlyCompat: raw.onlyCompat === true,
       collapsed: Array.isArray(raw.collapsed) ? raw.collapsed.filter((f): f is string => typeof f === "string") : [],
     };
   } catch {
@@ -64,6 +91,7 @@ export const [library, setLibrary] = createStore({
   query: "",
   sort: view.sort,
   onlyConn: view.onlyConn,
+  onlyCompat: view.onlyCompat,
   collapsed: view.collapsed,
   /** The row with the keyboard focus: "s:<id>" or "f:<folder>". */
   selected: "",
@@ -75,6 +103,8 @@ export const [library, setLibrary] = createStore({
   naming: null as { tabId: string; name: string; folder: string } | null,
   /** Bumped to move the focus to the search box (palette: "Buscar en la biblioteca"). */
   focusSearch: 0,
+  /** «Ejecutar en…» open for this script: pick the targets, then open or run. */
+  runOn: null as { scriptId: string } | null,
 });
 
 /** Top-level fields of library.json this version does not know: written back as they were. */
@@ -130,7 +160,7 @@ async function persist() {
 
 function saveView() {
   try {
-    localStorage.setItem(VIEW_KEY, JSON.stringify({ sort: library.sort, onlyConn: library.onlyConn, collapsed: library.collapsed }));
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ sort: library.sort, onlyConn: library.onlyConn, onlyCompat: library.onlyCompat, collapsed: library.collapsed }));
   } catch {
     // Not kept: the panel opens with the defaults next time.
   }
@@ -144,6 +174,16 @@ export function setLibrarySort(sort: LibrarySort) {
 export function setOnlyConn(on: boolean) {
   setLibrary("onlyConn", on);
   saveView();
+}
+
+export function setOnlyCompat(on: boolean) {
+  setLibrary("onlyCompat", on);
+  saveView();
+}
+
+/** The engines a script is for: what the user set, else its SQL's dialect, else the connection it belongs to. */
+export function scriptGuess(script: LibraryScript): EngineGuess {
+  return guessEngines(script.sql, { override: script.engine, connKind: connectionById(script.connId)?.kind });
 }
 
 export function toggleFolder(folder: string, open?: boolean) {
@@ -178,8 +218,14 @@ export function libraryDirty(id: string): boolean {
 export function currentFolder(): string {
   const key = library.selected;
   if (key.startsWith("f:")) return key.slice(2);
-  if (key.startsWith("s:")) return scriptById(key.slice(2))?.folder ?? "";
-  return "";
+  const id = scriptIdOf(key);
+  return id ? (scriptById(id)?.folder ?? "") : "";
+}
+
+/** The selected script, if a script row is selected. */
+export function selectedScript(): LibraryScript | undefined {
+  const id = scriptIdOf(library.selected);
+  return id ? scriptById(id) : undefined;
 }
 
 // ---------------------------------------------------------------- saving consoles
@@ -334,6 +380,120 @@ export async function openLibraryScript(id: string, run = false) {
   }
 }
 
+// ---------------------------------------------------------------- «Ejecutar en…»
+
+/** Opens «Ejecutar en…» for a script (in the window with the consoles when asked from the library's own window). */
+export function openRunOn(id: string) {
+  if (forwardFromPanel("library-run-on", { id })) return;
+  if (!scriptById(id)) return;
+  setLibrary("runOn", { scriptId: id });
+}
+
+export function closeRunOn() {
+  setLibrary("runOn", null);
+}
+
+/** The targets offered when «Ejecutar en…» opens: the last ones, else the script's connection, else the console's. */
+export function defaultTargets(script: LibraryScript): RunTarget[] {
+  const last = (script.targets ?? []).filter((t) => connectionById(t.connId));
+  if (last.length) return last.map((t) => ({ ...t }));
+  const connId = connectionById(script.connId) ? script.connId! : activeSql()?.connId ?? state.connections[0]?.id;
+  if (!connId) return [];
+  const sameConsole = activeSql()?.connId === connId ? activeSql()?.database ?? "" : "";
+  return [{ connId, database: targetHasDatabase(connectionById(connId)?.kind) ? sameConsole : "" }];
+}
+
+/** "Producción · ventas / public": how a target is named in titles and messages. */
+export function targetLabel(target: RunTarget): string {
+  const conn = connectionById(target.connId);
+  return [conn?.name ?? "Conexión borrada", [target.database, target.schema].filter(Boolean).join(" / ")].filter(Boolean).join(" · ");
+}
+
+/**
+ * «Ejecutar en…»: the script on each target, one console per target (its results in that console's tab). `open`
+ * only opens the consoles (to choose a statement and run it there); `run` runs the whole script in each, one after
+ * the other: production and "no WHERE" confirmations are asked per target, parameters once (on the first target).
+ * The targets are remembered for next time.
+ */
+export async function runLibraryOn(id: string, targets: RunTarget[], action: "run" | "open") {
+  const script = scriptById(id);
+  if (!script) return;
+  const valid = normalizeTargets(targets).filter((t) => connectionById(t.connId));
+  if (!valid.length) {
+    notify("Elige al menos una conexión", "warning");
+    return;
+  }
+  // Written for another engine (marked by hand, or by its own SQL): say so before running anything.
+  const guess = scriptGuess(script);
+  const others = valid.filter((t) => needsEngineConfirm(guess, connectionById(t.connId)?.kind));
+  if (action === "run" && others.length) {
+    const engines = guess.engines.map(kindLabel).join(", ");
+    const where = others.map((t) => `«${targetLabel(t)}» (${kindLabel(connectionById(t.connId)!.kind)})`).join(", ");
+    const ok = await confirmDialog(
+      "El script es para otro motor",
+      `«${script.name}» está ${guess.source === "override" ? "marcado" : "escrito"} para ${engines}, y ${others.length === 1 ? "el destino" : "los destinos"} ${where} no ${others.length === 1 ? "lo es" : "lo son"}. Puede fallar o hacer otra cosa.`,
+      "Ejecutar de todos modos",
+      true,
+    );
+    if (!ok) return;
+  }
+  setLibrary("scripts", (s) => s.id === id, { targets: valid, usedAt: Date.now() });
+  void persist();
+  const many = valid.length > 1;
+  let params: ParamAnswer | undefined;
+  let cancelled = false;
+  let done = 0;
+  for (const target of valid) {
+    const conn = connectionById(target.connId)!;
+    const where = targetLabel(target);
+    // One target: the script's own console when it is open right there; otherwise a console of its own.
+    const open = consoleOf(id);
+    const reuse = !many && open && open.connId === target.connId && !target.schema && (!target.database || open.database.toLowerCase() === target.database.toLowerCase());
+    let tabId: string;
+    if (reuse) {
+      tabId = open.id;
+      selectTab(tabId);
+    } else {
+      tabId = openQuery(target.connId, script.sql, many ? `${script.name} · ${where}` : script.name, {
+        database: target.database || undefined,
+        libraryId: !many && !open ? script.id : undefined,
+      });
+      persistSoon();
+    }
+    const setup = schemaSetupSql(conn.kind, target.schema);
+    if (setup) {
+      try {
+        await prepareConsoleSession(tabId, setup);
+      } catch (err) {
+        notify(`No se pudo preparar «${where}»: no se ha ejecutado ahí`, "error", errorText(err));
+        continue;
+      }
+    }
+    if (action === "open") continue;
+    // The editor of the new console mounts first; the run happens in that console.
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    selectTab(tabId);
+    const ran = await runActive("script", undefined, {
+      params,
+      onParams: (answer) => (params = answer),
+      onParamsCancelled: () => (cancelled = true),
+      database: target.database || undefined,
+      declared: script.params,
+    });
+    if (ran) done++;
+    // The parameters dialog was cancelled: the other targets are not run either.
+    if (cancelled) break;
+  }
+  if (many && action === "run") notify(`«${script.name}» ejecutado en ${done} de ${valid.length} destinos`, done === valid.length ? "success" : "warning", "Cada destino tiene su consola con sus resultados.");
+}
+
+export async function toggleFavorite(id: string) {
+  const script = scriptById(id);
+  if (!script) return;
+  setLibrary("scripts", (s) => s.id === id, "favorite", script.favorite ? undefined : true);
+  await persist();
+}
+
 /** Pastes the script at the cursor of the active console (or opens a console with it). */
 export function insertLibraryScript(id: string) {
   if (forwardFromPanel("library-insert", { id })) return;
@@ -363,8 +523,11 @@ export async function renameLibraryScript(id: string, name: string) {
   await persist();
 }
 
-/** Name, folder, tags and connection at once (the details form). */
-export async function updateLibraryScript(id: string, patch: { name?: string; folder?: string; tags?: string | string[]; connId?: string | null }) {
+/** Name, folder, tags, connection, description, engine and parameters at once (the details form). */
+export async function updateLibraryScript(
+  id: string,
+  patch: { name?: string; folder?: string; tags?: string | string[]; connId?: string | null; description?: string; engine?: EngineTag | ""; params?: ScriptParam[] },
+) {
   const script = scriptById(id);
   if (!script) return;
   const next: Partial<LibraryScript> = {};
@@ -372,6 +535,10 @@ export async function updateLibraryScript(id: string, patch: { name?: string; fo
   if (patch.folder !== undefined) next.folder = normalizeFolder(patch.folder);
   if (patch.tags !== undefined) next.tags = normalizeTags(patch.tags);
   if (patch.connId !== undefined) next.connId = patch.connId || null;
+  // Cleared fields go away (undefined), as if they had never been set.
+  if (patch.description !== undefined) next.description = patch.description.trim().slice(0, 2000) || undefined;
+  if (patch.engine !== undefined) next.engine = normalizeEngine(patch.engine);
+  if (patch.params !== undefined) next.params = patch.params.length ? patch.params : undefined;
   setLibrary("scripts", (s) => s.id === id, { ...next, updatedAt: Date.now() });
   if (next.folder) setLibrary("folders", (list) => withParents(list, [{ ...script, ...next } as LibraryScript]));
   if (next.name) {
@@ -386,7 +553,7 @@ export async function duplicateLibraryScript(id: string) {
   const script = scriptById(id);
   if (!script) return;
   const now = Date.now();
-  const copy: LibraryScript = { ...script, id: uid(), name: copyName(script.name, library.scripts.map((s) => s.name)), createdAt: now, updatedAt: now, usedAt: undefined };
+  const copy: LibraryScript = { ...script, id: uid(), name: copyName(script.name, library.scripts.map((s) => s.name)), createdAt: now, updatedAt: now, usedAt: undefined, favorite: undefined };
   const at = library.scripts.findIndex((s) => s.id === id);
   setLibrary("scripts", (list) => [...list.slice(0, at + 1), copy, ...list.slice(at + 1)]);
   setLibrary({ selected: `s:${copy.id}`, renaming: `s:${copy.id}` });
@@ -510,7 +677,19 @@ export async function importLibraryFiles() {
       const { text } = await api().readTextFile(path);
       const now = Date.now();
       for (const item of parseSqlFile(path, text)) {
-        added.push({ id: uid(), name: item.name, sql: item.sql, connId: null, folder: joinFolder(into, item.folder), tags: item.tags, createdAt: now, updatedAt: now });
+        added.push({
+          id: uid(),
+          name: item.name,
+          sql: item.sql,
+          connId: null,
+          folder: joinFolder(into, item.folder),
+          tags: item.tags,
+          createdAt: now,
+          updatedAt: now,
+          ...(item.description ? { description: item.description } : {}),
+          ...(item.engine ? { engine: item.engine } : {}),
+          ...(item.params ? { params: item.params } : {}),
+        });
       }
     } catch (err) {
       failed.push(`${path.split(/[\\/]/).pop()}: ${errorText(err)}`);

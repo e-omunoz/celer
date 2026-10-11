@@ -122,6 +122,8 @@ import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
+import { unsupportedReason } from "../engineCompat";
+import { resolvedFor, scopeText } from "../variableStore";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
 import { aiBadgeTitle } from "../mcpApp";
@@ -349,6 +351,8 @@ function SqlPane(props: { tab: SqlTab }) {
   const current = () => (props.tab.activeResult >= 0 ? props.tab.results[props.tab.activeResult] : undefined);
   /** What the grid shows: a pinned result, or the current one. */
   const result = () => pinned()?.result ?? current();
+  /** The engine has no plan Celer reads (Informix, generic ODBC): the button says so instead of failing. */
+  const planMissing = () => (props.tab.connId ? unsupportedReason("plan", kindOf(props.tab.connId)) : null);
   // Quick filter over the rows already loaded (any column contains the text, case-insensitive).
   const [filterOpen, setFilterOpen] = createSignal(false);
   const [filterText, setFilterText] = createSignal("");
@@ -458,7 +462,13 @@ function SqlPane(props: { tab: SqlTab }) {
         <button type="button" class="tb-icon" title={withShortcut("Ejecutar script completo", "run-script")} disabled={props.tab.running} onClick={() => void runActive("script")}>
           <PlayCircle size={16} />
         </button>
-        <button type="button" class="tb-icon" title={withShortcut("Plan de ejecución", "explain")} disabled={props.tab.running} onClick={() => void runActive("explain")}>
+        <button
+          type="button"
+          class="tb-icon"
+          title={planMissing() ?? withShortcut("Plan de ejecución", "explain")}
+          disabled={props.tab.running || Boolean(planMissing())}
+          onClick={() => void runActive("explain")}
+        >
           <Gauge size={16} />
         </button>
         <span class="tb-sep" />
@@ -503,6 +513,8 @@ function SqlPane(props: { tab: SqlTab }) {
           kind={kindOf(props.tab.connId)}
           tables={completionTables(props.tab)}
           snippets={allSnippets(kindOf(props.tab.connId), state.settings.snippets)}
+          variables={resolvedFor(props.tab)}
+          variableScope={(variable) => scopeText(variable, props.tab.connId)}
           keymap={state.settings.keymap}
           defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
           onOpenTable={(table) => openTableFromSql(props.tab, table)}

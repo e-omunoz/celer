@@ -132,7 +132,7 @@ async function act(action: string, args: Record<string, unknown>, client: string
 async function runIn(tabId: string, sql: string, client: string): Promise<Record<string, unknown>> {
   const before = state.tabs.find((tab) => tab.id === tabId);
   const outputs = before?.kind === "sql" ? before.output.length : 0;
-  await runActive("script", sql, tabId, client || "ai");
+  await runActive("script", sql, { tabId, fromAi: client || "ai" });
   const tab = state.tabs.find((item) => item.id === tabId);
   if (tab?.kind !== "sql") return { ran: false, reason: "La consola se cerró" };
   const last = tab.output.length > outputs ? tab.output[tab.output.length - 1] : null;

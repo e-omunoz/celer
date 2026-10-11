@@ -62,7 +62,8 @@ import {
   type Tab,
   type TableTab,
 } from "./state";
-import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, openLibraryScript, revertConsole, saveToLibrary, scriptById } from "./library";
+import { applySharedVariables } from "./variableStore";
+import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, openLibraryScript, openRunOn, revertConsole, saveToLibrary, scriptById } from "./library";
 import { handleMcpRequest } from "./mcpApp";
 import { closeSchemaCompare, openSyncScript, schemaCompare, setSchemaCompare, swapCompare } from "./schemaCompareRun";
 import { closeDataCompare, dataCompare, openDataSyncScript, setDataCompare, swapDataCompare } from "./dataCompareRun";
@@ -305,7 +306,7 @@ function applyEntry(entry: SavedWindow, known: (id: string | null) => boolean) {
   if (entry.explorerOpen !== undefined) ui.explorerOpen = entry.explorerOpen;
   if (entry.inspectorOpen !== undefined) ui.inspectorOpen = entry.inspectorOpen;
   setState(ui);
-  if (entry.inspectorMode && ["value", "record", "history", "library", "ai"].includes(entry.inspectorMode)) setState("inspectorMode", entry.inspectorMode as typeof state.inspectorMode);
+  if (entry.inspectorMode && ["value", "record", "history", "library", "variables", "ai"].includes(entry.inspectorMode)) setState("inspectorMode", entry.inspectorMode as typeof state.inspectorMode);
 }
 
 // ---------------------------------------------------------------- saving the layout
@@ -349,6 +350,7 @@ export async function saveWindowLayout(): Promise<void> {
 function applyShared(name: string, value: unknown) {
   if (name === "settings" && value && typeof value === "object") applySharedSettings(value as Partial<Settings>);
   else if (name === "library") applySharedLibrary(value);
+  else if (name === "variables") applySharedVariables(value);
   else if (name === "connections") void connectionsChanged();
 }
 
@@ -943,6 +945,11 @@ async function panelAction(action: string, args: Record<string, unknown>) {
       break;
     case "library-insert":
       insertLibraryScript(text("id"));
+      break;
+    case "library-run-on":
+      await loadLibrary();
+      openRunOn(text("id"));
+      void focusSelf();
       break;
     case "library-save":
       await saveToLibrary(args.asNew === true, typeof args.folder === "string" ? args.folder : undefined);

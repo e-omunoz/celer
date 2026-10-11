@@ -88,6 +88,43 @@ All notable changes to Celer are documented here. The format follows
   the tab opens in the background, and a Celer window in the background flashes its taskbar button. Scripts the AI
   adds to the library show the badge and their notes.
 
+- **Script library as a working tool** (#99):
+  - **«Ejecutar en…»** (Shift+Enter, a button on each script, its menu and the palette) picks where a script runs
+    without changing the connection it was saved with: a connection and, where the engine has them, a database (the
+    schema on MySQL and MariaDB) and, on PostgreSQL, a schema put first in that console's `search_path`. Several
+    targets run one after the other, one console per target with its results in its own tab; production and "no
+    WHERE" confirmations are asked per target and the parameters once. A target database that cannot be opened runs
+    nothing there. "Solo abrir" opens the consoles without running. The last targets are offered again next time.
+  - Scripts get a **description** (under the name, in the tooltip and in «Ejecutar en…»), an optional **engine**
+    («Genérico / SQL estándar» included) and **parameters** with a default value and a description: the parameters
+    prompt comes pre-filled with the default (or the value last typed in that console) and explains each field.
+  - **Favourites and recent** at the top of the panel (a star on each script; the five last used), and the search
+    also looks in the description.
+  - Multi-statement scripts say what runs: «Abrir y ejecutar todo (3 sentencias)»; to run one statement, open it and
+    press Ctrl+Enter on it.
+  - The library file moves to version 3; older files and `.sql` bundles load unchanged, and bundles now carry the
+    description, engine and parameters (favourites and targets stay on each machine).
+- **Engine compatibility at a glance** (#113): library scripts, your templates and history entries show the icons of
+  the engines they are written for (or «SQL estándar»), guessed from the SQL's dialect (TOP, GETDATE(), brackets,
+  ILIKE, `::`, backticks, FIRST/SKIP, NVL, PRAGMA, LIMIT…) or from the connection they were saved or run with, and
+  settable by hand («Genérico / SQL estándar» included). A mismatch with the active console's engine shows in yellow;
+  generic ODBC is never flagged. «Solo los compatibles con esta conexión» filters the library, the history and the
+  template settings, and other-engine templates sink in the editor's suggestions. «Ejecutar en…» warns per target and
+  asks before running a script marked or written for another engine.
+- **Variables** (#118): values written as `${name}` in consoles and library scripts, defined per console, per
+  connection or globally (the console's value wins, then the connection's, then the global one), edited in the new
+  «Variables» tab of the right panel (Alt+9), completed in the editor after `${` and shown on hover. Numbers, NULL and
+  booleans go in as they are and the rest quoted, or as raw SQL when marked; strings and comments are never touched,
+  and a name without a value is still asked for like a parameter. The same library script run on another connection
+  («Ejecutar en…» shows them per target) takes that connection's values. The history and the MCP audit log keep the
+  SQL actually sent, the MCP tools substitute the connection's and global variables too, and the AI assistant gets the
+  names, with their values only where the connection lets the AI read data. `${name}` is now also found on Informix,
+  where braces start a comment.
+- **Features an engine lacks are greyed out** with «No disponible en <motor>» instead of failing on click (one support
+  table): the execution plan (not on Informix or generic ODBC), the real plan (PostgreSQL and MariaDB), server
+  activity (not on SQLite or generic ODBC), and the E-R diagram and schema comparison (not on generic ODBC), in the
+  console's toolbar, the explorer's menus, the palette and the shortcuts.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added
@@ -118,6 +155,7 @@ All notable changes to Celer are documented here. The format follows
   - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
 
 ### Fixed
+- **Library «Ejecutar en…»** (#99): a run on a connection that is still connecting waits for it instead of failing with «Sin conexión»; the multi-target summary no longer counts failed runs as executed.
 - **IA activity list** (#100): the entries for app actions (open_table, add_library_script...) were invisible (a CSS class clash made them transparent).
 - **Informix over DRDA on Windows** (#100): catalog names padded with NULs no longer break open_table, open_object and the E-R diagram.
 - **E-R diagram on generic ODBC sources** (#100): no longer fails with «Aquí no hay una carpeta de tablas».

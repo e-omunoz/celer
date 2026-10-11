@@ -14,7 +14,7 @@ La ventana tiene tres zonas:
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
 - **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
 - **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
-  (Alt+8) y el asistente de IA.
+  (Alt+8), las variables (Alt+9) y el asistente de IA.
 
 ## Conexiones
 
@@ -193,8 +193,11 @@ en una tabla o una exportación en curso, lo pregunta antes.
 - **Autocompletado**: tablas después de `FROM`/`JOIN`, columnas de las tablas de la sentencia en el resto, y
   `alias.` o `esquema.` acotan la lista.
 - **Plantillas**: escribe `sel`, `selw`, `ins`, `upd`, `cte`… y pulsa Tab; los campos enlazados se rellenan a la vez.
-  Las tuyas se crean en *Ajustes › Plantillas*.
+  Las tuyas se crean en *Ajustes › Plantillas*, donde puedes indicar su motor (o dejar que Celer lo detecte); las de
+  otro motor salen en las sugerencias marcadas *otro motor* y al final.
 - **Parámetros**: `:nombre`, `?` o `${nombre}` en una consulta abren un diálogo para darles valor antes de ejecutar.
+- **Variables**: `${nombre}` con un valor guardado no se pregunta: se pone su valor (ver *Variables* más abajo).
+  Tras escribir `${` el editor sugiere las variables con su valor, y al pasar el ratón por encima se ve cuál se usará.
 - **UPDATE / DELETE sin WHERE** se subrayan mientras escribes y piden confirmación al ejecutarlos.
 - **Transacciones**: *Auto* confirma cada sentencia; en *Manual* aparecen Commit y Rollback
   (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R).
@@ -279,10 +282,26 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
 - **Guardar**: **Ctrl+Alt+B** guarda la consola con un nombre y una carpeta. En una consola abierta desde la
   biblioteca, el mismo atajo (o el botón del marcador en la barra de la consola) guarda sus cambios; un punto naranja
   avisa de que hay cambios sin guardar. *Guardar la consola en la biblioteca como script nuevo* crea otro.
-- **Buscar**: el cuadro busca en el nombre, la carpeta, las etiquetas y el SQL; `#etiqueta` filtra por etiqueta (o haz
-  clic en ella). Los scripts también salen en la paleta (**Shift Shift**).
+- **Buscar**: el cuadro busca en el nombre, la descripción, la carpeta, las etiquetas y el SQL; `#etiqueta` filtra por
+  etiqueta (o haz clic en ella). Los scripts también salen en la paleta (**Shift Shift**), cada uno también con su
+  *Ejecutar en…*.
+- **Favoritos y recientes**: la estrella (o *Añadir a favoritos* en el menú) lo pone en *Favoritos*, arriba del todo;
+  debajo, *Recientes* con los cinco últimos que abriste o ejecutaste. Siguen también en su carpeta.
 - **Abrir y ejecutar**: clic o **Intro** abre el script en su consola (si ya está abierta, va a ella);
-  **Ctrl+Intro** o el botón ▶ lo abre y lo ejecuta entero. Arrastrado al editor, pega su SQL donde lo sueltes.
+  **Ctrl+Intro** o el botón ▶ lo abre y lo ejecuta entero: en un script de varias sentencias el menú lo dice
+  (*Abrir y ejecutar todo (3 sentencias)*). Para ejecutar solo una, ábrelo y pulsa **Ctrl+Intro** en ella. Arrastrado
+  al editor, pega su SQL donde lo sueltes.
+- **Ejecutar en…** (**Mayús+Intro**, el botón ⏵ en círculo, el menú o la paleta): elige dónde ejecutarlo, sin tocar la
+  conexión con la que se guardó. Cada destino es una conexión y, si el motor las tiene, una base de datos (en MySQL y
+  MariaDB, el esquema) y en PostgreSQL un esquema, que se pone primero en el `search_path` de esa consola. *Añadir
+  destino* lo ejecuta en varios a la vez: una consola por destino, cada una con sus resultados en su pestaña, una
+  después de otra. Las confirmaciones de producción y de DELETE/UPDATE sin WHERE se piden en cada destino, y los
+  parámetros una sola vez. Si la base de datos elegida no se puede abrir, en ese destino no se ejecuta nada. *Solo
+  abrir* abre las consolas sin ejecutar, para elegir la sentencia. La próxima vez se proponen los mismos destinos.
+- **Detalles** (lápiz o **Alt+Intro**): una **descripción** (sale bajo el nombre y en la ventana de *Ejecutar en…*), el
+  **motor** para el que está escrito (o *Genérico / SQL estándar*) y los **parámetros** del SQL (`:nombre`, `?`,
+  `${nombre}`) con un valor por defecto y una descripción: al ejecutar, la ventana de parámetros sale rellena con ese
+  valor (o el último que escribiste en esa consola) y explica cada uno.
 - **Organizar**: carpetas y subcarpetas (botón de carpeta nueva o clic derecho), etiquetas y una conexión asociada
   (lápiz o **Alt+Intro**). Arrastra scripts y carpetas para moverlos. El menú **⋯** ordena por nombre o por uso y
   muestra solo los de la conexión activa.
@@ -292,9 +311,53 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
   confirmación (y también se puede deshacer).
 - **Importar y exportar**: *Importar ficheros .sql* crea un script por fichero en la carpeta seleccionada. Un script
   se exporta como SQL normal; una carpeta o la biblioteca entera, en un solo `.sql` que sigue ejecutándose como script
-  y que, al importarlo, recupera los scripts con sus carpetas y etiquetas.
+  y que, al importarlo, recupera los scripts con sus carpetas, etiquetas, descripción, motor y parámetros (los favoritos y
+  los destinos de *Ejecutar en…* son de cada equipo y no se exportan).
 
-La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas.
+La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas, y los
+`.sql` exportados antes se importan igual que siempre.
+
+### Variables
+
+Valores que defines una vez y escribes como `${nombre}` en consolas y scripts de la biblioteca (un cliente, un esquema,
+una fecha de corte…). Se ven y se editan en la pestaña **Variables** del panel derecho (**Alt+9**):
+
+- **Ámbitos**: de *esta consola*, de su *conexión* o *globales*. Al ejecutar vale el de la consola; si no tiene, el de la
+  conexión; si tampoco, el global. Por eso el mismo script, ejecutado en otra conexión (con *Ejecutar en…*), toma los
+  valores de esa conexión; *Ejecutar en…* los muestra en cada destino antes de ejecutar.
+- **Cómo se escriben**: números, NULL, TRUE y FALSE tal cual; el resto como texto entre comillas. Marca **SQL** para
+  que vaya tal cual (un nombre de tabla, una lista para `IN`…). Dentro de cadenas y comentarios no se sustituye nada.
+- **Sin valor**: una `${nombre}` que ningún ámbito define se pide al ejecutar, como un parámetro.
+- La sintaxis no choca con la de ningún motor (`:nombre`, `?`, `$1`, `@var`).
+- El **historial** y el registro del servidor MCP guardan el SQL que se envió, con los valores puestos. Las herramientas
+  MCP también sustituyen las variables de la conexión y las globales.
+- Al **asistente de IA** se le envían los nombres; los valores, solo si la conexión le permite leer datos (nivel
+  *Lectura* o *Lectura y escritura* en *Ajustes › IA*).
+- Las de conexión y las globales se guardan en `variables.json` (las comparten todas las ventanas); las de una consola,
+  con la consola.
+
+### Motor de cada script, plantilla y consulta
+
+Los scripts de la biblioteca, tus plantillas y las consultas del historial llevan los iconos de los motores para los
+que están escritos, o *SQL estándar* si no tienen nada propio de uno:
+
+- Celer lo **detecta** por el dialecto: `TOP`, `GETDATE()`, `[corchetes]` o `@@` son de SQL Server; `ILIKE`, `::tipo`
+  o `$$` de PostgreSQL; las comillas invertidas (`` `nombre` ``), `AUTO_INCREMENT` o `SHOW TABLES` de MySQL y MariaDB; `FIRST`,
+  `SKIP`, `NVL` o `TODAY` de Informix; `PRAGMA` o `sqlite_master` de SQLite; `LIMIT` vale para PostgreSQL, MySQL y
+  SQLite. Si el SQL no tiene nada propio, cuenta la conexión con la que se guardó o se ejecutó (borde discontinuo).
+  Lo que hay en comentarios y cadenas no cuenta.
+- Puedes **fijarlo** a mano en los detalles del script o de la plantilla, también como *Genérico / SQL estándar*.
+- Si no coincide con el motor de la consola activa, la etiqueta se pone en amarillo con *otro motor*. Una conexión
+  ODBC genérica puede ser cualquier motor: con ella no se avisa nunca.
+- **Filtro** *Solo los compatibles con esta conexión*: en el menú **⋯** de la biblioteca (y en la paleta), con el
+  embudo del historial y con la casilla de *Ajustes › Plantillas*.
+- **Ejecutar en…** avisa en cada destino de otro motor y, si el script está marcado o escrito para otro, pide
+  confirmación antes de ejecutar.
+
+Las funciones que un motor no tiene salen en gris con *No disponible en …* en lugar de fallar al pulsarlas: el plan
+de ejecución (no en Informix ni en ODBC genérico), el plan real (solo PostgreSQL y MariaDB), la actividad del servidor
+(no en SQLite ni en ODBC genérico) y el diagrama E-R y la comparación de esquemas (no en ODBC genérico). La comparación
+de datos y las herramientas MCP funcionan en todos.
 
 ## Asistente de IA y servidor MCP
 

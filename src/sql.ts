@@ -25,8 +25,8 @@ function scan(sql: string, dialect: string | undefined, onCode: (index: number, 
       while (i < n && sql[i] !== "\n") i++;
       continue;
     }
-    // Informix also writes comments between braces.
-    if (c === "{" && dialect === "informix") {
+    // Informix also writes comments between braces (but "${name}" is a Celer variable or parameter, not a comment).
+    if (c === "{" && dialect === "informix" && !(sql[i - 1] === "$" && /^\{[A-Za-z_]\w*\}/.test(sql.slice(i, i + 130)))) {
       const close = sql.indexOf("}", i + 1);
       i = close < 0 ? n : close + 1;
       continue;

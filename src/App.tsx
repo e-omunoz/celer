@@ -18,7 +18,9 @@ import { gibHere, openNewWindow, panelKind, prepareWindow, startWindows, windowL
 import { EngineIcon } from "./icons";
 import { McpIndicator } from "./components/McpIndicator";
 import { startMcpApp } from "./mcpApp";
-import { loadLibrary } from "./library";
+import { library, loadLibrary } from "./library";
+import { loadVariables } from "./variableStore";
+import { RunOnDialog } from "./components/RunOnDialog";
 import {
   activeTab,
   boot,
@@ -62,6 +64,8 @@ export default function App() {
       if (windowLabel === "main") startUpdateChecks();
       // The library early: consoles opened from it show whether they have unsaved changes, and the palette lists it.
       void loadLibrary();
+      // The variables too: the editor completes them and a run substitutes them.
+      void loadVariables();
     });
     // Shown once it is where it was last time (and painted).
     void prepareWindow().then(revealWindow);
@@ -149,6 +153,7 @@ export default function App() {
       <Modals />
       <Show when={update.dialogOpen}><UpdateDialog /></Show>
       <Show when={migration.open}><MigrateDialog /></Show>
+      <Show when={library.runOn}><RunOnDialog /></Show>
       <WindowAskDialog />
       <Show when={windowLabel === "main"}><Splash /></Show>
       <Show when={state.onboardingOpen}><Onboarding /></Show>
