@@ -2156,6 +2156,28 @@ mod tests {
         rows.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t")))
     }
 
+    /// Ajustes › Ejecución › tiempo máximo: the core's deadline cancels through the driver and the session answers again.
+    #[test]
+    fn pg_query_timeout_cancels() {
+        let Some(mut d) = driver() else { return };
+        let t0 = std::time::Instant::now();
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || d.execute("SELECT pg_sleep(20)", 10));
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10), "{:?}", t0.elapsed());
+        assert_eq!(txt(&d.execute("SELECT 7", 10).unwrap().results[0].rows[0][0]), "7");
+    }
+
+    /// Ayuda › Registro de errores: a PostgreSQL error with a value in it is logged without the value.
+    #[test]
+    fn pg_error_log_entry_is_scrubbed() {
+        let Some(mut d) = driver() else { return };
+        let e = d.execute("SELECT 'celer-secret-42'::int", 10).expect_err("valor no numérico").to_string();
+        crate::errlog::assert_scrubbed("PostgreSQL", &e, "celer-secret-42");
+        let cfg = test_cfg().unwrap();
+        crate::assert_report_banner("PostgreSQL", &d.server_info().unwrap(), &[&cfg.host, &cfg.user, &cfg.database]);
+    }
+
     #[test]
     fn pg_read_only_enforced_by_server() {
         let Some(mut cfg) = test_cfg() else { return };

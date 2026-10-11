@@ -98,7 +98,7 @@ export function TxSettings() {
   const s = () => state.settings;
   const minutes = (secs: number) => String(Math.round((secs / 60) * 10) / 10);
   const field = (label: string, key: "txWarnSecs" | "txAlertSecs" | "txProdWarnSecs" | "txProdAlertSecs") => (
-    <label class="field">
+    <label class="field" data-setting={label}>
       <span>{label}</span>
       <span class="input-unit">
         <input
@@ -119,7 +119,7 @@ export function TxSettings() {
   );
   return (
     <div class="tx-settings">
-      <h4>Transacciones manuales</h4>
+      <h4 data-setting="Transacciones manuales">Transacciones manuales</h4>
       <p class="settings-note">En modo Manual, la consola muestra cuánto lleva abierta la transacción y cuántas sentencias tiene: en ámbar al pasar el primer umbral y en rojo al pasar el segundo. En producción se usan los umbrales más estrictos.</p>
       <div class="form-row">
         {field("Ámbar a partir de", "txWarnSecs")}
@@ -127,7 +127,7 @@ export function TxSettings() {
         {field("Producción: ámbar", "txProdWarnSecs")}
         {field("Producción: rojo", "txProdAlertSecs")}
       </div>
-      <label class="check">
+      <label class="check" data-setting="Recordármelo al pasar a rojo">
         <input type="checkbox" checked={s().txRemind} onChange={(event) => void saveSettings({ txRemind: event.currentTarget.checked })} /> Recordármelo al pasar a rojo, y otra vez cada vez que pase ese tiempo (Gib, o un aviso si está apagado)
       </label>
       <p class="settings-note">Al cerrar una consola o la ventana, desconectar, cambiar de conexión o de base de datos, pasar a Auto o salir con una transacción abierta, Celer pregunta: Commit, Rollback o Cancelar. Nunca confirma por su cuenta.</p>

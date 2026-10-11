@@ -213,6 +213,20 @@ fn assert_cancel(d: &mut dyn Driver, slow_sql: &str) {
     assert_eq!(scalar(d, "SELECT 1 FROM (SELECT 1 AS x) q").trim(), "1");
 }
 
+/// Ajustes › Ejecución › tiempo máximo: the core's deadline (session::with_deadline) stops a slow statement through the
+/// driver's canceller, says so in its error, and the session answers again.
+fn assert_timeout(d: &mut dyn Driver, slow_sql: &str) {
+    let _guard = watchdog("tiempo máximo de una consulta", 120);
+    let t0 = Instant::now();
+    let cancel = d.canceller();
+    let r = crate::session::with_deadline(cancel, 2, || d.execute(slow_sql, 10));
+    println!("tiempo máximo: paró a los {:?} → {}", t0.elapsed(), r.as_ref().err().cloned().unwrap_or_default());
+    assert_eq!(r.err().as_deref(), Some(crate::session::timeout_error(2).as_str()), "la consulta lenta debía pararse por tiempo");
+    assert!(t0.elapsed() >= Duration::from_secs(2), "paró antes de tiempo: {:?}", t0.elapsed());
+    assert!(t0.elapsed() < Duration::from_secs(17), "el tiempo máximo tardó {:?}", t0.elapsed());
+    assert_eq!(scalar(d, "SELECT 1 FROM (SELECT 1 AS x) q").trim(), "1");
+}
+
 // ───────────────────────────────────────────────────────────────── SQL Server
 
 fn mssql_cfg(database: &str) -> Option<ConnConfig> {
@@ -471,7 +485,11 @@ fn mssql_engine() {
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "4");
 
     // Cancel a running statement.
+    let e = d.execute("SELECT * FROM celer_secret_42 WHERE x = 'celer-secret-42'", 10).expect_err("tabla inexistente").to_string();
+    crate::errlog::assert_scrubbed("SQL Server", &e, "celer_secret_42");
+    crate::assert_report_banner("SQL Server", &d.server_info().unwrap(), &["localhost", "1433", "celerdemo"]);
     assert_cancel(d, "WAITFOR DELAY '00:00:30'");
+    assert_timeout(d, "WAITFOR DELAY '00:00:30'");
 
     // The SQL the interface writes, run for real.
     let dt_obj = ObjectRef { database: "celer_test".into(), schema: "dbo".into(), name: "dt".into(), kind: "table".into() };
@@ -912,7 +930,12 @@ fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
     let dt_obj = ObjectRef { database: "celer".into(), schema: obj.schema.clone(), name: "dt".into(), kind: "table".into() };
 
     // Cancel a long statement.
+    let e = d.execute("SELECT * FROM celer_secret_42", 10).expect_err("tabla inexistente").to_string();
+    crate::errlog::assert_scrubbed(&format!("Informix {via}"), &e, "celer_secret_42");
+    // (The user is "informix", which the product name holds too: not a check here.)
+    crate::assert_report_banner(&format!("Informix {via}"), &d.server_info().unwrap(), &[&cfg.host, &cfg.password.clone().unwrap_or_default()]);
     assert_cancel(d, "SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e");
+    assert_timeout(d, "SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e");
 
     // The SQL the interface writes, run for real.
     let mut shape = json!({ "kind": "informix", "t": table_shape(d, &obj), "dt": table_shape(d, &dt_obj) });

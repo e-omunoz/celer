@@ -467,15 +467,70 @@ Gib vive en una sola ventana: la que estás usando.
 
 ## Personalizar
 
-*Ajustes* (Ctrl+Alt+S):
+*Ajustes* (Ctrl+Alt+S). Arriba a la izquierda, **Buscar un ajuste** encuentra cualquiera por su nombre (sin importar
+tildes ni mayúsculas) y lleva hasta él. Cada sección tiene **Restablecer sección**, que deja sus ajustes como venían
+(con *Deshacer* en el aviso), y abajo están **Exportar ajustes…** e **Importar ajustes…**: un fichero JSON para llevar
+tus ajustes a otro equipo (no incluye favoritas ni recientes, que dependen de las conexiones de cada equipo). Al
+importar, lo que Celer no entiende se ignora y se dice cuál.
 
 - **Apariencia**: ocho temas, color de acento, densidad, tamaño de la interfaz, Gib y animaciones.
-- **Editor y resultados**: tamaño del editor, filas por página, filas alternas y parámetros.
+- **Editor**: tamaño y tipo de letra, tabulador (2, 4 u 8; con espacios o tabuladores), ajuste de línea, números de
+  línea, autocompletado al escribir y su retardo (Ctrl+Espacio abre la lista siempre), mayúsculas o minúsculas en las
+  palabras clave (sugerencias y *Formatear SQL*) y pedir el valor de los parámetros. Se aplica al momento a todas las
+  consolas abiertas.
+- **Resultados**: filas por página, filas alternas, el texto de NULL, fechas como llegan o día/mes/año, números con
+  separador de miles, cuántos caracteres de un valor se dibujan en la celda y qué copia Ctrl+C (texto con tabuladores,
+  con cabeceras, CSV, Markdown o JSON). Los formatos solo cambian cómo se ve: al copiar, exportar o editar se usa el
+  valor tal como lo da el servidor.
+- **Ejecución**: **tiempo máximo de una consulta** (en segundos; 0 es sin límite). Pasado ese tiempo Celer cancela la
+  sentencia de la consola igual que el botón Detener, en cualquier motor, y el error lo dice. Y el modo de transacción
+  con el que empiezan las consolas nuevas: automático o manual (Commit / Rollback).
+- **Ventana y pestañas**: restaurar o no las pestañas y ventanas de la última sesión al iniciar, y si abrir una tabla
+  que ya está abierta va a su pestaña o abre otra.
+- **Historial**: cuántas consultas y cuántos días se guardan (al bajarlo se borra en el acto lo que sobra) y *Vaciar
+  historial*.
+- **Avisos**: cuánto duran los avisos (los de error, el doble) y una **notificación del escritorio** cuando una consulta
+  que tarda más de N segundos termina mientras estás en otra ventana.
 - **Plantillas**: las tuyas, junto a las de serie.
 - **Atajos de teclado**: pulsa **+** junto a una acción y después la combinación. Si ya la usa otra acción, Celer
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.
 - **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción, y los umbrales y el recordatorio de
   las transacciones manuales abiertas.
+
+## Si algo falla
+
+### Registro de errores
+
+*Ayuda › Registro de errores* (el botón **?** de la barra de la izquierda, o la paleta) muestra lo que ha fallado en
+este equipo: errores de los drivers de cada motor, errores de la interfaz, llamadas al núcleo que fallaron y cierres
+inesperados del núcleo, con la hora, la versión, dónde pasó y, si la hay, la pila. **Copiar** lo pone en el
+portapapeles, **Abrir carpeta** muestra el fichero, **Reportar…** prepara un reporte con los últimos y **Vaciar** lo
+borra.
+
+Antes de guardar cada entrada Celer le quita el texto SQL, los valores entre comillas, las contraseñas, las cadenas de
+conexión, los servidores y las IP, y las rutas con tu nombre de usuario. El registro ocupa como mucho medio megabyte
+(al llenarse, se aparta el anterior y se empieza otro) y **no se envía a ningún sitio**.
+
+### Reportar un fallo o sugerir una mejora
+
+*Ayuda › Reportar un fallo…* o *Sugerir una mejora…* (también en la paleta, en el icono de la derecha de la barra de
+estado y en el aviso que aparece tras un error inesperado) prepara un issue para el GitHub de Celer:
+
+- **Reportar un fallo**: título, qué ha pasado, qué esperabas y los pasos. Celer añade la versión, el sistema, el tema y
+  el motor y el driver de la conexión activa (por ejemplo «PostgreSQL · nativo · PostgreSQL 17.2» o «Informix · JDBC»),
+  nunca el servidor, el usuario, la base de datos ni tus datos. Puedes adjuntar los últimos errores del registro.
+- **Sugerir una mejora**: título, qué te gustaría, para qué y el área.
+- **Imágenes**: **Capturar la ventana** hace una captura de Celer en un clic; también puedes pegar (Ctrl+V), arrastrar o
+  añadir imágenes. El lápiz de cada una permite rodear con un **rectángulo**, señalar con una **flecha** u **ocultar**
+  una zona (la pixela en la propia imagen: lo de debajo no se puede recuperar).
+
+**Revisar y enviar** muestra exactamente lo que se enviará, campo por campo. Nada sale de Celer hasta que pulsas **Abrir
+en GitHub**: se abre la página de un issue nuevo con todo relleno y lo creas tú con tu cuenta de GitHub. Las imágenes no
+caben en la dirección: Celer las guarda en la carpeta de datos (`reports`), abre esa carpeta y copia la primera al
+portapapeles para que la pegues en «Capturas». Las rutas con tu nombre de usuario se quitan de lo que escribes.
+
+Lo que no terminas queda como **borrador** en este equipo. *Mis reportes* lista los borradores y los reportes abiertos
+en GitHub; pega el enlace del issue creado para tenerlo a mano.
 
 ## Gib
 
@@ -598,6 +653,8 @@ mientras se ejecuta; lo quita la siguiente instalación, o puedes borrarlo a man
 | Ajustes, conexiones, historial, biblioteca | `%APPDATA%\es.celer.app` | `~/Library/Application Support/es.celer.app` | `~/.local/share/es.celer.app` (o `$XDG_DATA_HOME`) |
 | Contraseñas | Administrador de credenciales | Llavero | Secret Service (GNOME Keyring, KWallet) |
 | Drivers descargados (IBM CLI, JDBC, Java) y el puente JDBC | `…\es.celer.app\drivers` | `…/es.celer.app/drivers` | `…/es.celer.app/drivers` |
+| Registro de errores | `…\es.celer.app\logs` | `…/es.celer.app/logs` | `…/es.celer.app/logs` |
+| Reportes: borradores (`reports.json`) e imágenes (`reports`) | `…\es.celer.app` | `…/es.celer.app` | `…/es.celer.app` |
 | Actualización descargada (Celer Setup) | `%LOCALAPPDATA%\es.celer.app\updates` | — | — |
 
 Si uno de esos ficheros se daña, Celer lo aparta con el sufijo `.unreadable-…` y avisa, en lugar de sobrescribirlo.

@@ -1914,6 +1914,36 @@ mod tests {
         Some(MysqlDriver::connect(cfg).expect("conexión de prueba"))
     }
 
+    /// Ajustes › Ejecución › tiempo máximo (MySQL and MariaDB): the core's deadline cancels through the driver. An
+    /// interrupted SLEEP ends with 1 instead of an error: the output stays, with the note that the deadline was hit.
+    #[test]
+    fn it_times_out() {
+        let Some(mut d) = connect() else { return };
+        let t0 = Instant::now();
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || d.execute("SELECT SLEEP(20) AS s", 10));
+        assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
+        match r {
+            Ok(out) => assert!(out.messages.contains(&crate::session::timeout_note(1)), "{:?}", out.messages),
+            Err(e) => assert_eq!(e, crate::session::timeout_error(1)),
+        }
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || d.execute("SELECT COUNT(*) FROM events a JOIN events b ON a.kind = b.kind JOIN events c ON b.kind = c.kind", 10));
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        let out = d.execute("SELECT 5", 10).unwrap();
+        assert_eq!(cell_i64(&out.results[0].rows[0][0]), 5);
+    }
+
+    /// Ayuda › Registro de errores (MySQL and MariaDB): the syntax error quotes the statement; its entry does not.
+    #[test]
+    fn it_scrubs_error_log_entries() {
+        let Some(mut d) = connect() else { return };
+        let e = d.execute("SELECT nombre FROMM clientes WHERE pwd = 'celer-secret-42'", 10).expect_err("error de sintaxis").to_string();
+        crate::errlog::assert_scrubbed("MySQL/MariaDB", &e, "celer-secret-42");
+        let cfg = test_cfg().unwrap();
+        crate::assert_report_banner("MySQL/MariaDB", &d.server_info().unwrap(), &[&cfg.host, "127.0.0.1", &cfg.user, &cfg.database]);
+    }
+
     #[test]
     fn it_pages_large_results() {
         let Some(mut d) = connect() else { return };

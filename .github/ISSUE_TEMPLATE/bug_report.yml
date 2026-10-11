@@ -1,21 +1,27 @@
 name: Bug report
 description: Something doesn't work as it should
-labels: [bug]
+# status:triage: every report waits for triage (CONTRIBUTING.md, "Triage"). Celer's «Reportar un fallo» window opens
+# this form with the fields below already filled (by their ids: keep them in step with src/report.ts).
+labels: [bug, "status:triage"]
 body:
   - type: markdown
     attributes:
-      value: Thanks for taking the time. Please check the [open issues](https://github.com/e-omunoz/celer/issues) first. Security problems go to [SECURITY.md](https://github.com/e-omunoz/celer/blob/main/SECURITY.md) instead.
+      value: Thanks for taking the time. Please check the [open issues](https://github.com/e-omunoz/celer/issues) first. Security problems go to [SECURITY.md](https://github.com/e-omunoz/celer/blob/main/SECURITY.md) instead. In Celer, *Ayuda › Reportar un fallo* fills this form for you.
   - type: textarea
     id: what
     attributes:
-      label: What happened?
-      description: What did you do, what did you expect, and what happened instead?
+      label: What happened? · Qué ha pasado
+      description: What did you do and what happened? Include the error message, if any.
     validations:
       required: true
   - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect? · Qué esperabas
+  - type: textarea
     id: steps
     attributes:
-      label: Steps to reproduce
+      label: Steps to reproduce · Pasos para reproducirlo
       placeholder: |
         1. Connect to …
         2. Run …
@@ -25,31 +31,27 @@ body:
   - type: input
     id: version
     attributes:
-      label: Celer version
-      description: Settings → About, or the title of the release you installed.
-      placeholder: 1.1.0
+      label: Celer version · Versión de Celer
+      description: Ayuda › Acerca de Celer, or the title of the release you installed.
+      placeholder: 2.3.0
     validations:
       required: true
-  - type: dropdown
-    id: engine
+  - type: textarea
+    id: environment
     attributes:
-      label: Database
-      multiple: true
-      options: [PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, Informix, ODBC (other), Not database related]
-    validations:
-      required: true
-  - type: input
-    id: engine-version
-    attributes:
-      label: Database server version
-      placeholder: PostgreSQL 17.1
-  - type: input
-    id: os
-    attributes:
-      label: Windows version
-      placeholder: Windows 11 24H2
+      label: Environment · Entorno
+      description: Operating system, theme, and the database engine, its version and the driver (PostgreSQL 17 · nativo, Informix · JDBC, ODBC · …). No server names, users or data.
+      placeholder: |
+        Sistema: Windows 11
+        Conexión activa: PostgreSQL · nativo · PostgreSQL 17.2
   - type: textarea
     id: logs
     attributes:
-      label: Screenshots, error messages or logs
-      description: The Output tab of the console shows the exact error. Remove passwords and personal data.
+      label: Recent errors (error log) · Últimos errores (registro de errores)
+      description: Ayuda › Registro de errores › Copiar. Celer removes SQL, values, passwords and paths from it; check before you submit.
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots · Capturas
+      description: Paste or drag images here. Hide any data you don't want to share.

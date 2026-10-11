@@ -322,12 +322,13 @@ const BREAK_BEFORE = [
   "ON",
 ];
 
-export function formatSql(sql: string, dialect?: string): string {
-  const lines = splitSql(sql, dialect).map((part) => formatOne(part.sql));
+/** One statement per paragraph, a line per clause; the clause keywords in `keywordCase` (Ajustes › Editor). */
+export function formatSql(sql: string, dialect?: string, keywordCase: "upper" | "lower" = "upper"): string {
+  const lines = splitSql(sql, dialect).map((part) => formatOne(part.sql, keywordCase));
   return lines.join(";\n\n") + (sql.trim().endsWith(";") ? ";" : "");
 }
 
-function formatOne(sql: string): string {
+function formatOne(sql: string, keywordCase: "upper" | "lower"): string {
   const tokens = tokenize(sql);
   const keywords = new Set(BREAK_BEFORE.flatMap((k) => k.split(" ")));
   let depth = 0;
@@ -341,7 +342,7 @@ function formatOne(sql: string): string {
     const three = `${two} ${tokens[i + 2]?.toUpperCase() ?? ""}`;
     const br = depth === 0 && (BREAK_BEFORE.includes(three) || BREAK_BEFORE.includes(two) || (keywords.has(upper) && BREAK_BEFORE.includes(upper)));
     if (br && out.length) out.push("\n");
-    if (keywords.has(upper) && /^[A-Za-z_]+$/.test(t)) out.push(upper);
+    if (keywords.has(upper) && /^[A-Za-z_]+$/.test(t)) out.push(keywordCase === "lower" ? upper.toLowerCase() : upper);
     else out.push(t);
     // A line comment runs to the end of the line: whatever follows must start on a new one.
     out.push(t.startsWith("--") ? "\n" : " ");

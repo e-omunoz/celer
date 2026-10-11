@@ -3,6 +3,8 @@ import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import type { Backend } from "./api";
 import { quoteIdent, resultToText } from "./sql";
 import { inOrder, isPermutation } from "./columnOrder";
+import { scrubStack, scrubText } from "./scrub";
+import type { ErrorEntry } from "./errorLogText";
 import type {
   Cell,
   ColKind,
@@ -616,6 +618,7 @@ export function createDemoBackend(): Backend {
         serverInfo: `SQLite ${version} — ${cfg.filePath || "memoria"} (demo navegador)`,
         connectMs: 0,
         reused: false,
+        driver: "sql.js (demo navegador)",
       };
       if (options?.autocommit === false) await self.setAutocommit(sessionId, false);
       return info;
@@ -796,6 +799,44 @@ export function createDemoBackend(): Backend {
     async clearHistory() {
       localStorage.removeItem("celer.history");
     },
+    async setHistoryRetention(max, days) {
+      const all = readJson<HistoryEntry[]>("celer.history", []);
+      const cutoff = days > 0 ? Date.now() - days * 86_400_000 : 0;
+      const kept = all.filter((entry) => entry.at >= cutoff).slice(-Math.max(1, max));
+      if (kept.length !== all.length) writeJson("celer.history", kept);
+      return all.length - kept.length;
+    },
+    // The browser demo keeps its error log in localStorage, scrubbed like the core's.
+    async errorLogAdd(area, message, stack) {
+      const all = readJson<ErrorEntry[]>("celer.errors", []);
+      all.push({ at: Date.now(), version: "dev", area: area.replace(/[^\w:-]/g, "").slice(0, 48) || "?", message: scrubText(message).slice(0, 2000), stack: scrubStack(stack ?? "").slice(0, 8000) });
+      writeJson("celer.errors", all.slice(-200));
+    },
+    async errorLogList(limit) {
+      return readJson<ErrorEntry[]>("celer.errors", []).reverse().slice(0, limit);
+    },
+    async errorLogClear() {
+      localStorage.removeItem("celer.errors");
+    },
+    // The browser cannot write to a folder: each image is downloaded instead.
+    async reportSaveImages(_id, images) {
+      for (const [name, dataUrl] of images) {
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = `${name || "imagen"}.png`;
+        link.click();
+      }
+      return images.map(([name]) => `${name || "imagen"}.png`);
+    },
+    async errorLogPath() {
+      throw new Error("En el navegador el registro está en el almacenamiento de la página");
+    },
+    async desktopNotify(title, body) {
+      // The browser's own notifications, when the page is allowed to show them.
+      if (typeof Notification === "undefined") return;
+      if (Notification.permission === "default") await Notification.requestPermission().catch(() => "denied");
+      if (Notification.permission === "granted") new Notification(title, { body });
+    },
     async loadJson(name) {
       const value = localStorage.getItem(`celer.${name}`);
       if (!value && name === "library") return demoLibrary();
@@ -919,7 +960,7 @@ export function createDemoBackend(): Backend {
       return sessionStorage.getItem("celer.ai-key");
     },
     async appInfo() {
-      return { version: "dev", dataDir: "navegador (localStorage)" };
+      return { version: "dev", dataDir: "navegador (localStorage)", os: "" };
     },
     async migrationSources() {
       return [];

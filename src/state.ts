@@ -228,6 +228,8 @@ interface ConnSession {
   metaId: string;
   database: string;
   serverInfo: string;
+  /** The driver and protocol the connection uses (SessionInfo.driver). */
+  driver?: string;
   databases: string[];
   connecting?: boolean;
 }
@@ -323,7 +325,7 @@ export const [state, setState] = createStore({
   // ---- shared by every window (mirrored from the core)
   connections: [] as ConnSummary[],
   settings: { ...defaultSettings } as Settings,
-  appInfo: { version: "", dataDir: "" },
+  appInfo: { version: "", dataDir: "", os: "" } as { version: string; dataDir: string; os?: string },
   driverPath: null as string | null,
   // ---- this window's own
   sessions: {} as Record<string, ConnSession>,
@@ -436,7 +438,9 @@ window.setInterval(() => {
 export function notify(text: string, kind: Toast["kind"] = "info", detail?: string, action?: Toast["action"]) {
   const id = ++toastId;
   setState("toasts", (list) => [...list.slice(-3), { id, kind, text, detail, action }]);
-  window.setTimeout(() => dismissToast(id), kind === "error" || action ? 9000 : 4500);
+  // Ajustes › Avisos: errors and notices with a button stay twice as long.
+  const ms = Math.max(2, state.settings.toastSeconds || 4.5) * 1000;
+  window.setTimeout(() => dismissToast(id), kind === "error" || action ? ms * 2 : ms);
 }
 
 export function dismissToast(id: number) {
@@ -555,6 +559,8 @@ export async function boot() {
     notify("No se pudieron leer los ajustes: se usan los de serie", "error", message);
   }
   applyTheme();
+  // The desktop core applies the history retention itself at start; the browser demo keeps its history here.
+  if (!isTauri()) void applyHistoryRetention();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (state.settings.theme === "system") applyTheme();
   });
@@ -646,7 +652,8 @@ export function blankSql(id: string, connId: string | null = null, sql = "", tit
     running: false,
     inTransaction: false,
     ...NO_TX,
-    autocommit: true,
+    // Ajustes › Ejecución: new consoles start in the chosen mode (a restored one keeps its own).
+    autocommit: state.settings.autocommitDefault,
     completion: null,
     lastSql: "",
     runId: 0,
@@ -751,6 +758,14 @@ export async function saveSettings(patch: Partial<Settings>) {
   // Only what changed: the core merges it into settings.json and tells the other windows, so two windows changing
   // different settings at once do not undo each other.
   await api().saveJson("settings", patch, true);
+  if ("historyMax" in patch || "historyDays" in patch) await applyHistoryRetention(settings);
+}
+
+/** Ajustes › Historial: the core keeps that many queries, that many days; the panel shows what is left. */
+export async function applyHistoryRetention(settings: Settings = state.settings) {
+  const dropped = await api().setHistoryRetention(settings.historyMax, settings.historyDays).catch(() => 0);
+  if (dropped && state.inspectorOpen && state.inspectorMode === "history") void refreshHistory();
+  return dropped;
 }
 
 /** Settings changed by another window (the core sends the whole file). */
@@ -1384,7 +1399,7 @@ export async function connect(connId: string, password?: string) {
       return;
     }
     markConn(connId, "on", { connectMs: opened.connectMs, reused: opened.reused, note: "" });
-    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases: [] });
+    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, driver: opened.driver ?? "", databases: [] });
     try {
       localStorage.setItem(`celer.server.${connId}`, opened.serverInfo.slice(0, 120));
     } catch {
@@ -1654,7 +1669,7 @@ export async function setTabConnection(tabId: string, connId: string) {
 export function formatActive() {
   const tab = activeSql();
   if (!tab) return;
-  setState("tabs", tabIndex(tab.id), { sql: formatSql(tab.sql, kindOf(tab.connId)), revision: tab.revision + 1 } as Partial<SqlTab>);
+  setState("tabs", tabIndex(tab.id), { sql: formatSql(tab.sql, kindOf(tab.connId), state.settings.keywordCase), revision: tab.revision + 1 } as Partial<SqlTab>);
   persistSoon();
 }
 
@@ -1923,7 +1938,8 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   }
   const fresh = state.tabs[tabIndex(current.id)];
   if (!fresh || fresh.kind !== "sql") return false;
-  patchTab(current.id, { running: true, error: "", messages: [], startedAt: Date.now(), lastSql: sql });
+  const startedAt = Date.now();
+  patchTab(current.id, { running: true, error: "", messages: [], startedAt, lastSql: sql });
   const token = tokenOf(current.id);
   try {
     const hadSession = Boolean(fresh.sessionId);
@@ -1932,9 +1948,10 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     if (options.database && !sameDatabase(tab.database, options.database)) {
       throw new NotRun(`No se pudo abrir la base de datos «${options.database}» (la sesión está en «${tab.database || "la predeterminada"}»): no se ha ejecutado nada`);
     }
-    const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize);
+    const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize, state.settings.queryTimeout);
     // Disconnected while it ran: this answer belongs to a closed session.
     if (tokenOf(current.id) !== token) return true;
+    notifyLongQuery(current.title, startedAt, describeResults(output.results, output.elapsedMs));
     // The session opened for this run: how long that took goes with the output. One that dropped and came back on
     // its own says so (the core's note) and the tab shows it.
     const opened = hadSession ? null : tabLink(tab);
@@ -1986,6 +2003,7 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       pushOutput(current.id, { at: Date.now(), sql, ok: false, text: full, elapsedMs: null });
       return false;
     }
+    notifyLongQuery(current.title, startedAt, plainError(full), true);
     // The connection dropped: the core reconnected (or could not) and says what was lost; the tab shows it.
     const dropped = noteDropped(current.id, current.title, full);
     const message = dropped ? plainError(full) : full;
@@ -2006,6 +2024,18 @@ class NotRun extends Error {}
 /** Database names as engines compare them (case aside; SQL Server and MySQL on Windows ignore it, the rest rarely clash). */
 function sameDatabase(a: string, b: string) {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Ajustes › Avisos: a desktop notification when a statement that ran longer than `notifyAfter` seconds ends while
+ * this window is in the background (the user went elsewhere to wait).
+ */
+function notifyLongQuery(title: string, startedAt: number, text: string, failed = false) {
+  const after = state.settings.notifyAfter;
+  if (!after || Date.now() - startedAt < after * 1000) return;
+  if (document.hasFocus() && !document.hidden) return;
+  const head = failed ? `La consulta de «${title}» falló` : `La consulta de «${title}» ha terminado`;
+  void api().desktopNotify(head, `${text} · ${formatMs(Date.now() - startedAt)}`).catch(() => {});
 }
 
 /**
@@ -2533,7 +2563,11 @@ export async function openTable(
 ): Promise<string | undefined> {
   if (forwardFromPanel("open-table", { connId, obj, section, filters })) return;
   const query = options.where !== undefined || options.orderBy !== undefined ? { where: options.where ?? "", orderBy: options.orderBy ?? "", filters: [] as ColumnFilter[], sort: null } : null;
-  const existing = state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
+  // Ajustes › Ventana: a table already open is shown again, or (tableTabs "new") opened in another tab.
+  const existing =
+    state.settings.tableTabs === "new"
+      ? undefined
+      : state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
   if (existing) {
     // A restored tab not loaded yet loads once here (with the filters, if any), not again when it is shown.
     const restored = existing.kind === "table" && existing.restored;

@@ -32,6 +32,11 @@ All notable changes to Celer are documented here. The format follows
   place and Esc flies it back where it was. With "Animaciones: Reducidas" (or the system's reduced motion) the columns
   jump instead of sliding. Only the rows on screen are drawn, so it stays smooth on wide, long results.
 
+- The settings dialog is split into one component per section (`src/components/settings/`), registered in
+  `src/settingsSections.ts`, so new sections plug in without touching the dialog. «Editor y resultados» is now two
+  sections, «Editor» and «Resultados».
+- Esc in a confirmation shown over another dialog (Ajustes) closes only the confirmation.
+
 ### Fixed
 - MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
 - Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
@@ -193,6 +198,45 @@ All notable changes to Celer are documented here. The format follows
   as production before is Producción, read from connections.json as it was (the file changes only when the
   connection is saved again); DBeaver's dev/test/prod types come in as the same environments, and the MCP server
   lists each connection's environment.
+- **Error log and reports** (#122, #112). The scrubber now also cleans the message at the head of UI error stacks, host
+  names and host:port, SQL Server duplicate-key values, EXEC/WITH statements and MySQL's «Can't connect» text. «Adjuntar
+  los últimos errores» is off unless you tick it (it starts ticked only on the report opened from an unexpected error),
+  and «Capturar la ventana» leaves hidden tabs out so it works with many tabs open.
+
+- **Settings reviewed and extended** (#106). Ajustes has a search box that finds any setting by name and takes you to it,
+  «Restablecer sección» on every section (with undo), and «Exportar ajustes…» / «Importar ajustes…» as JSON (an import
+  applies only the keys it understands, with valid values, and lists the rest). New settings, all applied without a
+  restart:
+  - Editor: font family, tab size and spaces or tabs, word wrap, line numbers, autocomplete on/off and its delay, and
+    keyword case (completion and «Formatear SQL»).
+  - Resultados: NULL text, dates as sent or day/month/year, numbers with a thousands separator, characters drawn per
+    cell and what Ctrl+C copies (TSV, TSV with headers, CSV, Markdown, JSON). Display only: copies, exports and edits
+    keep the server's value.
+  - Ejecución: a default query timeout, enforced by the core through each driver's own cancel (the «Detener» path), so
+    it works the same on PostgreSQL, MySQL, MariaDB, SQL Server, Informix (DRDA and JDBC), SQLite and ODBC; and the
+    transaction mode new consoles start in.
+  - Ventana y pestañas: restore the last session's tabs and windows on start (or not), and whether opening a table
+    already open goes to its tab or opens another.
+  - Historial: queries and days kept (applied by the core, the file is trimmed at once) and «Vaciar historial».
+  - Avisos: how long notices stay, and a desktop notification when a query longer than N seconds ends while Celer is in
+    the background.
+  Settings files from earlier versions load unchanged; new keys take their defaults, which keep today's behaviour.
+- **Local error log** (#122): Ayuda › Registro de errores (a new **?** button in the left bar, and the palette) lists
+  Rust panics, driver errors of every engine, unhandled interface errors and failed calls to the core, with time,
+  version, area and stack, and can copy them, show the file in its folder and clear them. Entries are scrubbed before
+  they are written (SQL text, quoted values, passwords, connection strings, hosts and IPs, paths with the user name);
+  the file (`<data>/logs/errors.log`) rotates at 256 KB. Nothing is sent anywhere. An unexpected interface error now
+  shows a notice that points to the log.
+- **Reportar / Sugerir** (#112): a window to report a bug or suggest an improvement on Celer's GitHub, from Ayuda, the
+  palette, the status bar and the notice after an unexpected error. A bug carries what happened, what was expected and
+  the steps, plus the version, system, theme and the active connection's engine and driver (never host, user, database
+  or data) and, if ticked, the last entries of the error log; an idea carries what, why and the area. Screenshot of the
+  window in one click, paste or drag images, and mark them with a rectangle or an arrow or pixelate what must not be
+  seen. A preview shows exactly what will be sent; «Abrir en GitHub» opens a prefilled issue form (labels `bug` or
+  `enhancement` plus `status:triage`) that the user submits, with the images saved in the data folder and the first one
+  copied. Drafts are kept offline and «Mis reportes» lists the reports sent, with their links. The issue forms in
+  `.github/ISSUE_TEMPLATE` match the window's fields, and CONTRIBUTING.md describes the triage flow
+  (`status:triage` → `status:ready`).
 
 ## [2.2.0] - 2026-10-09
 

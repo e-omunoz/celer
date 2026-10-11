@@ -236,7 +236,7 @@ impl<L: Link> LinkDriver<L> {
         let lost = self.in_tx;
         self.recover();
         if lost {
-            anyhow!("{e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
+            anyhow!("SESSION_LOST: {e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
         } else {
             e
         }
@@ -1624,6 +1624,40 @@ mod tests {
     }
 
     use super::*;
+
+    /// A generic ODBC connection through the system's driver manager, from CELER_ODBC_TEST (a connection string, e.g.
+    /// "Driver={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer;").
+    pub(crate) fn odbc_test_driver() -> Option<OdbcDriver> {
+        let conn_str = std::env::var("CELER_ODBC_TEST").ok().filter(|s| !s.trim().is_empty())?;
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: conn_str, ..Default::default() };
+        Some(OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC de prueba"))
+    }
+
+    /// Ajustes › Ejecución › tiempo máximo over ODBC: the core's deadline cancels through SQLCancel, and the session
+    /// answers again.
+    #[test]
+    fn odbc_query_timeout_cancels() {
+        let Some(mut d) = odbc_test_driver() else { return };
+        let t0 = std::time::Instant::now();
+        let cancel = d.canceller();
+        // A statement every ODBC source behind the test DSN understands as slow (PostgreSQL here).
+        let slow = std::env::var("CELER_ODBC_SLOW").unwrap_or_else(|_| "SELECT pg_sleep(20)".into());
+        let r = crate::session::with_deadline(cancel, 1, || d.execute(&slow, 10));
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(15), "{:?}", t0.elapsed());
+        let out = d.execute("SELECT 1", 10).unwrap();
+        assert_eq!(out.results[0].rows.len(), 1);
+    }
+
+    /// Ayuda › Registro de errores over ODBC: the driver's error with a value in it is logged without the value.
+    #[test]
+    fn odbc_error_log_entry_is_scrubbed() {
+        let Some(mut d) = odbc_test_driver() else { return };
+        let bad = std::env::var("CELER_ODBC_BAD").unwrap_or_else(|_| "SELECT 'celer-secret-42'::int".into());
+        let e = d.execute(&bad, 10).expect_err("valor no numérico").to_string();
+        crate::errlog::assert_scrubbed("ODBC", &e, "celer-secret-42");
+        crate::assert_report_banner("ODBC", &d.server_info().unwrap(), &["localhost", "15432", "Uid", "Pwd"]);
+    }
 
     #[test]
     fn empty_database_is_left_out() {

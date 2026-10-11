@@ -59,6 +59,8 @@ base64 = "0.22"
 getrandom = "0.3"
 # A second launch raises the running Celer instead of writing its files from a stale copy (src/lib.rs run)
 tauri-plugin-single-instance = "2"
+# Desktop notification when a long query ends while Celer is in the background (Ajustes › Avisos, src/lib.rs)
+tauri-plugin-notification = "2"
 
 # tiberius with the server's INFO messages (PRINT, low-severity RAISERROR) exposed: vendor/tiberius/PATCHES.md
 [patch.crates-io]

@@ -4,10 +4,28 @@ Thanks for helping make Celer better. This guide covers the workflow, the conven
 
 ## Before you start
 
-- **Bugs:** open an issue with the *Bug report* template. Include the Celer version (Settings → About), the database
-  engine and version, and the steps to reproduce.
-- **Ideas:** open a *Feature request* first so we can agree on the shape before you write code.
+- **Bugs:** open an issue with the *Bug report* template, or from Celer itself: *Ayuda › Reportar un fallo* fills it
+  with the version, the system, the theme and the engine and driver of the active connection, and can attach the
+  last entries of the local error log and annotated screenshots. Include the steps to reproduce.
+- **Ideas:** open a *Feature request* (or *Ayuda › Sugerir una mejora*) first so we can agree on the shape before you
+  write code.
 - **Security problems:** do not open an issue. Follow [SECURITY.md](SECURITY.md).
+
+## Triage
+
+Every issue opened from the templates, and so every report sent from the app, arrives with `status:triage` next to
+`bug` or `enhancement`. Nothing reaches GitHub on its own: the app opens a prefilled `issues/new` page after showing
+exactly what it holds, and the user submits it with their own account (images are pasted by hand; the app saves them in
+`<data>/reports/<id>/` and copies the first one).
+
+1. **`status:triage`** — reported, not yet reviewed. The maintainer goes through these with the AI assistant, which
+   rewrites each one in the project's issue style: context, files likely touched, proposal, "done when" (acceptance
+   criteria), and the engines it reaches. Duplicates are closed pointing to the original; reports that cannot be
+   reproduced get a question and stay in triage.
+2. **`status:ready`** — *pendiente de implementar*: rewritten and accepted. `status:triage` is removed and the issue
+   enters the backlog that `/issue-sprint` works through.
+
+Reporters are told in a comment when their issue moves to `status:ready` or is closed.
 
 ## Setup
 
