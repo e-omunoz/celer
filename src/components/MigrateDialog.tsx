@@ -70,9 +70,10 @@ export function MigrateDialog() {
                         onChange={(event) => setMigration("selected", c.key, event.currentTarget.checked)}
                       />
                       <EngineIcon kind={c.cfg.kind} size={16} />
-                      <span class="mig-name">
+                      <span class="mig-name" title={c.notes.join("\n") || undefined}>
                         <b>{c.cfg.name}</b>
                         <small>{c.status === "unsupported" ? c.driver : where(c)}</small>
+                        <Show when={c.status !== "unsupported" && c.notes.length}><small class="muted">{c.notes.join(" ")}</small></Show>
                       </span>
                       <span class="spacer" />
                       <Show when={c.savedPassword && c.status !== "unsupported"}><span class="mig-key" title="DBeaver guarda su contraseña"><KeyRound size={12} /></span></Show>

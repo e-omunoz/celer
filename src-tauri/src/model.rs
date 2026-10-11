@@ -185,6 +185,81 @@ pub struct ConnConfig {
     /// Sentencias que se ejecutan en cada sesión nueva nada más conectar (SET search_path…, SET LOCK_TIMEOUT…).
     #[serde(default)]
     pub startup_sql: String,
+    /// SSH tunnel to reach the server through a bastion (src/ssh.rs). Left out of the file while it is unused.
+    #[serde(default, skip_serializing_if = "SshConfig::is_unset")]
+    pub ssh: SshConfig,
+}
+
+/// An SSH tunnel: Celer logs in to `host` (through the `jumps`, in order) and forwards a local port to the database
+/// server. Secrets travel in memory only: on disk they are in the system's credential store (`SshConfig::ACCOUNTS`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SshConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: Option<u16>,
+    pub user: String,
+    /// "password" | "key" | "agent" (ssh-agent, Pageant or the OpenSSH agent of Windows).
+    pub auth: String,
+    /// A private key file (OpenSSH, PEM or PuTTY .ppk). Empty: the key pasted in the form, kept in the credential store.
+    pub key_path: String,
+    /// Jump hosts in the order they are crossed, as `user@host:port` (user and port optional): the same
+    /// authentication as the SSH server.
+    pub jumps: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+    /// The private key itself, when it was pasted instead of read from `key_path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_key: Option<String>,
+    /// Only while connecting through the tunnel (the host is then 127.0.0.1 and a local port): the server the port
+    /// leads to, so that the free connections of different servers are never mixed up. Never saved.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub forwarded_to: String,
+}
+
+impl SshConfig {
+    /// The credential store accounts of a connection's SSH secrets, after its id: password, key passphrase, key.
+    pub const ACCOUNTS: [&'static str; 3] = ["ssh-password", "ssh-passphrase", "ssh-key"];
+
+    pub fn is_unset(&self) -> bool {
+        *self == SshConfig::default()
+    }
+
+    /// The tunnel is used (an engine without network, SQLite or ODBC, never uses it).
+    pub fn active(&self, kind: DbKind) -> bool {
+        self.enabled && !matches!(kind, DbKind::Sqlite | DbKind::Odbc)
+    }
+
+    /// The secret kept under `account` (one of `ACCOUNTS`), as a mutable slot.
+    pub fn secret_mut(&mut self, account: &str) -> &mut Option<String> {
+        match account {
+            "ssh-password" => &mut self.password,
+            "ssh-passphrase" => &mut self.passphrase,
+            _ => &mut self.private_key,
+        }
+    }
+
+    /// Whether the authentication method uses the secret of `account` (the others are deleted on save).
+    pub fn uses(&self, account: &str) -> bool {
+        self.enabled
+            && match account {
+                "ssh-password" => self.auth == "password",
+                "ssh-passphrase" => self.auth == "key",
+                _ => self.auth == "key" && self.key_path.trim().is_empty(),
+            }
+    }
+
+    /// Without the secrets, for connections.json.
+    pub fn without_secrets(&self) -> SshConfig {
+        SshConfig { password: None, passphrase: None, private_key: None, forwarded_to: String::new(), ..self.clone() }
+    }
+}
+
+/// The credential store account of one of a connection's SSH secrets.
+pub fn ssh_account(conn_id: &str, which: &str) -> String {
+    format!("{conn_id}#{which}")
 }
 
 impl Default for ConnConfig {
@@ -212,6 +287,7 @@ impl Default for ConnConfig {
             folder: String::new(),
             file_path: String::new(),
             startup_sql: String::new(),
+            ssh: SshConfig::default(),
         }
     }
 }

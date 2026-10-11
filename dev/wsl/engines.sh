@@ -10,6 +10,14 @@ C="docker compose -f dev/wsl/compose.yml"
 D="$HOME/celer-drivers"
 MSSQL_PASSWORD='Celer_Test_2026!'
 
+# The SSH bastion's test key (compose.yml mounts its public half as authorized_keys).
+ssh_key() {
+  mkdir -p "$D/ssh"
+  [ -f "$D/ssh/id_ed25519" ] || ssh-keygen -q -t ed25519 -N "" -C celer-engines -f "$D/ssh/id_ed25519"
+  cp "$D/ssh/id_ed25519.pub" "$D/ssh/authorized_keys"
+  chmod 644 "$D/ssh/authorized_keys"
+}
+
 wait_all() {
   for i in $(seq 1 60); do docker exec celer-pg pg_isready -U celer >/dev/null 2>&1 && break; sleep 2; done
   for c in celer-mysql celer-mariadb; do
@@ -53,10 +61,12 @@ engine_env() {
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"
   export CELER_JDBC_JARS="$D/jdbc/jdbc-15.0.1.4.jar:$D/jdbc/bson-3.8.0.jar"
   export CELER_REQUIRE_BRIDGE=1 CELER_NODE=node CELER_INFORMIX_CONTAINER=celer-ifx
+  # SSH tunnels (engine_tests.rs ssh_tunnel_*): the bastion, and each engine as only the bastion sees it.
+  export CELER_SSH_TEST="host=localhost port=2222 user=celer password=celer key=$D/ssh/id_ed25519 container=celer-sshd pg=celer-pg:5432 mysql=celer-mysql:3306 mariadb=celer-mariadb:3306 mssql=celer-mssql:1433 ifx=celer-ifx"
 }
 
 case "${1:-status}" in
-  up) $C up -d; wait_all; echo "engines ready" ;;
+  up) ssh_key; $C up -d --build; wait_all; echo "engines ready" ;;
   down) $C down ;;
   status) $C ps ;;
   seed) seed; echo "seeded" ;;

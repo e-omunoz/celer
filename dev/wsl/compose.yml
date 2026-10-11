@@ -8,6 +8,12 @@
 #   MariaDB 11.4    localhost:33307  root/celer, celer/celer
 #   SQL Server 2022 localhost:1433   sa/Celer_Test_2026!
 #   Informix        localhost:9088 (SQLI/JDBC), 9089 (DRDA)  informix/in4mix, server informix
+#   SSH bastion     localhost:2222   celer/celer, or the key ~/celer-drivers/ssh/id_ed25519 (engines.sh up makes it)
+#
+# The bastion (sshd) is the way to test SSH tunnels: from it the engines are celer-pg:5432, celer-mysql:3306,
+# celer-mariadb:3306, celer-mssql:1433 and celer-ifx:9088/9089, names that only resolve inside this Docker network,
+# so a connection to them works only through the tunnel. Its host key is made when the image is built, so restarting
+# the container (docker restart celer-sshd, to drop every tunnel) keeps it.
 name: celer-engines
 
 services:
@@ -51,6 +57,23 @@ services:
     environment: { LICENSE: accept }
     ports: ["9088:9088", "9089:9089"]
     volumes: [ifx-data:/opt/ibm/data]
+    restart: unless-stopped
+
+  sshd:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine:3.20
+        RUN apk add --no-cache openssh-server \
+         && ssh-keygen -A \
+         && adduser -D -s /bin/sh celer && echo 'celer:celer' | chpasswd \
+         && sed -i -E '/^(AllowTcpForwarding|PasswordAuthentication|AuthorizedKeysFile|StrictModes)/d' /etc/ssh/sshd_config \
+         && printf 'AllowTcpForwarding yes\nPasswordAuthentication yes\nStrictModes no\nAuthorizedKeysFile /keys/authorized_keys .ssh/authorized_keys\n' >> /etc/ssh/sshd_config
+        CMD ["/usr/sbin/sshd", "-D", "-e"]
+    image: celer-sshd
+    container_name: celer-sshd
+    ports: ["2222:22"]
+    volumes: ["${HOME}/celer-drivers/ssh:/keys:ro"]
     restart: unless-stopped
 
 volumes:

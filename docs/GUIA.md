@@ -58,6 +58,33 @@ Si falla, dice qué significa y qué hacer (nombre que no resuelve o VPN caída,
 contraseña, base que no existe, certificado, `pg_hba.conf`, ERROR 1130 de MySQL…) y deja el error original del driver
 para copiarlo.
 
+Por un túnel SSH los dos primeros pasos son otros, y dicen cuál falló: **Túnel SSH** (entrar en el servidor SSH, y en
+los saltos, con su clave de servidor y el método de autenticación) y **Reenvío a servidor:puerto** (que el servidor SSH
+llega a la base). Después vienen el inicio de sesión y la base, como siempre.
+
+### Túnel SSH
+
+Para una base a la que solo se llega a través de un bastión, **Túnel SSH** (en PostgreSQL, MySQL/MariaDB, SQL Server e
+Informix, también por DRDA y JDBC) hace que Celer entre por SSH y reenvíe un puerto local hasta el servidor:
+
+- **Servidor SSH**, **Puerto** (22) y **Usuario SSH**. El *Servidor* y el *Puerto* de la base, arriba, son los que ve
+  el servidor SSH: `localhost` es el propio servidor SSH.
+- **Autenticación**: *Contraseña*, *Clave privada* (un fichero OpenSSH, PEM o PuTTY `.ppk`, o la clave pegada, con su
+  *Frase de paso* si la tiene) o *Agente SSH* (Pageant o el agente de OpenSSH en Windows; `ssh-agent` en Linux y macOS).
+- **Saltos previos** (opcional): otros servidores SSH que hay que cruzar antes, uno por línea y en orden
+  (`usuario@servidor:puerto`), con la misma autenticación.
+- La contraseña SSH, la frase de paso y la clave pegada se guardan en el almacén de credenciales del sistema, nunca en
+  `connections.json`; al exportar sin contraseñas solo viajan servidor, puerto, usuario, método y la ruta de la clave.
+- La primera vez que Celer ve un servidor SSH enseña su **huella** (`SHA256:…`) y no conecta hasta que pulsas
+  **Confiar en esta clave**; la guarda en `known_hosts` de la carpeta de datos de Celer (también se fía de tu
+  `~/.ssh/known_hosts`). Si un servidor conocido presenta otra clave, Celer no conecta y dice dónde está la guardada.
+- Todas las sesiones de la conexión comparten un túnel. Si el bastión se reinicia o el túnel se corta, la siguiente
+  consulta vuelve a abrir el túnel y la sesión, como con cualquier corte.
+- Una instancia con nombre de SQL Server necesita su **puerto**: SQL Server Browser no cruza el túnel. Cancelar una
+  consulta de Informix por SQLI puede no llegar al servidor por el túnel (usa datos urgentes de TCP).
+- SQLite (un fichero de este equipo) y ODBC (la conexión la abre el driver del DSN) no tienen túnel: en ODBC se
+  configura en el propio origen de datos.
+
 ### Organizar las conexiones
 
 En el explorador:
@@ -72,8 +99,16 @@ En el explorador:
   usuario, carpeta y motor (`pg`, `sqlserver`, `ifx`…). Los filtros rápidos dejan ver solo las favoritas, las
   conectadas, las de producción o las de un motor.
 - **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
-- **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON sin contraseñas, para compartirlas o
-  llevarlas a otro equipo; al importar no se repiten las que ya existen.
+- **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON, para compartirlas o llevarlas a otro
+  equipo; al importar no se repiten las que ya existen. De entrada va **sin contraseñas** (el fichero de siempre) y
+  Celer las pide al conectar. Con **Incluir contraseñas** viajan también la contraseña de la base, las del túnel SSH
+  (contraseña, frase de paso y clave pegada) y los parámetros secretos de la cadena ODBC y de *Parámetros extra*:
+  - Hay que escribir dos veces una **contraseña del fichero** (8 caracteres o más); Celer cifra con ella los secretos
+    (Argon2id + AES-256-GCM) y el fichero dice arriba que lleva contraseñas cifradas. Sin ella no se pueden recuperar.
+  - **Sin cifrar** existe, pero solo marcando que entiendes que cualquiera que lea el fichero podrá usarlas.
+  - Al importar un fichero con contraseñas cifradas, Celer pide su contraseña: si no es la correcta no importa ningún
+    secreto y deja volver a intentarlo, o **Importar sin contraseñas**. Los secretos van al almacén de credenciales
+    del sistema, nunca a `connections.json`, y las conexiones conectan sin volver a escribir nada.
 - **Varias a la vez**: Ctrl+clic (⌘+clic en macOS) añade o quita una fila, Mayús+clic selecciona un rango tal como se
   ve en el árbol y Ctrl+Mayús+clic lo añade a lo que ya había; con el teclado, Mayús+flechas (y Mayús+Inicio/Fin)
   amplían la selección y Ctrl+A selecciona todas las filas visibles del mismo tipo que la que tiene el foco (todas las
@@ -93,8 +128,14 @@ En el explorador:
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas
 de producción. Las contraseñas guardadas en DBeaver solo se traen si marcas **Importar también las contraseñas
 guardadas** (desmarcada de entrada): solo entonces, y al pulsar *Importar*, Celer lee el fichero cifrado de credenciales
-de DBeaver; al listar las conexiones no lo abre. De una conexión Informix se traen también el `informixserver` y
-el resto de propiedades de la URL (van a *Parámetros extra*).
+de DBeaver; al listar las conexiones no lo abre. La URL JDBC de cada conexión se lee entera, como en el campo **URL
+JDBC** del formulario: servidor, puerto, base, instancia de SQL Server (también `jdbc:sqlserver://;serverName=…`),
+`informixserver`, protocolo de Informix (`jdbc:ids` es DRDA), cifrado y certificado, y lo que el driver entiende como
+*Parámetros extra*. Las propiedades del driver que guarda DBeaver se suman a las de la URL en todos los motores. Un
+campo vacío en la herramienta no pisa lo que dice la URL; en una URL con varios servidores Celer usa el primero, y la
+lista avisa de lo que no se ha podido traer. El **túnel SSH** de una conexión también se trae (servidor, puerto,
+usuario y método; de DbVisualizer, también los saltos); de DBeaver, el usuario y la contraseña SSH vienen con las
+contraseñas guardadas.
 
 ### Conectar rápido
 

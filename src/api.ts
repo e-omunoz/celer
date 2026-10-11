@@ -12,10 +12,12 @@ import type {
   OpenSessionOptions,
   SessionHealth,
   SessionInfo,
+  SshHostKeyInfo,
   TableColumn,
 } from "./types";
 import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
 import type { MigrationSource } from "./migrate";
+import type { ImportedSecrets, SecretRequest } from "./connTree";
 import { createDemoBackend } from "./demo";
 
 export interface Backend {
@@ -32,6 +34,19 @@ export interface Backend {
   duplicateConnection(id: string, name: string): Promise<ConnConfig>;
   /** "Probar conexión": every step timed. Rejects only when the connection cannot even be attempted (driver missing…). */
   testConnection(cfg: ConnConfig): Promise<ConnTestReport>;
+  /** The SSH host key behind an SSH_HOST_UNKNOWN:<token>: error (null once it is no longer pending). */
+  sshHostKey(token: string): Promise<SshHostKeyInfo | null>;
+  /** «Confiar en esta clave»: the key goes to Celer's known_hosts. */
+  sshTrustHostKey(token: string): Promise<SshHostKeyInfo>;
+  /** An SSH password typed at connect time: kept in the core's memory only, never saved. */
+  setSessionSshPassword(connId: string, password: string): Promise<void>;
+  /**
+   * The `secrets` block of an export with passwords: the core reads each connection's secrets from the credential
+   * store and seals them with `passphrase` (Argon2id + AES-256-GCM), or leaves them in clear when it is null.
+   */
+  exportSecrets(items: SecretRequest[], passphrase: string | null): Promise<{ encrypted: boolean } & Record<string, unknown>>;
+  /** The secrets of a v2 file, by connection position. A wrong passphrase rejects with SECRETS_PASSPHRASE:. */
+  openSecrets(block: Record<string, unknown>, passphrase: string | null): Promise<Record<string, ImportedSecrets>>;
   openSession(connId: string, password?: string, options?: OpenSessionOptions): Promise<SessionInfo>;
   /** Checks a session (a cheap round trip if it has been idle, or always with `force`) and reconnects it if it dropped. */
   checkSession(sessionId: string, force: boolean): Promise<SessionHealth>;
@@ -130,6 +145,11 @@ function tauriBackend(): Backend {
     restoreConnection: (cfg) => invoke("restore_connection", { cfg: { ...cfg, password: cfg.password || null } }),
     duplicateConnection: (id, name) => invoke("duplicate_connection", { id, name }),
     testConnection: (cfg) => invoke("test_connection", { cfg }),
+    sshHostKey: (token) => invoke("ssh_host_key", { token }),
+    sshTrustHostKey: (token) => invoke("ssh_trust_host_key", { token }),
+    setSessionSshPassword: (connId, password) => invoke("set_session_ssh_password", { connId, password }),
+    exportSecrets: (items, passphrase) => invoke("export_secrets", { items, passphrase }),
+    openSecrets: (block, passphrase) => invoke("open_secrets", { block, passphrase }),
     openSession: (connId, password, options) =>
       invoke("open_session", { connId: connId, password: password ?? null, database: options?.database || null, autocommit: options?.autocommit ?? null }),
     checkSession: (sessionId, force) => invoke("check_session", { sessionId: sessionId, force }),

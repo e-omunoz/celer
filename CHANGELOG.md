@@ -6,8 +6,35 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **SSH tunnels** (#115): «Túnel SSH» in the connection form reaches PostgreSQL, MySQL/MariaDB, SQL Server and Informix
+  (DRDA and JDBC) through a bastion, with a password, a private key (file or pasted, OpenSSH/PEM/PuTTY, with its
+  passphrase) or the SSH agent (Pageant, the OpenSSH agent of Windows, ssh-agent), and optional jump hosts. The Rust
+  core forwards a local port (one tunnel per connection, shared by its sessions) and rebuilds it when the bastion
+  drops: the next query reconnects through the session guard. An unknown host key is shown with its fingerprint and
+  «Confiar en esta clave», and a changed one is refused. «Probar conexión» reports the SSH step and the forward apart
+  from the database's. The SSH password, passphrase and key go to the OS credential store (long keys in parts), never
+  to connections.json; exports carry only the tunnel's settings, and DBeaver/DbVisualizer imports bring them too.
+  Hidden, with a note why, for SQLite and ODBC.
+- **Export connections with their passwords** (#101): «Exportar» opens a dialog with «Incluir contraseñas», off by
+  default (the file is then exactly the v1 file as before). With it on, a passphrase typed twice seals every secret
+  (database password, SSH password, passphrase and pasted key, secret entries of the ODBC string and "Parámetros
+  extra") with Argon2id + AES-256-GCM in the Rust core, so the secrets never reach the interface on export; the file
+  (format v2) says on top that it carries encrypted passwords. «Sin cifrar» exists only behind an explicit warning.
+  Importing a v2 file asks for the passphrase, refuses a wrong one without importing any secret (try again, or import
+  without passwords), and saves the secrets to the OS credential store, never to connections.json. v1 files import as
+  before.
+
 ### Fixed
 - MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
+- Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
+- **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
+  «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
+  `jdbc:informix-sqli` without a port, SQL Server URLs with nothing after `//` (`serverName`, `instanceName`,
+  `portNumber`, `databaseName`) and multi-host PostgreSQL/MySQL URLs (the first server, and a note about the others)
+  come through. An empty host or database in the tool no longer hides the one in the URL, DBeaver's driver properties
+  and SSL settings apply to every engine (not only Informix), `jdbc:odbc:<DSN>` becomes an ODBC connection, and the list
+  says what was left out. dbvis.xml is read by Celer's own XML reader.
 
 ## [2.2.0] - 2026-10-09
 

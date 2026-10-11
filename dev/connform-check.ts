@@ -1,9 +1,9 @@
 // Checks for the connection form (src/connForm.ts, parseJdbc in src/migrateParse.ts): JDBC URLs of every engine,
 // field validation and the fields shown. node --experimental-strip-types dev/connform-check.ts
 import assert from "node:assert/strict";
-import { applyJdbcUrl, defaultPort, hasErrors, validateConn, visibleFields, withInstanceName } from "../src/connForm.ts";
+import { applyJdbcUrl, defaultPort, hasErrors, parseJump, validateConn, visibleFields, withInstanceName } from "../src/connForm.ts";
 import { parseJdbc, parseJdbcUrl } from "../src/migrateParse.ts";
-import { emptyConn, type ConnConfig } from "../src/types.ts";
+import { emptyConn, emptySsh, type ConnConfig, type SshConfig } from "../src/types.ts";
 
 const conn = (patch: Partial<ConnConfig>): ConnConfig => ({ ...emptyConn(patch.kind ?? "postgres"), ...patch });
 const fieldsWith = (cfg: ConnConfig, level?: "error" | "warning") =>
@@ -246,5 +246,43 @@ assert.deepEqual(issue.fix, { odbcConnStr: "DSN=x;UID=y;", password: "s" });
 assert.deepEqual(fieldsWith(conn({ kind: "postgres", extra: "password=p;connect_timeout=5" }), "warning"), ["extra"]);
 assert.equal(defaultPort(conn({ kind: "informix", informixMode: "drda" })), 9089);
 assert.equal(defaultPort(conn({ kind: "sqlite" })), null);
+
+// ---------------------------------------------------------------- SSH tunnel (#115)
+
+// The section is there for every network engine, and says why not for SQLite and ODBC.
+for (const kind of ["postgres", "mysql", "mssql", "informix"] as const) {
+  assert.ok(visibleFields(conn({ kind })).ssh && !visibleFields(conn({ kind })).sshNote, kind);
+}
+for (const kind of ["sqlite", "odbc"] as const) {
+  shown = visibleFields(conn({ kind }));
+  assert.ok(!shown.ssh && shown.sshNote.length > 20, kind);
+}
+const tunnel = (patch: Partial<SshConfig>, base: Partial<ConnConfig> = {}) => conn({ kind: "postgres", host: "db.internal", ...base, ssh: { ...emptySsh(), enabled: true, host: "bastion", user: "ops", ...patch } });
+assert.deepEqual(fieldsWith(tunnel({})), []);
+assert.deepEqual(fieldsWith(tunnel({ host: "", user: "" }), "error"), ["sshHost", "sshUser"]);
+assert.deepEqual(fieldsWith(tunnel({ port: 70000 }), "error"), ["sshPort"]);
+// A key: its file, a pasted one, or one already kept in the credential store.
+assert.deepEqual(fieldsWith(tunnel({ auth: "key" }), "error"), ["sshKey"]);
+assert.deepEqual(fieldsWith(tunnel({ auth: "key", keyPath: "~/.ssh/id_ed25519" })), []);
+assert.deepEqual(fieldsWith(tunnel({ auth: "key", privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----" })), []);
+assert.deepEqual(validateConn(tunnel({ auth: "key" }), [], true), []);
+assert.deepEqual(fieldsWith(tunnel({ auth: "agent" })), []);
+// Jump hosts as user@host:port, one per line.
+assert.deepEqual(fieldsWith(tunnel({ jumps: ["ops@edge:2222", "inner", "[2001:db8::1]:22", ""] })), []);
+issue = validateConn(tunnel({ jumps: ["ops@edge:99999", "a b"] }))[0];
+assert.equal(issue.field, "sshJumps");
+assert.ok(issue.message.includes("ops@edge:99999") && issue.message.includes("a b"), issue.message);
+assert.deepEqual(parseJump("ana@salto.example.com:2200"), { user: "ana", host: "salto.example.com", port: 2200 });
+assert.deepEqual(parseJump("salto"), { user: "", host: "salto", port: 22 });
+assert.equal(parseJump("x@h:0"), null);
+// SQL Server Browser does not cross a tunnel: a named instance needs its port.
+assert.deepEqual(fieldsWith(tunnel({}, { kind: "mssql", instance: "PROD", port: null }), "error"), ["port"]);
+assert.deepEqual(fieldsWith(tunnel({}, { kind: "mssql", instance: "PROD", port: 1500 }), "error"), []);
+assert.deepEqual(fieldsWith(conn({ kind: "mssql", instance: "PROD", port: null }), "error"), [], "without a tunnel Browser gives the port");
+// Off, or on an engine without network: nothing is checked.
+assert.deepEqual(fieldsWith(tunnel({ enabled: false, host: "" })), []);
+assert.deepEqual(fieldsWith(tunnel({ host: "" }, { kind: "sqlite", filePath: ":memory:" })), []);
+// A JDBC URL that changes the engine keeps the tunnel.
+assert.equal(applyJdbcUrl(tunnel({}), "jdbc:mysql://db:3306/x")?.cfg.ssh?.host, "bastion");
 
 console.log("connection form: ok");

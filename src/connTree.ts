@@ -1,7 +1,7 @@
 // Lógica pura del explorador de conexiones: carpetas anidadas ("Clientes/Egarsat"), orden, búsqueda y filtros, y el
-// formato portable para exportar e importar conexiones sin contraseñas. Sin solid-js ni efectos, para poder probarla
+// formato portable para exportar e importar conexiones (sin contraseñas, o con ellas en un bloque que sella el núcleo). Sin solid-js ni efectos, para poder probarla
 // con node (dev/explorer-check.ts).
-import { emptyConn, ENGINES, type ConnConfig, type DbKind } from "./types.ts";
+import { emptyConn, ENGINES, type ConnConfig, type DbKind, type SshConfig } from "./types.ts";
 
 /** Separador de niveles de carpeta en `ConnConfig.folder`. Las carpetas antiguas con " · " son nombres planos. */
 export const FOLDER_SEP = "/";
@@ -282,7 +282,10 @@ export function insertAt(order: string[], id: string, at: number): string[] {
 // ---------------------------------------------------------------- exportar e importar
 
 export const EXPORT_FORMAT = "celer-connections";
+/** Without passwords: the format as it has always been. */
 export const EXPORT_VERSION = 1;
+/** With «Incluir contraseñas»: v1 plus a `secrets` block, sealed by the core (src-tauri/src/secrets.rs). */
+export const EXPORT_VERSION_SECRETS = 2;
 
 /** Campos de una conexión que viajan en el fichero: todo menos el id y la contraseña. */
 const PORTABLE_KEYS = Object.keys(emptyConn("postgres")).filter((key) => key !== "id" && key !== "password") as (keyof ConnConfig)[];
@@ -304,6 +307,23 @@ export function inlinePassword(text: string): string | null {
   return found;
 }
 
+/** The settings of an SSH tunnel that travel in a file (no password, passphrase or key); null without a tunnel. */
+export function portableSsh(ssh: SshConfig | undefined | null): SshConfig | null {
+  if (!ssh || (!ssh.enabled && !ssh.host)) return null;
+  return { enabled: Boolean(ssh.enabled), host: ssh.host ?? "", port: ssh.port ?? 22, user: ssh.user ?? "", auth: ssh.auth || "password", keyPath: ssh.keyPath ?? "", jumps: [...(ssh.jumps ?? [])] };
+}
+
+/** An SSH block read from a file, checked field by field; null when it is not one. */
+function readSsh(raw: unknown): SshConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const port = typeof r.port === "number" && Number.isInteger(r.port) && r.port > 0 && r.port < 65536 ? r.port : 22;
+  const auth = ["password", "key", "agent"].includes(str(r.auth)) ? str(r.auth) : "password";
+  const jumps = Array.isArray(r.jumps) ? r.jumps.filter((j): j is string => typeof j === "string") : [];
+  return portableSsh({ enabled: r.enabled === true, host: str(r.host), port, user: str(r.user), auth, keyPath: str(r.keyPath), jumps });
+}
+
 /** Las conexiones (sin id ni contraseña) y las carpetas, como JSON legible. */
 export function exportConnectionsJson(conns: ConnConfig[], folders: string[], exportedAt: Date): string {
   const connections = conns.map((conn) => {
@@ -313,6 +333,9 @@ export function exportConnectionsJson(conns: ConnConfig[], folders: string[], ex
       if (value !== undefined) out[key] = key === "odbcConnStr" || key === "extra" ? withoutInlinePassword(String(value)) : value;
     }
     if (conn.startupSql) out.startupSql = conn.startupSql;
+    // The SSH tunnel's settings, never its secrets (only for connections that have one).
+    const ssh = portableSsh(conn.ssh);
+    if (ssh) out.ssh = ssh;
     return out;
   });
   const used = allFolders(
@@ -322,13 +345,105 @@ export function exportConnectionsJson(conns: ConnConfig[], folders: string[], ex
   return JSON.stringify({ format: EXPORT_FORMAT, version: EXPORT_VERSION, exportedAt: exportedAt.toISOString(), folders: used, connections }, null, 2);
 }
 
+/** Keys of a `key=value;…` entry that holds a secret (PWD= and Password= are the connection's password instead). */
+const SECRET_KEY = /(pass(word|wd|phrase)?|secret|token|api_?key|private_?key)$/i;
+const PARAM_ENTRY = /(?<=^|[;\n])[ \t]*([^=;\n]*?)[ \t]*=[ \t]*(\{(?:[^}]|\}\})*\}|[^;\n]*)[ \t]*(?:[;\n]|$)/g;
+
+/**
+ * A `key=value;…` list (ODBC string, "Parámetros extra") split into the entries that hold a secret (sslpassword=,
+ * token=…) and the rest as written. PWD= and Password= are left alone: they are the connection's password.
+ */
+export function splitSecretParams(text: string): { kept: string; secret: string } {
+  const secret: string[] = [];
+  const kept = text.replace(PARAM_ENTRY, (entry, key: string, value: string) => {
+    const k = key.trim();
+    if (!SECRET_KEY.test(k) || /^(pwd|password)$/i.test(k)) return entry;
+    secret.push(`${k}=${value.trim()}`);
+    return "";
+  });
+  return { kept, secret: secret.join(";") };
+}
+
+/** A secret entries list added back to the list it came from. */
+export function joinParams(text: string, secret: string | undefined): string {
+  if (!secret) return text;
+  if (!text.trim()) return secret;
+  const separator = text.includes("\n") && !text.includes(";") ? "\n" : ";";
+  return `${text.replace(/[;\n\s]+$/, "")}${separator}${secret}`;
+}
+
+/** One connection of an export with passwords, for the core: its id and the secret entries taken out of it. */
+export interface SecretRequest {
+  id: string;
+  inline: { extra?: string; odbcConnStr?: string } | null;
+}
+
+/** The connections without their secret entries, and what the core is asked to seal for each one (same order). */
+export function secretRequests(conns: ConnConfig[]): { conns: ConnConfig[]; requests: SecretRequest[] } {
+  const requests: SecretRequest[] = [];
+  const out = conns.map((conn) => {
+    const extra = splitSecretParams(conn.extra ?? "");
+    const odbc = splitSecretParams(conn.odbcConnStr ?? "");
+    const inline: SecretRequest["inline"] = {};
+    if (extra.secret) inline.extra = extra.secret;
+    if (odbc.secret) inline.odbcConnStr = odbc.secret;
+    requests.push({ id: conn.id, inline: Object.keys(inline).length ? inline : null });
+    return { ...conn, extra: extra.kept, odbcConnStr: odbc.kept };
+  });
+  return { conns: out, requests };
+}
+
+/**
+ * The file «con contraseñas» (format v2): the same connections and folders as v1, without the secret entries of their
+ * parameters, plus the `secrets` block the core sealed (`api().exportSecrets`), keyed by position. It says on top that
+ * it carries passwords and whether they are encrypted.
+ */
+export function exportConnectionsJsonWithSecrets(conns: ConnConfig[], folders: string[], exportedAt: Date, secrets: { encrypted?: boolean }): string {
+  const v1 = JSON.parse(exportConnectionsJson(secretRequests(conns).conns, folders, exportedAt)) as { exportedAt: string; folders: string[]; connections: unknown[] };
+  const encrypted = secrets.encrypted === true;
+  return JSON.stringify(
+    {
+      format: EXPORT_FORMAT,
+      version: EXPORT_VERSION_SECRETS,
+      exportedAt: v1.exportedAt,
+      containsSecrets: encrypted ? "Contiene contraseñas cifradas (Argon2id + AES-256-GCM): Celer pide la contraseña del fichero al importarlo." : "Contiene contraseñas SIN CIFRAR: cualquiera que lea este fichero puede usarlas.",
+      folders: v1.folders,
+      connections: v1.connections,
+      secrets,
+    },
+    null,
+    2,
+  );
+}
+
+/** What the core gives back for one connection of a v2 file (src-tauri/src/secrets.rs SecretSet). */
+export interface ImportedSecrets {
+  password?: string;
+  sshPassword?: string;
+  sshPassphrase?: string;
+  sshKey?: string;
+  inline?: { extra?: string; odbcConnStr?: string } | null;
+}
+
+/** A connection of the file with its secrets, to save (they go to the credential store, never to connections.json). */
+export function withImportedSecrets(conn: ConnConfig, secrets: ImportedSecrets | undefined): ConnConfig {
+  if (!secrets) return conn;
+  const out: ConnConfig = { ...conn, extra: joinParams(conn.extra, secrets.inline?.extra), odbcConnStr: joinParams(conn.odbcConnStr, secrets.inline?.odbcConnStr) };
+  if (secrets.password) Object.assign(out, { password: secrets.password, savePassword: true });
+  if (out.ssh && (secrets.sshPassword || secrets.sshPassphrase || secrets.sshKey)) {
+    out.ssh = { ...out.ssh, password: secrets.sshPassword ?? null, passphrase: secrets.sshPassphrase ?? null, privateKey: secrets.sshKey ?? null };
+  }
+  return out;
+}
+
 const KINDS = new Set<string>(ENGINES.map((engine) => engine.kind));
 
 /**
  * Lee un fichero exportado: las conexiones completadas con los valores por defecto de su motor (id vacío, sin
  * contraseña) y las carpetas. Un fichero que no es de Celer o una conexión sin motor válido dan un error claro.
+ * Uno con contraseñas (v2) trae además su bloque `secrets`, tal cual, para que el núcleo lo abra.
  */
-export function parseConnectionsJson(text: string): { connections: ConnConfig[]; folders: string[] } {
+export function parseConnectionsJson(text: string): { connections: ConnConfig[]; folders: string[]; secrets: { encrypted: boolean; block: Record<string, unknown> } | null } {
   let doc: unknown;
   try {
     doc = JSON.parse(text);
@@ -338,8 +453,8 @@ export function parseConnectionsJson(text: string): { connections: ConnConfig[];
   if (!doc || typeof doc !== "object" || (doc as { format?: unknown }).format !== EXPORT_FORMAT) {
     throw new Error("El fichero no es una exportación de conexiones de Celer");
   }
-  const file = doc as { version?: unknown; folders?: unknown; connections?: unknown };
-  if (typeof file.version !== "number" || file.version > EXPORT_VERSION) {
+  const file = doc as { version?: unknown; folders?: unknown; connections?: unknown; secrets?: unknown };
+  if (typeof file.version !== "number" || file.version > EXPORT_VERSION_SECRETS) {
     throw new Error(`Versión del fichero no admitida (${String(file.version)}): actualiza Celer`);
   }
   if (!Array.isArray(file.connections)) throw new Error("El fichero no tiene conexiones");
@@ -359,12 +474,20 @@ export function parseConnectionsJson(text: string): { connections: ConnConfig[];
     }
     cfg.id = "";
     cfg.password = "";
+    const ssh = readSsh(item.ssh);
+    if (ssh) cfg.ssh = ssh;
     cfg.folder = normalizeFolder(String(cfg.folder ?? ""));
     if (!String(cfg.name ?? "").trim()) cfg.name = `Conexión ${index + 1}`;
     return cfg as unknown as ConnConfig;
   });
   const folders = Array.isArray(file.folders) ? file.folders.filter((f): f is string => typeof f === "string").map(normalizeFolder).filter(Boolean) : [];
-  return { connections, folders };
+  let secrets: { encrypted: boolean; block: Record<string, unknown> } | null = null;
+  if (file.version >= EXPORT_VERSION_SECRETS) {
+    if (!file.secrets || typeof file.secrets !== "object") throw new Error("El fichero dice que trae contraseñas, pero no tiene el bloque «secrets»");
+    const block = file.secrets as Record<string, unknown>;
+    secrets = { encrypted: block.encrypted === true, block };
+  }
+  return { connections, folders, secrets };
 }
 
 /** Lo que identifica a qué servidor y con quién conecta una conexión (para no importarla dos veces). */

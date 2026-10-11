@@ -226,7 +226,13 @@ pub fn transient(msg: &str, patient: bool) -> bool {
 pub fn short(msg: &str) -> String {
     let line = msg.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let line = match line.split_once(": ") {
-        Some((code, rest)) if !code.is_empty() && code.chars().all(|c| c.is_ascii_uppercase() || matches!(c, '_' | ':' | ',')) => rest,
+        // CODE: or CODE:arg: (JDBC_SETUP:java,jdbc:, SSH_HOST_UNKNOWN:<hex token>:).
+        Some((code, rest))
+            if code.split(':').next().is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+                && code.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | ',')) =>
+        {
+            rest
+        }
         _ => line,
     };
     if line.chars().count() > 160 {

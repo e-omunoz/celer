@@ -18,6 +18,7 @@ import type {
   ObjectRef,
   ResultSet,
   Settings,
+  SshHostKeyInfo,
   TableColumn,
   ThemeName,
 } from "./types";
@@ -326,6 +327,12 @@ export const [state, setState] = createStore({
   informixDrivers: null as InformixDrivers | null,
   /** A JDBC connection lacks Java or the driver: what is missing, and what to retry once it is downloaded. */
   jdbcSetup: null as { missing: ("java" | "jdbc")[]; text: string; retry: (() => void) | null } | null,
+  /** «Exportar conexiones»: the dialog with «Incluir contraseñas» (ids empty = all). */
+  connExport: null as { ids: string[]; title: string; count: number } | null,
+  /** Importing a file with encrypted passwords: its passphrase (false = without passwords, null = cancel). */
+  secretsAsk: null as { error: string; resolve: (value: string | false | null) => void } | null,
+  /** An SSH server's key Celer has not seen (SSH_HOST_UNKNOWN): shown with «Confiar en esta clave». */
+  sshHostKey: null as { token: string; text: string; info: SshHostKeyInfo | null; retry: (() => void) | null } | null,
   /** The Informix drivers guide, open on a topic (jdbc, sdk, drda, locale, server), with the error that led there. */
   informixGuide: null as { topic: string; message: string } | null,
   /** "Probar conexión" failed with something the guide explains: its topic. */
@@ -333,7 +340,7 @@ export const [state, setState] = createStore({
   /** "Probar conexión": every step with its time, the way it connected and, if it failed, what to do. */
   testReport: null as ConnTestReport | null,
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
-  passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
+  passwordAsk: null as { name: string; label?: string; resolve: (value: string | null) => void } | null,
   /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
   paramAsk: null as ParamAsk | null,
   /** The entity-relationship diagram on show (a schema's tables and their foreign keys). */
@@ -709,8 +716,8 @@ export function applySharedSettings(value: Partial<Settings>) {
 
 // ---------------------------------------------------------------- connections
 
-export function askPassword(name: string) {
-  return new Promise<string | null>((resolve) => setState("passwordAsk", { name, resolve }));
+export function askPassword(name: string, label = "Contraseña") {
+  return new Promise<string | null>((resolve) => setState("passwordAsk", { name, label, resolve }));
 }
 
 export interface ErState {
@@ -1064,8 +1071,21 @@ export function answerPassword(value: string | null) {
   setState("passwordAsk", null);
 }
 
+/** ODBC takes its password from the connection string unless it names a user and carries none (an import). */
+function odbcNeedsPassword(conn: ConnSummary) {
+  return conn.kind === "odbc" && !!conn.user.trim() && !/\b(pwd|password)\s*=/i.test(`${conn.odbcConnStr};${conn.extra}`);
+}
+
 function needsPassword(conn: ConnSummary) {
-  return !conn.integratedAuth && conn.kind !== "sqlite" && conn.kind !== "odbc" && !conn.hasPassword && !state.passwords[conn.id];
+  const network = conn.kind !== "sqlite" && (conn.kind !== "odbc" || odbcNeedsPassword(conn));
+  return !conn.integratedAuth && network && !conn.hasPassword && !state.passwords[conn.id];
+}
+
+/** The tunnel logs in with a password nobody saved (an import): asked once per run. */
+const sshAsked = new Set<string>();
+function needsSshPassword(conn: ConnSummary) {
+  const ssh = conn.ssh;
+  return !!ssh?.enabled && ssh.auth === "password" && !conn.sshSaved?.password && !sshAsked.has(conn.id);
 }
 
 export async function refreshConnections() {
@@ -1169,13 +1189,13 @@ export async function testConnection(cfg: ConnConfig) {
       ? [report.serverInfo, report.route ? `Vía: ${report.route}` : "", `Total: ${formatMs(report.totalMs)}`]
       : [report.hint, plainError(report.error)];
     setState({ testReport: report, testOutput: summary.filter(Boolean).join("\n"), testOk: report.ok, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
-    if (code?.code === "JDBC_SETUP") offerDriverHelp(report.error, () => void testConnection(cfg));
+    if (code?.code === "JDBC_SETUP" || code?.code === "SSH_HOST_UNKNOWN") offerDriverHelp(report.error, () => void testConnection(cfg));
   } catch (err) {
     const message = errorText(err);
     const code = errorCode(message);
     setState({ testOutput: plainError(message), testOk: false, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
     // The dialog stays open: only what has to be downloaded is offered on top of it.
-    if (code?.code === "JDBC_SETUP") offerDriverHelp(message, () => void testConnection(cfg));
+    if (code?.code === "JDBC_SETUP" || code?.code === "SSH_HOST_UNKNOWN") offerDriverHelp(message, () => void testConnection(cfg));
   } finally {
     setState("testing", false);
   }
@@ -1187,7 +1207,7 @@ export async function testConnection(cfg: ConnConfig) {
  * went with it), CONN_RESET (it dropped and a write was not repeated), CONN_DOWN (it dropped and could not reconnect).
  */
 export function errorCode(message: string): { code: string; arg: string; text: string } | null {
-  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING|SESSION_LOST|CONN_RESET|CONN_DOWN)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
+  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING|SESSION_LOST|CONN_RESET|CONN_DOWN|SSH_HOST_UNKNOWN|SSH_HOST_CHANGED)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
   return match ? { code: match[1], arg: match[2] ?? "", text: match[3] } : null;
 }
 
@@ -1213,6 +1233,18 @@ export function offerDriverHelp(message: string, retry: (() => void) | null): bo
     setState("informixGuide", { topic: code.arg || "jdbc", message: code.text });
     return true;
   }
+  if (code.code === "SSH_HOST_UNKNOWN" && code.arg) {
+    // Never accepted in silence: the user sees the fingerprint and decides.
+    const token = code.arg;
+    setState("sshHostKey", { token, text: code.text, info: null, retry });
+    void api()
+      .sshHostKey(token)
+      .then((info) => {
+        if (state.sshHostKey?.token === token) setState("sshHostKey", "info", info);
+      })
+      .catch(() => {});
+    return true;
+  }
   if (code.code === "IBM_DRIVER_MISSING" || code.code === "JDBC_BRIDGE_MISSING") {
     setState({ settingsOpen: true, settingsSection: "drivers" });
     return true;
@@ -1230,6 +1262,12 @@ export async function connect(connId: string, password?: string) {
     const typed = await askPassword(conn.name);
     if (!typed) return;
     setState("passwords", connId, typed);
+  }
+  if (needsSshPassword(conn)) {
+    const typed = await askPassword(conn.name, `Contraseña SSH (${conn.ssh?.user || "túnel"}@${conn.ssh?.host})`);
+    if (!typed) return;
+    await api().setSessionSshPassword(connId, typed);
+    sshAsked.add(connId);
   }
   const pwd = state.passwords[connId];
   const generation = connectGeneration(connId);
@@ -1548,7 +1586,7 @@ export function warmSqlSession(tabId: string) {
   if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId) return;
   const conn = connectionById(tab.connId);
   if (!state.sessions[tab.connId]) {
-    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
+    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && !needsSshPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
     return;
   }
   void ensureSqlSession(tab).catch(() => {});
@@ -3211,6 +3249,21 @@ export async function downloadJdbcPiece(what: "java" | "jdbc"): Promise<boolean>
 
 export function cancelDriverDownload() {
   void api().driverDownloadCancel();
+}
+
+/** «Confiar en esta clave»: the SSH server's key goes to Celer's known_hosts, then what failed runs again. */
+export async function trustSshHostKey() {
+  const ask = state.sshHostKey;
+  if (!ask) return;
+  try {
+    await api().sshTrustHostKey(ask.token);
+    setState("sshHostKey", null);
+    notify("Clave del servidor SSH guardada", "success", ask.info ? `${ask.info.host}:${ask.info.port} · ${ask.info.fingerprint}` : undefined);
+    ask.retry?.();
+  } catch (err) {
+    setState("sshHostKey", null);
+    notify("No se guardó la clave del servidor SSH", "error", errorText(err));
+  }
 }
 
 /** The JDBC setup dialog: downloads what is missing, in turn, then retries what failed. */

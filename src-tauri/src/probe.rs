@@ -18,7 +18,7 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
-    /// resolve | tcp | tls | login | database
+    /// resolve | tcp | tls | login | database, or ssh | forward through an SSH tunnel
     pub id: &'static str,
     pub label: String,
     /// ok | failed | skipped
@@ -63,13 +63,18 @@ fn short_line(text: &str) -> String {
     crate::guard::short(text)
 }
 
-/// Prueba la conexión: los pasos de red con su tiempo y después el driver de verdad (`connector`).
-pub fn run(cfg: &ConnConfig, connector: Connector, route: &str) -> Report {
+/// Prueba la conexión: los pasos de red con su tiempo (o, por un túnel SSH, el túnel y el reenvío) y después el
+/// driver de verdad (`connector`).
+pub fn run(cfg: &ConnConfig, connector: Connector, route: &str, tunnel: Option<&crate::ssh::Plan>) -> Report {
     let start = Instant::now();
     let mut r = Report { route: route.to_string(), ..Report::default() };
     match cfg.kind {
         DbKind::Postgres | DbKind::Mysql | DbKind::Mssql | DbKind::Informix => {
-            if !network_steps(cfg, &mut r) {
+            let ready = match tunnel {
+                Some(plan) => ssh_steps(plan, &mut r),
+                None => network_steps(cfg, &mut r),
+            };
+            if !ready {
                 r.total_ms = ms(start);
                 return r;
             }
@@ -170,6 +175,57 @@ fn login_detail(cfg: &ConnConfig, route: &str) -> String {
         }
     };
     [who, how].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+}
+
+/// Through an SSH tunnel: logging in to the SSH server (and the jump hosts), then whether the SSH server reaches the
+/// database server. The database's own steps (login, database) come after, apart. Returns whether to go on.
+fn ssh_steps(plan: &crate::ssh::Plan, r: &mut Report) -> bool {
+    let t0 = Instant::now();
+    let tunnel = match plan.tunnel() {
+        Ok(t) => t,
+        Err(e) => {
+            let text = e.to_string();
+            let hint = ssh_hint(&text);
+            r.fail("ssh", "Túnel SSH", t0, text, hint);
+            return false;
+        }
+    };
+    r.step("ssh", "Túnel SSH", "ok", ms(t0), format!("{} · puerto local {}", tunnel.summary, tunnel.local_port));
+    let t1 = Instant::now();
+    let label = format!("Reenvío a {}", tunnel.target_label());
+    match tunnel.check_forward() {
+        Ok(()) => {
+            r.step("forward", &label, "ok", ms(t1), "el servidor SSH llega al servidor de la base");
+            true
+        }
+        Err(e) => {
+            let hint = format!(
+                "El túnel SSH está bien, pero el servidor SSH no llega a {}: revisa el servidor y el puerto de la base tal y como los ve el servidor SSH («localhost» es el propio servidor SSH) y que su configuración permita reenviar puertos (AllowTcpForwarding).",
+                tunnel.target_label()
+            );
+            r.fail("forward", &label, t1, e.to_string(), hint);
+            false
+        }
+    }
+}
+
+fn ssh_hint(error: &str) -> String {
+    let m = error.to_lowercase();
+    if error.starts_with("SSH_HOST_UNKNOWN:") {
+        "Es la primera vez que Celer ve este servidor SSH: compara la huella con la que te dé quien lo administra y, si coincide, pulsa «Confiar en esta clave».".into()
+    } else if error.starts_with("SSH_HOST_CHANGED:") {
+        "La clave del servidor SSH no es la que Celer guardó: no se conecta hasta saber por qué (un servidor reinstalado o alguien en medio).".into()
+    } else if m.contains("no aceptó la autenticación") {
+        "El servidor SSH rechazó el usuario o la credencial: revisa usuario, contraseña o clave (y que la clave pública esté en ~/.ssh/authorized_keys del servidor).".into()
+    } else if m.contains("refused") || m.contains("os error 10061") || m.contains("os error 111") {
+        "Nadie escucha en el puerto SSH: revisa el servidor y el puerto SSH (normalmente 22) y que sshd esté en marcha.".into()
+    } else if m.contains("no contesta") || m.contains("timed out") {
+        "El servidor SSH no contesta: un cortafuegos, la VPN desconectada o el servidor apagado.".into()
+    } else if m.contains("failed to lookup") || m.contains("name or service not known") || m.contains("no such host") || m.contains("nodename nor servname") {
+        "No se encuentra el nombre del servidor SSH: revisa cómo está escrito o usa su dirección IP.".into()
+    } else {
+        String::new()
+    }
 }
 
 /// SQLite: el fichero (se crea al conectar si no existe).
@@ -551,7 +607,7 @@ mod tests {
         c.host = "127.0.0.1".into();
         c.port = Some(port);
         let connector: Connector = std::sync::Arc::new(|| -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("no debía llegar a conectar") });
-        let r = run(&c, connector, "");
+        let r = run(&c, connector, "", None);
         assert!(!r.ok);
         let ids: Vec<&str> = r.steps.iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["resolve", "tcp"], "{:?}", r.steps);
@@ -583,13 +639,13 @@ mod tests {
         for error in ["db error: FATAL: database \"no_such_db\" does not exist", "ERROR 1049 (42000): Unknown database 'no_such_db'", "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login."] {
             let text = error.to_string();
             let connector: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("{text}") });
-            let r = run(&c, connector, "");
+            let r = run(&c, connector, "", None);
             let steps: Vec<(&str, &str)> = r.steps.iter().map(|s| (s.id, s.status)).collect();
             assert_eq!(steps, vec![("login", "ok"), ("database", "failed")], "{error}");
             assert!(!r.ok && r.hint.starts_with("La base de datos"), "{}", r.hint);
         }
         let connector: Connector = std::sync::Arc::new(|| -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("password authentication failed for user \"app\"") });
-        let r = run(&c, connector, "");
+        let r = run(&c, connector, "", None);
         assert_eq!(r.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), vec![("login", "failed")]);
     }
 
@@ -609,7 +665,7 @@ mod tests {
         c.database = "no_such_db".into();
         let cfg = c.clone();
         let connector: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn crate::session::Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?)) });
-        let r = run(&c, connector, "");
+        let r = run(&c, connector, "", None);
         let login = r.steps.iter().find(|s| s.id == "login").unwrap();
         let database = r.steps.iter().find(|s| s.id == "database").unwrap();
         assert_eq!((login.status, database.status), ("ok", "failed"), "{:?} {}", r.steps, r.error);

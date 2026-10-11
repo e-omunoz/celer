@@ -35,8 +35,20 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Debug builds only: `CELER_MIGRATE_HOME` stands for the user's folders (its DBeaverData/workspace6 and .dbvis), so
+/// the assistant can be tried on the samples in dev/fixtures/migrate without a real DBeaver or DbVisualizer.
+fn sample_home() -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("CELER_MIGRATE_HOME").filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
 /// DBeaver workspaces: Windows %APPDATA%, Linux ~/.local/share, macOS ~/Library (DBeaverData/workspace6).
 fn dbeaver_workspaces() -> Vec<PathBuf> {
+    if let Some(home) = sample_home() {
+        return vec![home.join("DBeaverData").join("workspace6")].into_iter().filter(|p| p.is_dir()).collect();
+    }
     let mut roots = Vec::new();
     if let Some(d) = dirs::data_dir() {
         roots.push(d.join("DBeaverData").join("workspace6"));
@@ -80,7 +92,7 @@ fn find_dbeaver(out: &mut Vec<SourceFile>) {
 
 /// DbVisualizer keeps one folder per major version (~/.dbvis/config70, config230…): newest first.
 fn find_dbvisualizer(out: &mut Vec<SourceFile>) {
-    let Some(home) = dirs::home_dir() else { return };
+    let Some(home) = sample_home().or_else(dirs::home_dir) else { return };
     let Ok(entries) = fs::read_dir(home.join(".dbvis")) else { return };
     let mut configs: Vec<(u32, PathBuf)> = entries
         .flatten()

@@ -1,9 +1,10 @@
 import { BookOpen, CircleAlert, CircleCheck, Copy, FolderOpen, Lightbulb, LoaderCircle, Minus, OctagonX, X } from "lucide-solid";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { EngineIcon } from "../icons";
+import { api } from "../api";
 import { browseSqlite, connect, copyText, formatMs, plainError, setState, state, submitConnection, testConnection } from "../state";
 import { knownFolders } from "../connManage";
-import { ENGINES, emptyConn, engineOf, type ConnConfig, type ConnTestReport, type DbKind } from "../types";
+import { ENGINES, emptyConn, emptySsh, engineOf, type ConnConfig, type ConnSummary, type ConnTestReport, type DbKind, type SshConfig } from "../types";
 import { applyJdbcUrl, defaultPort, hasErrors, looksLikeJdbcUrl, validateConn, visibleFields, withInstanceName, type FieldIssue, type IssueField } from "../connForm";
 import { Dialog } from "./Modals";
 import { openInformixGuide } from "./InformixDrivers";
@@ -118,9 +119,125 @@ function TestReportView(props: { report: ConnTestReport }) {
   );
 }
 
+const SSH_AUTH: Record<string, string> = {
+  password: "La contraseña del usuario SSH; se guarda en el almacén de credenciales del sistema.",
+  key: "Una clave privada OpenSSH, PEM o PuTTY (.ppk): su fichero, o pegada aquí (se guarda en el almacén de credenciales).",
+  agent: "Las claves cargadas en el agente: Pageant o el agente de OpenSSH en Windows, ssh-agent en Linux y macOS.",
+};
+
+/**
+ * «Túnel SSH»: the bastion, how to log in to it and the jump hosts on the way. The database's server and port above
+ * are the ones the SSH server reaches. Secrets typed here go to the credential store; empty means «sin cambios».
+ */
+function SshSection(props: {
+  ssh: SshConfig;
+  saved: { password: boolean; passphrase: boolean; key: boolean } | undefined;
+  issuesOf: (field: IssueField) => FieldIssue[];
+  invalid: (field: IssueField) => boolean;
+  touch: (field: IssueField) => void;
+  onChange: (patch: Partial<SshConfig>) => void;
+  onFix: (patch: Partial<ConnConfig>) => void;
+}) {
+  const ssh = () => props.ssh;
+  const [pasting, setPasting] = createSignal(Boolean(props.ssh.privateKey) || (props.ssh.auth === "key" && !props.ssh.keyPath && Boolean(props.saved?.key)));
+  const savedHint = (has: boolean | undefined) => (has ? "guardada (escribe otra para cambiarla)" : "");
+  return (
+    <div class="ssh-section">
+      <label class="check"><input type="checkbox" checked={ssh().enabled} onChange={(event) => props.onChange({ enabled: event.currentTarget.checked })} /> Conectar por un túnel SSH</label>
+      <Show when={ssh().enabled}>
+        <small class="field-hint">El servidor y el puerto de la base, arriba, son los que ve el servidor SSH («localhost» es el propio servidor SSH).</small>
+        <div class="form-row">
+          <label class="field grow">
+            <span>Servidor SSH</span>
+            <input value={ssh().host} placeholder="bastion.empresa.com" spellcheck={false} aria-invalid={props.invalid("sshHost")} onInput={(event) => props.onChange({ host: event.currentTarget.value })} onBlur={() => props.touch("sshHost")} />
+            <FieldMessages issues={props.issuesOf("sshHost")} onFix={props.onFix} />
+          </label>
+          <label class="field" style={{ width: "96px" }}>
+            <span>Puerto</span>
+            <input type="number" value={ssh().port ?? ""} placeholder="22" aria-invalid={props.invalid("sshPort")} onInput={(event) => props.onChange({ port: event.currentTarget.value ? Number(event.currentTarget.value) : null })} onBlur={() => props.touch("sshPort")} />
+            <FieldMessages issues={props.issuesOf("sshPort")} onFix={props.onFix} />
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="field grow">
+            <span>Usuario SSH</span>
+            <input value={ssh().user} spellcheck={false} aria-invalid={props.invalid("sshUser")} onInput={(event) => props.onChange({ user: event.currentTarget.value })} onBlur={() => props.touch("sshUser")} />
+            <FieldMessages issues={props.issuesOf("sshUser")} onFix={props.onFix} />
+          </label>
+          <label class="field grow">
+            <span>Autenticación</span>
+            <select value={ssh().auth} onChange={(event) => props.onChange({ auth: event.currentTarget.value })}>
+              <option value="password">Contraseña</option>
+              <option value="key">Clave privada</option>
+              <option value="agent">Agente SSH (Pageant, ssh-agent)</option>
+            </select>
+          </label>
+        </div>
+        <small class="field-hint">{SSH_AUTH[ssh().auth] ?? ""}</small>
+        <Show when={ssh().auth === "password"}>
+          <label class="field">
+            <span>Contraseña SSH</span>
+            <input type="password" value={ssh().password ?? ""} placeholder={savedHint(props.saved?.password)} onInput={(event) => props.onChange({ password: event.currentTarget.value })} />
+          </label>
+        </Show>
+        <Show when={ssh().auth === "key"}>
+          <Show
+            when={!pasting()}
+            fallback={
+              <label class="field">
+                <span>Clave privada <button type="button" class="text-link" onClick={() => { setPasting(false); props.onChange({ privateKey: "" }); }}>usar un fichero</button></span>
+                <textarea rows="4" spellcheck={false} class="ssh-key" value={ssh().privateKey ?? ""} aria-invalid={props.invalid("sshKey")} placeholder={props.saved?.key ? "guardada (pega otra para cambiarla)" : "-----BEGIN OPENSSH PRIVATE KEY-----…"} onInput={(event) => props.onChange({ privateKey: event.currentTarget.value, keyPath: "" })} onBlur={() => props.touch("sshKey")} />
+                <FieldMessages issues={props.issuesOf("sshKey")} onFix={props.onFix} />
+              </label>
+            }
+          >
+            <label class="field">
+              <span>Fichero de la clave <button type="button" class="text-link" onClick={() => { setPasting(true); props.onChange({ keyPath: "" }); }}>pegar la clave</button></span>
+              <div class="input-group">
+                <input value={ssh().keyPath} placeholder="~/.ssh/id_ed25519  ·  C:\Users\…\clave.ppk" spellcheck={false} aria-invalid={props.invalid("sshKey")} onInput={(event) => props.onChange({ keyPath: event.currentTarget.value })} onBlur={() => props.touch("sshKey")} />
+                <button type="button" class="btn" onClick={() => void browseKey((path) => props.onChange({ keyPath: path }))}><FolderOpen size={14} /> Examinar</button>
+              </div>
+              <FieldMessages issues={props.issuesOf("sshKey")} onFix={props.onFix} />
+            </label>
+          </Show>
+          <label class="field">
+            <span>Frase de paso <small class="muted">(si la clave la tiene)</small></span>
+            <input type="password" value={ssh().passphrase ?? ""} placeholder={savedHint(props.saved?.passphrase)} onInput={(event) => props.onChange({ passphrase: event.currentTarget.value })} />
+          </label>
+        </Show>
+        <label class="field">
+          <span>Saltos previos <small class="muted">(opcional: uno por línea, en orden, usuario@servidor:puerto; con la misma autenticación)</small></span>
+          <textarea
+            rows="2"
+            spellcheck={false}
+            value={ssh().jumps.join("\n")}
+            aria-invalid={props.invalid("sshJumps")}
+            placeholder="ops@salto.empresa.com:22"
+            onInput={(event) => props.onChange({ jumps: event.currentTarget.value.split("\n") })}
+            onBlur={() => {
+              props.onChange({ jumps: ssh().jumps.map((jump) => jump.trim()).filter(Boolean) });
+              props.touch("sshJumps");
+            }}
+          />
+          <FieldMessages issues={props.issuesOf("sshJumps")} onFix={props.onFix} />
+        </label>
+      </Show>
+    </div>
+  );
+}
+
+/** Picks a private key file (any name: id_ed25519, clave.ppk…). */
+async function browseKey(onPick: (path: string) => void) {
+  const path = await api().pickOpenPath([{ name: "Clave privada", extensions: ["*"] }]);
+  if (path) onPick(path);
+}
+
 export function ConnectionDialog(props: { cfg: ConnConfig }) {
   const [cfg, setCfg] = createSignal<ConnConfig>({ ...props.cfg });
   const [advanced, setAdvanced] = createSignal(false);
+  const [sshOpen, setSshOpen] = createSignal(Boolean(props.cfg.ssh?.enabled));
+  const sshSaved = () => (props.cfg as ConnSummary).sshSaved;
+  const setSsh = (patch: Partial<SshConfig>) => setCfg({ ...cfg(), ssh: { ...(cfg().ssh ?? emptySsh()), ...patch } });
   const [url, setUrl] = createSignal("");
   const [urlNotes, setUrlNotes] = createSignal<string[]>([]);
   const [urlError, setUrlError] = createSignal("");
@@ -132,9 +249,11 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
   const kind = () => cfg().kind;
   const show = createMemo(() => visibleFields(cfg()));
   const editing = () => Boolean(props.cfg.id);
-  const issues = createMemo(() => validateConn(cfg(), state.connections));
+  const issues = createMemo(() => validateConn(cfg(), state.connections, Boolean(sshSaved()?.key)));
   const issuesOf = (field: IssueField) => (tried() || touched().has(field) ? issues().filter((issue) => issue.field === field) : []);
   const invalid = (field: IssueField) => issuesOf(field).some((issue) => issue.level === "error");
+  // Opened by hand, or by an error in it after trying to save or test (its first wrong field takes the focus).
+  const sshShown = () => sshOpen() || (tried() && issues().some((issue) => issue.level === "error" && issue.field.startsWith("ssh")));
   const touch = (field: IssueField) => {
     if (!touched().has(field)) setTouched(new Set([...touched(), field]));
   };
@@ -151,6 +270,8 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
       color: current.color,
       production: current.production,
       readOnly: current.readOnly,
+      // Kept (hidden for SQLite and ODBC, which do not use it).
+      ssh: current.ssh,
       host: next === "sqlite" || next === "odbc" ? "" : current.host || "localhost",
       // SQLite and generic ODBC have no database field: a value carried over could not be seen or cleared.
       database: next === "sqlite" || next === "odbc" ? "" : current.database,
@@ -443,6 +564,22 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
               </For>
             </div>
           </div>
+
+          <Show
+            when={show().ssh}
+            fallback={
+              <Show when={show().sshNote}>
+                <small class="field-hint ssh-note">Túnel SSH: {show().sshNote}</small>
+              </Show>
+            }
+          >
+            <button type="button" class="disclosure" aria-expanded={sshShown()} onClick={() => setSshOpen(!sshShown())}>
+              {sshShown() ? "▾" : "▸"} Túnel SSH{cfg().ssh?.enabled ? ` · ${cfg().ssh?.user ? `${cfg().ssh?.user}@` : ""}${cfg().ssh?.host || "sin servidor"}` : ""}
+            </button>
+            <Show when={sshShown()}>
+              <SshSection ssh={cfg().ssh ?? emptySsh()} saved={sshSaved()} issuesOf={issuesOf} invalid={invalid} touch={touch} onChange={setSsh} onFix={fix} />
+            </Show>
+          </Show>
 
           <button type="button" class="disclosure" aria-expanded={advanced()} onClick={() => setAdvanced(!advanced())}>{advanced() ? "▾" : "▸"} Opciones avanzadas</button>
           <Show when={advanced()}>

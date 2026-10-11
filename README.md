@@ -87,7 +87,9 @@ without administrator rights, and keeps itself up to date.
   never your rows. An **MCP server** (`celer.exe --mcp`) lets Claude Desktop, Claude Code and other clients use your
   connections with a permission level per connection, row and time limits, masked columns and an audit log.
 - **Bring your connections.** Import them from **DBeaver** (saved passwords included, if you want) and
-  **DbVisualizer**, with folders and production flags. Drag connections between folders in the explorer.
+  **DbVisualizer**, with folders, production flags and SSH tunnels. Reach servers behind a bastion through an **SSH
+  tunnel** (password, key or agent, jump hosts). Export them with their passwords, sealed with a passphrase
+  (Argon2id + AES-256-GCM). Drag connections between folders in the explorer.
 - **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift),
   shortcuts you can change, a script library, a startup script per connection, and **Gib**: he thinks while queries
   run, has an idea when a long one finishes, goes for a coffee or juggles when you are away, and swats the cursor if

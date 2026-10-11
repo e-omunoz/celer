@@ -499,7 +499,7 @@ export function Sidebar() {
     items.push(
       { separator: true },
       { label: "Copiar nombres", hint: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
-      { label: `Exportar ${conns(all.length)} (sin contraseñas)…`, disabled: !all.length, run: () => void exportConnections(all, `${all.length} conexiones`) },
+      { label: `Exportar ${conns(all.length)}…`, disabled: !all.length, run: () => void exportConnections(all, `${all.length} conexiones`) },
     );
     if (!favs) {
       items.push({ separator: true }, { label: `Eliminar ${selectionLabel(ids.length, folders.length)}`, hint: "Supr", icon: "trash", danger: true, run: () => void deleteItems(ids, folders) });
@@ -739,7 +739,7 @@ export function Sidebar() {
       { label: "Copiar nombre", hint: "Ctrl+C", run: () => void copyText(conn.name) },
       { label: "Copiar esquema para IA", disabled: !connected, run: () => void copySchemaForAi(conn.id) },
       ...(conn.kind === "sqlite" || conn.kind === "odbc" ? [] : [{ label: "Actividad del servidor…", icon: "activity", run: () => void openActivity(conn.id) }]),
-      { label: "Exportar conexión (sin contraseña)…", run: () => void exportConnections([conn.id], conn.name) },
+      { label: "Exportar conexión…", run: () => void exportConnections([conn.id], conn.name) },
       { separator: true },
       { label: "Eliminar conexión", hint: "Supr", icon: "trash", danger: true, run: () => void deleteConnectionUndoable(conn.id) },
     ]);
@@ -757,7 +757,7 @@ export function Sidebar() {
       ...(parentFolder(path) ? [{ label: "Mover a la carpeta de arriba", run: () => void moveFolder(path, parentFolder(parentFolder(path))) }] : []),
       { label: "Conectar todas", disabled: !ids.length, run: () => ids.forEach((id) => void connect(id)) },
       { label: "Copiar nombre", hint: "Ctrl+C", run: () => void copyText(folderName(path)) },
-      { label: "Exportar la carpeta (sin contraseñas)…", disabled: !ids.length, run: () => void exportConnections(ids, folderName(path)) },
+      { label: "Exportar la carpeta…", disabled: !ids.length, run: () => void exportConnections(ids, folderName(path)) },
       { separator: true },
       { label: "Eliminar carpeta", hint: "Supr", icon: "trash", danger: true, run: () => void deleteFolder(path) },
     ]);
@@ -769,7 +769,7 @@ export function Sidebar() {
       { label: alpha ? "Orden: alfabético" : "Ordenar alfabéticamente", hint: alpha ? "actual" : undefined, run: () => setConnSort("alpha") },
       { label: alpha ? "Ordenar a mano (arrastrando)" : "Orden: manual", hint: alpha ? undefined : "actual", run: () => setConnSort("manual") },
       { separator: true },
-      { label: "Exportar todas las conexiones (sin contraseñas)…", disabled: !state.connections.length, run: () => void exportConnections() },
+      { label: "Exportar todas las conexiones…", disabled: !state.connections.length, run: () => void exportConnections() },
       { label: "Importar conexiones de un fichero de Celer…", run: () => void importConnections() },
       { label: "Importar de DBeaver o DbVisualizer…", run: () => void openMigration() },
     ];
