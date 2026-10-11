@@ -1,14 +1,14 @@
 # Roadmap
 
-## Phase 0 — Foundations ✅ (mostly)
+## Phase 0 — Foundations ✅
 - [x] Project scaffold: Tauri 2 + Rust + SolidJS
 - [x] Core: sessions, `Driver` trait, paging, cancellation, transactions
 - [x] Drivers: SQL Server (native), Informix (IBM CLI / CSDK), generic ODBC
 - [x] Export: CSV, TSV, JSON, SQL, Excel
 - [x] Persistence: connections, OS credential store, history
 - [x] Core compiles on Linux (`cargo test --lib`)
-- [ ] Switch the Windows build to the MSVC toolchain
-- [ ] Core integration tests against SQL Server and Informix containers
+- [x] Windows build on the MSVC toolchain
+- [x] Core integration tests against every engine (`engine_tests.rs`; SQL Server and Informix in `engines.yml`)
 
 ## Phase 1 — Usable client (MVP)
 - [x] Connection manager: folders, colours, production / read-only flags, test connection
@@ -24,6 +24,9 @@
 - [x] Query history panel with search
 - [x] Themes: light, dark, high contrast and accent colours; font size; follows the OS theme
 - [x] Workspace restore: open tabs and their content survive restarts
+- [x] Several windows: tabs dragged between them with their sessions, layout restored per monitor
+- [x] Connection organisation: nested folders, favourites, recent, search, multi-selection with undo
+- [x] Reconnection that never loses work in silence; "Probar conexión" step by step
 
 ## Phase 2 — Tier 1 drivers
 - [x] PostgreSQL (native; CockroachDB, YugabyteDB, TimescaleDB, Redshift speak its protocol)
@@ -31,6 +34,7 @@
 - [x] SQLite (embedded). libSQL / Turso still planned
 - [ ] Oracle (Instant Client, downloaded on demand)
 - [ ] IBM Db2 (LUW, i, z/OS) via the IBM CLI driver
+- [x] Informix over JDBC (Celer's bridge), Client SDK and IBM CLI (DRDA); generic ODBC
 - [ ] Generic connection form driven by each driver's field description
 - [ ] Capability flags wired into the UI
 
@@ -45,6 +49,23 @@
 - [x] Server activity: sessions and running queries, cancel and kill
 - [x] Typed cell editors: booleans, dates, foreign-key lookup
 - [x] Data compare between two tables, with a synchronization script
+- [x] Migration of connections from DBeaver and DbVisualizer
+- [x] AI assistant and MCP server with permissions per connection
+
+## Next — from the open issues
+
+Delivered in the latest sprint (integrated in one PR, see [STATUS.md](../STATUS.md)): working tools (library on any
+database #99, variables #118, typed Excel import #120, pinned result compare #119, transaction timer #116, E-R
+foreign keys in one query #98); connections (SSH tunnel #115, export with secrets #101, whole-window environment
+colours #117, JDBC URL parsing #102); AI (MCP from WSL #124, MCP acting in the app #100); look and feel (theme editor
+#107, tear-off hint #108, column drag #109, animations #110, Gib #103, #104, #105, settings review #106); drivers
+(SQL Server PRINT / RAISERROR #67, Informix idle-drop recovery #97, Informix row history #123); support (error log
+#122, report from the app #112).
+
+Next sprints, from what is still open (refreshed at the end of each sprint):
+
+- **Simplify** — apply the reorganisation proposal for overgrown menus, toolbars, dialogs and settings (#111)
+- **Working tools** — engine compatibility indicator (#113)
 
 ## Phase 4 — Tier 2 drivers (analytics and cloud)
 - [ ] DuckDB (including CSV / Parquet / JSON files)

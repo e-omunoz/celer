@@ -1,22 +1,28 @@
 # Architecture
 
 ```
-┌─ UI: SolidJS + TypeScript (WebView2 / WebKit) ─────────────────────────────┐
-│  CodeMirror 6 SQL editor · canvas data grid · object tree · themes         │
-│  Talks to the core only through Tauri commands and events                  │
-└───────────────────────────────┬─────────────────────────────────────────────┘
+┌─ UI: SolidJS + TypeScript (WebView2 / WebKit) ───────────────────────────────┐
+│  CodeMirror 6 SQL editor · canvas data grid · object tree · themes · Gib     │
+│  Talks to the core only through Tauri commands and events                    │
+└───────────────────────────────┬──────────────────────────────────────────────┘
                                 │ invoke() / events (JSON, paged)
-┌─ Core: Rust (src-tauri) ──────┴─────────────────────────────────────────────┐
-│  lib.rs        Tauri commands, app state                                    │
-│  windows.rs    Several windows: inboxes, layout file, tab drag, focus       │
-│  session.rs    Driver trait · one OS thread per session · job queue         │
-│  guard.rs      Watched sessions: check before use, reconnect, generic pool  │
+┌─ Core: Rust (src-tauri) ──────┴──────────────────────────────────────────────┐
+│  lib.rs        Tauri commands, app state                                     │
+│  windows.rs    Several windows: inboxes, layout file, tab drag, focus        │
+│  session.rs    Driver trait · one OS thread per session · job queue          │
+│  guard.rs      Watched sessions: check before use, reconnect, generic pool   │
 │  probe.rs      "Probar conexión" step by step (DNS, port, TLS, login, query) │
-│  drivers       mssql.rs · odbc.rs + odbc_driver.rs · (postgres, mysql, …)   │
-│  export.rs     Streaming export (CSV, TSV, JSON, SQL, XLSX)                 │
+│  startup.rs    A connection's startup script, run on every connection opened │
+│  drivers       postgres.rs · mysql.rs · mssql.rs · sqlite.rs ·               │
+│                odbc.rs + odbc_driver.rs (Informix CLI/CSDK, generic ODBC) ·  │
+│                jdbc.rs + bridge/*.java (Informix over JDBC, one shared JVM)  │
+│  drivers.rs    Discovery and on-demand download of vendor client libraries   │
+│  export.rs     Streaming export (CSV, TSV, JSON, XML, SQL, XLSX, MD, HTML)   │
+│  sheets.rs     Spreadsheets to import (xlsx, xls, ods)                       │
+│  migrate.rs    Connections of other tools (DBeaver, DbVisualizer)            │
+│  mcp.rs        MCP server (`celer --mcp`): permissions, masking, audit log   │
+│  update.rs     Update check and the verified Celer Setup download            │
 │  store.rs      Connections, settings, workspace, history; OS credential store│
-│  drivers.rs    Discovery and on-demand download of vendor client libraries  │
-│  jdbc.rs       JDBC bridge: one shared JVM over stdin/stdout (bridge/*.java) │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -26,6 +32,57 @@
 - **Tauri 2:** native window with the OS webview (no bundled browser): small installer (~10 MB) and low memory.
 - **SolidJS:** fine-grained reactivity without a virtual DOM; faster updates and a smaller bundle than React.
 - **Canvas grid:** draws only the visible cells, so scrolling stays at 60 fps with many columns and rows.
+
+## Areas
+
+What each part of the app is for. A feature belongs to the area whose purpose it serves; when a new option does not
+fit any of these sentences, the area is growing beyond its purpose (see #111).
+
+- **Explorer** (`Sidebar.tsx`, `connTree.ts`, `treeSelect.ts`): find a connection or an object and act on it. It
+  holds the saved connections (folders, favourites, recent, search, multi-selection) and, once connected, the lazy
+  tree of databases, schemas and objects. It is the entry point for everything that starts from an object: open,
+  generate SQL, export, import, diagram, compare. It does not show data itself.
+- **Consoles** (`Editor.tsx`, `Workspace.tsx`, `sqlContext.ts`, `snippets.ts`): write and run SQL against one
+  connection and database. A console owns its session, its transaction mode, its file or library script and its
+  results; it offers completion from the real schema, templates, parameters, the statement under the caret, the
+  execution plan and safety checks before risky statements.
+- **Results** (`Grid.tsx`, `compare.ts`, `columnOrder.ts`): read what a query returned without loading it all. The
+  canvas grid pages from an open cursor, selects, searches, filters loaded rows, reorders columns, copies in many
+  formats, pins a result to compare it with the next run and shows aggregates of the selection.
+- **Table viewer** (`Workspace.tsx` table tabs, `TableFilters.tsx`, `fkLookup.ts`): look at and change one table's
+  rows and structure. Filters run on the server, edits are typed and saved in one transaction with the SQL shown
+  first, foreign keys can be followed, and the Columns, Indexes, Keys and DDL tabs describe the table.
+- **Library** (`LibraryView.tsx`, `library.ts`, `libraryModel.ts`): keep the SQL you run again. Named scripts in
+  folders with tags and an optional connection, searchable from the palette, opened in a linked console that saves
+  back to the script, imported from and exported to `.sql` files.
+- **History** (`Inspector.tsx` history view, `history.jsonl`): find what you ran before. Every executed statement
+  with its connection, time, duration and row count, searchable; a click pastes it into the console, a double click
+  opens it in a new one. It is a log, not a place to organise SQL (that is the library).
+- **E-R diagram** (`ErDiagram.tsx`, `erLayout.ts`): understand how tables relate. A schema's tables laid out by
+  their dependencies, or one table with the tables its foreign keys link it with, expandable a level at a time,
+  searchable and exportable to SVG. Read-only.
+- **Import / export** (`ImportDialog.tsx`, `importer.ts`, `importFormats.ts`, `sheets.rs`; `ExportDialog.tsx`,
+  `export.rs`): move rows between Celer and files. Export streams a console's result, a filtered table or an object
+  to disk in any of eight formats, with progress and cancel; import maps a CSV, TSV, JSON or spreadsheet onto a table
+  and inserts it all in one transaction.
+- **Migrate** (`MigrateDialog.tsx`, `migrate.ts`, `migrateParse.ts`, `migrate.rs`): bring connections from another
+  tool. It reads DBeaver and DbVisualizer's files (passwords only when asked), keeps folders and production flags,
+  and never changes the source tool. Connection files exported by Celer itself are imported from the explorer.
+- **Settings** (`Modals.tsx` settings dialog, `AiSettings.tsx`, `KeymapSettings.tsx`, `SnippetSettings.tsx`,
+  `InformixDrivers.tsx`): choices that apply to the whole app and every window: look (theme, accent, density, size,
+  Gib, motion), editor and results, templates, shortcuts, safety confirmations, AI and MCP, drivers. Anything that
+  belongs to one connection lives in the connection dialog instead.
+- **AI / MCP** (`AiPanel.tsx`, `ai.ts`, `mcp.rs`, [AI_MCP.md](AI_MCP.md)): let an assistant help with SQL without
+  seeing your data unless you allow it. The in-app assistant writes, explains, fixes and optimises SQL from the
+  schema, never rows; the MCP server lets external clients use connections with a permission level per connection,
+  limits, masked columns and an audit log.
+- **Gib** (`src/gib/`, [DESIGN.md §4](DESIGN.md)): make waiting visible and the app friendly. The mascot shows what
+  Celer is doing (loading, running, long operations with cancel), reacts to results and errors, and gives tips learned
+  from how you work, only when you pause. Silent or off in Settings; he never blocks or hides anything.
+
+Around them: the **command palette** (every action by name), the **inspector** (right panel: a cell's value, the row
+as a form, and the history, library and AI views), **several windows**, **server activity**, **execution plans** and
+**schema / data compare**, which belong to the console and explorer they start from.
 
 ## Sessions
 

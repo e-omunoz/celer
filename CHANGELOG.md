@@ -7,6 +7,7 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+
 ### Changed
 - **The E-R diagram reads a schema's foreign keys in one catalog query** (#98) instead of asking table by table: the
   diagram of one table no longer shows «Buscando las relaciones de … n/1557» on large schemas. On a 1,500-table
@@ -36,6 +37,13 @@ All notable changes to Celer are documented here. The format follows
   `src/settingsSections.ts`, so new sections plug in without touching the dialog. «Editor y resultados» is now two
   sections, «Editor» and «Resultados».
 - Esc in a confirmation shown over another dialog (Ajustes) closes only the confirmation.
+
+- **Shorter texts in Settings** (Editor y resultados, Seguridad, IA y MCP, Drivers) and a tighter user guide: the
+  explorer's multi-selection, quick connect, reconnection and column moving read in half the words; the guide gains
+  *Historial* and *Exportar e importar* sections and names the *IA y MCP* and *Drivers* settings (#111).
+- **Docs**: what each area of the app is for (`docs/ARCHITECTURE.md › Areas`), `STATUS.md` and `docs/ROADMAP.md`
+  rewritten from what exists today and from the open issues, and the README lists several windows, connection
+  organisation and every download Celer can make (#111, #121).
 
 ### Fixed
 - MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.

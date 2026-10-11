@@ -13,8 +13,8 @@ La ventana tiene tres zonas:
 
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
 - **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
-- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
-  (Alt+8), las variables (Alt+9) y el asistente de IA.
+- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial (Ctrl+Alt+E), la
+  biblioteca de scripts (Alt+8), las variables (Alt+9) y el asistente de IA (Ctrl+Alt+I).
 
 ## Conexiones
 
@@ -31,8 +31,8 @@ y cualquier otra base de datos entra por ODBC.
   propio puede tratarse como producción. Las conexiones marcadas como producción en versiones anteriores aparecen como
   Producción.
 - **Solo lectura** rechaza en el núcleo cualquier sentencia que modifique datos.
-- **Avanzado › Script de inicio**: sentencias que se ejecutan en cada conexión que abre Celer, también al reconectar
-  (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
+- **Opciones avanzadas › Script al conectar**: sentencias que se ejecutan en cada conexión que abre Celer, también al
+  reconectar (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
 - Las contraseñas se guardan en el almacén de credenciales del sistema operativo, nunca en un fichero.
 
 ### El formulario
@@ -146,15 +146,12 @@ contraseñas guardadas.
 
 ### Conectar rápido
 
-- Una consola conecta **en segundo plano** en cuanto se abre o se muestra: la primera ejecución no espera al login.
-  Si su conexión no está conectada y no pide contraseña, también se conecta sola.
-- Cada sesión entra **directamente en su base de datos y con su modo de transacción**, sin `USE` ni idas y vueltas
-  después (en PostgreSQL, sin abrir una segunda conexión).
-- Las conexiones de las sesiones que se cierran sin nada propio (una tabla, un recuento) quedan **libres unos minutos**
-  para la siguiente de la misma configuración, que se ahorra el login. Nunca una con transacción, tablas temporales o
-  `SET` propios; al desconectar o editar la conexión se cierran.
-- El tiempo de conexión aparece en el tooltip de la conexión y de la pestaña, y en la salida de la primera sentencia
-  de una consola que tuvo que conectar.
+- Una consola conecta **en segundo plano** en cuanto se abre: la primera ejecución no espera al login. Si la conexión
+  no pide contraseña, también se conecta sola.
+- Cada sesión entra **directamente en su base de datos y con su modo de transacción**, sin `USE` después.
+- Las conexiones de sesiones cerradas sin nada propio (una tabla, un recuento) quedan **libres unos minutos** para la
+  siguiente con la misma configuración. Nunca una con transacción, tablas temporales o `SET` propios.
+- El tiempo de conexión sale en el tooltip de la conexión y de la pestaña.
 
 ### Reconexión
 
@@ -401,6 +398,19 @@ de ejecución (no en Informix ni en ODBC genérico), el plan real (solo PostgreS
 (no en SQLite ni en ODBC genérico) y el diagrama E-R y la comparación de esquemas (no en ODBC genérico). La comparación
 de datos y las herramientas MCP funcionan en todos.
 
+## Historial
+
+**Ctrl+Alt+E** abre en el panel derecho todo lo que has ejecutado, con su conexión, cuándo, cuánto tardó y cuántas
+filas devolvió (o si dio error). El cuadro de arriba busca en el SQL. Clic pega la consulta en la consola; doble clic
+la abre en una consola nueva. La papelera lo vacía. Para guardar SQL con nombre, usa la biblioteca.
+
+## Exportar e importar
+
+- **Exportar** (botón de la rejilla, menú de una tabla o de un objeto): CSV (con el separador que elijas), TSV,
+  Excel, JSON, XML, SQL INSERT, Markdown o HTML. Escribe en disco sobre la marcha, con progreso y *Cancelar*; desde
+  una tabla respeta sus filtros.
+- **Importar** (menú de una tabla): ver *Tablas*.
+
 ## Asistente de IA y servidor MCP
 
 El asistente (Ctrl+Alt+I) escribe, explica, corrige y optimiza SQL con Claude usando la estructura de tu base de
@@ -496,6 +506,8 @@ importar, lo que Celer no entiende se ignora y se dice cuál.
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.
 - **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción, y los umbrales y el recordatorio de
   las transacciones manuales abiertas.
+- **IA y MCP**: modelo y clave del asistente, permisos del servidor MCP por conexión y su registro.
+- **Drivers**: qué ha encontrado Celer para Informix (Java, JDBC, IBM CLI) y las descargas.
 
 ## Si algo falla
 

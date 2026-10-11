@@ -88,7 +88,12 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
 - **Trae tus conexiones.** Impórtalas desde **DBeaver** (con las contraseñas guardadas, si quieres) y
   **DbVisualizer**, con carpetas, marcas de producción y túneles SSH. Llega a servidores detrás de un bastión con un
   **túnel SSH** (contraseña, clave o agente, con saltos). Expórtalas con sus contraseñas, cifradas con una contraseña
-  del fichero (Argon2id + AES-256-GCM). Arrastra conexiones entre carpetas en el explorador.
+  del fichero (Argon2id + AES-256-GCM). Organízalas en carpetas anidadas con favoritas y búsqueda, arrástralas entre
+  carpetas y actúa sobre varias a la vez. «Probar conexión» enseña cada paso y qué hacer si uno falla; una conexión
+  caída vuelve sola, y nunca en silencio si se perdería una transacción.
+- **Varias ventanas.** Arrastra una pestaña fuera para llevarla a su propia ventana, una por monitor si quieres: la
+  consola conserva su sesión, la transacción abierta y las filas que faltaban por cargar. La biblioteca, el asistente
+  de IA, los planes, los diagramas y las comparaciones también pueden tener su ventana, y todas vuelven a su sitio.
 - **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
   configurables, biblioteca de scripts que ejecuta cualquier script guardado en cualquier conexión o en varias a la vez, `${variables}` por consola, conexión o globales, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
   tiene una idea cuando acaba una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como
@@ -231,8 +236,9 @@ Todos los atajos se pueden cambiar en *Ajustes › Atajos de teclado*. En macOS,
 - Sin cuentas ni telemetría. Tus datos no salen del equipo salvo que tú lo pidas.
 - Las contraseñas y la clave de IA se guardan en el almacén de credenciales del sistema, nunca en ficheros.
 - Más allá de tus bases de datos, Celer solo se conecta para: comprobar actualizaciones en la API de GitHub Releases
-  (no envía nada sobre ti y se puede desactivar), descargar el driver de IBM cuando lo pides y el asistente de IA si
-  configuras tu propia clave (recibe el esquema, nunca filas).
+  (no envía nada sobre ti y se puede desactivar), descargar los drivers de Informix cuando lo pides (IBM CLI, el driver
+  JDBC de Maven Central y, solo si no hay Java, un JRE de Adoptium) y el asistente de IA si configuras tu propia clave
+  (recibe el esquema, nunca filas).
 - El servidor MCP funciona en local por stdio, está desactivado por defecto y solo ve lo que permite cada conexión.
   Dejar que actúe en la aplicación es otro interruptor, también desactivado de serie; habla con el Celer abierto por
   loopback con un token aleatorio.
