@@ -2344,7 +2344,9 @@ fn script_json(s: &Value, conns: &[ConnConfig], with_sql: bool) -> Value {
         "connection": conn_id.and_then(|id| conns.iter().find(|c| c.id == id)).map(|c| c.name.clone()),
         "updatedAt": s.get("updatedAt"),
     });
-    if let Some(notes) = s.get("notes").and_then(Value::as_str).filter(|n| !n.is_empty()) {
+    // The script's description (what add_library_script's "notes" became), or the notes of a script saved before.
+    let notes = ["description", "notes"].iter().find_map(|k| s.get(*k).and_then(Value::as_str).filter(|n| !n.is_empty()));
+    if let Some(notes) = notes {
         v["notes"] = json!(truncate_chars(notes, if with_sql { 4000 } else { 200 }));
     }
     if with_sql {
@@ -3674,7 +3676,7 @@ mod tests {
         fs::write(
             dir.join("library.json"),
             json!({"version": 2, "folders": ["Informes"], "scripts": [
-                {"id": "s1", "name": "Ventas", "sql": "SELECT 1\nFROM users", "connId": null, "folder": "Informes/Mensuales", "tags": ["ventas"], "notes": "por mes"},
+                {"id": "s1", "name": "Ventas", "sql": "SELECT 1\nFROM users", "connId": null, "folder": "Informes/Mensuales", "tags": ["ventas"], "description": "por mes"},
                 {"id": "s2", "name": "Usuarios", "sql": "SELECT * FROM users", "connId": "read", "folder": "", "tags": []},
                 {"id": "s3", "name": "Oculto", "sql": "SELECT 'oculto'", "connId": "hidden", "folder": "", "tags": []}
             ]})

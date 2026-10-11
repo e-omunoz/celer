@@ -333,7 +333,8 @@ export async function addLibraryScriptFromAi(input: { name: string; sql: string;
     tags: normalizeTags(input.tags ?? []),
     createdAt: now,
     updatedAt: now,
-    ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
+    // What the assistant says the script does is its description (shown under its name and searched).
+    ...(input.notes?.trim() ? { description: input.notes.trim().slice(0, 2000) } : {}),
     addedBy: client || "IA",
   };
   setLibrary("scripts", (list) => [...list, script]);
