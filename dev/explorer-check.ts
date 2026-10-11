@@ -179,6 +179,10 @@ const golden = [
 ].map(({ id, name, folder, kind, ...rest }) => ({ ...emptyConn(kind), ...rest, id, name, folder, kind }));
 const v1 = exportConnectionsJson(golden, ["Vacía"], new Date("2026-10-08T10:00:00Z"));
 assert.equal(createHash("sha256").update(v1).digest("hex"), "954b4aaae34b4daad0d76c134f9907b6cbb625a6f5d7a57d011f4fcd03fbc18a", v1);
+// An environment and a keepalive travel when set (and only then, so the golden file above is unchanged).
+const staged = exportConnectionsJson([{ ...golden[0], environment: "staging", envLabel: "", envColor: "", keepaliveMin: 15 }], [], new Date());
+assert.deepEqual([JSON.parse(staged).connections[0].environment, JSON.parse(staged).connections[0].envLabel, JSON.parse(staged).connections[0].keepaliveMin], ["staging", undefined, 15]);
+assert.deepEqual([parseConnectionsJson(staged).connections[0].environment, parseConnectionsJson(staged).connections[0].keepaliveMin], ["staging", 15]);
 // Secret entries of the parameters (not PWD=/Password=, which are the password) are split out for the core.
 assert.deepEqual(splitSecretParams("DB_LOCALE=en_US.819;sslpassword=x;passfile=/p;PWD=y;api_key={a;b}"), { kept: "DB_LOCALE=en_US.819;passfile=/p;PWD=y;", secret: "sslpassword=x;api_key={a;b}" });
 assert.deepEqual(splitSecretParams("application_name=x\ntoken=t\nconnect_timeout=5"), { kept: "application_name=x\nconnect_timeout=5", secret: "token=t" });

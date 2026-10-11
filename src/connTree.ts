@@ -289,6 +289,7 @@ export const EXPORT_VERSION_SECRETS = 2;
 
 /** Campos de una conexión que viajan en el fichero: todo menos el id y la contraseña. */
 const PORTABLE_KEYS = Object.keys(emptyConn("postgres")).filter((key) => key !== "id" && key !== "password") as (keyof ConnConfig)[];
+const ENV_KEYS = new Set<keyof ConnConfig>(["environment", "envLabel", "envColor"]);
 
 const INLINE_PASSWORD = /(?<=^|[;\n])[ \t]*(?:pwd|password)[ \t]*=[ \t]*(\{(?:[^}]|\}\})*\}|[^;\n]*)[ \t]*(?:[;\n]|$)/gi;
 
@@ -330,9 +331,12 @@ export function exportConnectionsJson(conns: ConnConfig[], folders: string[], ex
     const out: Record<string, unknown> = {};
     for (const key of PORTABLE_KEYS) {
       const value = conn[key];
+      // An unset environment is left out, so a connection without one exports exactly as before environments.
+      if (value === "" && ENV_KEYS.has(key)) continue;
       if (value !== undefined) out[key] = key === "odbcConnStr" || key === "extra" ? withoutInlinePassword(String(value)) : value;
     }
     if (conn.startupSql) out.startupSql = conn.startupSql;
+    if (conn.keepaliveMin) out.keepaliveMin = conn.keepaliveMin;
     // The SSH tunnel's settings, never its secrets (only for connections that have one).
     const ssh = portableSsh(conn.ssh);
     if (ssh) out.ssh = ssh;
@@ -472,6 +476,7 @@ export function parseConnectionsJson(text: string): { connections: ConnConfig[];
         if (value === null || (typeof value === "number" && Number.isInteger(value) && value > 0 && value < 65536)) cfg.port = value;
       } else if (typeof value === want) cfg[key] = value;
     }
+    if (typeof item.keepaliveMin === "number" && Number.isInteger(item.keepaliveMin) && item.keepaliveMin > 0) cfg.keepaliveMin = Math.min(item.keepaliveMin, 1440);
     cfg.id = "";
     cfg.password = "";
     const ssh = readSsh(item.ssh);
