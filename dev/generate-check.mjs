@@ -67,11 +67,11 @@ await js(`
   set('code', 'ZZ'); set('name', 'Zetalandia'); set('eu_member', 'false');
   d.querySelector('button[type=submit]').click();
 `);
-const upserted = await js(`await until(() => !pane().querySelector('.progress-bar') && !document.querySelector('.params-dialog'), 10000); await sleep(800); const out = [...pane().querySelectorAll('.out-entry')].pop()?.textContent ?? ''; return { tx: !!pane().querySelector('.tag.warn'), affected: pane().querySelector('.affected strong')?.textContent || out, error: pane().querySelector('.rtab.error')?.textContent ?? '' };`);
+const upserted = await js(`await until(() => !pane().querySelector('.progress-bar') && !document.querySelector('.params-dialog'), 10000); await sleep(800); const out = [...pane().querySelectorAll('.out-entry')].pop()?.textContent ?? ''; return { tx: !!pane().querySelector('.tx-indicator'), affected: pane().querySelector('.affected strong')?.textContent || out, error: pane().querySelector('.rtab.error')?.textContent ?? '' };`);
 check("the UPSERT runs (1 row, transaction open)", /1 fila/.test(upserted.affected) && upserted.tx, JSON.stringify(upserted));
 await press("r", 1 | 2 | 8); // Ctrl+Alt+Shift+R: rollback
 await sleep(800);
-check("rolled back", (await js(`return !pane().querySelector('.tag.warn');`)) === true);
+check("rolled back", (await js(`return !pane().querySelector('.tx-indicator');`)) === true);
 
 const drop = await js(`pane().querySelector('.cm-content').focus(); await sleep(100); return null;`);
 void drop;

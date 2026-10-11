@@ -103,7 +103,7 @@ await js(`const list = await inv('list_connections'); const c = list.find((x) =>
 // ---------------------------------------------------------------- pinned result after an UPDATE and after an error
 await js(`[...pane().querySelectorAll('.tx-toggle button')].find((b) => b.textContent === 'Manual')?.click(); await until(() => [...pane().querySelectorAll('.tx-toggle button')].find((b) => b.textContent === 'Manual')?.classList.contains('on'));`);
 await run("SELECT code, name FROM countries ORDER BY code");
-await js(`pane().querySelector('button[title^="Fijar este resultado"]').click(); await sleep(200);`);
+await js(`pane().querySelector('button[title^="Fijar resultado"]').click(); await sleep(200);`);
 await run("UPDATE countries SET name = name WHERE code = 'ES'");
 const afterUpdate = await js(`
   [...pane().querySelectorAll('.rtab.pinned .rtab-main')][0].click(); await sleep(300);
