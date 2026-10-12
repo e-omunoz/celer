@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -430,6 +430,9 @@ pub struct Tunnel {
     target: (String, u16),
     /// Forwarded connections open now.
     active: Arc<AtomicUsize>,
+    /// The connection was disconnected or deleted while some of its connections still went through: the last one to
+    /// end closes the tunnel (`close_forgotten`).
+    closing: Arc<AtomicBool>,
     last_used: Arc<Mutex<Instant>>,
     /// The last forward the SSH server refused (the database server unreachable from it), taken by `explain`.
     error: Arc<Mutex<Option<String>>>,
@@ -528,15 +531,17 @@ async fn open_tunnel(plan: Plan) -> Result<Tunnel> {
     };
     let local_port = listener.local_addr()?.port();
     let active = Arc::new(AtomicUsize::new(0));
+    let closing = Arc::new(AtomicBool::new(false));
     let last_used = Arc::new(Mutex::new(Instant::now()));
     let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let last = sessions.last().cloned().ok_or_else(|| anyhow!("SSH: túnel sin servidor SSH"))?;
     let accept = {
-        let (active, last_used, error, target) = (active.clone(), last_used.clone(), error.clone(), plan.target.clone());
+        let (active, closing, last_used, error, target, key) = (active.clone(), closing.clone(), last_used.clone(), error.clone(), plan.target.clone(), plan.key.clone());
         let via = plan.hops.last().map(Hop::label).unwrap_or_default();
         tokio::spawn(async move {
             while let Ok((socket, peer)) = listener.accept().await {
-                let (session, active, last_used, error, target, via) = (last.clone(), active.clone(), last_used.clone(), error.clone(), target.clone(), via.clone());
+                let (session, active, closing, last_used, error, target, via, key) =
+                    (last.clone(), active.clone(), closing.clone(), last_used.clone(), error.clone(), target.clone(), via.clone(), key.clone());
                 tokio::spawn(async move {
                     let _ = socket.set_nodelay(true);
                     *last_used.lock() = Instant::now();
@@ -545,8 +550,11 @@ async fn open_tunnel(plan: Plan) -> Result<Tunnel> {
                         Ok(Ok(channel)) => {
                             active.fetch_add(1, Ordering::SeqCst);
                             pipe(socket, channel, &session).await;
-                            active.fetch_sub(1, Ordering::SeqCst);
+                            let left = active.fetch_sub(1, Ordering::SeqCst) - 1;
                             *last_used.lock() = Instant::now();
+                            if left == 0 && closing.load(Ordering::SeqCst) {
+                                close_forgotten(&key, &closing);
+                            }
                         }
                         // The driver sees the local connection closed, and `explain` says why.
                         Ok(Err(e)) => {
@@ -560,7 +568,7 @@ async fn open_tunnel(plan: Plan) -> Result<Tunnel> {
             }
         })
     };
-    Ok(Tunnel { local_port, sessions, target: plan.target, active, last_used, error, accept, summary: summary.join(" → ") })
+    Ok(Tunnel { local_port, sessions, target: plan.target, active, closing, last_used, error, accept, summary: summary.join(" → ") })
 }
 
 // ───────────────────────────────────────────────────────────────── shared tunnels
@@ -641,6 +649,8 @@ impl Plan {
         // One at a time per tunnel: sessions opening together share the one the first builds.
         let mut current = slot.lock();
         if let Some(t) = current.as_ref().filter(|t| t.alive()) {
+            // Used again: it is no longer closing when its last connection ends.
+            t.closing.store(false, Ordering::SeqCst);
             return Ok(t.clone());
         }
         *current = None;
@@ -652,16 +662,31 @@ impl Plan {
     }
 }
 
-/// Closes the tunnels of a connection with no forwarded connection open (it was disconnected, edited or deleted).
+/// Closes the tunnels of a connection (it was disconnected, edited or deleted): now when no forwarded connection is
+/// open, otherwise when the last one ends (its sessions are closing at the same time).
 pub fn forget(owner: &str) {
     let prefix = format!("{owner}:");
     let slots: Vec<Slot> = tunnels().lock().iter().filter(|(k, _)| k.starts_with(&prefix)).map(|(_, s)| s.clone()).collect();
     for slot in slots {
         if let Some(mut current) = slot.try_lock() {
-            if current.as_ref().is_some_and(|t| t.active.load(Ordering::SeqCst) == 0) {
+            let Some(t) = current.as_ref() else { continue };
+            t.closing.store(true, Ordering::SeqCst);
+            if t.active.load(Ordering::SeqCst) == 0 {
                 *current = None;
             }
         }
+    }
+}
+
+/// The last forwarded connection of a forgotten tunnel ended: the tunnel (SSH login and local port) is closed, unless
+/// it was used again since (`Plan::tunnel` clears `closing`) or another one replaced it. A slot busy building a
+/// tunnel is left to the janitor.
+fn close_forgotten(key: &str, closing: &Arc<AtomicBool>) {
+    let Some(slot) = tunnels().lock().get(key).cloned() else { return };
+    let Some(mut current) = slot.try_lock() else { return };
+    let gone = current.as_ref().is_some_and(|t| Arc::ptr_eq(&t.closing, closing) && t.closing.load(Ordering::SeqCst) && t.active.load(Ordering::SeqCst) == 0);
+    if gone {
+        *current = None;
     }
 }
 

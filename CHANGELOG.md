@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- SSH tunnels: disconnecting, editing or deleting a tunnelled connection closes its tunnel (the SSH login on the
+  bastion and the local port) as soon as its last connection through it ends, instead of leaving it open for up to
+  about two and a half minutes (#164).
 - SSH tunnels: when the bastion cannot reach the database host (a firewall, a wrong address), «Probar conexión» fails
   the forward step in 5 s and connecting fails in 15 s with what happened, instead of waiting about two minutes; an
   SSH login that stalls while authenticating, or a jump host that cannot reach the next one, is bounded too (#142).

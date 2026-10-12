@@ -1802,6 +1802,43 @@ fn ssh_tunnel_every_engine() {
     let _ = std::fs::remove_dir_all(&store.dir);
 }
 
+/// Disconnecting (or deleting) a tunnelled connection closes its tunnel once its sessions have gone: the local port
+/// stops listening and the bastion's login ends, instead of waiting for the janitor (#164).
+#[test]
+fn ssh_tunnel_closes_on_disconnect() {
+    let Some(s) = ssh_spec() else { return };
+    let Some(first) = tunnelled_engines(&s).into_iter().next() else { return };
+    let store = sample_store("forget");
+    trust_bastion(&store, &first.cfg);
+    let mut cfg = first.cfg.clone();
+    cfg.id = "ssh-test-forget".into();
+    let prepared = ssh_prepared(&store, &cfg);
+    let port = prepared.ssh.clone().unwrap().tunnel().unwrap().local_port;
+    // Whether the port is taken, without connecting (a connection would go through the tunnel and keep it in use).
+    let listening = || std::net::TcpListener::bind(("127.0.0.1", port)).is_err();
+    let mut a = guarded(cfg.kind, &prepared.connector, &prepared.key, "");
+    assert_eq!(scalar(&mut a, first.probe), "1");
+    assert!(listening(), "the tunnel listens on {port}");
+    // As the app disconnects: the sessions close and the connection's free ones and tunnel are forgotten at once,
+    // while the forwarded connections are still ending.
+    drop(a);
+    crate::guard::pool_forget(&format!("engine-test-{}", prepared.key));
+    crate::forget_free(&cfg.id);
+    let t0 = Instant::now();
+    while listening() && t0.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    eprintln!("SSH ✔ túnel cerrado al desconectar en {:?}", t0.elapsed());
+    assert!(!listening(), "the tunnel still listens on {port} after disconnecting");
+    // Connecting again opens a new one.
+    let mut b = guarded(cfg.kind, &prepared.connector, &prepared.key, "");
+    assert_eq!(scalar(&mut b, first.probe), "1");
+    drop(b);
+    crate::guard::pool_forget(&format!("engine-test-{}", prepared.key));
+    crate::forget_free(&cfg.id);
+    let _ = std::fs::remove_dir_all(&store.dir);
+}
+
 /// Password authentication, a jump host (the bastion through itself), a forward the bastion refuses and a host key
 /// that changed: each says which step failed and why.
 #[test]
