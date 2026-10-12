@@ -85,10 +85,18 @@ export function ThemeEditor() {
   /** The theme as last saved (null: new, not saved yet). */
   const [saved, setSaved] = createSignal<CustomTheme | null>(customThemeById(first.id) ?? null);
   const [draft, setDraft] = createSignal<CustomTheme>(plainClone(first));
+  /** What the draft was when it was opened, saved or reset: a new theme nobody has touched has nothing to lose. */
+  const [pristine, setPristine] = createSignal<CustomTheme>(plainClone(first));
   const [group, setGroup] = createSignal("general");
   const [values, setValues] = createSignal<Record<string, string>>({});
   const [bad, setBad] = createSignal<Record<string, string>>({});
-  const dirty = () => !same(saved(), draft());
+  const dirty = () => !same(pristine(), draft());
+  /** Opens `theme` in the editor (`isSaved`: it is one of the saved themes, not a new draft). */
+  const load = (theme: CustomTheme, isSaved: boolean) => {
+    setSaved(isSaved ? theme : null);
+    setDraft(plainClone(theme));
+    setPristine(plainClone(theme));
+  };
 
   // Live: the whole interface shows the draft, and the colours it comes to are read back for the fields.
   createEffect(() => {
@@ -124,16 +132,14 @@ export function ThemeEditor() {
 
   async function switchTo(theme: CustomTheme, isSaved: boolean) {
     if (!(await leaveChanges())) return;
-    setSaved(isSaved ? theme : null);
-    setDraft(plainClone(theme));
+    load(theme, isSaved);
     setBad({});
   }
 
   async function save(use: boolean) {
     const theme = { ...draft(), name: uniqueThemeName(draft().name, names(draft().id)) };
     await saveCustomTheme(theme, use);
-    setDraft(theme);
-    setSaved(plainClone(theme));
+    load(theme, true);
   }
 
   async function remove() {
@@ -141,14 +147,12 @@ export function ThemeEditor() {
     if (!current) {
       // Never saved: there is nothing to delete, only the draft to drop.
       const other = state.settings.customThemes[0];
-      setSaved(other ?? null);
-      setDraft(other ? plainClone(other) : fresh(draft().base));
+      load(other ?? fresh(draft().base), !!other);
       return;
     }
     if (!(await deleteCustomTheme(current))) return;
     const other = state.settings.customThemes[0];
-    setSaved(other ?? null);
-    setDraft(other ? plainClone(other) : fresh(current.base));
+    load(other ?? fresh(current.base), !!other);
   }
 
   async function back() {
@@ -187,10 +191,7 @@ export function ThemeEditor() {
         <button type="button" class="icon-btn" title="Importar un tema (JSON)" onClick={() => void (async () => {
           if (!(await leaveChanges())) return;
           const theme = await importCustomTheme();
-          if (theme) {
-            setSaved(theme);
-            setDraft(plainClone(theme));
-          }
+          if (theme) load(theme, true);
         })()}><Upload size={15} /></button>
         <button type="button" class="icon-btn" title="Exportar a un fichero (JSON)" onClick={() => void exportCustomTheme(draft())}><Download size={15} /></button>
         <button type="button" class="icon-btn danger" title="Borrar el tema" onClick={() => void remove()}><Trash2 size={15} /></button>
@@ -343,10 +344,10 @@ export function ThemeEditor() {
       </div>
 
       <footer class="te-foot">
-        <span class="muted small">{dirty() ? "Cambios sin guardar: lo que ves es una vista previa." : saved() ? "Guardado." : ""}</span>
+        <span class="muted small">{dirty() ? "Cambios sin guardar: lo que ves es una vista previa." : saved() ? "Guardado." : "Tema nuevo: guárdalo para conservarlo."}</span>
         <span class="spacer" />
-        <button type="button" class="btn" disabled={!dirty() || !saved()} onClick={() => saved() && setDraft(plainClone(saved()!))}>Descartar cambios</button>
-        <button type="button" class="btn" disabled={!dirty()} onClick={() => void save(false)}>Guardar</button>
+        <button type="button" class="btn" disabled={!dirty()} onClick={() => setDraft(plainClone(pristine()))}>Descartar cambios</button>
+        <button type="button" class="btn" disabled={!dirty() && !!saved()} onClick={() => void save(false)}>Guardar</button>
         <button type="button" class="btn primary" disabled={!dirty() && state.settings.theme === choiceOf(draft())} onClick={() => void save(true)}>Guardar y usar</button>
       </footer>
     </div>
