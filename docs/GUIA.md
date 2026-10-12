@@ -13,8 +13,15 @@ La ventana tiene tres zonas:
 
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
 - **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
-- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial (Ctrl+Alt+E), la
-  biblioteca de scripts (Alt+8), las variables (Alt+9) y el asistente de IA (Ctrl+Alt+I).
+- **Panel derecho** (Alt+7): el valor de una celda y la fila como formulario (*Valor / Registro* en su cabecera), y
+  las herramientas que se abren desde la franja de la izquierda: el historial (Ctrl+Alt+E), la biblioteca de scripts
+  (Alt+8), las variables (Alt+9) y el asistente de IA (Ctrl+Alt+I). Con una herramienta abierta, la cabecera dice
+  cuál es.
+
+**F6** lleva el foco al panel siguiente (explorador, editor, resultados, panel derecho) y **Mayús+F6** al anterior; el
+panel se ilumina un momento y el foco vuelve a donde estaba en él. Si cierras un panel con el foco dentro, pasa al
+editor o a los resultados. Los menús contextuales muestran a la derecha el atajo de cada acción (el que tengas en
+*Ajustes › Atajos de teclado*), y las filas con › abren un submenú (con el ratón, o con → y ←).
 
 ## Conexiones
 
@@ -22,7 +29,9 @@ La ventana tiene tres zonas:
 Informix conecta por JDBC, por el Client SDK o por el driver IBM CLI (ver [Drivers de Informix](#drivers-de-informix)),
 y cualquier otra base de datos entra por ODBC.
 
-- **Entorno**: *Desarrollo*, *Pruebas*, *Preproducción*, *Producción* u *Otro…* (un nombre y un color tuyos). Todas
+- **Entorno**: una sola fila del formulario, aparte de motor, servidor, usuario y base, reúne el entorno, *Solo
+  lectura* y el *Color* de la conexión. El entorno es *Desarrollo*, *Pruebas*, *Preproducción*, *Producción* u
+  *Otro…* (un nombre y un color tuyos). Todas
   las consolas y tablas de la conexión llevan una franja de ese color arriba y una etiqueta con icono y nombre en la
   barra de la consola y en la barra de estado; sus pestañas, su nodo del explorador y sus consolas en otras ventanas
   llevan el mismo color. Producción va en rojo y Preproducción en ámbar.
@@ -105,7 +114,7 @@ En el explorador:
 - **Buscar** (Ctrl+F, o empezar a escribir en el árbol): cada palabra se busca en el nombre, servidor, puerto, base,
   usuario, carpeta y motor (`pg`, `sqlserver`, `ifx`…). Los filtros rápidos dejan ver solo las favoritas, las
   conectadas, las de producción o las de un motor.
-- **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
+- **Orden** manual (arrastrando) o alfabético, desde el botón de opciones o el menú del fondo del explorador.
 - **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON, para compartirlas o llevarlas a otro
   equipo; al importar no se repiten las que ya existen. De entrada va **sin contraseñas** (el fichero de siempre) y
   Celer las pide al conectar. Con **Incluir contraseñas** viajan también la contraseña de la base, las del túnel SSH
@@ -132,7 +141,8 @@ En el explorador:
     empieza de nuevo en ella.
 - Todo está en el menú contextual (también con la tecla Menú o Mayús+F10), con su atajo al lado.
 
-¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas
+**Importar conexiones ›** (en *Nuevo* y en el botón de opciones del explorador) trae un fichero exportado por Celer o
+las conexiones de **DBeaver** o de **DbVisualizer** de este equipo; también desde la paleta. Las de DBeaver y DbVisualizer llegan con carpetas y marcas
 de producción. Las contraseñas guardadas en DBeaver solo se traen si marcas **Importar también las contraseñas
 guardadas** (desmarcada de entrada): solo entonces, y al pulsar *Importar*, Celer lee el fichero cifrado de credenciales
 de DBeaver; al listar las conexiones no lo abre. La URL JDBC de cada conexión se lee entera, como en el campo **URL
@@ -240,7 +250,10 @@ las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
     iguales, así que se pueden comparar resultados de dos motores distintos.
   - Se comparan las filas cargadas (hasta 200.000 por lado). Si un lado tiene más, se avisa y se ofrece *Cargar todo*;
     un resultado fijado antes de cargar todas sus páginas se queda con las que tenía.
-- **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
+- **Copiar**: el menú de una celda tiene *Copiar* (Ctrl+C), *Copiar con cabeceras* (Ctrl+Mayús+C) y *Copiar como ›*
+  (CSV, JSON, Markdown, XML, SQL INSERT, lista IN y WHERE, con los literales del motor de la conexión); **Exportar** a
+  disco en streaming. En una tabla, *Filtrar ›* añade el filtro por el valor de la celda (por este valor, excluirlo,
+  contiene, es NULL, no es NULL).
 - **Mover columnas**: arrastra la cabecera de una columna y la columna entera se levanta (semitransparente, con
   sombra); las demás se apartan para abrirle hueco donde caerá y, cerca del borde, la rejilla se desplaza sola. Al
   soltarla se acomoda en su sitio; Esc durante el arrastre la devuelve a donde estaba. Con *Animaciones: Reducidas*
@@ -284,8 +297,11 @@ Doble clic en una tabla del explorador la abre.
 - **Pegar en la tabla**: Ctrl+V en la rejilla de una tabla pega el bloque copiado desde la celda activa como cambios
   pendientes (las filas que sobran pasan a ser filas nuevas); se guardan con *Guardar*, como cualquier edición.
 
-Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,
-UPSERT/MERGE, DELETE, DROP y su DDL.
+El menú de una tabla o vista empieza por *Abrir datos* (F4), *Abrir estructura*, *Ver DDL* y el diagrama de
+relaciones. **Generar SQL ›** escribe en una consola SELECT, SELECT con los joins de sus claves, SELECT COUNT(*),
+INSERT, UPDATE, DELETE, UPSERT/MERGE y DROP (en una vista, los SELECT y el DROP). La pestaña *DDL* tiene *Copiar* y
+*Abrir en consola*, que lleva el DDL a una consola nueva de esa conexión y base. *Comparar ›* agrupa marcar la tabla
+y comparar sus datos con la marcada.
 
 ## Entender una base de datos
 
@@ -307,9 +323,9 @@ UPSERT/MERGE, DELETE, DROP y su DDL.
   conexión o de otra), *Comparar con…*. Verás las tablas que solo están en un lado y las columnas con otro tipo o
   nulabilidad. *Script para igualar el destino* abre en una consola del destino el SQL que lo dejaría como el origen,
   para revisarlo antes de ejecutarlo; lo que borraría datos queda comentado.
-- **Comparar datos** de dos tablas: *Marcar para comparar datos* en el menú de una tabla y *Comparar datos con…* en
-  el de la otra. Las filas se emparejan por la clave primaria; se marcan las celdas cambiadas (al pasar el ratón se ve
-  el valor del destino), las filas que solo están en una y las nuevas. El script para igualar el destino lleva INSERT y
+- **Comparar datos** de dos tablas: *Comparar › Marcar para comparar datos* en el menú de una tabla y *Comparar ›
+  Comparar datos con…* en el de la otra. Las filas se emparejan por la clave primaria; se marcan las celdas
+  cambiadas (al pasar el ratón se ve el valor del destino), las filas que solo están en una y las nuevas. El script para igualar el destino lleva INSERT y
   UPDATE; los DELETE van comentados. Se comparan hasta 50.000 filas por tabla.
 - **Actividad del servidor** (menú de la conexión): sesiones y consultas en curso, con cancelar y matar.
 
@@ -459,8 +475,9 @@ biblioteca, los ajustes, el tema, los atajos y a Gib; cada una tiene sus pestañ
   tabla pone NULL en la celda; en el resto de Celer (editor, pestañas, paneles) abre la ventana nueva.
 - **Sacar una pestaña**: arrástrala fuera de la barra de pestañas. Bajo el puntero va una tarjeta con su título,
   su conexión y sus primeras líneas; fuera de las ventanas de Celer se convierte en el contorno de la ventana nueva,
-  con *Soltar para abrir en una ventana nueva*. Al soltarla, la ventana nueva aparece justo ahí, con la pestaña donde
-  estaba el puntero. También con el botón derecho sobre la pestaña: *Abrir en ventana nueva*. La primera vez que
+  de su tamaño y justo donde se abrirá (siempre dentro de la pantalla en la que está el puntero), con *Soltar para
+  abrir en una ventana nueva* arriba. Al soltarla, la ventana nueva aparece ahí y crece hasta su sitio; Esc durante el
+  arrastre lo cancela y la pestaña se queda donde estaba. También con el botón derecho sobre la pestaña: *Abrir en ventana nueva*. La primera vez que
   tienes dos pestañas, Gib (o un aviso, si está apagado) te lo recuerda.
 - **Llevarla a otra ventana**: arrástrala sobre otra ventana de Celer: su barra de pestañas se marca y una línea
   enseña dónde quedará (al final si la sueltas fuera de la barra). También *Mover a la ventana…* en el menú de la
@@ -490,7 +507,14 @@ tildes ni mayúsculas) y lleva hasta él. Cada sección tiene **Restablecer secc
 tus ajustes a otro equipo (no incluye favoritas ni recientes, que dependen de las conexiones de cada equipo). Al
 importar, lo que Celer no entiende se ignora y se dice cuál.
 
-- **Apariencia**: ocho temas, color de acento, densidad, tamaño de la interfaz, Gib y animaciones.
+Las secciones van en cuatro grupos: **General** (Apariencia, Editor de tema, Ventana y pestañas, Avisos), **Editor**
+(Editor, Resultados, Ejecución, Historial, Plantillas, Atajos de teclado), **Conexiones** (Seguridad, Drivers) e
+**IA y MCP**.
+
+- **Apariencia**: ocho temas y los tuyos, color de acento, densidad, tamaño de la interfaz, Gib y animaciones. Con
+  *Seguir al sistema*, eliges qué tema usar cuando el sistema está en modo claro y cuál en modo oscuro (también temas
+  propios). El lápiz de un tema propio lo abre en el editor de tema.
+- **Editor de tema**: ver [Editor de tema](#editor-de-tema).
 - **Editor**: tamaño y tipo de letra, tabulador (2, 4 u 8; con espacios o tabuladores), ajuste de línea, números de
   línea, autocompletado al escribir y su retardo (Ctrl+Espacio abre la lista siempre), mayúsculas o minúsculas en las
   palabras clave (sugerencias y *Formatear SQL*) y pedir el valor de los parámetros. Se aplica al momento a todas las
@@ -518,6 +542,28 @@ importar, lo que Celer no entiende se ignora y se dice cuál.
   las transacciones manuales abiertas.
 - **IA y MCP**: modelo y clave del asistente, permisos del servidor MCP por conexión y su registro.
 - **Drivers**: qué ha encontrado Celer para Informix (Java, JDBC, IBM CLI) y las descargas.
+
+### Editor de tema
+
+*Ajustes › Editor de tema* (también *Editor de tema* en *Apariencia*, o *Editor de tema…* en la paleta) crea un tema
+propio a partir de cualquiera de serie. Mientras lo editas, toda la interfaz lo muestra en vivo; la muestra de la
+derecha reúne explorador, pestañas, editor, resultados, un diálogo y a Gib para verlo de un vistazo.
+
+- **General**: el tema base (lo que no cambies se toma de él, y decide si es claro u oscuro), la fuente de la
+  interfaz y la del editor (cualquier fuente instalada), el radio de las esquinas, la altura de las filas de
+  resultados, las sombras y la velocidad de las animaciones.
+- **Colores**, por grupos: superficies, texto, bordes, acento, estados, tabla de resultados, editor y sintaxis,
+  explorador y Gib. Cada color se elige con el selector o se escribe (`#1e1f22`, `rgb(0 0 0 / 0.4)`…); la flecha
+  vuelve al del tema base.
+- **Contraste**: cada par de texto y fondo muestra su relación de contraste y avisa de los que no llegan a AA (4,5:1;
+  3:1 en texto grande y bordes).
+- *Guardar*, *Guardar y usar* y *Descartar cambios*; arriba, el tema que editas, su nombre, tema nuevo, duplicar,
+  importar, exportar y borrar. Si sales del editor con cambios sin guardar, Celer pregunta antes.
+
+Un tema exportado es un fichero `.celer-theme.json`: al importarlo en otro equipo se ve igual (lleva su color de
+acento). Un fichero que no es un tema de Celer, que está dañado o que hizo una versión más nueva se rechaza con el
+motivo, sin aplicar nada. Los temas propios aparecen junto a los de serie, en la paleta (*Tema: …*) y en las ventanas
+separadas, y viajan con *Exportar ajustes…*.
 
 ## Si algo falla
 
@@ -606,7 +652,9 @@ normal o a menudo (como mucho 3, 8 o 16 mensajes suyos por hora, sin sonido y si
 si reacciona a lo que pasa, si se entretiene, si da consejos por su cuenta, si sus ojos siguen al cursor y dónde
 aparece: la barra de estado, los estados vacíos y el asistente de IA, el arranque, y las esperas, la guía y los
 diálogos. Los avisos sobre la sentencia que acabas de lanzar no cuentan para ese límite. Con *Animaciones:
-reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de animarse.
+reducidas*, o si el sistema lo pide, se queda quieto, como el resto de animaciones de Celer (paneles, pestañas,
+diálogos, menús y avisos aparecen y se van con un movimiento corto, que el editor de tema hace más rápido o más
+pausado). Cuando la ventana no está en primer plano deja de animarse.
 
 ## Drivers de Informix
 
