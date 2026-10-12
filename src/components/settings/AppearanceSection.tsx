@@ -3,7 +3,7 @@ import { For } from "solid-js";
 import { themeChoices } from "../../commands";
 import { applyTheme, saveSettings, state } from "../../state";
 import { themeVars, type CustomTheme } from "../../themes";
-import { choiceOf, openThemeEditor, setAccent } from "../../themeStore";
+import { activeCustomTheme, choiceOf, openThemeEditor, setAccent } from "../../themeStore";
 import { ACCENTS, type ThemeChoice } from "../../types";
 import { GibSettings } from "../GibSettings";
 import { Field, NumberStepper } from "./controls";
@@ -11,6 +11,10 @@ import { Field, NumberStepper } from "./controls";
 /** Ajustes › Apariencia: theme (built-in and custom), accent, density, interface size, Gib and animations. */
 export function AppearanceSection() {
   const s = () => state.settings;
+  /** The accent in use: the custom theme's own when it has one (setAccent changes that one), else Ajustes'. */
+  const accent = () => activeCustomTheme()?.colors["--accent"] ?? s().accent;
+  /** The colour picker takes only #rrggbb: a theme's rgb()/hsl() accent shows the global one there. */
+  const accentHex = () => (/^#[0-9a-f]{6}$/i.test(accent()) ? accent() : s().accent);
   /** What «Seguir al sistema» may pick for each mode: every theme but "system" itself, custom ones included. */
   const choices = () => [
     ...themeChoices.filter((theme) => theme.id !== "system").map((theme) => ({ id: theme.id as string, label: theme.label })),
@@ -85,10 +89,10 @@ export function AppearanceSection() {
       <h4 data-setting="Color de acento">Color de acento</h4>
       <div class="swatches">
         <For each={ACCENTS}>
-          {(item) => <button type="button" class="swatch big" classList={{ on: s().accent.toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void setAccent(item.value)} />}
+          {(item) => <button type="button" class="swatch big" classList={{ on: accent().toLowerCase() === item.value.toLowerCase() }} style={{ background: item.value }} title={item.name} onClick={() => void setAccent(item.value)} />}
         </For>
         <label class="swatch big custom" title="Personalizado">
-          <input type="color" value={s().accent} onChange={(event) => void setAccent(event.currentTarget.value)} />
+          <input type="color" value={accentHex()} onChange={(event) => void setAccent(event.currentTarget.value)} />
         </label>
       </div>
       <div class="form-row">
