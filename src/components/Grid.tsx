@@ -1325,13 +1325,20 @@ export function DataGrid(props: GridProps) {
     const items: MenuItem[] = [
       { label: "Copiar", keys: "Ctrl+C", icon: "copy", run: () => copy(state.settings.copyFormat) },
       { label: "Copiar con cabeceras", keys: "Ctrl+Shift+C", run: () => copy("tsv-head") },
-      { label: "Copiar como CSV", run: () => copy("csv") },
-      { label: "Copiar como JSON", run: () => copy("json") },
-      { label: "Copiar como Markdown", run: () => copy("markdown") },
-      { label: "Copiar como XML", run: () => copy("xml") },
-      { label: "Copiar como SQL INSERT", run: () => copy("insert") },
-      { label: "Copiar como lista IN (…)", run: () => copy("in") },
-      { label: "Copiar como WHERE", run: () => copy("where") },
+      // The other formats in one submenu (#111); each copies exactly what its own entry did.
+      {
+        label: "Copiar como",
+        submenu: [
+          { label: "CSV", run: () => copy("csv") },
+          { label: "JSON", run: () => copy("json") },
+          { label: "Markdown", run: () => copy("markdown") },
+          { label: "XML", run: () => copy("xml") },
+          { separator: true },
+          { label: "SQL INSERT", run: () => copy("insert") },
+          { label: "Lista IN (…)", run: () => copy("in") },
+          { label: "WHERE", run: () => copy("where") },
+        ],
+      },
       { separator: true },
       { label: "Ver valor", keys: "Mayús+Intro", icon: "eye", run: () => activate() },
     ];
@@ -1347,11 +1354,18 @@ export function DataGrid(props: GridProps) {
     if (props.onFilter) {
       items.push(
         { separator: true },
-        { label: "Filtrar por este valor", icon: "filter", run: () => quickFilter("eq") },
-        { label: "Excluir este valor", run: () => quickFilter("ne") },
-        { label: "Contiene este texto", run: () => quickFilter("contains") },
-        { label: "Es NULL", run: () => quickFilter("null") },
-        { label: "No es NULL", run: () => quickFilter("not-null") },
+        {
+          label: "Filtrar",
+          icon: "filter",
+          submenu: [
+            { label: "Por este valor", run: () => quickFilter("eq") },
+            { label: "Excluir este valor", run: () => quickFilter("ne") },
+            { label: "Contiene este texto", run: () => quickFilter("contains") },
+            { separator: true },
+            { label: "Es NULL", run: () => quickFilter("null") },
+            { label: "No es NULL", run: () => quickFilter("not-null") },
+          ],
+        },
       );
     }
     if (props.editable) {

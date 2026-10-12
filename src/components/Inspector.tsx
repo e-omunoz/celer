@@ -11,22 +11,41 @@ import { leaveAnimation } from "../motion";
 import { withShortcut } from "../commands";
 import { prettyXml } from "../prettyXml";
 import { cellText, isNullCell, prettyJson } from "../sql";
-import { activeTab, clearHistory, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory } from "../state";
+import { activeTab, clearHistory, connectionById, copyText, formatMs, openInspector, openQuery, refreshHistory, setState, state, useHistory, type InspectorMode } from "../state";
+import { Dynamic } from "solid-js/web";
 import { isTauri } from "../api";
 import { detachPanel } from "../windows";
+
+/** The right panel's tools, with the title its header shows and the command (and shortcut) that opens each. */
+const TOOL_TITLES: Partial<Record<InspectorMode, { title: string; command: string; icon: typeof History }>> = {
+  history: { title: "Historial", command: "history", icon: History },
+  library: { title: "Biblioteca", command: "library", icon: BookMarked },
+  variables: { title: "Variables", command: "variables", icon: Variable },
+  ai: { title: "Asistente IA", command: "ai", icon: Sparkles },
+};
 
 export function Inspector() {
   return (
     <aside class="inspector" data-focus-region="inspector" ref={(el) => onCleanup(() => { rescueFocus(el); leaveAnimation(el, "panel-right"); })} style={{ width: `${state.settings.inspectorWidth}px` }}>
       <div class="toolwin-head">
-        <div class="seg small">
-          <button type="button" classList={{ on: state.inspectorMode === "value" }} title="Valor de la celda" onClick={() => openInspector("value")}><Braces size={13} /><span class="seg-label">Valor</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "record" }} title="Registro: la fila como formulario" onClick={() => openInspector("record")}><Rows3 size={13} /><span class="seg-label">Registro</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "history" }} title={withShortcut("Historial de consultas", "history")} onClick={() => openInspector("history")}><History size={13} /><span class="seg-label">Historial</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "library" }} title={withShortcut("Biblioteca de scripts guardados", "library")} onClick={() => openInspector("library")}><BookMarked size={13} /><span class="seg-label">Biblioteca</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "variables" }} title={withShortcut("Variables: ${nombre} con un valor por consola, conexión o global", "variables")} onClick={() => openInspector("variables")}><Variable size={13} /><span class="seg-label">Variables</span></button>
-          <button type="button" classList={{ on: state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => openInspector("ai")}><Sparkles size={13} /><span class="seg-label">IA</span></button>
-        </div>
+        {/* The cell views switch here; the tools (history, library, variables, assistant) open from the stripe and
+            their shortcuts, and only name themselves here (#111). */}
+        <Show
+          when={TOOL_TITLES[state.inspectorMode]}
+          fallback={
+            <div class="seg small">
+              <button type="button" classList={{ on: state.inspectorMode === "value" }} title="Valor de la celda" onClick={() => openInspector("value")}><Braces size={13} /><span class="seg-label">Valor</span></button>
+              <button type="button" classList={{ on: state.inspectorMode === "record" }} title="Registro: la fila como formulario" onClick={() => openInspector("record")}><Rows3 size={13} /><span class="seg-label">Registro</span></button>
+            </div>
+          }
+        >
+          {(tool) => (
+            <span class="toolwin-title inspector-title" title={withShortcut(tool().title, tool().command)}>
+              <Dynamic component={tool().icon} size={14} />
+              {tool().title}
+            </span>
+          )}
+        </Show>
         <span class="spacer" />
         <Show when={isTauri() && (state.inspectorMode === "library" || state.inspectorMode === "ai")}>
           <button type="button" class="icon-btn" title="Abrir en su propia ventana" onClick={() => void detachPanel(state.inspectorMode === "ai" ? "ai" : "library")}><ExternalLink size={14} /></button>

@@ -629,6 +629,8 @@ kbd {
 
 .toolwin-head { display: flex; align-items: center; gap: 2px; height: 36px; flex: none; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border); }
 .toolwin-title { font-weight: 600; font-size: 12.5px; }
+.inspector-title { display: inline-flex; align-items: center; gap: 7px; padding-left: 4px; color: var(--text); }
+.inspector-title svg { color: var(--text-muted); }
 
 /* ============================================================================
    Explorer
@@ -1169,6 +1171,10 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .menu-item kbd { margin-left: auto; background: transparent; border: 0; padding: 0; color: var(--text-faint); font-size: 11px; }
 .menu-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+/* Submenus («Generar SQL ›», «Copiar como ›»): an arrow on the row, which stays lit while its submenu is open. */
+.menu-sub-arrow { flex: none; margin-left: auto; color: var(--text-faint); }
+.menu-item.open:not(.active) { background: var(--hover); }
+.menu.submenu { z-index: 101; transform-origin: top left; }
 
 .scrim { position: fixed; inset: 0; z-index: 60; background: var(--scrim); animation: fade-in var(--motion-normal) var(--ease-out); backdrop-filter: blur(1.5px); }
 .scrim.light { background: color-mix(in srgb, var(--scrim) 50%, transparent); backdrop-filter: none; }
@@ -2592,6 +2598,10 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .env-field .env-custom-row { margin-top: 8px; align-items: flex-end; }
 .env-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
 .env-preview small { flex-basis: 100%; }
+/* Connection dialog: the Entorno row (#111): environment, read-only and colour together, framed apart from the main block. */
+.env-group { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--surface-alt) 60%, transparent); }
+.env-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; }
+.env-color { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-muted); }
 
 /* Open manual transaction: neutral, then amber, then red past the thresholds (Ajustes > Seguridad). */
 .tx-indicator {

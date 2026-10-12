@@ -34,9 +34,9 @@ import {
 } from "../state";
 import type { GenerateKind, MenuItem } from "../state";
 import { isTauri } from "../api";
-import { emptyConn, ENGINES, type ConnSummary, type DbKind, type MetaNode } from "../types";
+import { emptyConn, ENGINES, type ConnSummary, type DbKind, type MetaNode, type ObjectRef } from "../types";
 import { startImport } from "../importer";
-import { openMigration } from "../migrate";
+import { importConnectionsItem } from "../migrate";
 import { withShortcut } from "../commands";
 import { unsupportedReason, type Feature } from "../engineCompat";
 import { compareWithMarked, isMarked, markForCompare, schemaCompare, schemaTitle } from "../schemaCompareRun";
@@ -54,7 +54,6 @@ import {
   duplicateConnectionNow,
   exportConnections,
   folderCollapsed,
-  importConnections,
   isFavorite,
   knownFolders,
   moveConnectionsTo,
@@ -784,15 +783,21 @@ export function Sidebar() {
     ]);
   }
 
-  function optionsItems(): MenuItem[] {
+  function sortItems(): MenuItem[] {
     const alpha = state.settings.connSort === "alpha";
     return [
       { label: alpha ? "Orden: alfabético" : "Ordenar alfabéticamente", hint: alpha ? "actual" : undefined, run: () => setConnSort("alpha") },
       { label: alpha ? "Ordenar a mano (arrastrando)" : "Orden: manual", hint: alpha ? undefined : "actual", run: () => setConnSort("manual") },
+    ];
+  }
+
+  /** The explorer's options menu (⋯): order, and connections in and out (the one «Importar conexiones ›», #111). */
+  function optionsItems(): MenuItem[] {
+    return [
+      ...sortItems(),
       { separator: true },
-      { label: "Exportar todas las conexiones…", disabled: !state.connections.length, run: () => void exportConnections() },
-      { label: "Importar conexiones de un fichero de Celer…", run: () => void importConnections() },
-      { label: "Importar de DBeaver o DbVisualizer…", run: () => void openMigration() },
+      { label: "Exportar todas las conexiones…", command: "export-conns", disabled: !state.connections.length, run: () => void exportConnections() },
+      importConnectionsItem(),
     ];
   }
 
@@ -802,7 +807,8 @@ export function Sidebar() {
       { label: "Nueva carpeta", keys: "Ctrl+Mayús+N", run: () => void newFolder("") },
       { label: "Buscar conexiones", keys: "Ctrl+F", run: () => { setFilterOpen(true); queueMicrotask(() => filterInput?.focus()); } },
       { separator: true },
-      ...optionsItems(),
+      // Order only: import and export live in the options menu (⋯) and in Nuevo, not repeated here.
+      ...sortItems(),
       { separator: true },
       { label: "Contraer todo", run: collapseAll },
       { label: "Actualizar todo", disabled: !Object.keys(state.sessions).length, run: () => { for (const id of Object.keys(state.sessions)) void refreshNode(id, []); } },
@@ -822,6 +828,26 @@ export function Sidebar() {
     );
   }
 
+  /** «Generar SQL ›» of a table (eight entries) or a view (four): each opens the statement in a console. */
+  function generateItems(connId: string, obj: ObjectRef, path: string[]): MenuItem[] {
+    const items: MenuItem[] = [
+      { label: "SELECT", run: () => void generateSql(connId, obj, "select") },
+      { label: "SELECT con JOIN de sus claves foráneas", run: () => void generateSql(connId, obj, "select-join") },
+      { label: "SELECT COUNT(*)", run: () => void generateSql(connId, obj, "count") },
+    ];
+    if (obj.kind === "table") {
+      const upsert = kindOf(connId) === "mysql" || kindOf(connId) === "postgres" || kindOf(connId) === "sqlite";
+      items.push(
+        { label: "INSERT", run: () => void generateSql(connId, obj, "insert") },
+        { label: "UPDATE", run: () => void generateSql(connId, obj, "update") },
+        { label: "DELETE", run: () => void generateSql(connId, obj, "delete") },
+        { label: upsert ? "UPSERT (insertar o actualizar)" : "MERGE (insertar o actualizar)", run: () => void generateSql(connId, obj, "upsert") },
+      );
+    }
+    items.push({ separator: true }, { label: `DROP ${path.includes("matviews") ? "MATERIALIZED VIEW" : obj.kind === "view" ? "VIEW" : "TABLE"}`, run: () => void generateSql(connId, obj, "drop", path) });
+    return items;
+  }
+
   function nodeMenu(event: MouseEvent, connId: string, node: MetaNode) {
     const obj = node.obj;
     const items = [] as Parameters<typeof openMenu>[1];
@@ -829,36 +855,28 @@ export function Sidebar() {
       items.push(
         { label: "Abrir datos", keys: "F4", icon: "table", run: () => void openTable(connId, obj) },
         { label: "Abrir estructura", run: () => void openTable(connId, obj, "columns") },
+        // The one DDL entry: its tab has «Abrir en consola» (the old «DDL en consola», #111).
         { label: "Ver DDL", icon: "code", run: () => void openTable(connId, obj, "ddl") },
         // The table and the tables its foreign keys link it with, both ways.
         ...(obj.kind === "table" ? [feature("Diagrama de relaciones", "er", connId, { icon: "diagram", run: () => void openErDiagram(connId, erSchemaPath(connId, obj, node.path[0]), obj) })] : []),
         { separator: true },
-        { label: "Generar SELECT", run: () => void generateSql(connId, obj, "select") },
-        { label: "Generar SELECT con JOIN de sus claves foráneas", run: () => void generateSql(connId, obj, "select-join") },
-        { label: "Generar SELECT COUNT(*)", run: () => void generateSql(connId, obj, "count") },
-      );
-      if (obj.kind === "table") {
-        items.push(
-          { label: "Generar INSERT", run: () => void generateSql(connId, obj, "insert") },
-          { label: "Generar UPDATE", run: () => void generateSql(connId, obj, "update") },
-          { label: "Generar DELETE", run: () => void generateSql(connId, obj, "delete") },
-          { label: kindOf(connId) === "mysql" || kindOf(connId) === "postgres" || kindOf(connId) === "sqlite" ? "Generar UPSERT (insertar o actualizar)" : "Generar MERGE (insertar o actualizar)", run: () => void generateSql(connId, obj, "upsert") },
-        );
-      }
-      items.push(
-        { label: `Generar DROP ${node.path.includes("matviews") ? "MATERIALIZED VIEW" : obj.kind === "view" ? "VIEW" : "TABLE"}`, run: () => void generateSql(connId, obj, "drop", node.path) },
-        { label: "DDL en consola", run: () => void generateSql(connId, obj, "ddl") },
+        { label: "Generar SQL", icon: "console", submenu: generateItems(connId, obj, node.path) },
         { separator: true },
         { label: "Exportar datos…", icon: "download", run: () => void startObjectExport(connId, obj) },
         ...(obj.kind === "table" ? [{ label: "Importar datos (CSV, JSON, Excel)…", icon: "upload", run: () => void startImport(connId, obj) }] : []),
         { label: "Copiar estructura para IA", icon: "ai", run: () => void copySchemaForAi(connId, obj) },
         { separator: true },
       );
-      // Comparing the rows of two tables: mark one, then "Comparar datos con…" on the other.
+      // Comparing the rows of two tables: mark one, then "Comparar datos con…" on the other (both under Comparar ›).
       const tableRef = { connId, obj };
       const marked = dataCompare.mark;
-      if (marked && !isTableMarked(tableRef)) items.push({ label: `Comparar datos con «${tableTitle(marked)}»`, icon: "compare", run: () => void compareDataWithMarked(tableRef) });
-      items.push({ label: isTableMarked(tableRef) ? "Marcada para comparar datos" : "Marcar para comparar datos", icon: "compare", run: () => markTableForCompare(tableRef) }, { separator: true });
+      const compare: MenuItem[] = [{ label: isTableMarked(tableRef) ? "Marcada para comparar datos" : "Marcar para comparar datos", run: () => markTableForCompare(tableRef) }];
+      compare.push(
+        marked && !isTableMarked(tableRef)
+          ? { label: `Comparar datos con «${tableTitle(marked)}»`, run: () => void compareDataWithMarked(tableRef) }
+          : { label: "Comparar datos con…", disabled: true, title: "Marca antes otra tabla con «Marcar para comparar datos»" },
+      );
+      items.push({ label: "Comparar", icon: "compare", submenu: compare }, { separator: true });
     } else if (obj) {
       items.push({ label: "Abrir definición", icon: "code", run: () => void generateSql(connId, obj, "ddl") }, { separator: true });
     }

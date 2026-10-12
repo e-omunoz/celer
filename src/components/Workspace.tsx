@@ -1091,7 +1091,16 @@ function TablePane(props: { tab: TableTab }) {
           <div class="ddl-view">
             <div class="ddl-actions">
               <button type="button" class="btn tiny" onClick={() => void copyText(props.tab.ddl, "DDL copiado")}>Copiar</button>
-              <button type="button" class="btn tiny" onClick={() => openQuery(props.tab.connId, props.tab.ddl, `${props.tab.obj.name}.sql`)}>Abrir en consola</button>
+              {/* A console on this connection and database with the DDL, to change or run it (#111: the old «DDL en consola»). */}
+              <button
+                type="button"
+                class="btn tiny"
+                disabled={!props.tab.ddl}
+                title="Abre el DDL en una consola nueva de esta conexión"
+                onClick={() => openQuery(props.tab.connId, props.tab.ddl, `${props.tab.obj.name}.sql`, { database: props.tab.obj.database || props.tab.database || undefined })}
+              >
+                Abrir en consola
+              </button>
             </div>
             <CodeView doc={props.tab.ddl} kind={kindOf(props.tab.connId)} />
           </div>

@@ -281,6 +281,8 @@ export interface MenuItem {
   keys?: string;
   /** The command it runs (commands.ts): its shortcut is shown as the user set it. */
   command?: string;
+  /** A submenu («Generar SQL ›», «Copiar como ›»…): the row opens it instead of running something. */
+  submenu?: MenuItem[];
   icon?: string;
   danger?: boolean;
   disabled?: boolean;

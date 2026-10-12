@@ -9,10 +9,15 @@ const H = `
   const pane = () => document.querySelector('.pane-host.active');
   const rowByText = (text) => [...document.querySelectorAll('.tree-row')].find((e) => e.querySelector('.tree-name')?.textContent === text);
   const connRow = () => [...document.querySelectorAll('.tree-row.conn')].find((e) => e.textContent.includes('Postgres local'));
-  const menu = async (row, re) => {
+  // A row's menu, then one item per regex: the first ones open submenus («Generar SQL ›»), the last one runs.
+  const menu = async (row, ...res) => {
     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 160, clientY: 200 }));
-    const item = await until(() => [...document.querySelectorAll('.ctx-menu button, .menu button, [role=menuitem]')].find((b) => re.test(b.textContent)), 3000);
-    item?.click();
+    let item = null;
+    for (const [level, re] of res.entries()) {
+      item = await until(() => [...(document.querySelectorAll('.menu')[level]?.querySelectorAll(':scope > .menu-item') ?? [])].find((b) => re.test(b.textContent)), 3000);
+      item?.click();
+      if (!item) break;
+    }
     return item?.textContent ?? null;
   };
   const editorText = () => pane().querySelector('.cm-content')?.innerText ?? '';
@@ -40,7 +45,7 @@ await js(`
 await press("l", 2 | 8);
 await js(`await until(() => pane()?.querySelector('.cm-content')); await sleep(300);`);
 
-const join = await js(`await menu(rowByText('events'), /JOIN de sus claves/); await sleep(1500); return editorText();`);
+const join = await js(`await menu(rowByText('events'), /^Generar SQL/, /JOIN de sus claves/); await sleep(1500); return editorText();`);
 check("SELECT with FK joins is written", /LEFT JOIN .*customers.* t1 ON t1\..*id.* = t0\..*customer_id/s.test(join), join);
 await js(`pane().querySelector('.cm-content').focus();`);
 await press("a", 2);
@@ -55,7 +60,7 @@ await js(`[...pane().querySelectorAll('.tx-toggle button')].find((b) => b.textCo
 await js(`pane().querySelector('.cm-content').focus();`);
 await press("a", 2);
 await press("Delete");
-const upsert = await js(`await menu(rowByText('countries'), /UPSERT/); await sleep(1500); return editorText();`);
+const upsert = await js(`await menu(rowByText('countries'), /^Generar SQL/, /UPSERT/); await sleep(1500); return editorText();`);
 check("UPSERT uses ON CONFLICT and named parameters", /ON CONFLICT \(.*code.*\) DO UPDATE SET/s.test(upsert) && /:code/.test(upsert) && /:name/.test(upsert), upsert);
 await js(`pane().querySelector('.cm-content').focus();`);
 await press("Enter", 2);
@@ -77,7 +82,7 @@ const drop = await js(`pane().querySelector('.cm-content').focus(); await sleep(
 void drop;
 await press("a", 2);
 await press("Delete");
-const dropText = await js(`await menu(rowByText('countries'), /DROP TABLE/); await sleep(1200); return editorText();`);
+const dropText = await js(`await menu(rowByText('countries'), /^Generar SQL/, /DROP TABLE/); await sleep(1200); return editorText();`);
 check("DROP is written with a warning comment, not run", /DROP TABLE .*countries/s.test(dropText) && /Revisa/.test(dropText) && (await js(`return !pane().querySelector('.progress-bar');`)), dropText);
 
 app.close();

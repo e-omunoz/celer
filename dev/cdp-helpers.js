@@ -39,14 +39,27 @@ const findConn = async (name) => {
   return connRow(name);
 };
 
-/** Right-clicks a connection in the explorer and picks the menu item matching `re`. */
-const menu = async (name, re) => {
+/**
+ * In an open context menu, one item per regex: the first ones open submenus («Generar SQL ›», «Copiar como ›»), the
+ * last one runs. The item that ran, or null.
+ */
+const menuPath = async (...res) => {
+  let item = null;
+  for (const [level, re] of res.entries()) {
+    item = await until(() => [...(document.querySelectorAll(".menu")[level]?.querySelectorAll(":scope > .menu-item") ?? [])].find((b) => re.test(b.textContent)), 2000);
+    if (!item) return null;
+    item.click();
+  }
+  return item;
+};
+
+/** Right-clicks a connection in the explorer and picks the menu item matching `re` (more regexes: a submenu path). */
+const menu = async (name, ...res) => {
   const row = await findConn(name);
   if (!row) return false;
   const r = row.getBoundingClientRect();
   row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r.left + 40, clientY: r.top + 8 }));
-  const item = await until(() => [...document.querySelectorAll(".menu .menu-item")].find((b) => re.test(b.textContent)), 2000);
-  item?.click();
+  const item = await menuPath(...res);
   await sleep(250);
   return !!item;
 };
@@ -82,13 +95,12 @@ const newConsole = async (name, ms = 30000) => {
 const tabs = () => [...document.querySelectorAll(".tab")].map((t) => ({ title: txt(t.querySelector(".tab-title")) ?? txt(t), active: t.classList.contains("on") }));
 const closeActive = () => document.querySelector(".tab.on .tab-close")?.click();
 /** Right-clicks the active tab and picks the menu item matching `re` (e.g. /^Abrir en ventana nueva/). */
-const tabMenu = async (re) => {
+const tabMenu = async (...res) => {
   const t = document.querySelector(".tab.on");
   if (!t) return false;
   const r = t.getBoundingClientRect();
   t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r.left + 20, clientY: r.top + 8 }));
-  const item = await until(() => [...document.querySelectorAll(".menu .menu-item")].find((b) => re.test(b.textContent)), 2000);
-  item?.click();
+  const item = await menuPath(...res);
   await sleep(250);
   return !!item;
 };

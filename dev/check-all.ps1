@@ -48,8 +48,10 @@ Step "explorer" { & $node --experimental-strip-types --no-warnings dev\explorer-
 Step "theme contrast" { & $node --experimental-strip-types --no-warnings dev\contrast-check.ts }
 Step "custom themes" { & $node --experimental-strip-types --no-warnings dev\themes-check.ts }
 Step "motion, focus and drag and drop" { & $node --experimental-strip-types --no-warnings dev\motion-check.ts }
+Step "menus and submenus" { & $node --experimental-strip-types --no-warnings dev\menu-check.ts }
 Step "update notes" { & $node --experimental-strip-types --no-warnings dev\update-check.ts }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
+if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "menus, settings and theme editor (preview)" { & $node dev\layout-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
 
 # The MCP settings start from their defaults (the e2e checks them): one left enabled by an earlier manual test is
