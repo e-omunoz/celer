@@ -233,6 +233,10 @@ pub struct SshConfig {
     /// leads to, so that the free connections of different servers are never mixed up. Never saved.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub forwarded_to: String,
+    /// Only while connecting through the tunnel: the database server's name as given (the tunnel's target), which
+    /// the drivers check the TLS certificate against instead of 127.0.0.1. Never saved.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tls_host: String,
 }
 
 impl SshConfig {
@@ -269,7 +273,7 @@ impl SshConfig {
 
     /// Without the secrets, for connections.json.
     pub fn without_secrets(&self) -> SshConfig {
-        SshConfig { password: None, passphrase: None, private_key: None, forwarded_to: String::new(), ..self.clone() }
+        SshConfig { password: None, passphrase: None, private_key: None, forwarded_to: String::new(), tls_host: String::new(), ..self.clone() }
     }
 }
 

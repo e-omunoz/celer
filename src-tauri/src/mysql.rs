@@ -844,10 +844,13 @@ impl MysqlDriver {
         if let Some(sock) = &extra.socket {
             base = base.socket(Some(sock.clone())).prefer_socket(true);
         }
+        // Through an SSH tunnel the driver connects to 127.0.0.1, which no certificate names, and the mysql crate has
+        // no way to check another name: the certificate's chain is still validated, its name is not.
+        let tunnelled = !cfg.ssh.tls_host.is_empty();
         let ssl = |verify: bool| {
             SslOpts::default()
                 .with_danger_accept_invalid_certs(!verify)
-                .with_danger_skip_domain_validation(!verify)
+                .with_danger_skip_domain_validation(!verify || tunnelled)
                 .with_root_cert_path(extra.ssl_ca.as_ref().map(PathBuf::from))
         };
         let (conn, opts) = match tls_mode(&cfg.encryption) {

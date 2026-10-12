@@ -1974,6 +1974,59 @@ fn ssh_tunnel_auth_jumps_and_refusals() {
     let _ = std::fs::remove_dir_all(&store.dir);
 }
 
+/// TLS with certificate validation through the tunnel (#141): the driver connects to 127.0.0.1 but checks the
+/// certificate against the database server's name. Needs servers whose certificates name their container
+/// (celer-pg, celer-mysql, celer-mariadb, celer-mssql), signed by the CA in CELER_SSH_TLS_CA, which the process trusts
+/// (SSL_CERT_FILE on Linux). By the container's IP instead, PostgreSQL and SQL Server refuse the name; MySQL and
+/// MariaDB check only the chain (the mysql crate cannot check another name than the one it connects to).
+#[test]
+fn ssh_tunnel_validates_tls_by_server_name() {
+    let Some(s) = ssh_spec() else { return };
+    if std::env::var("CELER_SSH_TLS_CA").is_err() {
+        return;
+    }
+    let store = sample_store("tls");
+    let engines: Vec<Tunnelled> = tunnelled_engines(&s).into_iter().filter(|t| matches!(t.cfg.kind, DbKind::Postgres | DbKind::Mysql | DbKind::Mssql)).collect();
+    assert!(!engines.is_empty());
+    trust_bastion(&store, &engines[0].cfg);
+    for t in engines {
+        let mut cfg = t.cfg.clone();
+        cfg.encryption = "required".into();
+        cfg.trust_cert = false;
+        let encrypted = match cfg.kind {
+            DbKind::Postgres => "SELECT CASE WHEN ssl THEN 1 ELSE 0 END FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+            DbKind::Mysql => "SHOW SESSION STATUS LIKE 'Ssl_cipher'",
+            _ => "SELECT CASE WHEN encrypt_option = 'TRUE' THEN 1 ELSE 0 END FROM sys.dm_exec_connections WHERE session_id = @@SPID",
+        };
+        let prepared = ssh_prepared(&store, &cfg);
+        let mut d = (prepared.connector)().unwrap_or_else(|e| panic!("{}: TLS validado por el túnel: {e}", t.name));
+        let (_, rows) = all_rows(d.as_mut(), encrypted);
+        let on = if cfg.kind == DbKind::Mysql { !txt(&rows[0][1]).is_empty() } else { txt(&rows[0][0]) == "1" };
+        assert!(on, "{}: cifrada", t.name);
+        drop(d);
+        crate::forget_free(&cfg.id);
+        eprintln!("SSH ✔ {}: TLS validado con el nombre {}", t.name, cfg.host);
+
+        // The same server by its IP: the certificate does not name it.
+        let ip = Command::new("docker").args(["inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", &cfg.host]).output().expect("docker inspect");
+        let ip = String::from_utf8_lossy(&ip.stdout).trim().to_string();
+        assert!(!ip.is_empty(), "{}: sin IP", t.name);
+        let mut by_ip = cfg.clone();
+        by_ip.id = format!("{}-ip", cfg.id);
+        by_ip.host = ip.clone();
+        let prepared = ssh_prepared(&store, &by_ip);
+        let result = (prepared.connector)().map(|_| ());
+        crate::forget_free(&by_ip.id);
+        if cfg.kind == DbKind::Mysql {
+            assert!(result.is_ok(), "{}: la cadena es válida: {:?}", t.name, result.err());
+        } else {
+            let e = result.err().unwrap_or_else(|| panic!("{}: {ip} no está en el certificado", t.name)).to_string();
+            eprintln!("SSH ✔ {}: por la IP {ip}, rechazado: {e}", t.name);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&store.dir);
+}
+
 // ───────────────────────────────────────────────────────────────── a schema's foreign keys at once (#98)
 
 use crate::model::SchemaForeignKey;

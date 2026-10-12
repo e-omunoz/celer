@@ -283,6 +283,7 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
             Some(plan) => {
                 let t = plan.tunnel()?;
                 cfg.ssh.forwarded_to = t.target_label();
+                cfg.ssh.tls_host = t.target_host();
                 cfg.host = "127.0.0.1".into();
                 cfg.port = Some(t.local_port);
                 Some(t)

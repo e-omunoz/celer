@@ -1371,7 +1371,14 @@ fn conn_string(cfg: &ConnConfig, database: &str) -> Result<String> {
     }
     let mut out = String::new();
     let host = cfg.host.trim();
-    push(&mut out, "host", if host.is_empty() { "localhost" } else { host });
+    let host = if host.is_empty() { "localhost" } else { host };
+    if cfg.ssh.tls_host.is_empty() {
+        push(&mut out, "host", host);
+    } else {
+        // Through an SSH tunnel: connect to the local port, but check the certificate against the server's name.
+        push(&mut out, "host", &cfg.ssh.tls_host);
+        push(&mut out, "hostaddr", host);
+    }
     push(&mut out, "port", &cfg.port.unwrap_or(DEFAULT_PORT).to_string());
     if !cfg.user.trim().is_empty() {
         push(&mut out, "user", cfg.user.trim());
@@ -2123,6 +2130,13 @@ mod tests {
         assert_eq!(sslmode("required"), "require");
         cfg.extra = "nonsense".into();
         assert!(conn_string(&cfg, "").is_err());
+        // Through an SSH tunnel: the local port by address, the certificate checked against the server's name (#141).
+        cfg.extra.clear();
+        cfg.host = "127.0.0.1".into();
+        cfg.ssh.tls_host = "db.example.com".into();
+        let s = conn_string(&cfg, "").unwrap();
+        assert!(s.starts_with("host='db.example.com' hostaddr='127.0.0.1' "), "{s}");
+        assert!(s.parse::<Config>().is_ok());
     }
 
     #[test]

@@ -1565,6 +1565,9 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
     });
     if cfg.trust_cert {
         config.trust_cert();
+    } else if !cfg.ssh.tls_host.is_empty() {
+        // Through an SSH tunnel (host 127.0.0.1): the certificate is checked against the server's name.
+        config.hostname_in_certificate(&cfg.ssh.tls_host);
     }
     let fut = async {
         let mut config = config;

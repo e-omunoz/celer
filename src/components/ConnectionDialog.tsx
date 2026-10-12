@@ -604,6 +604,12 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
                     <label class="check" style={{ "align-self": "end", "padding-bottom": "6px" }}><input type="checkbox" checked={cfg().trustCert} onChange={(event) => set("trustCert", event.currentTarget.checked)} /> Confiar en el certificado</label>
                   </Show>
                 </div>
+                <Show when={show().trustCert && cfg().ssh?.enabled && cfg().encryption !== "off" && !cfg().trustCert}>
+                  <small class="field-hint">
+                    Por el túnel SSH, el certificado se comprueba con el nombre del servidor de la base tal y como está arriba, no con 127.0.0.1
+                    {cfg().kind === "mysql" ? " (en MySQL y MariaDB se valida su cadena, no su nombre)" : ""}.
+                  </small>
+                </Show>
               </Show>
               <Show when={show().extra}>
                 <label class="field">

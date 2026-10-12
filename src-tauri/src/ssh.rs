@@ -458,6 +458,11 @@ impl Tunnel {
         host_port(&self.target.0, self.target.1)
     }
 
+    /// The database server's host as the SSH server reaches it: the name its TLS certificate is checked against.
+    pub fn target_host(&self) -> String {
+        self.target.0.clone()
+    }
+
     /// A driver could not connect through the tunnel: when the SSH server refused to forward, that is the error.
     pub fn explain(&self, e: anyhow::Error) -> anyhow::Error {
         match self.error.lock().take() {
