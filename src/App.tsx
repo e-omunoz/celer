@@ -242,11 +242,13 @@ function StatusBar() {
   return (
     <footer class="statusbar">
       <Show when={conn()} fallback={<span class="st-item muted">{state.connections.length ? "Sin conexión" : "Celer"}</span>}>
-        <span class="st-item">
+        <span class="st-item st-conn" title={tab()?.database ? `${conn()!.name} · ${tab()!.database}` : conn()!.name}>
           <EngineIcon kind={conn()!.kind} size={12} server={session()?.serverInfo} />
           <i class="st-dot" style={{ background: session() ? connColor(conn()) : "var(--text-faint)" }} />
-          {conn()!.name}
-          <Show when={tab()?.database}><span class="muted"> · {tab()!.database}</span></Show>
+          <span class="st-text">
+            {conn()!.name}
+            <Show when={tab()?.database}><span class="muted"> · {tab()!.database}</span></Show>
+          </span>
         </span>
         <EnvChip conn={conn()} short tiny />
         <Show when={session()?.serverInfo}><span class="st-item muted st-server" title={session()!.serverInfo}>{session()!.serverInfo.split("\n")[0]}</span></Show>

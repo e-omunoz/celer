@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Status bar: with the environment chip, an open transaction, MCP or a selection's aggregates on a 1024–1366 px
+  window, the items no longer overlap: the connection, the server version, the aggregates, the transaction and MCP
+  shrink with an ellipsis, and below 1280 px the server version and below 1100 px the MCP label give way (#132).
 - Transactions: a detached plan or result comparison no longer reminds of a console's open transaction (it kept doing
   so after the Commit); the window that owns the console is the one that reminds (#166).
 - Transactions: closing a console, a window or Celer (or anything else that asks Commit or Rollback) while the console
