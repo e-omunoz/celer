@@ -37,6 +37,10 @@ pub const CHECK_AFTER: Duration = Duration::from_secs(60);
 /// Lo que se espera la respuesta de esa comprobación, si la sesión no tiene nada que perder, antes de dar la conexión
 /// por muerta (#97): una ida y vuelta normal tarda milisegundos.
 pub const PING_LIMIT: Duration = Duration::from_millis(1500);
+/// The same with session state to lose (transaction, temporary tables, SET): a slow answer is waited for longer, as
+/// reconnecting loses that state, but not for ever: a connection dropped in silence would hang until the system gives
+/// up (#143). SQL Server's own ping gives up after 5 s.
+pub const STATEFUL_PING_LIMIT: Duration = Duration::from_secs(10);
 /// Lo que dice `progress` mientras se abre la conexión que sustituye a la que se cortó.
 pub const RECONNECTING: &str = "Reconectando…";
 /// Esperas entre intentos cuando conectar falla por algo pasajero.
@@ -281,9 +285,9 @@ pub fn connect_retrying(connect: &Connector, patient: bool) -> Result<Box<dyn Dr
     }
 }
 
-/// `Driver::ping` on its own thread, waiting at most `PING_LIMIT`: the driver comes back if it answered in time
+/// `Driver::ping` on its own thread, waiting at most `limit` (or until `abort` is set, by «Detener»): the driver comes back if it answered in time
 /// (well or not); if not, it stays on that thread, which drops it when its socket finally gives up.
-fn ping_bounded(mut d: Box<dyn Driver>) -> (Option<Box<dyn Driver>>, Result<()>) {
+fn ping_bounded(mut d: Box<dyn Driver>, limit: Duration, abort: &AtomicBool) -> (Option<Box<dyn Driver>>, Result<()>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("celer-ping".into()).spawn(move || {
         let r = d.ping();
@@ -292,9 +296,15 @@ fn ping_bounded(mut d: Box<dyn Driver>) -> (Option<Box<dyn Driver>>, Result<()>)
     if let Err(e) = spawned {
         return (None, Err(anyhow!("No se pudo comprobar la conexión: {e}")));
     }
-    match rx.recv_timeout(PING_LIMIT) {
-        Ok((d, r)) => (Some(d), r),
-        Err(_) => (None, Err(anyhow!("el servidor no contesta en {:.1} s", PING_LIMIT.as_secs_f64()))),
+    let deadline = Instant::now() + limit;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left.min(Duration::from_millis(100))) {
+            Ok((d, r)) => return (Some(d), r),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !left.is_zero() && !abort.load(Ordering::SeqCst) => {}
+            Err(_) if abort.load(Ordering::SeqCst) => return (None, Err(anyhow!("detenida mientras se comprobaba"))),
+            Err(_) => return (None, Err(anyhow!("el servidor no contesta en {:.1} s", limit.as_secs_f64()))),
+        }
     }
 }
 
@@ -358,7 +368,7 @@ fn pool_take(key: &str, wanted: &str) -> Option<Box<dyn Driver>> {
             return Some(idle.driver);
         }
         // A free connection has no state of its own: one that does not answer in time is left behind.
-        if let (Some(d), Ok(())) = ping_bounded(idle.driver) {
+        if let (Some(d), Ok(())) = ping_bounded(idle.driver, PING_LIMIT, &AtomicBool::new(false)) {
             return Some(d);
         }
     }
@@ -436,6 +446,10 @@ pub struct Guarded {
     /// Se está abriendo la conexión que sustituye a la que se cortó (para `progress`, desde otro hilo).
     reconnecting: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
+    /// The check before use is waiting for the server, and «Detener» asked to stop waiting (it then abandons the
+    /// connection instead of sending a cancel to a server that may not be there).
+    checking: Arc<AtomicBool>,
+    check_aborted: Arc<AtomicBool>,
     pub connect_ms: u64,
     pub reused: bool,
 }
@@ -496,6 +510,8 @@ impl Guarded {
             last_used: Instant::now(),
             pending_loss: None,
             cancelled: Arc::new(AtomicBool::new(false)),
+            checking: Arc::new(AtomicBool::new(false)),
+            check_aborted: Arc::new(AtomicBool::new(false)),
             connect_ms: t0.elapsed().as_millis() as u64,
             reused,
         })
@@ -564,7 +580,11 @@ impl Guarded {
     fn recover(&mut self) -> Result<u64> {
         let t0 = Instant::now();
         let lost = if self.inner.is_some() { self.lost_state() } else { String::new() };
-        drop(self.inner.take());
+        // A cut connection can take as long to close as it took not to answer (PostgreSQL waits for the server to
+        // end it, a silent one until the system gives up, #143): it is closed on a thread of its own.
+        if let Some(old) = self.inner.take() {
+            let _ = std::thread::Builder::new().name("celer-close".into()).spawn(move || drop(old));
+        }
         self.in_tx = false;
         self.tx_maybe = false;
         self.temp = false;
@@ -626,12 +646,26 @@ impl Guarded {
         if self.cursor || (!force && idle < CHECK_AFTER) {
             return Ok(None);
         }
-        let ping = self.ping_within();
+        let lost = self.lost_state();
+        let ping = self.ping_within(!lost.is_empty());
         let Err(e) = ping else {
             self.touch();
             return Ok(None);
         };
-        let lost = self.lost_state();
+        if self.check_aborted.swap(false, Ordering::SeqCst) {
+            // «Detener» while waiting: the connection is left behind (inner is gone) and its state with it; the next
+            // operation opens another one.
+            self.in_tx = false;
+            self.tx_maybe = false;
+            self.temp = false;
+            self.settings = false;
+            self.cursor = false;
+            let why = format!("Detenido mientras se comprobaba la conexión, que llevaba {} sin usarse", human(idle));
+            if !lost.is_empty() {
+                bail!("SESSION_LOST: {why}: se ha dejado y con ella se han perdido {lost}. La operación no se ha hecho; la próxima abre otra conexión.");
+            }
+            bail!("{why}: se ha dejado. La operación no se ha hecho; la próxima abre otra conexión.");
+        }
         let reason = short(&e.to_string());
         let ms = self.recover().map_err(|again| down_msg(&reason, &again, &lost))?;
         let why = format!("la conexión llevaba {} sin usarse y se había cortado ({reason})", human(idle));
@@ -641,15 +675,17 @@ impl Guarded {
         Ok(Some(format!("{RECOVERED}: {why}; reconectada en {ms} ms.")))
     }
 
-    /// La comprobación de `check`. Sin estado que perder, en otro hilo y con `PING_LIMIT`: si no contesta a tiempo, la
-    /// conexión se da por muerta y se deja en ese hilo, que la cierra cuando el sistema se rinda (cerrarla aquí podría
-    /// esperar lo mismo). Con estado (transacción, temporales, SET) se espera la respuesta: reconectar lo perdería.
-    fn ping_within(&mut self) -> Result<()> {
-        if !self.lost_state().is_empty() {
-            return self.d().and_then(|d| d.ping());
-        }
+    /// La comprobación de `check`, en otro hilo y con `PING_LIMIT`: si no contesta a tiempo, la conexión se da por
+    /// muerta y se deja en ese hilo, que la cierra cuando el sistema se rinda (cerrarla aquí podría esperar lo mismo).
+    /// Con estado (transacción, temporales, SET) se espera más, `STATEFUL_PING_LIMIT`, porque reconectar lo pierde;
+    /// «Detener» deja de esperar en ambos casos.
+    fn ping_within(&mut self, stateful: bool) -> Result<()> {
         let d = self.inner.take().ok_or_else(|| anyhow!("Sin conexión con el servidor"))?;
-        let (back, r) = ping_bounded(d);
+        let limit = if stateful { STATEFUL_PING_LIMIT } else { PING_LIMIT };
+        self.check_aborted.store(false, Ordering::SeqCst);
+        self.checking.store(true, Ordering::SeqCst);
+        let (back, r) = ping_bounded(d, limit, &self.check_aborted);
+        self.checking.store(false, Ordering::SeqCst);
         self.inner = back;
         r
     }
@@ -887,8 +923,14 @@ impl Driver for Guarded {
     fn canceller(&self) -> Canceller {
         let slot = self.cancel_slot.clone();
         let flag = self.cancelled.clone();
+        let (checking, aborted) = (self.checking.clone(), self.check_aborted.clone());
         Arc::new(move || {
             flag.store(true, Ordering::SeqCst);
+            // Nothing runs on the server yet: the check before use stops waiting instead.
+            if checking.load(Ordering::SeqCst) {
+                aborted.store(true, Ordering::SeqCst);
+                return;
+            }
             let cancel = slot.lock().clone();
             cancel();
         })
@@ -1192,6 +1234,41 @@ mod tests {
         let e = g.execute("SELECT 1", 10).unwrap_err().to_string();
         assert!(t0.elapsed() >= Duration::from_secs(4), "{:?}", t0.elapsed());
         assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción"), "{e}");
+    }
+
+    /// #143: with state to lose, a connection that never answers is given up after STATEFUL_PING_LIMIT (the loss is
+    /// reported), and «Detener» during the check stops waiting at once without a cancel sent to the server.
+    #[test]
+    fn a_silent_cut_with_state_is_bounded_and_can_be_stopped() {
+        let server = Arc::new(Server::default());
+        *server.hang.lock() = Duration::from_secs(60);
+        let mut g = Guarded::open(connector(&server), opts(DbKind::Postgres, "")).unwrap();
+        g.set_autocommit(false).unwrap();
+        g.execute("UPDATE t SET a = 1", 10).unwrap();
+        server.silent_upto.store(1, Ordering::SeqCst);
+        g.pretend_idle(Duration::from_secs(300));
+        let t0 = Instant::now();
+        let e = g.execute("SELECT 1", 10).unwrap_err().to_string();
+        let took = t0.elapsed();
+        assert!(took >= STATEFUL_PING_LIMIT && took < STATEFUL_PING_LIMIT + Duration::from_secs(2), "{took:?}");
+        assert!(e.starts_with("SESSION_LOST:") && e.contains("transacción") && e.contains("no contesta"), "{e}");
+
+        // «Detener» while the check waits: back at once, the loss said, and the next statement on a new connection.
+        g.execute("UPDATE t SET a = 2", 10).unwrap();
+        server.silent_upto.store(2, Ordering::SeqCst);
+        g.pretend_idle(Duration::from_secs(300));
+        let cancel = g.canceller();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            cancel();
+        });
+        let t0 = Instant::now();
+        let e = g.execute("SELECT 1", 10).unwrap_err().to_string();
+        stopper.join().unwrap();
+        assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+        assert!(e.starts_with("SESSION_LOST: Detenido") && e.contains("transacción"), "{e}");
+        let out = g.execute("SELECT 1", 10).unwrap();
+        assert_eq!(first_cell(&out), 3, "on a new connection");
     }
 
     /// While the new connection opens, `progress` says so (the tab's dot and the running timer show it).

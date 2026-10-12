@@ -2572,13 +2572,15 @@ struct SilentCase<'a> {
     database: &'a str,
     current_db: &'a str,
     manual: Option<(&'a str, &'a str)>,
+    /// A statement that leaves session state a new connection would lose (a SET, a #temp table).
+    state: &'a str,
 }
 
 /// #97 on a real engine: a watched session idle for a while whose connection went quiet answers the next query in
 /// about PING_LIMIT plus a login (not after the system's TCP timeout), on a new connection in the same database and
 /// the same transaction mode.
 fn silent_cut_suite(case: SilentCase, connect: &Connector, proxy: &Blackhole) {
-    let SilentCase { engine, kind, database, current_db, manual } = case;
+    let SilentCase { engine, kind, database, current_db, manual, state } = case;
     let mut g = guarded(kind, connect, "", database);
     assert_eq!(scalar(&mut g, current_db).trim(), database, "{engine}: la base pedida");
     proxy.silence();
@@ -2608,6 +2610,39 @@ fn silent_cut_suite(case: SilentCase, connect: &Connector, proxy: &Blackhole) {
     g.pretend_idle(Duration::from_secs(250));
     let h = g.keep_alive(Duration::from_secs(240)).expect("comprobada");
     assert!(h.ok && !h.reconnected, "{engine}: {h:?}");
+    stateful_silent_cut(engine, &mut g, state, current_db, proxy);
+}
+
+/// #143: with session state, the check before use of a connection gone quiet waits longer than without, but not for
+/// ever (STATEFUL_PING_LIMIT, then SESSION_LOST naming the state), and «Detener» ends the wait at once.
+fn stateful_silent_cut(engine: &str, g: &mut Guarded, state: &str, probe: &str, proxy: &Blackhole) {
+    g.execute(state, 10).unwrap_or_else(|e| panic!("{engine}: {state}: {e}"));
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let cancel = g.canceller();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        cancel();
+    });
+    let t0 = Instant::now();
+    let e = g.execute(probe, 10).unwrap_err().to_string();
+    stopper.join().unwrap();
+    eprintln!("{engine} #143: Detener durante la comprobación → {:?}; {e}", t0.elapsed());
+    assert!(t0.elapsed() < Duration::from_secs(2), "{engine}: {:?}", t0.elapsed());
+    assert!(e.starts_with("SESSION_LOST: Detenido"), "{engine}: {e}");
+    let out = g.execute(probe, 10).unwrap_or_else(|e| panic!("{engine}: después de Detener → {e}"));
+    assert!(!out.results.is_empty(), "{engine}");
+
+    g.execute(state, 10).unwrap();
+    proxy.silence();
+    g.pretend_idle(Duration::from_secs(300));
+    let t0 = Instant::now();
+    let e = g.execute(probe, 10).unwrap_err().to_string();
+    let took = t0.elapsed();
+    eprintln!("{engine} #143: con estado, conexión muda → {took:?}; {e}");
+    assert!(took < crate::guard::STATEFUL_PING_LIMIT + Duration::from_secs(5), "{engine}: {took:?}");
+    assert!(e.starts_with("SESSION_LOST:"), "{engine}: {e}");
+    assert!(!g.execute(probe, 10).unwrap().results.is_empty(), "{engine}: la siguiente, en otra conexión");
 }
 
 /// The same server reached through a Blackhole: `host`/`port` of the config point to the proxy.
@@ -2624,7 +2659,7 @@ fn pg_silent_cut() {
     let Some(cfg) = pg_cfg() else { return };
     let (cfg, proxy) = through(&cfg, 5432);
     let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
-    let case = SilentCase { engine: "PostgreSQL", kind: DbKind::Postgres, database: "celer", current_db: "SELECT current_database()", manual: Some(("SELECT (now() <> statement_timestamp())::text", "true")) };
+    let case = SilentCase { engine: "PostgreSQL", kind: DbKind::Postgres, database: "celer", current_db: "SELECT current_database()", manual: Some(("SELECT (now() <> statement_timestamp())::text", "true")), state: "SET application_name = 'celer-143'" };
     silent_cut_suite(case, &connect, &proxy);
 }
 
@@ -2633,7 +2668,7 @@ fn mysql_silent_cut() {
     let Some(cfg) = mysql_cfg() else { return };
     let (cfg, proxy) = through(&cfg, 3306);
     let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mysql::MysqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
-    let case = SilentCase { engine: "MySQL/MariaDB", kind: DbKind::Mysql, database: "shop", current_db: "SELECT DATABASE()", manual: Some(("SELECT @@autocommit", "0")) };
+    let case = SilentCase { engine: "MySQL/MariaDB", kind: DbKind::Mysql, database: "shop", current_db: "SELECT DATABASE()", manual: Some(("SELECT @@autocommit", "0")), state: "SET @celer_143 = 1" };
     silent_cut_suite(case, &connect, &proxy);
 }
 
@@ -2642,7 +2677,7 @@ fn mssql_silent_cut() {
     let Some(cfg) = mssql_cfg("master") else { return };
     let (cfg, proxy) = through(&cfg, 1433);
     let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mssql::MssqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
-    let case = SilentCase { engine: "SQL Server", kind: DbKind::Mssql, database: "celer_test", current_db: "SELECT DB_NAME()", manual: Some(("SELECT @@OPTIONS & 2", "2")) };
+    let case = SilentCase { engine: "SQL Server", kind: DbKind::Mssql, database: "celer_test", current_db: "SELECT DB_NAME()", manual: Some(("SELECT @@OPTIONS & 2", "2")), state: "CREATE TABLE #celer_143 (a int)" };
     silent_cut_suite(case, &connect, &proxy);
 }
 
@@ -2653,13 +2688,13 @@ fn informix_silent_cut() {
         let (mut cfg, proxy) = through(&cfg, 9089);
         cfg.database = "celerdemo".into();
         let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
-        silent_cut_suite(SilentCase { engine: "Informix DRDA", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None }, &connect, &proxy);
+        silent_cut_suite(SilentCase { engine: "Informix DRDA", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None, state: "SET ISOLATION TO DIRTY READ" }, &connect, &proxy);
     }
     if let Some((cfg, rt)) = informix_jdbc_cfg() {
         let (mut cfg, proxy) = through(&cfg, 9088);
         cfg.database = "celerdemo".into();
         let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
-        silent_cut_suite(SilentCase { engine: "Informix JDBC", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None }, &connect, &proxy);
+        silent_cut_suite(SilentCase { engine: "Informix JDBC", kind: DbKind::Informix, database: "celer", current_db: DB, manual: None, state: "SET ISOLATION TO DIRTY READ" }, &connect, &proxy);
     }
 }
 
@@ -2688,6 +2723,7 @@ fn odbc_silent_cut() {
     eprintln!("ODBC #97: conexión muda → resultado en {:?}; {:?}", t0.elapsed(), out.messages);
     assert!(out.messages.iter().any(|m| m.starts_with(RECOVERED)), "{:?}", out.messages);
     assert!(t0.elapsed() < Duration::from_millis(2500));
+    stateful_silent_cut("ODBC", &mut g, "SET application_name = 'celer-143'", "SELECT 1", &proxy);
 }
 
 /// Kill and requery on PostgreSQL and MySQL/MariaDB (SQL Server and Informix: mssql_reconnects,

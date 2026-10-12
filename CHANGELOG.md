@@ -210,6 +210,10 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Sessions: with session state (a transaction, a temporary table, a SET), the check before using a session idle for
+  over a minute gives a silently dropped connection 10 s and then reports what was lost (`SESSION_LOST`), instead of
+  hanging the console until the system gave up; «Detener» ends that wait at once. A dropped connection is closed in
+  the background, so PostgreSQL no longer waits on it either (#143).
 - SSH tunnels: TLS with certificate validation («Confiar en el certificado» off) works through a tunnel: PostgreSQL
   and SQL Server check the certificate against the database server's name instead of 127.0.0.1, which no
   certificate names; MySQL and MariaDB validate its chain (their driver cannot check another name). The form says so
