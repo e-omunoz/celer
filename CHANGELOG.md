@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-12
+
 ### Added
 - **Own data folder in any build**: `--data-dir <folder>` (or `CELER_DATA_DIR`) makes the portable or installed app keep
   its connections, settings, history and library there, with its own WebView2 profile and credential store entries,
@@ -785,7 +787,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/e-omunoz/celer/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/e-omunoz/celer/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/e-omunoz/celer/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/e-omunoz/celer/compare/v2.0.1...v2.1.0
