@@ -6,7 +6,7 @@
 //! cual a las columnas de la tabla.
 
 use anyhow::{anyhow, bail, Result};
-use calamine::{open_workbook, open_workbook_auto, Cell, Data, Range, Reader, Xlsx};
+use calamine::{open_workbook, open_workbook_auto, Cell, Data, DataRef, Dimensions, Range, Reader, Xlsb, Xlsx};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -116,38 +116,26 @@ fn read_range(path: &str, sheet: Option<&str>, stop: &AtomicBool, progress: &dyn
             _ => sheets.first().cloned().ok_or_else(|| anyhow!("El libro no tiene hojas"))?,
         })
     };
-    if is_xlsx(path) {
+    if is_xlsx(path) || is_xlsb(path) {
         // Celda a celda: progreso por filas y se puede cancelar entre celdas.
-        let mut book: Xlsx<_> = open_workbook(path).map_err(|e| anyhow!("No se pudo abrir el libro: {e}"))?;
+        let open_err = |e: &dyn std::fmt::Display| anyhow!("No se pudo abrir el libro: {e}");
+        let read_err = |name: &str, e: &dyn std::fmt::Display| anyhow!("No se pudo leer la hoja «{name}»: {e}");
+        if is_xlsb(path) {
+            let mut book: Xlsb<_> = open_workbook(path).map_err(|e| open_err(&e))?;
+            let sheets = book.sheet_names().to_vec();
+            let name = pick(&sheets)?;
+            let mut reader = book.worksheet_cells_reader(&name).map_err(|e| read_err(&name, &e))?;
+            let dims = reader.dimensions();
+            let range = collect(dims, &mut || reader.next_cell().map(|c| c.map(own)).map_err(|e| read_err(&name, &e)), stop, progress)?;
+            return Ok((sheets, name, range));
+        }
+        let mut book: Xlsx<_> = open_workbook(path).map_err(|e| open_err(&e))?;
         let sheets = book.sheet_names().to_vec();
         let name = pick(&sheets)?;
-        let mut reader = book.worksheet_cells_reader(&name).map_err(|e| anyhow!("No se pudo leer la hoja «{name}»: {e}"))?;
+        let mut reader = book.worksheet_cells_reader(&name).map_err(|e| read_err(&name, &e))?;
         let dims = reader.dimensions();
-        // A workbook that declares <dimension ref="A1"> (writers that do not track the used area) says nothing about
-        // the row count: no total, so the progress is not shown as "N de 1".
-        let total = if dims.end == (0, 0) { 0 } else { dims.end.0.saturating_sub(dims.start.0) + 1 };
-        let mut cells: Vec<Cell<Data>> = Vec::new();
-        let mut last_report = 0u32;
-        let mut count = 0u64;
-        while let Some(cell) = reader.next_cell().map_err(|e| anyhow!("No se pudo leer la hoja «{name}»: {e}"))? {
-            count += 1;
-            if count % 4096 == 0 && stop.load(Ordering::Relaxed) {
-                bail!(CANCELLED);
-            }
-            let (row, col) = cell.get_position();
-            let value: Data = cell.get_value().clone().into();
-            if matches!(value, Data::Empty) {
-                continue;
-            }
-            let done = row.saturating_sub(dims.start.0);
-            if done >= last_report + 2000 {
-                last_report = done;
-                progress(done, total.max(done));
-            }
-            cells.push(Cell::new((row, col), value));
-        }
-        progress(total, total);
-        return Ok((sheets, name, Range::from_sparse(cells)));
+        let range = collect(dims, &mut || reader.next_cell().map(|c| c.map(own)).map_err(|e| read_err(&name, &e)), stop, progress)?;
+        return Ok((sheets, name, range));
     }
     let mut book = open_workbook_auto(path).map_err(|e| anyhow!("No se pudo abrir el libro: {e}"))?;
     let sheets = book.sheet_names().to_vec();
@@ -157,6 +145,78 @@ fn read_range(path: &str, sheet: Option<&str>, stop: &AtomicBool, progress: &dyn
         bail!(CANCELLED);
     }
     Ok((sheets, name, range))
+}
+
+fn is_xlsb(path: &str) -> bool {
+    path.to_lowercase().ends_with(".xlsb")
+}
+
+fn own(cell: Cell<DataRef<'_>>) -> Cell<Data> {
+    Cell::new(cell.get_position(), cell.get_value().clone().into())
+}
+
+/// Cells a sheet may span (first to last used row times first to last used column) before it is refused: the range
+/// is kept dense, so one stray value far from the data (XFD1 under a column of 100,000 rows) would otherwise ask for
+/// billions of cells and abort the process. About 1 GB, more than a full .xls sheet (65,536 x 256).
+const MAX_CELLS: u64 = 30_000_000;
+
+/// Reads the cells `next` yields (empty ones skipped) into a range, reporting progress by rows of `dims` and
+/// stopping on `stop`; refuses a used area of more than MAX_CELLS before allocating it.
+fn collect(dims: Dimensions, next: &mut dyn FnMut() -> Result<Option<Cell<Data>>>, stop: &AtomicBool, progress: &dyn Fn(u32, u32)) -> Result<Range<Data>> {
+    // A workbook that declares <dimension ref="A1"> (writers that do not track the used area) says nothing about
+    // the row count: no total, so the progress is not shown as "N de 1".
+    let total = if dims.end == (0, 0) { 0 } else { dims.end.0.saturating_sub(dims.start.0) + 1 };
+    let mut cells: Vec<Cell<Data>> = Vec::new();
+    let mut last_report = 0u32;
+    let mut count = 0u64;
+    let (mut r0, mut r1, mut c0, mut c1) = (u32::MAX, 0u32, u32::MAX, 0u32);
+    while let Some(cell) = next()? {
+        count += 1;
+        if count % 4096 == 0 && stop.load(Ordering::Relaxed) {
+            bail!(CANCELLED);
+        }
+        if matches!(cell.get_value(), Data::Empty) {
+            continue;
+        }
+        let (row, col) = cell.get_position();
+        (r0, r1, c0, c1) = (r0.min(row), r1.max(row), c0.min(col), c1.max(col));
+        let done = row.saturating_sub(dims.start.0);
+        if done >= last_report + 2000 {
+            last_report = done;
+            progress(done, total.max(done));
+        }
+        cells.push(cell);
+    }
+    if !cells.is_empty() {
+        let area = (r1 - r0 + 1) as u64 * (c1 - c0 + 1) as u64;
+        if area > MAX_CELLS {
+            bail!(
+                "La hoja ocupa demasiadas celdas: de {}{} a {}{} son {} millones de celdas y el máximo es {} millones. \
+                 Suele deberse a un valor suelto lejos de los datos (en Excel, Ctrl+Fin lleva a la última celda usada): \
+                 bórralo o copia solo los datos a una hoja nueva.",
+                column_name(c0),
+                r0 + 1,
+                column_name(c1),
+                r1 + 1,
+                area / 1_000_000,
+                MAX_CELLS / 1_000_000
+            );
+        }
+    }
+    progress(total, total);
+    Ok(Range::from_sparse(cells))
+}
+
+/// Spreadsheet column letters for a 0-based column (0 = A, 16383 = XFD).
+fn column_name(col: u32) -> String {
+    let mut n = col as u64 + 1;
+    let mut out = Vec::new();
+    while n > 0 {
+        out.push(b'A' + ((n - 1) % 26) as u8);
+        n = (n - 1) / 26;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// The used area of a range, without trailing empty rows (formatted but blank) and its first rows.
@@ -401,6 +461,30 @@ mod tests {
         // Cancelled from the first progress report on.
         let res = open(p, None, "big-cancel", &|_, _| cancel("big-cancel"));
         assert_eq!(res.err().map(|e| e.to_string()).as_deref(), Some(CANCELLED));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_stray_far_away_cell_is_refused_before_allocating() {
+        assert_eq!((column_name(0), column_name(25), column_name(26), column_name(16383)), ("A".into(), "Z".into(), "AA".into(), "XFD".into()));
+        let path = std::env::temp_dir().join(format!("celer-sheet-far-{}.xlsx", std::process::id()));
+        let mut book = rust_xlsxwriter::Workbook::new();
+        let ws = book.add_worksheet();
+        ws.write_string(0, 0, "a").unwrap();
+        ws.write_string(1_048_575, 16_383, "z").unwrap();
+        book.save(&path).unwrap();
+        // 17 billion cells as a dense range would abort the process; it is a readable error instead.
+        let err = open(path.to_str().unwrap(), None, "far", &|_, _| {}).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.starts_with("La hoja ocupa demasiadas celdas: de A1 a XFD1048576"), "{err}");
+        // A wide but legitimate table still opens.
+        let mut book = rust_xlsxwriter::Workbook::new();
+        let ws = book.add_worksheet();
+        ws.write_string(0, 0, "a").unwrap();
+        ws.write_string(1_000, 1_000, "z").unwrap();
+        book.save(&path).unwrap();
+        let sheet = read(path.to_str().unwrap(), None);
+        assert_eq!((sheet.rows, sheet.last_col), (1_001, 1_000));
+        close(sheet.handle);
         let _ = std::fs::remove_file(&path);
     }
 }

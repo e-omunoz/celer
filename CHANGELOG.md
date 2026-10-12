@@ -210,6 +210,10 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Import: a spreadsheet with one value far from its data (a stray cell in column XFD or row 1,048,576) no longer
+  closes Celer while it opens: a used area of more than 30 million cells is refused with «La hoja ocupa demasiadas
+  celdas», where it is and how to clear it. .xlsb workbooks are read cell by cell too, with progress and «Cancelar»
+  (#130).
 - Informix: the guide and docs/DRIVERS.md list what DRDA changes in the values (a floating `DECIMAL(p)` arrives as a
   DOUBLE with about 15 significant digits, DATETIME fractions with 6 digits, `HOUR TO MINUTE` with seconds, BOOLEAN
   as 1/0) and recommend SQLI (JDBC) when exact floating decimals matter (#160).
