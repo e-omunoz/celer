@@ -91,14 +91,36 @@ export function paramNames(refs: ParamRef[]): string[] {
 }
 
 /**
+ * The engine whose literals a value is written for: the connection's own, or for ODBC the server behind it, read
+ * from its banner (SQL_DBMS_NAME: "Microsoft SQL Server", "Informix", "IDS/UNIX64", "PostgreSQL", "MySQL"…).
+ * An ODBC banner it does not recognise stays "odbc" (generic literals).
+ */
+export function literalDialect(kind: string | undefined, serverInfo = ""): string | undefined {
+  if (kind !== "odbc") return kind;
+  if (/sql server|azure sql|synapse/i.test(serverInfo)) return "mssql";
+  if (/informix|^\s*IDS\b/i.test(serverInfo)) return "informix";
+  if (/postgres/i.test(serverInfo)) return "postgres";
+  if (/mysql|mariadb/i.test(serverInfo)) return "mysql";
+  if (/sqlite/i.test(serverInfo)) return "sqlite";
+  return kind;
+}
+
+/**
  * The SQL value to write for what the user typed: numbers, NULL, TRUE/FALSE and anything marked as raw SQL go
  * in as they are; everything else becomes a quoted string. Digits with leading zeros (a postcode, "007") are
- * text, not numbers.
+ * text, not numbers. TRUE/FALSE are written as the engine accepts them: 1/0 on SQL Server (no boolean literals;
+ * a bit or int column takes them) and 't'/'f' on Informix (its BOOLEAN literals).
  */
 export function paramLiteral(value: string, raw: boolean, dialect?: string): string {
   const v = value.trim();
   if (raw) return value;
-  if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(v) || /^(null|true|false)$/i.test(v)) return v;
+  if (/^(true|false)$/i.test(v)) {
+    const yes = v.toLowerCase() === "true";
+    if (dialect === "mssql") return yes ? "1" : "0";
+    if (dialect === "informix") return yes ? "'t'" : "'f'";
+    return v;
+  }
+  if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(v) || /^null$/i.test(v)) return v;
   const escaped = dialect === "mysql" ? value.replace(/\\/g, "\\\\").replace(/'/g, "''") : value.replace(/'/g, "''");
   return `'${escaped}'`;
 }

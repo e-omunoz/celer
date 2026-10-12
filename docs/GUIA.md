@@ -364,8 +364,10 @@ una fecha de corte…). Se ven y se editan en la pestaña **Variables** del pane
 - **Ámbitos**: de *esta consola*, de su *conexión* o *globales*. Al ejecutar vale el de la consola; si no tiene, el de la
   conexión; si tampoco, el global. Por eso el mismo script, ejecutado en otra conexión (con *Ejecutar en…*), toma los
   valores de esa conexión; *Ejecutar en…* los muestra en cada destino antes de ejecutar.
-- **Cómo se escriben**: números, NULL, TRUE y FALSE tal cual; el resto como texto entre comillas. Marca **SQL** para
-  que vaya tal cual (un nombre de tabla, una lista para `IN`…). Dentro de cadenas y comentarios no se sustituye nada.
+- **Cómo se escriben**: números y NULL tal cual; TRUE y FALSE como los acepta el motor (TRUE / FALSE en PostgreSQL,
+  MySQL, MariaDB y SQLite; 1 / 0 en SQL Server; 't' / 'f' en Informix; por ODBC, como el servidor que hay detrás); el
+  resto como texto entre comillas. Marca **SQL** para que vaya tal cual (un nombre de tabla, una lista para `IN`…).
+  Dentro de cadenas y comentarios no se sustituye nada. Los valores de los parámetros se escriben igual.
 - **Sin valor**: una `${nombre}` que ningún ámbito define se pide al ejecutar, como un parámetro.
 - La sintaxis no choca con la de ningún motor (`:nombre`, `?`, `$1`, `@var`).
 - El **historial** y el registro del servidor MCP guardan el SQL que se envió, con los valores puestos. Las herramientas

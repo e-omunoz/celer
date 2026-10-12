@@ -8,7 +8,8 @@ import { compatibility, kindLabel } from "../engineCompat";
 import { EngineBadge } from "./EngineBadge";
 import { findVariables, variableLiteral } from "../variables";
 import { resolvedFor } from "../variableStore";
-import { connect, connectionById, state } from "../state";
+import { connect, connectionById, serverOf, state } from "../state";
+import { literalDialect } from "../snippets";
 import { Dialog } from "./Modals";
 
 export function RunOnDialog() {
@@ -110,7 +111,7 @@ function RunOnForm(props: { scriptId: string }) {
                       {usedVars()
                         .map((name) => {
                           const variable = resolvedFor(undefined, target().connId).get(name);
-                          return variable ? `\${${name}} = ${variableLiteral(variable, kind())}` : `\${${name}} sin valor: se pedirá`;
+                          return variable ? `\${${name}} = ${variableLiteral(variable, literalDialect(kind(), serverOf(target().connId)))}` : `\${${name}} sin valor: se pedirá`;
                         })
                         .join(" · ")}
                     </p>

@@ -25,7 +25,7 @@ import type {
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
 import { binaryKeysWritable, changeStatements, explainPrefix, paramNamesFor, selectLimit, upsertSql, whereOf } from "./sqlgen";
-import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
+import { bindParams, findParams, hasUnfilteredWrite, literalDialect, paramNames } from "./snippets";
 import { erNeighbourhood, erNeighbours, type ErEdge, type ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, parseSynapsePlan, type Plan } from "./plan";
 import { activitySpec, readSessions, synapseDedicated, type ServerSession } from "./activity";
@@ -1924,7 +1924,9 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
   // Variables (${name}): the console's, its connection's or the global value, written in as literals. What is sent,
   // and so what the history and the output log keep, has the values; a name nobody defines is asked for below.
   await loadVariables();
-  sql = substituteVariables(sql, resolvedFor(current), conn?.kind).sql;
+  // Values are written for the server: an ODBC connection's TRUE/FALSE go in as that server takes them.
+  const literals = literalDialect(conn?.kind, current.serverInfo || serverOf(current.connId));
+  sql = substituteVariables(sql, resolvedFor(current), literals).sql;
   // Parameters (:name, ?, ${name}): ask for their values and write them in as literals.
   if (state.settings.askParams) {
     const refs = findParams(sql, conn?.kind);
@@ -1945,7 +1947,7 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       }
       if (given && answer !== given) answer = { values: { ...given.values, ...answer.values }, raw: { ...given.raw, ...answer.raw } };
       options.onParams?.(answer);
-      sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
+      sql = bindParams(sql, refs, answer.values, answer.raw, literals);
     }
   }
   if (mode === "explain" || mode === "analyze") {

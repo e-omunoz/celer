@@ -2,7 +2,8 @@
 // its connection's, the global ones), and which of them the active console's SQL uses. The data is in variableStore.ts.
 import { CornerDownLeft, Plus, Trash2 } from "lucide-solid";
 import { createMemo, For, Index, onMount, Show } from "solid-js";
-import { activeSql, connectionById, insertIntoActive, notify } from "../state";
+import { activeSql, connectionById, insertIntoActive, notify, serverOf } from "../state";
+import { literalDialect } from "../snippets";
 import { deleteVariable, loadVariables, resolvedFor, saveVariable, scopeList, scopeText } from "../variableStore";
 import { findVariables, validVarName, variableLiteral, type Variable, type VarScope } from "../variables";
 
@@ -10,6 +11,8 @@ export function VariablesPanel() {
   onMount(() => void loadVariables());
   const tab = () => activeSql();
   const conn = () => connectionById(tab()?.connId);
+  /** The engine the values are written for (an ODBC connection's: the server behind it). */
+  const literals = () => literalDialect(conn()?.kind, tab()?.serverInfo || serverOf(tab()?.connId));
   const resolved = createMemo(() => resolvedFor(tab()));
   /** The ${names} of the active console's SQL, each with the value that applies (or none: it will be asked). */
   const inUse = createMemo(() => {
@@ -32,7 +35,7 @@ export function VariablesPanel() {
               <div class="vars-use" classList={{ missing: !item.variable }}>
                 <code>{"${" + item.name + "}"}</code>
                 <Show when={item.variable} fallback={<span class="muted">sin valor: se pedirá al ejecutar</span>}>
-                  <span class="vars-use-value" title={variableLiteral(item.variable!, conn()?.kind)}>{variableLiteral(item.variable!, conn()?.kind)}</span>
+                  <span class="vars-use-value" title={variableLiteral(item.variable!, literals())}>{variableLiteral(item.variable!, literals())}</span>
                   <small class="muted">{scopeText(item.variable!, tab()?.connId)}</small>
                 </Show>
               </div>
