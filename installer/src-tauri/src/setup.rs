@@ -121,8 +121,18 @@ pub struct Layout {
     pub sys: SysDirs,
 }
 
+/// Test mode: with `CELER_SETUP_SANDBOX=<folder>` everything the installer would create outside the install folder
+/// (registry key, shortcuts, file association, the app's data) goes under that folder or under names of its own,
+/// so a release can be installed, started and uninstalled on a machine with a real Celer without touching it.
+pub fn sandbox() -> Option<PathBuf> {
+    std::env::var_os("CELER_SETUP_SANDBOX").filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
 impl Layout {
     pub fn real() -> Layout {
+        if let Some(root) = sandbox() {
+            return Layout::sandboxed(&root);
+        }
         let appdata = win::known_folder(&win::FOLDERID_RoamingAppData)
             .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
             .unwrap_or_default();
@@ -151,13 +161,30 @@ impl Layout {
         }
     }
 
+    /// `real()` in test mode: its own uninstall key, a dummy extension, shortcuts and data under `root`.
+    pub fn sandboxed(root: &Path) -> Layout {
+        Layout {
+            uninstall_key: "Celer-sandbox".into(),
+            progid: "Celer.sandbox".into(),
+            ext: ".celersandbox".into(),
+            start_menu_lnk: root.join(r"StartMenu\Celer.lnk"),
+            desktop_lnk: root.join(r"Desktop\Celer.lnk"),
+            data_dirs: vec![root.join("data")],
+            leftover_dirs: vec![root.join(r"Programs\Celer")],
+            sys: SysDirs::real(),
+        }
+    }
+
     pub fn uninstall_key_path(&self) -> String {
         format!(r"{UNINSTALL_ROOT}\{}", self.uninstall_key)
     }
 }
 
-/// `%LOCALAPPDATA%\Programs\Celer`
+/// `%LOCALAPPDATA%\Programs\Celer` (`<sandbox>\Programs\Celer` in test mode)
 pub fn default_dir() -> PathBuf {
+    if let Some(root) = sandbox() {
+        return root.join(r"Programs\Celer");
+    }
     win::known_folder(&win::FOLDERID_UserProgramFiles)
         .or_else(|| std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("Programs")))
         .unwrap_or_else(|| PathBuf::from(r"C:\Celer"))
@@ -804,7 +831,15 @@ pub fn launch(path: &Path) -> Result<(), String> {
         return Err(format!("No se encuentra Celer en «{}».", path.display()));
     }
     let cwd = path.parent().unwrap_or(Path::new("."));
-    let spawn = |flags: u32| std::process::Command::new(path).current_dir(cwd).creation_flags(flags).spawn();
+    // In test mode the app gets the sandbox's data folder, never the real one.
+    let data = sandbox().map(|root| root.join("data"));
+    let spawn = |flags: u32| {
+        let mut cmd = std::process::Command::new(path);
+        if let Some(d) = &data {
+            cmd.arg("--data-dir").arg(d);
+        }
+        cmd.current_dir(cwd).creation_flags(flags).spawn()
+    };
     spawn(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
         .or_else(|_| spawn(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP))
         .map(|_| ())
@@ -827,6 +862,19 @@ mod tests {
             ],
             exact: vec![PathBuf::from(r"C:\Users\ana"), PathBuf::from(r"C:\Users\ana\AppData\Local\Programs")],
         }
+    }
+
+    #[test]
+    fn the_sandbox_layout_never_names_the_real_install() {
+        let root = PathBuf::from(r"D:\celer-setup-sandbox");
+        let l = Layout::sandboxed(&root);
+        assert_ne!(l.uninstall_key, "Celer");
+        assert_ne!(l.ext, ".sql");
+        assert_ne!(l.progid, "Celer.sql");
+        for p in [&l.start_menu_lnk, &l.desktop_lnk].into_iter().chain(&l.data_dirs).chain(&l.leftover_dirs) {
+            assert!(p.starts_with(&root), "{} is outside the sandbox", p.display());
+        }
+        assert!(!l.data_dirs.iter().any(|d| d.ends_with(APP_IDENTIFIER)));
     }
 
     #[test]
