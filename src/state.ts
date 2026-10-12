@@ -2395,16 +2395,36 @@ export async function settleTransactions(tabs: readonly Tab[], doing: string): P
   const at = Date.now();
   const describe = (tab: SqlTab) => `«${tab.title}»${tab.txStartedAt ? ` (${txDuration(at - tab.txStartedAt)}, ${tab.txStatements} ${tab.txStatements === 1 ? "sentencia" : "sentencias"})` : ""}`;
   const one = open.length === 1;
+  const running = open.filter((tab) => tab.running);
+  const stopping = running.length
+    ? ` ${running.length === 1 ? `«${running[0].title}» está ejecutando una sentencia, que se detendrá` : `${running.map((tab) => `«${tab.title}»`).join(", ")} están ejecutando sentencias, que se detendrán`} antes (no entra${running.length === 1 ? "" : "n"} en el Commit).`
+    : "";
   const choice = await askWindow(
     one ? "Transacción abierta" : `${open.length} transacciones abiertas`,
-    `${one ? `La consola ${describe(open[0])} tiene una transacción` : `Las consolas ${open.map(describe).join(", ")} tienen transacciones`} sin confirmar. Antes de ${doing}, confírma${one ? "la" : "las"} (Commit) o deshaz${one ? "la" : "las"} (Rollback).`,
+    `${one ? `La consola ${describe(open[0])} tiene una transacción` : `Las consolas ${open.map(describe).join(", ")} tienen transacciones`} sin confirmar. Antes de ${doing}, confírma${one ? "la" : "las"} (Commit) o deshaz${one ? "la" : "las"} (Rollback).${stopping}`,
     [
       { label: one ? "Commit" : "Commit en todas", value: "commit", style: "primary" },
       { label: one ? "Rollback" : "Rollback en todas", value: "rollback", style: "danger" },
     ],
   );
   if (choice !== "commit" && choice !== "rollback") return false;
+  // A statement still running would hold the session (the Commit or Rollback would wait for it to end) and would go
+  // into the Commit: it is stopped first, as closing did before transactions were asked about (#147).
+  if (!(await stopRunning(open.map((tab) => tab.id)))) return false;
   return endTransactions(open.map((tab) => tab.id), choice === "rollback");
+}
+
+/** Stops the statements running in these consoles and waits for them to end; false when one does not stop in time. */
+async function stopRunning(ids: string[], timeoutMs = 15000): Promise<boolean> {
+  const busy = () => ids.map((id) => state.tabs[tabIndex(id)]).filter((tab): tab is SqlTab => tab?.kind === "sql" && tab.running);
+  const first = busy();
+  if (!first.length) return true;
+  await Promise.all(first.map((tab) => (tab.sessionId ? api().cancel(tab.sessionId).catch(() => {}) : undefined)));
+  const until = Date.now() + timeoutMs;
+  while (busy().length && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  const left = busy();
+  if (left.length) notify(`No se pudo detener la sentencia de ${left.map((tab) => `«${tab.title}»`).join(", ")}`, "error", "Detenla o espera a que termine y vuelve a intentarlo.");
+  return !left.length;
 }
 
 /**
