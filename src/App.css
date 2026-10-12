@@ -704,7 +704,11 @@ kbd {
 .tab.dragging { opacity: 0.5; }
 .tab-strip { position: absolute; left: 0; right: 0; top: 0; height: 2px; opacity: 0.85; }
 .tab.on .tab-strip { opacity: 1; }
-.tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; flex: 0 100 auto; min-width: 0; }
+/* A tab never draws outside itself: with an open transaction it keeps room for the badge, even «TX 1 h 05 min» (the
+   tab bar scrolls), and only its title gives way. */
+.tab { overflow: hidden; }
+.tab:has(.tab-tx) { min-width: 164px; }
 .tab.on .tab-title { font-weight: 500; }
 .tab-rename { width: 140px; height: 22px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); padding: 0 6px; font-size: 12.5px; }
 .tab-close { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; color: var(--text-faint); opacity: 0; flex: none; }

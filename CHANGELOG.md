@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Tab bar: with many consoles in a manual transaction on a narrow window, a tab's «TX …» badge no longer sticks out
+  over the next tab and the «+» button; a tab with a transaction keeps room for its badge and close button (the tab
+  bar scrolls) and only its title gives way (#134).
 - Console toolbar: with an open transaction on a console of a production connection, the connection and database
   pickers no longer spill past their buttons and under the environment chip; the transaction's label collapses to its
   icon on consoles narrower than 1100 px, and a squeezed picker cuts its name inside its own box with the chevron
