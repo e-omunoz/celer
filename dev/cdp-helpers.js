@@ -81,7 +81,7 @@ const newConsole = async (name, ms = 30000) => {
 /** Tabs of this window: [{ title, active }]. */
 const tabs = () => [...document.querySelectorAll(".tab")].map((t) => ({ title: txt(t.querySelector(".tab-title")) ?? txt(t), active: t.classList.contains("on") }));
 const closeActive = () => document.querySelector(".tab.on .tab-close")?.click();
-/** Right-clicks the active tab and picks the menu item matching `re` (e.g. /^Mover a una ventana nueva/). */
+/** Right-clicks the active tab and picks the menu item matching `re` (e.g. /^Abrir en ventana nueva/). */
 const tabMenu = async (re) => {
   const t = document.querySelector(".tab.on");
   if (!t) return false;

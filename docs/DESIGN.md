@@ -394,9 +394,12 @@ Middle-click closes. Drag to reorder or split the editor (vertical / horizontal)
 
 ### Windows
 Several windows share connections, library, settings and Gib; each has its own tabs, explorer and side panel.
-A tab dragged out of the tab bar opens a new window where it is dropped; dragged onto another window's tab bar it
-moves there (that tab bar takes the accent tint while a tab from another window is in the air). The tab's menu and
-the palette offer the same ("Mover a una ventana nueva", "Mover a la ventana 2"). The library, the assistant, a plan,
+A tab dragged out of the tab bar opens a new window where it is dropped. While it is dragged a ghost card (title,
+connection · database, first lines) follows the pointer over every Celer window; outside them it turns into the
+dashed outline of the window that will open, at its real size and place (kept on the monitor's work area), with
+«Soltar para abrir en una ventana nueva» at the top. Over another window its tab bar takes the accent tint and an
+insertion line shows where the tab lands (the same line reorders tabs within a bar); Esc cancels. The new window
+grows into place. The tab's menu and the palette offer the same ("Abrir en ventana nueva", "Mover a la ventana 2"). The library, the assistant, a plan,
 the E-R diagram and the comparisons have an "own window" button (external-link icon) and come back with *Acoplar*.
 A panel window has a slim title bar: the panel's name, *Acoplar* and the window buttons. Gib appears in one window
 only, the one in use. Closing a window that is not the last asks only when tabs would lose work.
