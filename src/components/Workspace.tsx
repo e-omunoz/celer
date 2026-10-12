@@ -133,7 +133,7 @@ import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, star
 import { aiBadgeTitle } from "../mcpApp";
 import { flipList, leaveOnCleanup } from "../motion";
 import { followDragGhost, ghostCard, previewLines } from "../dnd";
-import { hintOnce } from "../hints";
+import { hintOnce, hintReady } from "../hints";
 import { insertionGap, reorderTarget, windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
@@ -235,8 +235,8 @@ function TabBar() {
     });
   });
 
-  // The first time a window has two tabs: a word on tearing them off (once, ever).
-  createEffect(on(() => state.tabs.length >= 2, (two) => two && isTauri() && hintOnce("tab-tearoff", "Arrastra una pestaña fuera de la ventana para abrirla en una ventana nueva (o clic derecho › «Abrir en ventana nueva»).")));
+  // The first time a window has two tabs: a word on tearing them off (once, ever), said here once Gib is here.
+  createEffect(on(() => state.tabs.length >= 2 && hintReady(), (two) => two && isTauri() && hintOnce("tab-tearoff", "Arrastra una pestaña fuera de la ventana para abrirla en una ventana nueva (o clic derecho › «Abrir en ventana nueva»).")));
 
   function menu(event: MouseEvent, tab: Tab) {
     // Another window, or a new one: the tab goes on there with its session as it is.
