@@ -5,7 +5,7 @@ import { FlaskConical, Layers, ShieldAlert, Tag, Timer, Wrench } from "lucide-so
 import { Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { envOf, type EnvLook } from "../environment";
-import { txDuration, txLabel, txLevel, worstLevel } from "../txWatch";
+import { txDuration, txLabel, txLevel, txThresholdSecs, worstLevel } from "../txWatch";
 import { now, openMenu, openTransactions, saveSettings, selectTab, state, txAge, txThresholdsOf, type SqlTab } from "../state";
 import type { ConnSummary } from "../types";
 
@@ -108,9 +108,10 @@ export function TxSettings() {
           step="0.5"
           value={minutes(s()[key])}
           onChange={(event) => {
-            const value = Number(event.currentTarget.value.replace(",", "."));
-            if (Number.isFinite(value) && value > 0) void saveSettings({ [key]: Math.round(Math.min(240, value) * 60) });
-            else event.currentTarget.value = minutes(s()[key]);
+            const secs = txThresholdSecs(event.currentTarget.value);
+            if (secs !== null) void saveSettings({ [key]: secs });
+            // The field shows the threshold in force (clamped, or the previous one when the value is not valid).
+            event.currentTarget.value = minutes(secs ?? s()[key]);
           }}
         />
         <small>min</small>

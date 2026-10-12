@@ -39,6 +39,17 @@ export function txThresholds(settings: TxSettings, production: boolean): TxThres
   return { warnSecs: prodWarn, alertSecs: Math.max(prodWarn, Math.min(alertSecs, positive(settings.txProdAlertSecs, 120))) };
 }
 
+/**
+ * A threshold typed in Settings (minutes, "," allowed as decimal mark) as the seconds saved: clamped to 0.5–240 min,
+ * so what is saved is what applies (a value rounding to 0 s would fall back to the default). Null when not a number
+ * above 0.
+ */
+export function txThresholdSecs(typed: string): number | null {
+  const value = Number(typed.trim().replace(",", "."));
+  if (!typed.trim() || !Number.isFinite(value) || value <= 0) return null;
+  return Math.max(30, Math.round(Math.min(240, value) * 60));
+}
+
 const positive = (value: number, fallback: number) => (Number.isFinite(value) && value > 0 ? value : fallback);
 
 /** ok below the first threshold, warn (amber) past it, alert (red) past the second. */

@@ -1,6 +1,6 @@
 // Checks for src/txWatch.ts (open manual transactions): node --experimental-strip-types dev/txwatch-check.ts
 import assert from "node:assert/strict";
-import { countStatements, NO_TX, reminderDue, txAfterRun, txDuration, txLabel, txLevel, txReminderText, txThresholds, worstLevel } from "../src/txWatch.ts";
+import { countStatements, NO_TX, reminderDue, txAfterRun, txDuration, txLabel, txLevel, txReminderText, txThresholds, txThresholdSecs, worstLevel } from "../src/txWatch.ts";
 import { defaultSettings } from "../src/types.ts";
 
 // Defaults: 1 min / 5 min, stricter on production.
@@ -55,5 +55,19 @@ assert.equal(reminderDue(600_000, normal, 1), true);
 assert.equal(txReminderText("Producción", "Producción", 2 * 60_000, 1), "«Producción»: transacción abierta · 2 min · 1 sentencia. Mientras no hagas commit o rollback puede bloquear a otros.");
 assert.ok(txReminderText("Consola 2", "Producción", 2 * 60_000, 1).startsWith("«Consola 2» (Producción): transacción abierta"));
 assert.ok(txReminderText("Consola 2", undefined, 0, 1).startsWith("«Consola 2»: "));
+
+// Thresholds typed in Settings (#155): clamped to 0.5–240 min, so what is saved is what applies.
+assert.equal(txThresholdSecs("0.001"), 30, "below 0.5 min: the minimum, not 0 s");
+assert.equal(txThresholdSecs("0.005"), 30);
+assert.equal(txThresholdSecs("0,25"), 30, "a comma decimal mark");
+assert.equal(txThresholdSecs("0.5"), 30);
+assert.equal(txThresholdSecs("2"), 120);
+assert.equal(txThresholdSecs("1,5"), 90);
+assert.equal(txThresholdSecs("999"), 14400, "above 240 min: the maximum");
+for (const bad of ["0", "-1", "", "  ", "abc", "NaN", "Infinity"]) assert.equal(txThresholdSecs(bad), null, `«${bad}» is refused`);
+for (const typed of ["0.001", "0.7", "3", "240"]) {
+  const secs = txThresholdSecs(typed)!;
+  assert.equal(txThresholds({ txWarnSecs: secs, txAlertSecs: 14400, txProdWarnSecs: 30, txProdAlertSecs: 120 }, false).warnSecs, secs, `${typed} min applies as saved`);
+}
 
 console.log("txwatch-check: ok");
