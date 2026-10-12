@@ -61,4 +61,24 @@ for (const theme of Object.keys(themes)) {
   }
 }
 
+// The comparison chips (cambiadas, solo en B, solo en A): half the state colour, half the text colour (#153).
+const mix = (a: string, b: string, share: number) => {
+  const rgb = (hex: string) => {
+    const h = hex.slice(1).length === 3 ? [...hex.slice(1)].map((c) => c + c).join("") : hex.slice(1);
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  };
+  const [x, y] = [rgb(a), rgb(b)];
+  return `#${x.map((v, i) => Math.round(v * share + y[i] * (1 - share)).toString(16).padStart(2, "0")).join("")}`;
+};
+assert.equal(mix("#000", "#ffffff", 0.5), "#808080");
+for (const theme of Object.keys(themes)) {
+  const tokens = themes[theme];
+  for (const state of ["--warning", "--success", "--danger"]) {
+    for (const bg of ["--panel", "--surface"]) {
+      const ratio = contrastRatio(mix(tokens[state], tokens["--text"], 0.5), tokens[bg]);
+      assert.ok(ratio >= 4.5, `${theme}: ${state} chip label on ${bg} is ${ratio.toFixed(2)}:1`);
+    }
+  }
+}
+
 console.log("contrast-check: ok");

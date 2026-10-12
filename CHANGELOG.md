@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Result and data comparison: the «cambiadas», «solo en B» and «solo en A» chips reach 4.5:1 in every theme (they
+  were below it in Sand, Celer Claro and, for «solo en A», Fjord) (#153).
 - Transactions: the reminder of a long open transaction names the connection only when the console's title is not
   already the connection's name («Producción» (Producción) became «Producción») (#152).
 - Quitting with a single open transaction in another window: the buttons read «Commit» and «Rollback», as with one
