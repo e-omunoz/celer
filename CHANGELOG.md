@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- History: «Consultas que se guardan» is what limits the history again: its size bound grows with the setting (about
+  512 bytes per query, 4 MB at least) instead of a fixed 4 MB that kept only about 15,000 queries whatever the setting
+  said; Ajustes › Historial and the guide say how very long queries count (#163).
 - SSH tunnels: disconnecting, editing or deleting a tunnelled connection closes its tunnel (the SSH login on the
   bastion and the local port) as soon as its last connection through it ends, instead of leaving it open for up to
   about two and a half minutes (#164).

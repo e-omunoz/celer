@@ -12,7 +12,9 @@ export function HistorySection() {
       <div data-setting="Vaciar historial">
         <button type="button" class="btn" onClick={() => void clearHistory()}>Vaciar historial…</button>
       </div>
-      <p class="settings-note">El historial se guarda solo en este equipo, en la carpeta de datos de Celer. Al bajar los límites se borra en el acto lo que sobra.</p>
+      <p class="settings-note">El historial se guarda solo en este equipo, en la carpeta de datos de Celer. Al bajar los límites se borra en el acto lo que sobra.
+        Ocupa como mucho unos 512 bytes por consulta que se guarda (4 MB como mínimo): con consultas muy largas se guardan algo menos.
+      </p>
     </>
   );
 }

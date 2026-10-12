@@ -500,7 +500,8 @@ importar, lo que Celer no entiende se ignora y se dice cuál.
 - **Ventana y pestañas**: restaurar o no las pestañas y ventanas de la última sesión al iniciar, y si abrir una tabla
   que ya está abierta va a su pestaña o abre otra.
 - **Historial**: cuántas consultas y cuántos días se guardan (al bajarlo se borra en el acto lo que sobra) y *Vaciar
-  historial*.
+  historial*. El historial ocupa como mucho unos 512 bytes por consulta que se guarda (4 MB como mínimo): si guardas
+  consultas muy largas, se conservan algo menos de las que dice el ajuste.
 - **Avisos**: cuánto duran los avisos (los de error, el doble) y una **notificación del escritorio** cuando una consulta
   que tarda más de N segundos termina mientras estás en otra ventana.
 - **Plantillas**: las tuyas, junto a las de serie.

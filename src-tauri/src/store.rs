@@ -13,9 +13,11 @@ use crate::model::ConnConfig;
 
 /// Queries kept by default (Ajustes › Historial changes it: `set_history_retention`).
 const HISTORY_MAX: usize = 5000;
-/// history.jsonl is compacted past this size, down to about half of it, so the next compaction is far away.
-const HISTORY_COMPACT_AT: u64 = 8 * 1024 * 1024;
+/// history.jsonl is compacted past twice what it keeps, down to that, so the next compaction is far away. It keeps
+/// HISTORY_ENTRY_BYTES per entry of «Consultas que se guardan» (an entry is ~300 bytes on average, so the setting's
+/// count is what limits), and at least HISTORY_KEEP_BYTES.
 const HISTORY_KEEP_BYTES: usize = 4 * 1024 * 1024;
+const HISTORY_ENTRY_BYTES: usize = 512;
 /// The SQL of one entry is kept up to this many characters (a pasted dump would otherwise fill the history).
 const HISTORY_SQL_MAX: usize = 100_000;
 
@@ -355,7 +357,8 @@ impl Store {
         };
         writeln!(f, "{line}")?;
         // Compactación ocasional para mantener el fichero acotado: por tamaño, no solo por número, hasta la mitad.
-        if f.metadata().map(|m| m.len()).unwrap_or(0) > HISTORY_COMPACT_AT {
+        let keep_bytes = self.history_keep_bytes();
+        if f.metadata().map(|m| m.len()).unwrap_or(0) > 2 * keep_bytes as u64 {
             drop(f);
             let lines: Vec<String> = self.history_all().iter().filter_map(|e| serde_json::to_string(e).ok()).collect();
             let mut bytes = 0;
@@ -365,7 +368,7 @@ impl Store {
                 .take(self.history_max())
                 .take_while(|l| {
                     bytes += l.len() + 1;
-                    bytes <= HISTORY_KEEP_BYTES
+                    bytes <= keep_bytes
                 })
                 .count();
             let body: String = lines[lines.len() - keep..].iter().map(|l| format!("{l}\n")).collect();
@@ -376,6 +379,11 @@ impl Store {
 
     fn history_max(&self) -> usize {
         self.history_max.load(std::sync::atomic::Ordering::Relaxed).max(1)
+    }
+
+    /// What history.jsonl keeps when it is compacted by size: grows with «Consultas que se guardan».
+    fn history_keep_bytes(&self) -> usize {
+        HISTORY_KEEP_BYTES.max(self.history_max().saturating_mul(HISTORY_ENTRY_BYTES))
     }
 
     /// Entries older than this (milliseconds since 1970) are past the retention; 0 when there is no limit.
@@ -521,6 +529,21 @@ mod tests {
         store.add_history(&entry("y".repeat(300_000))).unwrap();
         let cut = &store.history("", 1)[0].sql;
         assert!(cut.len() < 100_100 && cut.ends_with("(recortado en el historial)"));
+        let _ = std::fs::remove_file(&file);
+        // A larger «Consultas que se guardan» keeps that many typical statements: the size bound grows with it.
+        store.set_history_retention(30_000, 0).unwrap();
+        let mut body = String::new();
+        for i in 0..28_000 {
+            body.push_str(&serde_json::to_string(&entry(format!("SELECT * FROM clientes WHERE id = {i} AND nombre LIKE '%{}%'", "a".repeat(200)))).unwrap());
+            body.push('\n');
+        }
+        std::fs::write(&file, body).unwrap();
+        assert!(std::fs::metadata(&file).unwrap().len() > 8 * 1024 * 1024, "past where the fixed bound compacted to 4 MB");
+        for i in 0..100 {
+            store.add_history(&entry(format!("SELECT {i}"))).unwrap();
+        }
+        assert_eq!(store.history_all().len(), 28_100, "nothing dropped below the count");
+        store.set_history_retention(super::HISTORY_MAX, 0).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
