@@ -331,8 +331,28 @@ export function DataGrid(props: GridProps) {
     });
   }
 
+  /** The widths last measured for the result (a column still at its own was not resized by hand). */
+  let autoWidths: number[] = [];
+
+  /** Measures the result's columns and gives every column its measured width. */
+  function measureAll() {
+    autoWidths = measureWidths();
+    setWidths(autoWidths);
+  }
+
   function refreshPalette() {
+    const before = palette;
     palette = readPalette();
+    // A theme with another font: the text no longer fits the widths (and cell size) measured for the old one. The
+    // columns still at their measured width are measured again; one resized by hand keeps its width.
+    if (before && (before.mono !== palette.mono || before.sans !== palette.sans) && autoWidths.length) refitFont();
+  }
+
+  function refitFont() {
+    const old = autoWidths;
+    const next = measureWidths();
+    autoWidths = next;
+    setWidths(widths().map((width, index) => (width === old[index] ? next[index] : width)));
   }
 
   function schedule() {
@@ -976,13 +996,11 @@ export function DataGrid(props: GridProps) {
   }
 
   function autofit(col?: number) {
+    if (col === undefined) return measureAll();
     const measured = measureWidths();
-    if (col === undefined) setWidths(measured);
-    else {
-      const next = widths().slice();
-      next[col] = measured[col];
-      setWidths(next);
-    }
+    const next = widths().slice();
+    next[col] = measured[col];
+    setWidths(next);
   }
 
   function beginEdit(pos: Pos, initial?: string) {
@@ -1612,6 +1630,13 @@ export function DataGrid(props: GridProps) {
       schedule();
     });
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "data-density"] });
+    // A theme's font that was still loading when the grid measured: measure again once it is there.
+    const fontsLoaded = () => {
+      if (autoWidths.length) refitFont();
+      schedule();
+    };
+    document.fonts?.addEventListener?.("loadingdone", fontsLoaded);
+    onCleanup(() => document.fonts?.removeEventListener?.("loadingdone", fontsLoaded));
     const up = () => onMouseUp();
     window.addEventListener("mouseup", up);
     // Resizing or moving a column goes on outside the grid.
@@ -1648,7 +1673,7 @@ export function DataGrid(props: GridProps) {
         }
         setScroll({ x: 0, y: 0 });
         refreshPalette();
-        setWidths(measureWidths());
+        measureAll();
       },
     ),
   );
