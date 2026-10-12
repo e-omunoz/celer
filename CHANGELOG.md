@@ -210,6 +210,10 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Console toolbar: with an open transaction on a console of a production connection, the connection and database
+  pickers no longer spill past their buttons and under the environment chip; the transaction's label collapses to its
+  icon on consoles narrower than 1100 px, and a squeezed picker cuts its name inside its own box with the chevron
+  visible (#133).
 - Status bar: with the environment chip, an open transaction, MCP or a selection's aggregates on a 1024–1366 px
   window, the items no longer overlap: the connection, the server version, the aggregates, the transaction and MCP
   shrink with an ellipsis, and below 1280 px the server version and below 1100 px the MCP label give way (#132).
