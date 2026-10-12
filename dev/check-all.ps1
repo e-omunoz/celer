@@ -50,6 +50,9 @@ Step "update notes" { & $node --experimental-strip-types --no-warnings dev\updat
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
 
+# The MCP settings start from their defaults (the e2e checks them): one left enabled by an earlier manual test is
+# kept as mcp.json.prev, not deleted.
+if (Test-Path "D:\celer-devdata\mcp.json") { Move-Item -Force "D:\celer-devdata\mcp.json" "D:\celer-devdata\mcp.json.prev" }
 Restart-App -Build:(-not $NoBuild)
 Step "e2e" { & $node dev\e2e.mjs }
 Restart-App
