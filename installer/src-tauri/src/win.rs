@@ -106,10 +106,13 @@ impl Drop for Com {
 }
 
 /// Crea (o sobrescribe) un acceso directo `.lnk`. Requiere COM inicializado en el hilo.
-pub fn create_shortcut(lnk: &Path, target: &Path, workdir: &Path, description: &str) -> windows::core::Result<()> {
+pub fn create_shortcut(lnk: &Path, target: &Path, args: &str, workdir: &Path, description: &str) -> windows::core::Result<()> {
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(target.as_os_str()))?;
+        if !args.is_empty() {
+            link.SetArguments(&HSTRING::from(args))?;
+        }
         link.SetWorkingDirectory(&HSTRING::from(workdir.as_os_str()))?;
         link.SetIconLocation(&HSTRING::from(target.as_os_str()), 0)?;
         link.SetDescription(&HSTRING::from(description))?;
