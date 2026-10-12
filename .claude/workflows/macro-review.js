@@ -122,9 +122,17 @@ const VERIFIED = {
 
 const ROLE = role => `Read and follow your role file \`.claude/agents/${role}.md\` and the project notes in \`CLAUDE.md\`.`
 
+// UI areas test in parallel, each in its own desktop app slot (dev/run-desktop.ps1 -Slot n: own build, data folder
+// and DevTools port 9333+n), so they no longer wait for each other. The browser pane is still one: ui-visual has it.
+const UI_SLOT = { 'ui-visual': 1, 'ui-functional': 2 }
+const SLOT_RULE = area => {
+  const n = UI_SLOT[area.key]
+  return `Your desktop app is slot ${n}; the other UI auditor runs at the same time in another slot, so never stop a celer.exe that is not yours. From the Windows checkout (C:\\Users\\oscar\\Projects\\celer): \`powershell.exe -ExecutionPolicy Bypass -File 'C:\\Users\\oscar\\Projects\\celer\\dev\\run-desktop.ps1' -Slot ${n} -Ref origin/<the branch under review>\` (data D:\\celer-devdata-slot${n}, one connection per engine; \`-Fresh\` for first-run behaviour), driven with \`node dev/cdp.mjs --slot ${n} …\` (\`windows\`, \`--window\`, \`eval -h\`, \`drag\`; helpers in dev/cdp-helpers.js; how-to in docs/review/ENGINE_MATRIX.md). ${area.key === 'ui-visual' ? 'The browser pane preview `celer-web` is yours too.' : 'The browser pane belongs to the visual auditor: use your slot.'} Tables you create carry \`s${n}\` in the name. Stop your slot when done (\`-Slot ${n} -Stop\`).`
+}
+
 function auditPrompt(area) {
   const appRule = area.ui
-    ? 'You may launch the desktop app (dev/run-desktop.ps1) and the browser pane preview `celer-web`; you are the only agent using them right now. Stop the app when done.'
+    ? SLOT_RULE(area)
     : 'Test everything live that you can: start, seed and kill test databases, build, run cargo/node checks and probes (CLAUDE.md "Local testing"). Only the desktop app and the browser pane are off-limits in this phase, because the UI auditors are using them (dev/run-desktop.ps1 would kill their instance).'
   return `${ROLE('celer-auditor')}
 
@@ -142,7 +150,7 @@ function verifyPrompt(area, findings) {
 
 Area: ${area.title}. Try to refute each finding below (index = position in the list). Default to real=false when unsure.
 Also mark real=false for duplicates of each other or of existing issues (\`gh issue list --label review --state all -L 200\`).
-${area.ui ? 'Re-check live in the browser pane / desktop app (the auditor has finished with them).' : 'Re-check live with test databases and CLI checks where cheap; the desktop app and browser pane belong to the UI auditors in this phase.'}
+${area.ui ? `Re-check live in the auditor's app slot (the auditor has finished with it). ${SLOT_RULE(area)}` : 'Re-check live with test databases and CLI checks where cheap; the desktop app and browser pane belong to the UI auditors in this phase.'}
 
 ${JSON.stringify(findings.map((f, index) => ({ index, ...f })), null, 1)}`
 }
@@ -167,11 +175,7 @@ phase('Audit')
 const uiAreas = AREAS.filter(a => a.ui)
 const codeAreas = AREAS.filter(a => !a.ui)
 const [uiResults, codeResults] = await parallel([
-  async () => {
-    const out = []
-    for (const area of uiAreas) out.push(await auditArea(area)) // one at a time: shared app and browser pane
-    return out
-  },
+  () => parallel(uiAreas.map(area => () => auditArea(area))), // one app slot each (UI_SLOT)
   () => pipeline(codeAreas, auditArea),
 ])
 const audited = [...(uiResults || []), ...(codeResults || [])].filter(Boolean)
