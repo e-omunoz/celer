@@ -554,11 +554,12 @@ impl PostgresDriver {
             ),
             &[],
         )?;
+        let own = own_keys(&self.version);
         let cons = self.meta(
             &db,
             &format!(
-                "SELECT conname::text, pg_catalog.pg_get_constraintdef(oid, true) FROM pg_catalog.pg_constraint \
-                 WHERE conrelid = {oid} AND contype IN ('p','u','c','f','x') \
+                "SELECT conname::text, pg_catalog.pg_get_constraintdef(oid, true) FROM pg_catalog.pg_constraint co \
+                 WHERE conrelid = {oid} AND contype IN ('p','u','c','f','x'){own} \
                  ORDER BY CASE contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'c' THEN 2 WHEN 'x' THEN 3 ELSE 4 END, conname"
             ),
             &[],
@@ -1038,7 +1039,7 @@ impl Driver for PostgresDriver {
                     "fks" => {
                         let rows = self.meta(
                             db,
-                            "SELECT co.conname::text, \
+                            &format!("SELECT co.conname::text, \
                                (SELECT string_agg(pg_catalog.quote_ident(a.attname), ', ' ORDER BY k.ord) \
                                   FROM unnest(co.conkey) WITH ORDINALITY k(attnum, ord) \
                                   JOIN pg_catalog.pg_attribute a ON a.attrelid = co.conrelid AND a.attnum = k.attnum), \
@@ -1052,8 +1053,8 @@ impl Driver for PostgresDriver {
                              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
                              JOIN pg_catalog.pg_class rc ON rc.oid = co.confrelid \
                              JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace \
-                             WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relname = $2::text \
-                             ORDER BY co.conname",
+                             WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relname = $2::text{} \
+                             ORDER BY co.conname", own_keys(&self.version)),
                             &args,
                         )?;
                         // `obj` is the referenced table, so the UI can jump to it.
@@ -1104,7 +1105,7 @@ impl Driver for PostgresDriver {
     /// one row per column pair in key order.
     fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
         let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
-        let rows = self.meta(db, SCHEMA_FKS_SQL, &[schema])?;
+        let rows = self.meta(db, &schema_fks_sql(&self.version), &[schema])?;
         Ok(crate::session::group_foreign_keys(rows.iter().map(|r| FkColumn {
             key: s(r, 0),
             name: s(r, 1),
@@ -1473,9 +1474,27 @@ fn any_text(row: &::postgres::Row, i: usize) -> Option<String> {
     None
 }
 
+/// Leaves out the copies of a foreign key PostgreSQL 11+ keeps on the referencing table for each partition of a
+/// partitioned referenced table (`conparentid` is a key of the same table): neither pg_dump nor `\d` shows them, and
+/// a script with them fails. A partition's key inherited from its parent table stays. `co` is the pg_constraint row.
+fn own_keys(version: &str) -> &'static str {
+    let major: u32 = version.split(|c: char| !c.is_ascii_digit()).next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    if major >= 11 {
+        " AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint pc WHERE pc.oid = co.conparentid AND pc.conrelid = co.conrelid)"
+    } else {
+        ""
+    }
+}
+
 /// Every foreign key of a schema ($1), one row per column pair: constraint oid, name, table, column, referenced schema,
 /// table and column.
-pub const SCHEMA_FKS_SQL: &str = "SELECT co.oid::text, co.conname::text, c.relname::text, a.attname::text, rn.nspname::text, rc.relname::text, ra.attname::text \
+fn schema_fks_sql(version: &str) -> String {
+    format!("{SCHEMA_FKS_SQL}{}{SCHEMA_FKS_ORDER}", own_keys(version))
+}
+
+const SCHEMA_FKS_ORDER: &str = " ORDER BY c.relname, co.conname, co.oid, k.ord";
+
+const SCHEMA_FKS_SQL: &str = "SELECT co.oid::text, co.conname::text, c.relname::text, a.attname::text, rn.nspname::text, rc.relname::text, ra.attname::text \
      FROM pg_catalog.pg_constraint co \
      JOIN pg_catalog.pg_class c ON c.oid = co.conrelid \
      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
@@ -1484,8 +1503,7 @@ pub const SCHEMA_FKS_SQL: &str = "SELECT co.oid::text, co.conname::text, c.relna
      CROSS JOIN LATERAL unnest(co.conkey, co.confkey) WITH ORDINALITY k(attnum, refnum, ord) \
      JOIN pg_catalog.pg_attribute a ON a.attrelid = co.conrelid AND a.attnum = k.attnum \
      JOIN pg_catalog.pg_attribute ra ON ra.attrelid = co.confrelid AND ra.attnum = k.refnum \
-     WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relkind IN ('r','p','f') AND NOT c.relispartition \
-     ORDER BY c.relname, co.conname, co.oid, k.ord";
+     WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relkind IN ('r','p','f') AND NOT c.relispartition";
 
 fn s(r: &[Option<String>], i: usize) -> String {
     r.get(i).cloned().flatten().unwrap_or_default()

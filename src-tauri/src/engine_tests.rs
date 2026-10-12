@@ -1877,8 +1877,49 @@ fn pg_schema_foreign_keys() {
         10,
     )
     .unwrap();
+    // A key to a partitioned table, from a plain table and from a partitioned one (#139): PostgreSQL keeps a copy of
+    // it per partition of the referenced table, which is not a key of its own.
+    d.execute(
+        "CREATE TABLE celer_fk.part (id int, k int, PRIMARY KEY (id, k)) PARTITION BY RANGE (k);
+         CREATE TABLE celer_fk.part1 PARTITION OF celer_fk.part FOR VALUES FROM (0) TO (10);
+         CREATE TABLE celer_fk.part2 PARTITION OF celer_fk.part FOR VALUES FROM (10) TO (20);
+         CREATE TABLE celer_fk.ref_part (id int PRIMARY KEY, pid int, pk int, FOREIGN KEY (pid, pk) REFERENCES celer_fk.part (id, k));
+         CREATE TABLE celer_fk.ref_part_p (id int, pid int, pk int, FOREIGN KEY (pid, pk) REFERENCES celer_fk.part (id, k)) PARTITION BY RANGE (id);
+         CREATE TABLE celer_fk.ref_part_p1 PARTITION OF celer_fk.ref_part_p FOR VALUES FROM (0) TO (10);
+         INSERT INTO celer_fk.part VALUES (1, 1), (2, 12);
+         INSERT INTO celer_fk.ref_part VALUES (1, 1, 1), (2, 2, 12);
+         INSERT INTO celer_fk.ref_part_p VALUES (1, 2, 12);",
+        10,
+    )
+    .unwrap();
     let keys = assert_schema_fks(d, "postgres", &["celer", "celer_fk"]);
     assert_fixture_keys(&keys, "Hijo Raro", "customers");
+    for table in ["ref_part", "ref_part_p"] {
+        let to_part: Vec<_> = keys.iter().filter(|k| k.table.name == table).collect();
+        assert_eq!(to_part.len(), 1, "{table}: {to_part:#?}");
+        assert_eq!(to_part[0].target.name, "part");
+        let tables = |t: &str| vec!["celer".to_string(), "celer_fk".into(), "tables".into(), t.into(), "fks".into()];
+        assert_eq!(d.children(&tables(table)).unwrap().len(), 1, "{table}: explorer");
+    }
+    // A partition keeps the key it inherits; its table DDL has it once.
+    let part_fks = d.children(&["celer".to_string(), "celer_fk".into(), "tables".into(), "ref_part_p1".into(), "fks".into()]).unwrap();
+    assert_eq!(part_fks.len(), 1, "{part_fks:#?}");
+    let ddl = d.ddl(&ObjectRef::new("celer", "celer_fk", "ref_part", "table")).unwrap();
+    assert_eq!(ddl.matches("FOREIGN KEY").count(), 1, "{ddl}");
+    // The DDL runs: in a fresh schema, against a copy of the partitioned table.
+    let fresh = ddl.replace("\"celer_fk\".", "\"celer_fk2\".").replace("celer_fk.", "celer_fk2.");
+    d.execute(
+        &format!(
+            "DROP SCHEMA IF EXISTS celer_fk2 CASCADE; CREATE SCHEMA celer_fk2;
+             CREATE TABLE celer_fk2.part (id int, k int, PRIMARY KEY (id, k)) PARTITION BY RANGE (k);
+             CREATE TABLE celer_fk2.part1 PARTITION OF celer_fk2.part FOR VALUES FROM (0) TO (10);
+             CREATE TABLE celer_fk2.part2 PARTITION OF celer_fk2.part FOR VALUES FROM (10) TO (20);
+             {fresh}"
+        ),
+        10,
+    )
+    .unwrap_or_else(|e| panic!("{fresh}\n→ {e}"));
+    d.execute("DROP SCHEMA celer_fk2 CASCADE", 10).unwrap();
     for schema in ["public", "sales"] {
         assert_schema_fks(d, "postgres", &["celer", schema]);
     }

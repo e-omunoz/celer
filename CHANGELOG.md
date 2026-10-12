@@ -217,6 +217,9 @@ All notable changes to Celer are documented here. The format follows
   (`ANALYZE TABLE`, `OPTIMIZE TABLE`…), a `ROLLBACK TO SAVEPOINT` behind a comment and a reconnection after a lost
   connection no longer leave it wrong. Celer asks MySQL 5.7+ for its transaction state instead of guessing it from
   the text of the statements.
+- PostgreSQL: a foreign key to a partitioned table is listed once (#139), as pg_dump and `\d` show it: the copies
+  PostgreSQL keeps for each partition no longer appear in the explorer's «claves foráneas», the E-R diagram (which drew
+  the partitions as related tables) or the table's DDL, whose script now runs.
 - Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
 - **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
   «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
