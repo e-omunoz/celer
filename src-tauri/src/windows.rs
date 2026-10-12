@@ -217,13 +217,7 @@ pub async fn window_open(app: AppHandle, windows: State<'_, Windows>, request: O
         // Where the outline showed it (drop_frame): the monitor under the drop point, kept inside its work area.
         let logical = if kind == "full" { FULL_SIZE } else { (width, height) };
         let frame = drop_frame(&app, (x + GHOST_OFFSET.0, y + GHOST_OFFSET.1), logical).unwrap_or(Frame { x: x.round() as i32, y: y.round() as i32, width: 0, height: 0 });
-        let _ = window.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
-        if frame.width > 0 {
-            // On a monitor with another scale the system resizes the window once it lands there (and may nudge it):
-            // the size it will have there, then the corner again.
-            let _ = window.set_size(tauri::PhysicalSize::new(frame.width, frame.height));
-            let _ = window.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
-        }
+        place_in_frame(&window, frame);
     }
     // Red de seguridad: se muestra igualmente si la interfaz no lo ha hecho al poco.
     let shown = window.clone();
@@ -468,6 +462,41 @@ fn drop_frame(app: &AppHandle, cursor: (f64, f64), logical: (f64, f64)) -> Optio
     let monitor = app.monitor_from_point(cursor.0, cursor.1).ok().flatten().or_else(|| app.primary_monitor().ok().flatten())?;
     let area = monitor.work_area();
     Some(frame_in(cursor, logical, monitor.scale_factor(), (area.position.x, area.position.y, area.size.width as i32, area.size.height as i32)))
+}
+
+/// Coloca `window` de modo que lo que se ve de ella (su área cliente) ocupe justo `frame`, el contorno que se
+/// enseñó. Una ventana sin marco pero con sombra (Windows) tiene alrededor un borde invisible (8 px a los lados y
+/// abajo, 1 arriba a 100 %) que cuenta en su posición, y el primer cambio de tamaño de una ventana recién creada
+/// aún suma la barra de título que no tiene (salía 30 px más alta): se pide el tamaño, se mide lo que salió y se
+/// vuelve a pedir; luego se corre la esquina lo que el borde invisible la desplaza.
+fn place_in_frame(window: &WebviewWindow, frame: Frame) {
+    // On the monitor first: on one with another scale the system resizes the window when it lands there.
+    let _ = window.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
+    if frame.width == 0 {
+        return;
+    }
+    let target = tauri::PhysicalSize::new(frame.width, frame.height);
+    for _ in 0..3 {
+        let _ = window.set_size(target);
+        match window.inner_size() {
+            Ok(size) if size == target => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    let _ = window.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
+    if let (Ok(outer), Ok(inner)) = (window.outer_position(), window.inner_position()) {
+        let corner = client_corner(frame, (outer.x, outer.y), (inner.x, inner.y));
+        if corner != (frame.x, frame.y) {
+            let _ = window.set_position(tauri::PhysicalPosition::new(corner.0, corner.1));
+        }
+    }
+}
+
+/// Dónde poner la esquina de la ventana (con su borde invisible) para que su área cliente empiece en la de `frame`,
+/// sabiendo dónde quedan ahora la ventana (`outer`) y su área cliente (`inner`).
+fn client_corner(frame: Frame, outer: (i32, i32), inner: (i32, i32)) -> (i32, i32) {
+    (frame.x - (inner.0 - outer.0), frame.y - (inner.1 - outer.1))
 }
 
 /// La cuenta de `drop_frame` sin el monitor (pruebas): `area` es (x, y, ancho, alto) del área de trabajo.
@@ -796,7 +825,7 @@ pub fn mcp_app_reply(pending: State<'_, Arc<crate::mcp_app::Pending>>, id: Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_corner, compose, frame_in, ghost_corner, inside, Area, Frame, FULL_SIZE, GHOST_OFFSET};
+    use super::{clamp_corner, client_corner, compose, frame_in, ghost_corner, inside, Area, Frame, FULL_SIZE, GHOST_OFFSET};
     use serde_json::json;
 
     #[test]
@@ -833,6 +862,18 @@ mod tests {
         assert_eq!((small.x, small.y), (0, 0));
         // A broken scale factor is read as 100 %.
         assert_eq!(frame_in((500.0, 300.0), FULL_SIZE, 0.0, area).width, 1280);
+    }
+
+    #[test]
+    fn the_visible_window_starts_where_the_outline_did() {
+        // Sprint 2.3 tester: the outline was at 180,402 and the window's client area opened at 188,403, the
+        // invisible frame of an undecorated window with a shadow (8 px at the sides, 1 at the top on Windows 11).
+        let frame = Frame { x: 180, y: 402, width: 1280, height: 820 };
+        assert_eq!(client_corner(frame, (180, 402), (188, 403)), (172, 401));
+        // Without an invisible frame (other systems) nothing moves.
+        assert_eq!(client_corner(frame, (180, 402), (180, 402)), (180, 402));
+        // On a second monitor to the left, with negative coordinates.
+        assert_eq!(client_corner(Frame { x: -1280, y: 2, width: 1280, height: 820 }, (-1280, 2), (-1272, 3)), (-1288, 1));
     }
 
     #[test]
