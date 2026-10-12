@@ -29,8 +29,9 @@ Reporters are told in a comment when their issue moves to `status:ready` or is c
 
 ## Setup
 
-You need [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) 20+. On Windows you also need the Visual
-Studio Build Tools with the C++ workload. A JDK 11+ (`JAVA_HOME` or `javac` in the `PATH`) compiles the JDBC bridge
+You need [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) 22.12+ (the logic checks run TypeScript
+with `--experimental-strip-types`, and Vite needs 22.12 on Node 22). On Windows you also need the Visual Studio Build
+Tools with the C++ workload. A JDK 11+ (`JAVA_HOME` or `javac` in the `PATH`) compiles the JDBC bridge
 (`src-tauri/bridge`): without one, debug builds leave it out and Informix over JDBC says so; release builds need it.
 
 ```bash
@@ -53,10 +54,14 @@ The SQL Server and Informix containers are listed in [docs/DRIVERS.md](docs/DRIV
 Run these before you open a pull request:
 
 ```bash
-npx tsc --noEmit -p .              # app types
+for check in dev/*-check.ts; do node --experimental-strip-types --no-warnings "$check" || break; done   # logic checks
+npm run build                      # app types and UI build
 npx tsc --noEmit -p installer      # installer UI types
 cd src-tauri && cargo test --lib   # Rust unit tests
 ```
+
+In PowerShell, the logic checks are
+`Get-ChildItem dev\*-check.ts | ForEach-Object { node --experimental-strip-types --no-warnings $_.FullName }`.
 
 End-to-end checks drive the real desktop app through the DevTools protocol:
 
@@ -65,7 +70,8 @@ powershell -File dev\run-desktop.ps1     # builds and starts Celer with DevTools
 node dev/e2e.mjs
 ```
 
-CI runs the type checks and the Rust tests on every push and pull request.
+CI runs the logic checks, the type checks and UI build, the installer tests and the Rust tests on every push and pull
+request.
 
 ## Conventions
 
