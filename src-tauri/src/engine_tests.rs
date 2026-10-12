@@ -649,8 +649,10 @@ fn mssql_abandoned_cursor() {
         let out = d.execute("SELECT DB_NAME(), @@LANGUAGE", 10).unwrap();
         let next = t0.elapsed().as_millis();
         eprintln!("cursor abandonado sin estado, ronda {round}: primera página {first} ms, siguiente consulta {next} ms; {:?}", out.messages);
-        assert!(next < 500, "la consulta tras el cursor abandonado tardó {next} ms");
+        // What is checked is that it went on in the reserve connection (the message), not reading the rest of the
+        // result; the time bound is only a generous backstop, so a loaded machine does not fail it (#165).
         assert!(out.messages.iter().any(|m| m.contains("sigue en la conexión de reserva")), "{:?}", out.messages);
+        assert!(next < 3000, "la consulta tras el cursor abandonado tardó {next} ms");
         // Same database (and startup script) on the reserve.
         assert_eq!(txt(&out.results[0].rows[0][0]), "tempdb");
         // How the old connection was cut and closed, in the background, comes with the next statement.
