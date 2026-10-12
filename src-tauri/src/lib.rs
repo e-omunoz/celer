@@ -1235,6 +1235,29 @@ fn windows_1252(b: u8) -> char {
 }
 
 #[cfg(test)]
+mod data_dir_tests {
+    use super::data_dir_from;
+    use std::path::PathBuf;
+
+    fn args(a: &[&str]) -> impl Iterator<Item = String> {
+        a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn the_command_line_wins_over_the_environment() {
+        let env = Some("D:\\env".into());
+        assert_eq!(data_dir_from(args(&["--data-dir", "D:\\a b"]), env.clone()), Some(PathBuf::from("D:\\a b")));
+        assert_eq!(data_dir_from(args(&["--data-dir=E:\\celer"]), env.clone()), Some(PathBuf::from("E:\\celer")));
+        assert_eq!(data_dir_from(args(&["--mcp"]), env.clone()), Some(PathBuf::from("D:\\env")));
+        // An empty value is no override; nor is a flag that only starts like it.
+        assert_eq!(data_dir_from(args(&["--data-dir="]), None), None);
+        assert_eq!(data_dir_from(args(&["--data-dir"]), None), None);
+        assert_eq!(data_dir_from(args(&["--data-directory", "x"]), None), None);
+        assert_eq!(data_dir_from(args(&[]), Some("".into())), None);
+    }
+}
+
+#[cfg(test)]
 mod read_only_tests {
     use super::check_read_only;
     use crate::model::{ConnConfig, DbKind};
@@ -1648,9 +1671,9 @@ async fn update_check() -> CmdResult<update::UpdateInfo> {
 }
 
 /// Where updates are downloaded: `updates` in Celer's local data folder (%LOCALAPPDATA%\es.celer.app on Windows: not
-/// the roaming profile, and not the system's temp folder). Debug builds with `CELER_DATA_DIR` use that folder.
+/// the roaming profile, and not the system's temp folder). With --data-dir / `CELER_DATA_DIR`, that folder.
 fn updates_dir(app: &tauri::AppHandle) -> PathBuf {
-    let base = dev_data_dir()
+    let base = data_dir_override()
         .or_else(|| app.path().app_local_data_dir().ok())
         .unwrap_or_else(|| app.state::<Arc<AppState>>().store.dir.clone());
     base.join(update::DOWNLOAD_SUBDIR)
@@ -1798,23 +1821,47 @@ pub fn run_mcp() -> i32 {
     mcp::serve_stdio()
 }
 
-/// Debug builds only: `CELER_DATA_DIR` points the app at a separate data folder, so automated tests never touch
-/// the configuration of an installed copy.
-pub(crate) fn dev_data_dir() -> Option<std::path::PathBuf> {
-    if !cfg!(debug_assertions) {
-        return None;
+/// A data folder of its own instead of the usual one: `--data-dir <folder>` (or `--data-dir=<folder>`) on the command
+/// line, else `CELER_DATA_DIR`, in any build. Tests and a portable copy on a USB stick run this way without touching
+/// an installed Celer: with it the app also uses its own credential store service ("Celer-dev"), its own WebView2
+/// profile (`<folder>\webview`) and no single-instance guard.
+pub(crate) fn data_dir_override() -> Option<std::path::PathBuf> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| data_dir_from(std::env::args().skip(1), std::env::var_os("CELER_DATA_DIR"))).clone()
+}
+
+fn data_dir_from(args: impl Iterator<Item = String>, env: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    let mut args = args;
+    while let Some(a) = args.next() {
+        let value = match a.strip_prefix("--data-dir") {
+            Some("") => args.next(),
+            Some(v) => match v.strip_prefix('=') {
+                Some(v) => Some(v.to_string()),
+                None => continue,
+            },
+            None => continue,
+        };
+        if let Some(v) = value.filter(|v| !v.trim().is_empty()) {
+            return Some(std::path::PathBuf::from(v.trim()));
+        }
     }
-    std::env::var_os("CELER_DATA_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
+    env.filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Its own WebView2 profile next to its data, unless the caller chose one (dev/run-desktop.ps1 does).
+    if let Some(dir) = data_dir_override() {
+        if std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_none() {
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", dir.join("webview"));
+        }
+    }
     let mut builder = tauri::Builder::default();
     // One Celer per data folder: a second launch raises the running one and exits, since it would write
     // connections.json and workspace.json over the first one's changes. The guard is keyed on the app identifier,
-    // so a debug build on its own data folder (CELER_DATA_DIR) skips it to run next to an installed Celer, unless
+    // so a copy on its own data folder (--data-dir / CELER_DATA_DIR) skips it to run next to an installed Celer, unless
     // CELER_SINGLE_INSTANCE asks for it (to test the guard).
-    if dev_data_dir().is_none() || std::env::var_os("CELER_SINGLE_INSTANCE").is_some() {
+    if data_dir_override().is_none() || std::env::var_os("CELER_SINGLE_INSTANCE").is_some() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| windows::raise_last(app)));
     }
     builder
@@ -1822,7 +1869,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let dir = dev_data_dir().unwrap_or_else(|| {
+            let dir = data_dir_override().unwrap_or_else(|| {
                 app.path()
                     .app_data_dir()
                     .unwrap_or_else(|_| std::env::temp_dir().join("celer"))

@@ -7,6 +7,9 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Own data folder in any build**: `--data-dir <folder>` (or `CELER_DATA_DIR`) makes the portable or installed app keep
+  its connections, settings, history and library there, with its own WebView2 profile and credential store entries,
+  next to an installed Celer without touching it (a portable copy on a USB stick; the release smoke test).
 - **SSH tunnels** (#115): «Túnel SSH» in the connection form reaches PostgreSQL, MySQL/MariaDB, SQL Server and Informix
   (DRDA and JDBC) through a bastion, with a password, a private key (file or pasted, OpenSSH/PEM/PuTTY, with its
   passphrase) or the SSH agent (Pageant, the OpenSSH agent of Windows, ssh-agent), and optional jump hosts. The Rust

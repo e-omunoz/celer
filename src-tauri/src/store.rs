@@ -21,11 +21,11 @@ const HISTORY_ENTRY_BYTES: usize = 512;
 /// The SQL of one entry is kept up to this many characters (a pasted dump would otherwise fill the history).
 const HISTORY_SQL_MAX: usize = 100_000;
 
-/// Servicio del almacén de credenciales. Una compilación de depuración con `CELER_DATA_DIR` escribe en
-/// "Celer-dev" y solo lee "Celer" como alternativa: las pruebas nunca cambian las contraseñas de una copia
-/// instalada.
+/// Servicio del almacén de credenciales. Una copia con carpeta de datos propia (`--data-dir` / `CELER_DATA_DIR`)
+/// escribe en "Celer-dev" y solo lee "Celer" como alternativa: las pruebas nunca cambian las contraseñas de una
+/// copia instalada.
 pub(crate) fn keyring_service() -> &'static str {
-    if crate::dev_data_dir().is_some() {
+    if crate::data_dir_override().is_some() {
         "Celer-dev"
     } else {
         "Celer"

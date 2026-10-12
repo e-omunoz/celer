@@ -688,6 +688,11 @@ Los ficheros de cada versión tienen siempre el mismo nombre, y
 
 `SHA256SUMS.txt` trae el SHA-256 de todos (ver [SECURITY.md](../SECURITY.md)).
 
+**Carpeta de datos propia.** `Celer-Portable-Windows.exe --data-dir E:\Celer` (o la variable de entorno
+`CELER_DATA_DIR`) guarda conexiones, ajustes, historial y biblioteca en esa carpeta en vez de la habitual, por ejemplo
+en un USB. Esa copia tiene también su propio perfil del navegador interno (`<carpeta>\webview`), guarda las contraseñas
+aparte de las de la copia instalada y puede abrirse a la vez que ella.
+
 Celer comprueba al arrancar, y cada pocas horas, si hay una versión nueva (se desactiva en el diálogo de
 actualizaciones). Solo avisa: no descarga ni ejecuta nada hasta que pulsas **Actualizar**. Entonces, en una copia
 instalada con Celer Setup, descarga `Celer-Setup-Windows.exe` a su carpeta de datos local, comprueba su SHA-256 con el
