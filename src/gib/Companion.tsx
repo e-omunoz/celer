@@ -64,6 +64,10 @@ const ADVICE_REPEAT = 2;
 /** The same statement run this many times in a session (and not from the library): suggest saving it. */
 const REPEAT_RUNS = 3;
 
+/** Gib's bubble is open: the toasts move left of it (Overlays.tsx), so neither covers the other. */
+const [bubbleOpen, setBubbleOpen] = createSignal(false);
+export { bubbleOpen };
+
 export function Companion() {
   const [asleep, setAsleep] = createSignal(false);
   const [thinking, setThinking] = createSignal(false);
@@ -94,6 +98,8 @@ export function Companion() {
 
   const prefs = () => state.settings.gib;
   const shown = () => gibShows("companion");
+  createEffect(() => setBubbleOpen(shown() && bubble() !== null));
+  onCleanup(() => setBubbleOpen(false));
   // Anything at work: a query, a table loading, or the AI answering (he thinks along).
   const running = () => state.ai.running || state.tabs.some((tab) => (tab.kind === "sql" && tab.running) || (tab.kind === "table" && tab.loading));
 

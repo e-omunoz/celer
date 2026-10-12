@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show }
 import { commands } from "../commands";
 import { library, loadLibrary, openLibraryScript, openRunOn } from "../library";
 import { returnFocus } from "../focus";
+import { bubbleOpen } from "../gib/Companion";
 import { ObjIcon } from "../icons";
 import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty } from "../state";
 
@@ -110,7 +111,7 @@ export function Toasts() {
     return tab?.kind === "table" && tab.section === "data" && tableDirty(tab);
   };
   return (
-    <div class="toasts" classList={{ raised: raised() }} aria-live="polite">
+    <div class="toasts" classList={{ raised: raised(), "beside-tip": bubbleOpen() }} aria-live="polite">
       <For each={state.toasts}>
         {(toast) => (
           <div class={`toast ${toast.kind}`} role="status">
