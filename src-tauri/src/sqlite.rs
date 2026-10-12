@@ -384,6 +384,12 @@ impl SqliteDriver {
     }
 }
 
+/// The referenced table of a row `f` of pragma_foreign_key_list by its name in the catalog `cat`: REFERENCES takes the
+/// name in any case (`customers` for `Customers`), and the E-R diagram and the explorer link to the table's own name.
+fn fk_table(cat: &str) -> String {
+    format!("COALESCE((SELECT t.name FROM {cat} t WHERE t.type = 'table' AND t.name = f.\"table\" COLLATE NOCASE), f.\"table\")")
+}
+
 /// The referenced column of a row `f` of pragma_foreign_key_list (`schema`: the query parameter with the schema):
 /// `REFERENCES t` without columns points to t's primary key, whose column in the same position is looked up.
 fn fk_to(schema: &str) -> String {
@@ -595,7 +601,14 @@ impl Driver for SqliteDriver {
                         Ok(nodes)
                     }
                     "fks" => {
-                        let rows = self.query(&format!("SELECT f.id, f.\"table\", f.\"from\", {} FROM pragma_foreign_key_list(?1, ?2) f ORDER BY f.id, f.seq", fk_to("?2")), rusqlite::params![name, sch])?;
+                        let rows = self.query(
+                            &format!(
+                                "SELECT f.id, {}, f.\"from\", {} FROM pragma_foreign_key_list(?1, ?2) f ORDER BY f.id, f.seq",
+                                fk_table(&self.catalog(sch)),
+                                fk_to("?2")
+                            ),
+                            rusqlite::params![name, sch],
+                        )?;
                         let mut grouped: Vec<(i64, String, Vec<String>, Vec<String>)> = Vec::new();
                         for r in rows {
                             let id = cell_i64(&r[0]);
@@ -618,7 +631,7 @@ impl Driver for SqliteDriver {
                                     "key",
                                     Some(format!("{} → {}({})", from.join(", "), table, to.join(", "))),
                                 )
-                                .with_obj(ObjectRef::new(db, sch, &table, "table"))
+                                .with_obj(ObjectRef::new(db, schema, &table, "table"))
                             })
                             .collect())
                     }
@@ -637,8 +650,9 @@ impl Driver for SqliteDriver {
         let sch = self.schema_of(db, schema).to_string();
         let rows = self.query(
             &format!(
-                "SELECT m.name, f.id, f.\"table\", f.\"from\", {} FROM {} m, pragma_foreign_key_list(m.name, ?1) f \
+                "SELECT m.name, f.id, {}, f.\"from\", {} FROM {} m, pragma_foreign_key_list(m.name, ?1) f \
                  WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, f.id, f.seq",
+                fk_table(&self.catalog(&sch)),
                 fk_to("?1"),
                 self.catalog(&sch)
             ),
@@ -651,7 +665,7 @@ impl Driver for SqliteDriver {
                 name: format!("fk{}", cell_i64(&r[1])),
                 table: ObjectRef::new(db, schema, &table, "table"),
                 column: cell_string(&r[3]),
-                target: ObjectRef::new(db, &sch, &cell_string(&r[2]), "table"),
+                target: ObjectRef::new(db, schema, &cell_string(&r[2]), "table"),
                 target_column: cell_string(&r[4]),
             }
         })))
@@ -757,14 +771,8 @@ impl Driver for SqliteDriver {
     }
 
     fn qualified_name(&self, o: &ObjectRef) -> String {
-        let sch = if !o.schema.is_empty() {
-            o.schema.as_str()
-        } else if !o.database.is_empty() {
-            o.database.as_str()
-        } else {
-            "main"
-        };
-        format!("{}.{}", qi(sch), qi(&o.name))
+        // As the explorer's paths: an attached database's tables are (aux, main, name), like its columns and DDL.
+        format!("{}.{}", qi(self.schema_of(&o.database, &o.schema)), qi(&o.name))
     }
 
     fn quote_ident(&self, s: &str) -> String {

@@ -2018,6 +2018,34 @@ fn sqlite_schema_foreign_keys() {
     let implicit = keys.iter().find(|k| k.table.name == "nieto" && k.target.name == "padre").expect("clave sin columnas");
     assert_eq!(implicit.target_columns, ["b", "a"]);
     assert!(keys.iter().any(|k| k.table.name == "nieto" && k.target.name == "Hijo Raro" && k.target_columns == ["id"]));
+    // A REFERENCES written in another case, and the tables of an attached database (#158): the target is the table
+    // node the explorer and the E-R diagram have (same path, the catalog's name).
+    d.execute(
+        "CREATE TABLE Customers (Id INTEGER PRIMARY KEY);
+         CREATE TABLE orders (id INTEGER PRIMARY KEY, cust INTEGER REFERENCES customers(id));
+         INSERT INTO Customers VALUES (1); INSERT INTO orders VALUES (1, 1);
+         ATTACH ':memory:' AS aux;
+         CREATE TABLE aux.Clientes (id INTEGER PRIMARY KEY);
+         CREATE TABLE aux.pedidos (id INTEGER PRIMARY KEY, cliente INTEGER REFERENCES CLIENTES);
+         INSERT INTO aux.Clientes VALUES (1); INSERT INTO aux.pedidos VALUES (1, 1);",
+        10,
+    )
+    .unwrap();
+    for (db, from, to) in [("main", "orders", "Customers"), ("aux", "pedidos", "Clientes")] {
+        let keys = assert_schema_fks(d, "sqlite", &[db, "main"]);
+        let id = |o: &ObjectRef| (o.database.clone(), o.schema.clone(), o.name.clone());
+        let tables: Vec<_> = d
+            .children(&[db.to_string(), "main".into(), "tables".into()])
+            .unwrap()
+            .iter()
+            .filter_map(|n| n.obj.as_ref().map(id))
+            .collect();
+        let key = keys.iter().find(|k| k.table.name == from).unwrap_or_else(|| panic!("{db}: {keys:#?}"));
+        assert_eq!(key.target.name, to);
+        assert!(tables.contains(&id(&key.target)) && tables.contains(&id(&key.table)), "{db}: {key:?} / {tables:?}");
+        let explorer = d.children(&[db.to_string(), "main".into(), "tables".into(), from.into(), "fks".into()]).unwrap();
+        assert_eq!(explorer[0].obj.as_ref().map(id), Some(id(&key.target)), "{db}: explorer");
+    }
 }
 
 /// Generic ODBC against PostgreSQL's ODBC driver (psqlODBC), when CELER_ODBC_TEST gives its connection string and

@@ -351,7 +351,7 @@ function meta(db: Database, path: string[]): MetaNode[] {
     });
   }
   if (sub === "fks") {
-    const rows = query(db, `SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(${sqlString(name)})`);
+    const rows = query(db, `SELECT id, ${fkTable("main")}, "from", "to" FROM pragma_foreign_key_list(${sqlString(name)}) f`);
     // Same shape as the core: "cols → table(cols)" and the referenced table in obj (one node per key).
     const keys = new Map<string, { table: string; from: string[]; to: string[] }>();
     for (const row of rows) {
@@ -373,13 +373,18 @@ function meta(db: Database, path: string[]): MetaNode[] {
   return [];
 }
 
+/** The referenced table of a row `f` of pragma_foreign_key_list by its catalog name, as the core's fk_table. */
+function fkTable(sch: string): string {
+  return `COALESCE((SELECT t.name FROM ${quoteIdent(sch)}.sqlite_schema t WHERE t.type = 'table' AND t.name = f."table" COLLATE NOCASE), f."table")`;
+}
+
 /** Every foreign key of a schema ([database, schema]) in one query, as the core's schema_foreign_keys answers. */
 function schemaForeignKeys(db: Database, path: string[]): SchemaForeignKey[] {
   const [dbName = "main", schema = "main"] = path;
   const sch = schemaName(dbName, schema);
   const rows = query(
     db,
-    `SELECT m.name, f.id, f."table", f."from", f."to" FROM ${quoteIdent(sch)}.sqlite_schema m, pragma_foreign_key_list(m.name) f ` +
+    `SELECT m.name, f.id, ${fkTable(sch)}, f."from", f."to" FROM ${quoteIdent(sch)}.sqlite_schema m, pragma_foreign_key_list(m.name) f ` +
       `WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, f.id, f.seq`,
   );
   const keys = new Map<string, SchemaForeignKey>();

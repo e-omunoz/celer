@@ -220,6 +220,10 @@ All notable changes to Celer are documented here. The format follows
 - PostgreSQL: a foreign key to a partitioned table is listed once (#139), as pg_dump and `\d` show it: the copies
   PostgreSQL keeps for each partition no longer appear in the explorer's «claves foráneas», the E-R diagram (which drew
   the partitions as related tables) or the table's DDL, whose script now runs.
+- SQLite: the E-R diagram draws a foreign key whose `REFERENCES` is written in another case than the table
+  (`customers` for `Customers`) and the keys between tables of an attached database (#158); the explorer's «claves
+  foráneas» open the right table, and a table of an attached database opened from the explorer reads that database's
+  table instead of `main`'s.
 - Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
 - **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
   «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
