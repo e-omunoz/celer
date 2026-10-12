@@ -55,6 +55,11 @@ Celer is a database client, so it is useful to know exactly what it touches. Not
   checks it against the release's `SHA256SUMS.txt` (no sums, no update), checks it again right before running it, and
   runs it directly with `--update`: no command interpreter or script in between. Portable copies, macOS and Linux only
   open the release page.
+- **Reports to GitHub.** «Reportar / Sugerir» sends nothing on its own. «Abrir en GitHub» opens a prefilled
+  `issues/new` page in your browser. «Enviar a GitHub», offered only after you save your own GitHub token (a classic
+  token with `public_repo`, kept in the operating system's credential store under its own entry and never shown again
+  or written to a file or log), makes one `POST https://api.github.com/repos/e-omunoz/celer/issues` with the text of
+  the preview. «Quitar el token» deletes it from the credential store.
 - **Processes it starts.** The installer above; Java (`java -version`, and the JDBC bridge for Informix connections over
   JDBC), started directly with fixed arguments and without a console window; the browser or file manager when you ask
   for it. Celer Setup starts Celer when it finishes. No other program's process is stopped or modified: Celer Setup

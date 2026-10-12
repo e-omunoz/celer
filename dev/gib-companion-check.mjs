@@ -71,7 +71,8 @@ await app.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: g.x + g.w * 
 // frames apart, and reading them in between made this check fail now and then.
 const annoyed = await js(`
   const read = () => ({ mood: [...gib().classList].find((c) => c.startsWith('mood-')), side: [...gib().classList].find((c) => c.startsWith('side-')), act: [...gib().classList].find((c) => c.startsWith('act-')) ?? '' });
-  await until(() => { const r = read(); return r.mood === 'mood-annoyed' && r.side && !r.act; }, 2000);
+  // side-right exactly: a side-left left over from the previous pointer position must not end the wait.
+  await until(() => { const r = read(); return r.mood === 'mood-annoyed' && r.side === 'side-right' && !r.act; }, 2000);
   return read();`);
 check("hovering makes him annoyed and stops the activity", annoyed.mood === "mood-annoyed" && !annoyed.act, JSON.stringify(annoyed));
 check("he swats on the cursor's side", annoyed.side === "side-right", JSON.stringify(annoyed));

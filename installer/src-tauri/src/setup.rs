@@ -316,7 +316,8 @@ pub fn icon_ref(exe: &Path) -> String {
 pub fn uninstall_entries(dir: &Path, version: &str, size_kb: u32) -> Vec<(&'static str, RegVal)> {
     let exe = exe_path(dir);
     vec![
-        ("DisplayName", RegVal::Str("Celer".into())),
+        // Test mode shows apart from a real Celer in Settings › Apps.
+        ("DisplayName", RegVal::Str(if sandbox().is_some() { "Celer (prueba del instalador)" } else { "Celer" }.into())),
         ("DisplayVersion", RegVal::Str(version.into())),
         ("Publisher", RegVal::Str("Celer".into())),
         ("DisplayIcon", RegVal::Str(format!("{},0", exe.display()))),

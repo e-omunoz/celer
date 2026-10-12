@@ -234,11 +234,14 @@ Todos los atajos se pueden cambiar en *Ajustes › Atajos de teclado*. En macOS,
 ## Privacidad y seguridad
 
 - Sin cuentas ni telemetría. Tus datos no salen del equipo salvo que tú lo pidas.
-- Las contraseñas y la clave de IA se guardan en el almacén de credenciales del sistema, nunca en ficheros.
+- Las contraseñas, la clave de IA y el token opcional de GitHub para los reportes se guardan en el almacén de
+  credenciales del sistema, nunca en ficheros.
 - Más allá de tus bases de datos, Celer solo se conecta para: comprobar actualizaciones en la API de GitHub Releases
   (no envía nada sobre ti y se puede desactivar), descargar los drivers de Informix cuando lo pides (IBM CLI, el driver
-  JDBC de Maven Central y, solo si no hay Java, un JRE de Adoptium) y el asistente de IA si configuras tu propia clave
-  (recibe el esquema, nunca filas).
+  JDBC de Maven Central y, solo si no hay Java, un JRE de Adoptium), el asistente de IA si configuras tu propia clave
+  (recibe el esquema, nunca filas) y un reporte o sugerencia que envías con «Enviar a GitHub» usando tu propio token
+  de GitHub (una petición a la API de GitHub que crea el issue, con exactamente el texto que viste en la vista previa;
+  sin token, «Abrir en GitHub» solo abre la página en tu navegador).
 - El servidor MCP funciona en local por stdio, está desactivado por defecto y solo ve lo que permite cada conexión.
   Dejar que actúe en la aplicación es otro interruptor, también desactivado de serie; habla con el Celer abierto por
   loopback con un token aleatorio.

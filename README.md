@@ -236,11 +236,14 @@ Every shortcut can be changed in *Ajustes › Atajos de teclado*. On macOS, `Ctr
 ## Privacy and security
 
 - No accounts, no telemetry. Your data never leaves the computer unless you ask for it.
-- Passwords and the AI key live in the operating system's credential store, never in files.
+- Passwords, the AI key and the optional GitHub token for reports live in the operating system's credential store,
+  never in files.
 - Network access beyond your databases is limited to: the update check against the GitHub Releases API (it sends
   nothing about you and can be turned off), the Informix driver downloads when you ask for them (IBM CLI, the JDBC
-  driver from Maven Central and, only if there is no Java, a JRE from Adoptium), and the AI assistant if you configure
-  your own key (it receives the schema, never row data).
+  driver from Maven Central and, only if there is no Java, a JRE from Adoptium), the AI assistant if you configure
+  your own key (it receives the schema, never row data), and a bug report or suggestion you send with «Enviar a GitHub»
+  using your own GitHub token (one request to the GitHub API that creates the issue, with exactly the text you saw in
+  the preview; without a token, «Abrir en GitHub» only opens the page in your browser).
 - The MCP server runs locally over stdio, is off by default and only sees what each connection's permission allows.
   Letting it act in the app is a separate switch, off by default; it talks to the running Celer over loopback with a
   random token.
