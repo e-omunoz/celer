@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Quitting with a single open transaction in another window: the buttons read «Commit» and «Rollback», as with one
+  window, instead of «Commit en todas» / «Rollback en todas» (#151).
 - Gib: while his speech bubble is open, notices appear to the left of it instead of covering it in the bottom-right
   corner (#150).
 - Connection dialog: the «Otro…» environment button sits in line with the other five instead of 8 px lower (#149).

@@ -784,8 +784,8 @@ export async function confirmQuit(): Promise<boolean> {
         "¿Salir de Celer?",
         `Hay ${tx} ${tx === 1 ? "consola con una transacción abierta" : "consolas con transacciones abiertas"} en ${where.join(", ")}. Antes de salir, confírma${tx === 1 ? "la" : "las"} (Commit) o deshaz${tx === 1 ? "la" : "las"} (Rollback).`,
         [
-          { label: "Commit en todas", value: "commit", style: "primary" },
-          { label: "Rollback en todas", value: "rollback", style: "danger" },
+          { label: tx === 1 ? "Commit" : "Commit en todas", value: "commit", style: "primary" },
+          { label: tx === 1 ? "Rollback" : "Rollback en todas", value: "rollback", style: "danger" },
         ],
       );
       if (choice !== "commit" && choice !== "rollback") return false;
