@@ -28,7 +28,8 @@ try {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const until = async (fn, ms = 6000) => { const t = Date.now(); while (Date.now() - t < ms) { const v = fn(); if (v) return v; await sleep(40); } return null; };
     const txt = (el) => el?.textContent.replace(/\\s+/g, " ").trim() ?? null;
-    const panels = () => [...document.querySelectorAll('.menu')];
+    // Live menus only: a closed one leaves a copy of itself (data-leave) while its exit animation plays.
+    const panels = () => [...document.querySelectorAll('.menu:not([data-leave])')];
     const items = (level = 0) => [...(panels()[level]?.querySelectorAll(':scope > .menu-item') ?? [])];
     const labels = (level = 0) => items(level).map((b) => txt(b.querySelector('.menu-label')) + (b.classList.contains('has-sub') ? ' ›' : '') + (b.querySelector('kbd') ? ' [' + txt(b.querySelector('kbd')) + ']' : ''));
     const key = (k, target = document.activeElement) => target.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
@@ -68,7 +69,7 @@ try {
   check("its submenu: fichero de Celer, DBeaver, DbVisualizer", JSON.stringify(nuevo.sub) === JSON.stringify(["Fichero de Celer…", "DBeaver…", "DbVisualizer…"]), JSON.stringify(nuevo.sub));
   check("→ opens the submenu with its first item active and the focus in it", nuevo.subFocused && nuevo.firstActive === "Fichero de Celer…", JSON.stringify(nuevo));
   check("the submenu sits beside its row, on screen", nuevo.beside && nuevo.inside, JSON.stringify(nuevo));
-  const back = await js(`key('ArrowLeft', panels()[1]); await sleep(100); const one = panels().length === 1 && document.activeElement === panels()[0]; key('Escape', panels()[0]); await sleep(300); return { one, closed: panels().length === 0 };`);
+  const back = await js(`key('ArrowLeft', panels()[1]); await sleep(100); const one = panels().length === 1 && document.activeElement === panels()[0]; key('Escape', panels()[0]); const closed = Boolean(await until(() => panels().length === 0, 2000)); return { one, closed };`);
   check("← closes the submenu back to its row; Esc closes the menu", back.one && back.closed, JSON.stringify(back));
 
   // ---- #111: explorer options and background menus
@@ -182,6 +183,18 @@ try {
   await shot("06-settings-groups");
   check("settings nav grouped General, Editor, Conexiones, IA y MCP", JSON.stringify(st.map((g) => g.label)) === JSON.stringify(["General", "Editor", "Conexiones", "IA y MCP"]), JSON.stringify(st));
   check("the theme editor sits in General", st[0]?.items.includes("Editor de tema"), JSON.stringify(st[0]));
+  // A new theme nobody has touched has nothing to lose: leaving does not ask.
+  const untouched = await js(`
+    [...document.querySelectorAll('.settings-nav button')].find((b) => txt(b) === 'Editor de tema').click();
+    await until(() => document.querySelector('.theme-editor')); await sleep(400);
+    const status = txt(document.querySelector('.te-foot .muted'));
+    [...document.querySelectorAll('.settings-nav button')].find((b) => txt(b) === 'Apariencia').click();
+    const ask = await until(() => [...document.querySelectorAll('.dialog')].find((d) => /Descartar los cambios/.test(d.textContent)), 800);
+    if (ask) [...ask.querySelectorAll('button')].find((b) => /Descartar/.test(b.textContent))?.click();
+    await sleep(300);
+    return { ask: !!ask, status, left: !document.querySelector('.theme-editor') };
+  `);
+  check("an untouched new theme leaves the editor without asking", !untouched.ask && untouched.left && !/sin guardar:/i.test(untouched.status ?? ""), JSON.stringify(untouched));
   const te = await js(`
     [...document.querySelectorAll('.settings-nav button')].find((b) => txt(b) === 'Apariencia').click(); await sleep(300);
     [...document.querySelectorAll('.settings-body button')].find((b) => /Editor de tema/.test(b.textContent)).click();

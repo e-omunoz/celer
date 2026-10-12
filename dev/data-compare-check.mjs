@@ -16,7 +16,7 @@ const H = `
     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 200 }));
     let item = null;
     for (const [level, re] of res.entries()) {
-      item = await until(() => [...(document.querySelectorAll('.menu')[level]?.querySelectorAll(':scope > .menu-item') ?? [])].find((b) => re.test(b.textContent) && !b.disabled), 3000);
+      item = await until(() => [...(document.querySelectorAll('.menu:not([data-leave])')[level]?.querySelectorAll(':scope > .menu-item') ?? [])].find((b) => re.test(b.textContent) && !b.disabled), 3000);
       if (!item) break;
       item.click();
     }
