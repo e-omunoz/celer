@@ -1,7 +1,7 @@
 import { CalendarDays } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
 import { raw } from "../raw";
-import { easeTowards, identityOrder, inOrder, inverseOrder, isIdentity, layoutByColumn, moveColumn, slideGap, type ColumnOrder } from "../columnOrder";
+import { easeTowards, identityOrder, inOrder, inverseOrder, isIdentity, isPermutation, layoutByColumn, moveColumn, slideGap, type ColumnOrder } from "../columnOrder";
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
@@ -71,6 +71,8 @@ export interface GridProps {
   onActivate?: (row: number, col: number) => void;
   /** The column order changed (headers dragged): null when it is the query's own again. */
   onColumnOrder?: (order: ColumnOrder | null) => void;
+  /** An order to start with (a tab moved from another window), asked once per result; used when it fits its columns. */
+  initialColumnOrder?: () => ColumnOrder | null | undefined;
   /**
    * Ctrl+V in an editable grid: the block on the clipboard (copied from Excel: tab-separated) goes into the cells
    * from the active one rightwards and down, each value read for its column; a `row` past the rows shown is new.
@@ -1666,7 +1668,10 @@ export function DataGrid(props: GridProps) {
         headerPress = null;
         if (colMove()) endMove();
         stopSlide();
-        setColOrder(identityOrder(props.columns.length));
+        const start = untrack(() => props.initialColumnOrder?.());
+        const names = props.columns.map((col) => col.name);
+        const fits = start && start.names.length === names.length && start.names.every((name, i) => name === names[i]) && isPermutation(start.order, names.length);
+        setColOrder(fits ? start.order : identityOrder(props.columns.length));
         if (scroller) {
           scroller.scrollTop = 0;
           scroller.scrollLeft = 0;

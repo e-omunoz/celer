@@ -96,6 +96,7 @@ import {
   serverOf,
   setActiveResult,
   setGridColumnOrder,
+  takeArrivingColumnOrder,
   setState,
   setTabConnection,
   setTableFilter,
@@ -759,6 +760,7 @@ function SqlPane(props: { tab: SqlTab }) {
               onExport={exportShown}
               onActivate={() => openInspector("value")}
               onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
+              initialColumnOrder={() => takeArrivingColumnOrder(props.tab.id)}
             />
           </Match>
         </Switch>
@@ -1014,6 +1016,7 @@ function TablePane(props: { tab: TableTab }) {
             onColumnFilter={(col) => openFilter(newFilter(props.tab, props.tab.gridCols[col]?.name, "in"))}
             onActivate={() => openInspector("value")}
             onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
+            initialColumnOrder={() => takeArrivingColumnOrder(props.tab.id)}
           />
           <Show when={changes()}>
             <div class="changes-bar">

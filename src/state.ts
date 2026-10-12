@@ -3506,6 +3506,23 @@ export function setGridColumnOrder(tabId: string, order: ColumnOrder | null) {
   else gridColumnOrders.delete(tabId);
 }
 
+export function gridColumnOrder(tabId: string): ColumnOrder | undefined {
+  return gridColumnOrders.get(tabId);
+}
+
+/** Column orders of tabs that came from another window: their grid takes it once, when it first shows the result. */
+const arrivingColumnOrders = new Map<string, ColumnOrder>();
+
+export function setArrivingColumnOrder(tabId: string, order: ColumnOrder) {
+  arrivingColumnOrders.set(tabId, order);
+}
+
+export function takeArrivingColumnOrder(tabId: string): ColumnOrder | undefined {
+  const order = arrivingColumnOrders.get(tabId);
+  arrivingColumnOrders.delete(tabId);
+  return order;
+}
+
 const EXT: Record<ExportFormat, string> = { csv: "csv", tsv: "tsv", json: "json", sql: "sql", markdown: "md", html: "html", xml: "xml", xlsx: "xlsx" };
 
 function openExport(source: ExportSource) {

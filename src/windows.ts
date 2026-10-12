@@ -1,4 +1,5 @@
 import type { GhostContent } from "./dnd";
+import type { ColumnOrder } from "./columnOrder";
 // Several windows of one Celer. Each window is its own page with its own state.ts: its tabs and their sessions,
 // its explorer, its panels and its focus. What they share (connections, settings, the library, Gib's memory) has
 // one owner: the core writes the files and tells every window (events "celer://shared"). The core also keeps the
@@ -36,6 +37,7 @@ import {
   endTransactions,
   explainStatement,
   fileDirty,
+  gridColumnOrder,
   insertIntoActive,
   notify,
   openInspector,
@@ -50,6 +52,7 @@ import {
   restoreTabs,
   runText,
   savedTabs,
+  setArrivingColumnOrder,
   setGibEvent,
   setState,
   showPlan,
@@ -402,7 +405,13 @@ function tabMessage(tabs: Tab[], index: number | null): Message {
   for (const tab of tabs) if (tab.connId && state.passwords[tab.connId]) passwords[tab.connId] = state.passwords[tab.connId];
   // The plain tabs behind the store, not a clone: the message is serialized once on its way, and a loaded result
   // can be up to a million rows.
-  return { kind: "adopt", tabs: tabs.map(raw), index, passwords };
+  // The order the grid's columns were dragged into goes along (the grid itself is not part of the tab).
+  const columnOrders: Record<string, unknown> = {};
+  for (const tab of tabs) {
+    const order = gridColumnOrder(tab.id);
+    if (order) columnOrders[tab.id] = order;
+  }
+  return { kind: "adopt", tabs: tabs.map(raw), index, passwords, columnOrders };
 }
 
 /** Rows a tab carries with it to another window (its results, pinned ones included, or a table's page). */
@@ -610,7 +619,10 @@ function adopt(message: Message) {
   takePasswords(message.passwords);
   const tabs = Array.isArray(message.tabs) ? (message.tabs as Tab[]).filter((tab) => tab && typeof tab.id === "string") : [];
   let index = typeof message.index === "number" ? message.index : null;
+  const orders = message.columnOrders && typeof message.columnOrders === "object" ? (message.columnOrders as Record<string, unknown>) : {};
   for (const tab of tabs) {
+    const order = orders[tab.id] as ColumnOrder | undefined;
+    if (order && Array.isArray(order.names) && Array.isArray(order.order)) setArrivingColumnOrder(tab.id, order);
     adoptTab(tab, index);
     if (index !== null) index++;
   }
