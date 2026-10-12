@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Import from DBeaver/DbVisualizer: a MySQL/MariaDB URL with `connectTimeout=0` or `socketTimeout=0` (no timeout
+  in Connector/J) no longer becomes a 1-second timeout; the parameter is left out (#144).
 - Windows: closing a window with a single tab at risk says «Puedes moverla…» / «Moverla a …» instead of the plural
   (#157).
 - Variables: hovering a `${name}` inside a comment or string that spans several lines (a `/* … */` block) no longer

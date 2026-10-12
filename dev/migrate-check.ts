@@ -4,7 +4,7 @@
 // per engine of dev/wsl/compose.yml); the edge cases below are written in the same formats.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { applyDbeaverCredentials, decryptDbeaverCredentials, parseDbeaver, parseDbVisualizer, parseJdbcUrl, parseXml, type Candidate } from "../src/migrateParse.ts";
+import { applyDbeaverCredentials, decryptDbeaverCredentials, parseDbeaver, parseJdbc, parseDbVisualizer, parseJdbcUrl, parseXml, type Candidate } from "../src/migrateParse.ts";
 
 const fixture = (path: string) => readFileSync(new URL(`./fixtures/migrate/${path}`, import.meta.url), "utf8");
 const dbeaver = (connections: Record<string, unknown>, path = "data-sources.json") => parseDbeaver({ tool: "dbeaver", project: "General", path, text: JSON.stringify({ connections }) });
@@ -115,6 +115,9 @@ assert.deepEqual(pgMulti.notes, ["Celer conecta al primer servidor; no se usan: 
 const myMulti = byName(edge, "MySQL varios");
 assert.deepEqual([myMulti.cfg.host, myMulti.cfg.port, myMulti.cfg.database, myMulti.cfg.encryption, myMulti.cfg.trustCert, myMulti.cfg.extra], ["my1", 3306, "web", "required", true, "connect_timeout=5"]);
 assert.ok(myMulti.notes[0].includes("my2:3307"));
+// connectTimeout=0 / socketTimeout=0 are "no timeout" in Connector/J: left out, never a 1 s limit (#144).
+assert.equal(parseJdbc("jdbc:mysql://h/x?connectTimeout=0&socketTimeout=0")?.params, undefined);
+assert.equal(parseJdbc("jdbc:mariadb://h/x?socketTimeout=1500")?.params, "read_timeout=2");
 const pgSsl = byName(edge, "PG SSL");
 assert.deepEqual([pgSsl.cfg.encryption, pgSsl.cfg.trustCert], ["required", false]);
 const plain = byName(edge, "Sin cifrado");

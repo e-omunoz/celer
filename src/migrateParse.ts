@@ -331,11 +331,12 @@ export function parseJdbc(url: string): JdbcInfo | null {
         case "trustservercertificate":
           info.trustCert = isTrue(value);
           break;
+        // 0 is "no timeout" in Connector/J and MariaDB Connector/J: left out, not a 1 s limit.
         case "connecttimeout":
-          if (/^\d+$/.test(value)) extra.push(param("connect_timeout", String(ms(value))));
+          if (/^\d+$/.test(value) && Number(value) > 0) extra.push(param("connect_timeout", String(ms(value))));
           break;
         case "sockettimeout":
-          if (/^\d+$/.test(value)) extra.push(param("read_timeout", String(ms(value))));
+          if (/^\d+$/.test(value) && Number(value) > 0) extra.push(param("read_timeout", String(ms(value))));
           break;
         case "usecompression":
           extra.push(param("compress", isTrue(value) ? "true" : "false"));
