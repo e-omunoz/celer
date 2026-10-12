@@ -484,6 +484,64 @@ fn mssql_engine() {
     assert!(out.messages.iter().any(|m| m.starts_with("No se ejecutó 1 lote")), "{:?}", out.messages);
     assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "4");
 
+    // An error raised after a result's columns (a conversion failing on row n, divide by zero) fails the statement,
+    // in the first page or a later one, in a later statement of the batch, and stops a GO script there (#129).
+    let err = d.execute("SELECT CAST(v AS int) AS n FROM (VALUES('1'),('2'),('x'),('4')) t(v)", 100).unwrap_err().to_string();
+    assert!(err.contains("Msg 245") && err.contains("tras leer 2 filas"), "{err}");
+    let err = d.execute("SELECT CAST(v AS int) FROM (VALUES('1'),('x')) t(v)", 100).unwrap_err().to_string();
+    assert!(err.contains("Msg 245"), "{err}");
+    let err = d.execute("SELECT 1 AS a; SELECT 1/0 AS b", 100).unwrap_err().to_string();
+    assert!(err.contains("Msg 8134") && err.contains("Se descartan los 2 resultados"), "{err}");
+    let err = d.execute("PRINT 'antes'; SELECT 1/0 AS b", 100).unwrap_err().to_string();
+    assert!(err.starts_with("antes\n") && err.contains("Msg 8134"), "{err}");
+    let late = "SELECT CAST(CASE WHEN n = 3001 THEN 'x' ELSE CAST(n AS varchar(10)) END AS int) AS n FROM (SELECT TOP 4000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) n FROM sys.all_objects a CROSS JOIN sys.all_objects b) s";
+    let out = d.execute(late, 100).unwrap();
+    assert!(out.results[0].has_more);
+    let err = loop {
+        match d.fetch(500) {
+            Ok(f) => assert!(f.has_more, "the error of row 3001 was lost: {} rows", f.rows.len()),
+            Err(e) => break e.to_string(),
+        }
+    };
+    assert!(err.contains("Msg 245"), "{err}");
+    assert_eq!(scalar(d, "SELECT 1"), "1");
+    // A later statement fails while the first result is paged.
+    let out = d.execute("SELECT TOP 50 a.object_id FROM sys.all_objects a; SELECT 1/0 AS b", 10).unwrap();
+    assert!(out.results[0].has_more);
+    let err = loop {
+        match d.fetch(10) {
+            Ok(f) => assert!(f.has_more, "the divide by zero after the paged result was lost"),
+            Err(e) => break e.to_string(),
+        }
+    };
+    assert!(err.contains("Msg 8134"), "{err}");
+    let err = d.execute("SELECT CAST(v AS int) FROM (VALUES('1'),('x')) t(v)\nGO\nINSERT dbo.go_a DEFAULT VALUES", 10).unwrap_err().to_string();
+    assert!(err.starts_with("Lote 1 de 2:") && err.contains("Msg 245"), "{err}");
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "4", "the batch after the failing one is not sent");
+    let err = d.execute(&format!("{late}\nGO\nINSERT dbo.go_a DEFAULT VALUES"), 100).map(|_| loop {
+        match d.fetch(1000) {
+            Ok(f) if f.has_more => {}
+            Ok(_) => break String::new(),
+            Err(e) => break e.to_string(),
+        }
+    });
+    let err = err.unwrap();
+    assert!(err.contains("Msg 245") && err.contains("No se ejecutó 1 lote del script por este error"), "{err}");
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM dbo.go_a"), "4", "the batch after the failing one is not sent");
+    let out = d.execute("SELECT 1", 10).unwrap();
+    assert!(!out.messages.iter().any(|m| m.contains("lote")), "the stopped batch is not told as dropped: {:?}", out.messages);
+    // Export fails and leaves no file, in the first page or a later one.
+    let dir = std::env::temp_dir().join(format!("celer-mssql-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (sql, what) in [(late.to_string(), "later page"), (late.replace("3001", "30"), "first page")] {
+        let path = dir.join("fallo.csv");
+        let o = crate::export::ExportOptions { path: path.to_string_lossy().into(), ..Default::default() };
+        let err = crate::export::export(d, &sql, &o, DbKind::Mssql, &|_| {}, &|| false).unwrap_err().to_string();
+        assert!(err.contains("Msg 245"), "{what}: {err}");
+        assert!(!path.exists() && !dir.join("fallo.csv.partial").exists(), "{what}: a file was left");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
     // Cancel a running statement.
     let e = d.execute("SELECT * FROM celer_secret_42 WHERE x = 'celer-secret-42'", 10).expect_err("tabla inexistente").to_string();
     crate::errlog::assert_scrubbed("SQL Server", &e, "celer_secret_42");
@@ -2510,4 +2568,114 @@ fn odbc_open_result_is_freed_before_its_connection() {
         }
         eprintln!("{via}: 40 consoles closed with an open result");
     }
+}
+
+// ───────────────────────────────────────────────────────────────── a runtime error inside a result (#129)
+
+/// A statement whose error is raised while its rows are read (a division by zero, a failed conversion or a
+/// subquery with two rows, on a late row) fails: in the first page or a later one, never as a shorter result, and
+/// an export of it fails and leaves no file. The session still answers `probe` afterwards.
+fn assert_mid_result_error(engine: &str, kind: DbKind, d: &mut dyn Driver, sql: &str, probe: &str) {
+    let failed = match d.execute(sql, 10) {
+        Err(e) => e.to_string(),
+        Ok(out) => {
+            let mut rows = out.results.iter().map(|r| r.rows.len()).sum::<usize>();
+            let mut more = out.results.iter().any(|r| r.has_more);
+            loop {
+                assert!(more, "{engine}: the error was lost, the statement ended OK with {rows} rows");
+                match d.fetch(100) {
+                    Ok(f) => {
+                        rows += f.rows.len();
+                        more = f.has_more;
+                    }
+                    Err(e) => break e.to_string(),
+                }
+            }
+        }
+    };
+    assert!(!failed.is_empty(), "{engine}: an empty error");
+    eprintln!("{engine}: {}", failed.lines().next().unwrap_or(""));
+    assert!(!scalar(d, probe).is_empty(), "{engine}: the session after the error");
+    let dir = std::env::temp_dir().join(format!("celer-midresult-{}-{}", engine.replace(['/', ' '], "_"), std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for format in ["csv", "xlsx"] {
+        let path = dir.join(format!("fallo.{format}"));
+        let o = crate::export::ExportOptions { format: format.into(), path: path.to_string_lossy().into(), ..Default::default() };
+        let r = crate::export::export(d, sql, &o, kind, &|_| {}, &|| false);
+        assert!(r.is_err(), "{engine} {format}: the export reported success ({:?} rows)", r.ok());
+        assert!(!path.exists() && !dir.join(format!("fallo.{format}.partial")).exists(), "{engine} {format}: a file was left");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!scalar(d, probe).is_empty(), "{engine}: the session after the failed export");
+}
+
+#[test]
+fn mid_result_error_mssql() {
+    let Some(mut d) = mssql("tempdb") else { return };
+    let late = |row: u32| format!("SELECT CAST(CASE WHEN n = {row} THEN 'x' ELSE CAST(n AS varchar(10)) END AS int) AS n FROM (SELECT TOP 8000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) n FROM sys.all_objects a CROSS JOIN sys.all_objects b) s");
+    assert_mid_result_error("SQL Server (first page)", DbKind::Mssql, &mut d, &late(3), "SELECT 1");
+    assert_mid_result_error("SQL Server (later page)", DbKind::Mssql, &mut d, &late(7001), "SELECT 1");
+    assert_mid_result_error("SQL Server (divide by zero)", DbKind::Mssql, &mut d, "SELECT 10 / (n - 600) AS q FROM (SELECT TOP 800 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) n FROM sys.all_objects) s", "SELECT 1");
+}
+
+#[test]
+fn mid_result_error_postgres() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    assert_mid_result_error("PostgreSQL (first page)", DbKind::Postgres, &mut d, "SELECT 10 / (n - 3) AS q FROM generate_series(1, 8000) n", "SELECT 1");
+    assert_mid_result_error("PostgreSQL (later page)", DbKind::Postgres, &mut d, "SELECT 10 / (n - 7001) AS q FROM generate_series(1, 8000) n", "SELECT 1");
+    assert_mid_result_error("PostgreSQL (conversion)", DbKind::Postgres, &mut d, "SELECT CASE WHEN n = 6000 THEN 'x' ELSE n::text END::int AS q FROM generate_series(1, 8000) n", "SELECT 1");
+}
+
+/// MySQL, and MariaDB in the second run of dev/wsl/engines.sh (it runs the tests named "mysql").
+#[test]
+fn mid_result_error_mysql() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let engine = if d.server_info().unwrap_or_default().contains("MariaDB") { "MariaDB" } else { "MySQL" };
+    // A scalar subquery that finds two rows on one row: error 1242 (division by zero is NULL in MySQL).
+    let sql = |row: u32| format!("WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 900) SELECT n, (SELECT 1 FROM (SELECT 1 AS a UNION ALL SELECT 2) x WHERE s.n = {row}) AS q FROM s");
+    assert_mid_result_error(&format!("{engine} (first page)"), DbKind::Mysql, &mut d, &sql(3), "SELECT 1");
+    assert_mid_result_error(&format!("{engine} (later page)"), DbKind::Mysql, &mut d, &sql(700), "SELECT 1");
+}
+
+#[test]
+fn mid_result_error_sqlite() {
+    let cfg = ConnConfig { kind: DbKind::Sqlite, file_path: ":memory:".into(), ..Default::default() };
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite en memoria");
+    let sql = |row: u32| format!("WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 8000) SELECT CASE WHEN n = {row} THEN abs(-9223372036854775807 - 1) ELSE n END AS q FROM s");
+    assert_mid_result_error("SQLite (first page)", DbKind::Sqlite, &mut d, &sql(3), "SELECT 1");
+    assert_mid_result_error("SQLite (later page)", DbKind::Sqlite, &mut d, &sql(7001), "SELECT 1");
+}
+
+/// Informix over DRDA and over JDBC: a division by zero on a late row of a catalog cross join.
+fn informix_mid_result(via: &str, d: &mut dyn Driver) {
+    let probe = "SELECT COUNT(*) FROM systables WHERE tabid = 1";
+    let sql = |at: u32| format!("SELECT 10 / (a.tabid * 1000 + b.tabid - {at}) AS q FROM systables a, systables b WHERE a.tabid <= 60 AND b.tabid <= 60 ORDER BY a.tabid, b.tabid");
+    assert_mid_result_error(&format!("Informix {via} (first page)"), DbKind::Informix, d, &sql(1003), probe);
+    assert_mid_result_error(&format!("Informix {via} (later page)"), DbKind::Informix, d, &sql(50050), probe);
+}
+
+#[test]
+fn mid_result_error_informix() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let mut d = drda_connect(lib)(cfg).expect("conexión Informix DRDA");
+    informix_mid_result("DRDA", d.as_mut());
+}
+
+#[test]
+fn mid_result_error_informix_jdbc() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt)(cfg).expect("conexión Informix JDBC");
+    informix_mid_result("JDBC", d.as_mut());
+}
+
+/// Generic ODBC (PostgreSQL through psqlODBC on the WSL engines).
+#[test]
+fn mid_result_error_odbc() {
+    let Ok(s) = std::env::var("CELER_ODBC_TEST") else { return };
+    let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: s, ..Default::default() };
+    let mut d = crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().into()).expect("conexión ODBC");
+    assert_mid_result_error("ODBC (first page)", DbKind::Odbc, &mut d, "SELECT 10 / (n - 3) AS q FROM generate_series(1, 8000) n", "SELECT 1");
+    assert_mid_result_error("ODBC (later page)", DbKind::Odbc, &mut d, "SELECT 10 / (n - 7001) AS q FROM generate_series(1, 8000) n", "SELECT 1");
 }

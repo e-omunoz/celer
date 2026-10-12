@@ -436,6 +436,17 @@ fn batches_note(one: &str, many: &str, n: usize, rest: &str) -> Option<String> {
     }
 }
 
+/// What a failed batch had returned before its error, for the error text (its rows are not shown as a result).
+fn partial_note(results: &[ResultSet]) -> Option<String> {
+    let rows: usize = results.iter().filter(|r| !r.columns.is_empty()).map(|r| r.rows.len()).sum();
+    let grids = results.iter().filter(|r| !r.columns.is_empty()).count();
+    match grids {
+        0 => None,
+        1 => Some(format!("El resultado se descarta: el error llegó tras leer {}.", fmt_rows(rows as i64))),
+        n => Some(format!("Se descartan los {n} resultados del lote: el error llegó tras leer {}.", fmt_rows(rows as i64))),
+    }
+}
+
 /// Si la línea es un separador de lotes: `GO` o `GO n`, con un comentario `--` detrás si acaso. Las veces del lote.
 fn go_line(line: &str) -> Option<usize> {
     let code = line.split("--").next().unwrap_or("");
@@ -2025,9 +2036,16 @@ impl MssqlDriver {
         let mut out = ExecOutput::default();
         self.errored = false;
         out.results = self.pump(fetch.max(1), &mut out.messages);
-        // Only errors make the batch fail: PRINT and other messages alone are its output.
-        if out.results.is_empty() && self.errored && self.cursor.is_none() {
-            let msg = out.messages.join("\n");
+        // Only errors make the batch fail: PRINT and other messages alone are its output. An error that arrives after
+        // a result's columns (divide by zero, a failed conversion on row n) fails it too, as on every other engine:
+        // the rows read before it are only a part of the answer, so they are not shown as one.
+        if self.errored {
+            self.close_cursor()?;
+            let mut msg = out.messages.join("\n");
+            if let Some(note) = partial_note(&out.results) {
+                msg.push('\n');
+                msg.push_str(&note);
+            }
             self.refresh_tx_state();
             bail!(msg);
         }
@@ -2089,15 +2107,32 @@ impl MssqlDriver {
                     out.rows.push(r);
                 }
                 Some(Item::Error(m)) => {
+                    // The script stops at the failing batch: the ones after it are not sent (nor told as dropped).
+                    let left = std::mem::take(&mut self.batches).len();
                     self.close_cursor()?;
-                    bail!(m);
+                    self.refresh_tx_state();
+                    let mut msg = out.messages;
+                    msg.push(m);
+                    msg.extend(batches_note("No se ejecutó", "No se ejecutaron", left, "del script por este error."));
+                    bail!(msg.join("\n"));
                 }
                 // PRINT while the rows are read (between two results, or from a procedure): told with this page.
                 Some(Item::Info(m)) => out.messages.push(m),
                 Some(other) => {
                     // Empieza otro resultado del mismo lote.
                     self.peek_back(other);
+                    self.errored = false;
                     out.extra = self.pump(n, &mut out.messages);
+                    // A later statement of the batch failed: the batch fails, like one that fails before its first page.
+                    if self.errored {
+                        let left = std::mem::take(&mut self.batches).len();
+                        self.close_cursor()?;
+                        self.refresh_tx_state();
+                        let mut msg = out.messages;
+                        msg.extend(partial_note(&out.extra));
+                        msg.extend(batches_note("No se ejecutó", "No se ejecutaron", left, "del script por este error."));
+                        bail!(msg.join("\n"));
+                    }
                     return Ok(out);
                 }
                 None => {

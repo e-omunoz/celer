@@ -210,6 +210,11 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- **SQL Server: an error raised while a result's rows are read fails the statement** (#129): a conversion that fails
+  or a division by zero on row n (or in a later statement of the batch) was shown as a success with the rows read
+  before it, an export wrote a truncated file and reported success, and a GO script went on with the next batches.
+  Now the statement fails with SQL Server's message (and how many rows had arrived), the export fails and leaves no
+  file, and the script stops at the failing batch, as on every other engine.
 - MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
 - **MySQL's transaction indicator follows the server** (#128): a script that fails after `START TRANSACTION` leaves the
   transaction shown as open (Commit/Rollback enabled, a warning before closing the console rolls it back), and so do
