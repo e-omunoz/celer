@@ -16,7 +16,8 @@ export const meta = {
 
 // args: { branch: 'feat/integration-x.y' (required), base?: 'origin/main', since?: '<ref of the previous release>',
 //         issues?: number[], review?: boolean (default true), reviewMode?: 'audit' | 'full', milestone?: string, tracking?: number,
-//         release?: boolean (default true: merge and publish when every gate in docs/review/RELEASE_GATE.md passes) }
+//         release?: boolean (default true: merge and publish when every gate in docs/review/RELEASE_GATE.md passes),
+//         slots?: number (default 3: packages tested at the same time, each in its own desktop app slot) }
 const A = args || {}
 if (!A.branch) throw new Error('args.branch (the integration branch name) is required')
 const BRANCH = A.branch
@@ -24,9 +25,10 @@ const BASE = A.base || 'origin/main'
 const SINCE = A.since || BASE
 const REVIEW = A.review !== false
 const RELEASE = A.release !== false
+const SLOTS = Math.max(1, Math.min(A.slots || 3, 6))
 const ROLE = role => `Read and follow your role file \`.claude/agents/${role}.md\`, the project notes in \`CLAUDE.md\` and the engine rule in \`docs/review/ENGINE_MATRIX.md\` (every engine, always).`
 
-// The desktop app, the browser pane and the main checkout are single resources: testing and fixing take turns.
+// The main checkout is one: integrating, the gate and the release take turns (tests run in app slots, see withSlot).
 let lock = Promise.resolve()
 function exclusive(fn) {
   const run = lock.then(fn, fn)
@@ -122,10 +124,25 @@ if (triage.skipped.length) log(`Skipped: ${triage.skipped.map(s => `#${s.number}
 const issueInfo = new Map(triage.issues.map(i => [i.number, i]))
 log(`${triage.issues.length} issues in ${triage.packages.length} packages`)
 
-// ---------------------------------------------------------------- Implement → Test (pipeline; tests take turns)
-const testPrompt = (pkg, branch) => `${ROLE('celer-tester')}
+// ---------------------------------------------------------------- Implement → Test (pipeline; SLOTS tests at once)
+// Each test chain holds one desktop app slot (dev/run-desktop.ps1 -Slot n: own worktree, build, data folder and
+// DevTools port), so packages are tested side by side without sharing an app or switching a checkout.
+const freeSlots = Array.from({ length: SLOTS }, (_, i) => i + 1)
+const slotWaiters = []
+async function withSlot(fn) {
+  const slot = freeSlots.length ? freeSlots.shift() : await new Promise(resolve => slotWaiters.push(resolve))
+  try {
+    return await fn(slot)
+  } finally {
+    const next = slotWaiters.shift()
+    if (next) next(slot)
+    else freeSlots.push(slot)
+  }
+}
 
-Branch: \`${branch}\` (package ${pkg.slug}). Test these issues against their acceptance criteria, on every listed engine:
+const testPrompt = (pkg, branch, slot) => `${ROLE('celer-tester')}
+
+Branch: \`${branch}\` (package ${pkg.slug}). Your app slot is **${slot}**: \`dev\\run-desktop.ps1 -Slot ${slot} -Ref origin/${branch}\` from the Windows checkout, \`node dev/cdp.mjs --slot ${slot} …\`; other packages are being tested in other slots at the same time, so never stop a celer.exe that is not yours, and put \`s${slot}\` in the name of any table you create. Test these issues against their acceptance criteria, on every listed engine:
 ${JSON.stringify(pkg.issues.map(n => issueInfo.get(n)).filter(Boolean).map(i => ({ issue: i.number, title: i.title, acceptance: i.acceptance, engines: i.engines })), null, 1)}`
 
 const results = await pipeline(
@@ -133,23 +150,23 @@ const results = await pipeline(
   pkg => agent(`${ROLE('celer-implementer')}
 
 Create branch \`issue/${pkg.slug}\` from \`${BASE}\` in this worktree and implement package "${pkg.slug}" (${pkg.rationale}).
-When done and pushed, run \`git switch --detach\` so the branch is free for the tester to check out in the main checkout.
+When done and pushed, run \`git switch --detach\` so the branch is free for a fixer's worktree.
 Use your own cargo target dir (\`$env:CARGO_TARGET_DIR = "D:\\celer-target-${pkg.slug}"\`) so parallel builds do not block each other.
 ${JSON.stringify(pkg.issues.map(n => issueInfo.get(n)).filter(Boolean), null, 1)}`,
     { label: `implement:${pkg.slug}`, phase: 'Implement', schema: IMPLEMENTED, isolation: 'worktree' }),
 
-  (impl, pkg) => exclusive(async () => {
+  (impl, pkg) => withSlot(async slot => {
     if (!impl || !impl.done.length) return { pkg, impl, test: null }
     const branch = impl.branch || `issue/${pkg.slug}`
-    let test = await agent(testPrompt(pkg, branch), { label: `test:${pkg.slug}`, phase: 'Test', schema: TESTED })
+    let test = await agent(testPrompt(pkg, branch, slot), { label: `test:${pkg.slug}`, phase: 'Test', schema: TESTED })
     for (let round = 1; test && !test.pass && round <= 2; round++) {
       log(`${pkg.slug}: ${test.results.filter(r => !r.pass).length} failing criteria, ${test.regressions.length} regressions — fix round ${round}`)
       await agent(`${ROLE('celer-fixer')}
 
-You are on branch \`${branch}\` in the main checkout (\`git switch ${branch}\`). The independent tester found these failures; fix every one (commit per cause, "(#<issue>)" in the message), re-run the checks and \`dev\\wsl.ps1 test -Ref HEAD\`, push the branch.
+In this worktree: \`git fetch origin && git switch ${branch}\` (own cargo target: \`D:\\celer-target-${pkg.slug}\` on Windows; to see the app use slot ${slot}, \`dev\\run-desktop.ps1 -Slot ${slot} -Ref origin/${branch}\` after pushing). When pushed, \`git switch --detach\`. The independent tester found these failures; fix every one (commit per cause, "(#<issue>)" in the message), re-run the checks and \`dev\\wsl.ps1 test -Ref HEAD\`, push the branch.
 ${JSON.stringify({ failing: test.results.filter(r => !r.pass), regressions: test.regressions }, null, 1)}`,
-        { label: `fix:${pkg.slug}:${round}`, phase: 'Test' })
-      test = await agent(testPrompt(pkg, branch), { label: `retest:${pkg.slug}:${round}`, phase: 'Test', schema: TESTED })
+        { label: `fix:${pkg.slug}:${round}`, phase: 'Test', isolation: 'worktree' })
+      test = await agent(testPrompt(pkg, branch, slot), { label: `retest:${pkg.slug}:${round}`, phase: 'Test', schema: TESTED })
     }
     log(`${pkg.slug}: ${test && test.pass ? 'PASS' : 'still failing'}`)
     return { pkg, impl, test, branch }

@@ -42,7 +42,7 @@ What it does (`.claude/workflows/issue-sprint.js`):
 - **Triage**: one agent reads every open issue with comments, writes acceptance criteria and the engines each must
   pass on, groups issues into packages that do not share files, comments the plan on each issue.
 - **Implement**: one `celer-implementer` per package in its own git worktree and branch `issue/<slug>`, in parallel.
-- **Test**: one `celer-tester` per package, taking turns on the real app + all engines; failures go to a
+- **Test**: one `celer-tester` per package, up to `slots` (default 3) at once, each in its own desktop app slot (`dev\run-desktop.ps1 -Slot n`), on the real app + all engines; failures go to a
   `celer-fixer` and are re-tested (two rounds max).
 - **Integrate**: passing branches merged into the integration branch, full checks (`dev\wsl.ps1 test`,
   `dev\check-all.ps1`), draft PR with per-issue sections, "Closes #n" and engine results.
@@ -56,7 +56,7 @@ What it does (`.claude/workflows/issue-sprint.js`):
   verify the published release and its files, comment and close the tracking issue and milestone.
 
 Resume after an interruption with `resumeFromRunId`. Run only part: `issues: [..]`, `review: false`, `release: false`
-(stop at the gate report), or the review alone with `/macro-review full` and `since`.
+(stop at the gate report), `slots: n` (packages tested at once), or the review alone with `/macro-review full` and `since`.
 
 ## 3. After it returns
 1. Check the returned summary against GitHub (PR body, issue comments, gate comment, release page).
