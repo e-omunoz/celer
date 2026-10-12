@@ -28,8 +28,12 @@ use sha2::{Digest, Sha256};
 
 use crate::model::{ConnConfig, DbKind, SshConfig};
 
-/// How long logging in to one SSH server may take.
+/// How long logging in to one SSH server may take (connecting, then authenticating), and how long the SSH server may
+/// take to open a forwarded connection for a driver or the next hop.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// «Probar conexión»: how long the SSH server may take to reach the database server, like a network step without a
+/// tunnel (probe.rs STEP_TIMEOUT).
+const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 /// A tunnel without forwarded connections is closed after this long.
 const IDLE_CLOSE: Duration = Duration::from_secs(120);
 /// SSH keepalives: a bastion that stops answering is noticed in about a minute.
@@ -296,9 +300,9 @@ async fn connect_hop(prev: Option<&Session>, hop: &Hop, ssh: &SshConfig, known: 
     let connected = match prev {
         None => tokio::time::timeout(CONNECT_TIMEOUT, client::connect(ssh_config(), (hop.host.as_str(), hop.port), checker)).await,
         Some(prev) => {
-            let channel = prev
-                .channel_open_direct_tcpip(hop.host.clone(), hop.port as u32, "127.0.0.1", 0)
+            let channel = tokio::time::timeout(CONNECT_TIMEOUT, prev.channel_open_direct_tcpip(hop.host.clone(), hop.port as u32, "127.0.0.1", 0))
                 .await
+                .map_err(|_| anyhow!("SSH: el salto anterior no llegó a {} en {} s", host_port(&hop.host, hop.port), CONNECT_TIMEOUT.as_secs()))?
                 .map_err(|e| anyhow!("SSH: el salto anterior no pudo abrir la conexión con {}: {e}", host_port(&hop.host, hop.port)))?;
             tokio::time::timeout(CONNECT_TIMEOUT, client::connect_stream(ssh_config(), channel.into_stream(), checker)).await
         }
@@ -316,7 +320,9 @@ async fn connect_hop(prev: Option<&Session>, hop: &Hop, ssh: &SshConfig, known: 
         }
     };
     let key = verdict.lock().as_ref().map(|(_, key)| format!("{} {}", key_type(key), fingerprint(key))).unwrap_or_default();
-    let method = authenticate(&mut session, hop, ssh).await?;
+    let method = tokio::time::timeout(CONNECT_TIMEOUT, authenticate(&mut session, hop, ssh))
+        .await
+        .map_err(|_| anyhow!("SSH: {} no terminó la autenticación en {} s", hop.label(), CONNECT_TIMEOUT.as_secs()))??;
     Ok((session, format!("{} · {method} · clave {key}", hop.label())))
 }
 
@@ -463,9 +469,9 @@ impl Tunnel {
         let last = self.sessions.last().cloned().ok_or_else(|| anyhow!("SSH: túnel sin sesión"))?;
         let (host, port) = self.target.clone();
         block(async move {
-            let channel = last
-                .channel_open_direct_tcpip(host.clone(), port as u32, "127.0.0.1", 0)
+            let channel = tokio::time::timeout(FORWARD_TIMEOUT, last.channel_open_direct_tcpip(host.clone(), port as u32, "127.0.0.1", 0))
                 .await
+                .map_err(|_| anyhow!("SSH: el servidor SSH no llegó a {} en {} s", host_port(&host, port), FORWARD_TIMEOUT.as_secs()))?
                 .map_err(|e| anyhow!("SSH: el servidor SSH no pudo abrir la conexión con {}: {e}", host_port(&host, port)))?;
             let _ = channel.close().await;
             Ok(())
@@ -534,15 +540,20 @@ async fn open_tunnel(plan: Plan) -> Result<Tunnel> {
                 tokio::spawn(async move {
                     let _ = socket.set_nodelay(true);
                     *last_used.lock() = Instant::now();
-                    match session.channel_open_direct_tcpip(target.0.clone(), target.1 as u32, peer.ip().to_string(), peer.port() as u32).await {
-                        Ok(channel) => {
+                    let open = session.channel_open_direct_tcpip(target.0.clone(), target.1 as u32, peer.ip().to_string(), peer.port() as u32);
+                    match tokio::time::timeout(CONNECT_TIMEOUT, open).await {
+                        Ok(Ok(channel)) => {
                             active.fetch_add(1, Ordering::SeqCst);
                             pipe(socket, channel, &session).await;
                             active.fetch_sub(1, Ordering::SeqCst);
                             *last_used.lock() = Instant::now();
                         }
-                        Err(e) => {
+                        // The driver sees the local connection closed, and `explain` says why.
+                        Ok(Err(e)) => {
                             *error.lock() = Some(format!("SSH: {via} no pudo abrir la conexión con {}: {e}. Revisa el servidor y el puerto de la base tal y como los ve el servidor SSH («localhost» es el propio servidor SSH).", host_port(&target.0, target.1)));
+                        }
+                        Err(_) => {
+                            *error.lock() = Some(format!("SSH: {via} no llegó a {} en {} s. Revisa el servidor y el puerto de la base tal y como los ve el servidor SSH («localhost» es el propio servidor SSH) y que un cortafuegos no los bloquee.", host_port(&target.0, target.1), CONNECT_TIMEOUT.as_secs()));
                         }
                     }
                 });

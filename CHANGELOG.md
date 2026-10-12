@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- SSH tunnels: when the bastion cannot reach the database host (a firewall, a wrong address), «Probar conexión» fails
+  the forward step in 5 s and connecting fails in 15 s with what happened, instead of waiting about two minutes; an
+  SSH login that stalls while authenticating, or a jump host that cannot reach the next one, is bounded too (#142).
 - SQL Server: Detener and «Tiempo máximo de una consulta» cut the statement with ATTENTION and keep the connection, so
   an open transaction (manual mode, BEGIN TRAN) survives as in SSMS instead of being rolled back with a reconnect.
   Only a cut in the middle of a very long value still reopens the connection, and the next statement says what was

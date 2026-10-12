@@ -1882,6 +1882,22 @@ fn ssh_tunnel_auth_jumps_and_refusals() {
     let e = (prepared.connector)().err().expect("sin servidor detrás").to_string();
     assert!(e.contains("no pudo abrir la conexión"), "{e}");
 
+    // An address the bastion cannot reach (its connection attempt would hang for minutes): the forward step fails in
+    // a few seconds, and a session through it within the SSH login bound (#142).
+    let mut unreachable = first.cfg.clone();
+    unreachable.id = "ssh-test-unreachable".into();
+    unreachable.host = "10.255.255.1".into();
+    let prepared = ssh_prepared(&store, &unreachable);
+    let t0 = Instant::now();
+    let report = crate::probe::run(&unreachable, prepared.connector.clone(), &prepared.route, prepared.ssh.as_deref());
+    eprintln!("SSH ✔ destino inalcanzable: {:?} en {:?} · {}", report.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), t0.elapsed(), report.error);
+    assert_eq!(report.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), [("ssh", "ok"), ("forward", "failed")], "{}", report.error);
+    assert!(t0.elapsed() < Duration::from_secs(12), "Probar conexión tardó {:?}", t0.elapsed());
+    let t0 = Instant::now();
+    let e = (prepared.connector)().err().expect("inalcanzable").to_string();
+    eprintln!("  la sesión: {:?} · {e}", t0.elapsed());
+    assert!(t0.elapsed() < Duration::from_secs(40), "conectar tardó {:?}", t0.elapsed());
+
     // Another key kept for the bastion: refused, never replaced in silence.
     let changed = sample_store("changed");
     let other_key = "AAAAC3NzaC1lZDI1NTE5AAAAIC41+NZJQtVUMQCd674m8Rz7ExbU516UV7jdMruaJXwy";
