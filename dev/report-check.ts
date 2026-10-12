@@ -8,13 +8,16 @@ import {
   draftProblems,
   engineLine,
   environmentText,
+  issueBody,
   issueText,
   issueUrl,
   MAX_URL,
   osFromUserAgent,
   parseIssueUrl,
   REPO,
+  sentFromApi,
   sentLink,
+  TOKEN_URL,
 } from "../src/report.ts";
 
 // ---- engine and driver of the active connection, for every engine: never the host, the database or the file
@@ -97,6 +100,30 @@ const fitted = issueUrl(huge);
 assert.ok(fitted.url.length <= MAX_URL, `${fitted.url.length}`);
 assert.ok(fitted.cut.includes("what"));
 assert.ok(new URL(fitted.url).searchParams.get("what")!.endsWith("(recortado: el texto completo está en el portapapeles)"));
+
+// ---- the API path: the same text the form gets, uncut, under the form's labels as GitHub writes them
+const body = issueBody(issue);
+assert.ok(body.startsWith("### What happened? · Qué ha pasado\n\nAl exportar a C:\\Users\\…\\Desktop"), body);
+for (const f of issue.fields) assert.ok(body.includes(`### ${f.label}\n\n${f.value}`), `the body has ${f.id}`);
+assert.ok(!body.includes("oscar") && !body.includes("Etiquetas:"), "no user name, and the labels go as labels");
+const hugeBody = issueBody(huge);
+assert.ok(hugeBody.includes("ñ".repeat(20_000)) && !hugeBody.includes("recortado"), "the API path is never cut for the address");
+assert.equal(issueBody({ ...idea, fields: [] }), "");
+const created = sentFromApi(filled, issue, { number: 169, html_url: "https://github.com/e-omunoz/celer/issues/169" }, 5);
+assert.deepEqual(created, { id: "d1", kind: "bug", title: "La exportación falla", at: 5, issueUrl: "https://github.com/e-omunoz/celer/issues/169" });
+assert.equal(sentFromApi(filled, issue, { number: 1, html_url: "https://evil.example/x" }).issueUrl, "", "only a link of this repository");
+assert.equal(new URL(TOKEN_URL).searchParams.get("scopes"), "public_repo", "a classic token with only public_repo");
+
+// ---- the window: with a token «Enviar a GitHub» is primary and «Abrir en GitHub» stays; a failure keeps the draft
+const dialog = readFileSync(new URL("../src/components/ReportDialog.tsx", import.meta.url), "utf8");
+assert.ok(/classList=\{\{ primary: !report\.hasToken \}\}[^]*?Abrir en GitHub/.test(dialog), "«Abrir en GitHub» is secondary with a token");
+assert.ok(/<Show when=\{report\.hasToken\}>[^]*?sendReportWithApi\(\)[^]*?Enviar a GitHub/.test(dialog), "«Enviar a GitHub» only with a token");
+const store = readFileSync(new URL("../src/reportStore.ts", import.meta.url), "utf8");
+const apiSend = store.slice(store.indexOf("export async function sendReportWithApi"));
+const caught = apiSend.indexOf("catch (err)");
+const failure = apiSend.slice(caught, apiSend.indexOf("return;", caught));
+assert.ok(failure.includes("sendError") && !/drafts|markSent|view/.test(failure), "a failed send only shows why");
+assert.ok(!/localStorage|saveJson/.test(store.slice(store.indexOf("export async function saveGithubToken"), store.indexOf("export async function refreshErrors"))), "the token goes only to the core");
 
 // ---- «Mis reportes»
 assert.equal(parseIssueUrl("https://github.com/e-omunoz/celer/issues/131#issuecomment-1"), "https://github.com/e-omunoz/celer/issues/131");

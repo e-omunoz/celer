@@ -159,6 +159,13 @@ All notable changes to Celer are documented here. The format follows
   copied. Drafts are kept offline and «Mis reportes» lists the reports sent, with their links. The issue forms in
   `.github/ISSUE_TEMPLATE` match the window's fields, and CONTRIBUTING.md describes the triage flow
   (`status:triage` → `status:ready`).
+- **Reports sent with your GitHub account** (#112): «Enviar con mi cuenta de GitHub» in the report preview keeps a
+  GitHub token (classic, `public_repo`) in the OS credential store, never in a file, and never shows it again. With it
+  saved, «Enviar a GitHub» creates the issue through the GitHub API with the same text the form would get (GitHub drops
+  the labels for accounts without triage rights), and the report goes to «Mis reportes» with its real link; images,
+  which the API cannot attach, are saved and the first copied, and the new issue opens in the browser to add them. A
+  failure (bad or expired token, missing permission, rate limit, no connection) says what to do and keeps the draft;
+  «Abrir en GitHub» works as before.
 - **Gib reacts to what happens, and only as much as you want** (#104): a long query that finally works, an error (and
   a run of them), an empty result (he scratches his head), a big export, a connection that drops or comes back, the
   first query of the day, two hours without a break, Friday afternoon (careful on production) and late nights. Idle

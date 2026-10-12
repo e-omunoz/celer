@@ -1,8 +1,8 @@
-import { Bug, Camera, ExternalLink, FolderOpen, ImagePlus, Lightbulb, PenLine, Trash2, X } from "lucide-solid";
+import { Bug, Camera, ExternalLink, FolderOpen, ImagePlus, Lightbulb, PenLine, Send, Trash2, X } from "lucide-solid";
 import { createSignal, For, Show } from "solid-js";
 import { isTauri } from "../api";
 import { entryTime } from "../errorLogText";
-import { AREAS, draftProblems, issueText, issueUrl, parseIssueUrl, sentLink, type ReportKind } from "../report";
+import { AREAS, draftProblems, issueText, issueUrl, parseIssueUrl, sentLink, TOKEN_URL, type ReportKind } from "../report";
 import {
   addImage,
   captureWindow,
@@ -17,7 +17,9 @@ import {
   replaceImage,
   report,
   resumeDraft,
+  saveGithubToken,
   sendReport,
+  sendReportWithApi,
   setReport,
   setSentLink,
   switchKind,
@@ -36,7 +38,7 @@ async function openLink(url: string) {
 /** «Reportar / Sugerir»: a bug or an idea for Celer's GitHub, previewed before anything leaves. */
 export function ReportDialog() {
   const title = () =>
-    report.view === "mine" ? "Mis reportes" : report.view === "sent" ? "Reporte abierto en GitHub" : report.draft.kind === "bug" ? "Reportar un fallo" : "Sugerir una mejora";
+    report.view === "mine" ? "Mis reportes" : report.view === "sent" ? (report.last?.via === "api" ? "Reporte enviado a GitHub" : "Reporte abierto en GitHub") : report.draft.kind === "bug" ? "Reportar un fallo" : "Sugerir una mejora";
   return (
     <div classList={{ "report-hidden": report.capturing }}>
       <Dialog title={title()} wide class="report" onClose={closeReport}>
@@ -191,7 +193,7 @@ function ReportForm() {
         </Show>
         <p class="settings-note">
           Se añaden la versión de Celer, el sistema, el tema y el motor y driver de la conexión activa; nunca el servidor, el usuario, la base de datos ni tus
-          datos. Nada sale de Celer hasta que lo revises y pulses «Abrir en GitHub». El borrador se guarda solo.
+          datos. Nada sale de Celer hasta que lo revises y pulses «Abrir en GitHub» (o «Enviar a GitHub»). El borrador se guarda solo.
         </p>
         <footer>
           <Show when={missing().length}><span class="muted small">Falta {missing().join(", ")}.</span></Show>
@@ -210,10 +212,20 @@ function ReportPreview() {
   const cut = () => issueUrl(issue()).cut;
   return (
     <div class="report-body">
-      <p class="dialog-lead">
-        Esto es exactamente lo que se enviará. «Abrir en GitHub» abre la página de un issue nuevo con estos campos ya rellenos: allí lo revisas otra vez y lo
-        creas tú con tu cuenta. Las imágenes no viajan en la dirección: Celer las guarda en una carpeta (y copia la primera) para que las pegues.
-      </p>
+      <Show
+        when={report.hasToken}
+        fallback={
+          <p class="dialog-lead">
+            Esto es exactamente lo que se enviará. «Abrir en GitHub» abre la página de un issue nuevo con estos campos ya rellenos: allí lo revisas otra vez y lo
+            creas tú con tu cuenta. Las imágenes no viajan en la dirección: Celer las guarda en una carpeta (y copia la primera) para que las pegues.
+          </p>
+        }
+      >
+        <p class="dialog-lead">
+          Esto es exactamente lo que se enviará. «Enviar a GitHub» crea el issue con tu cuenta, sin salir de Celer. GitHub no deja adjuntar imágenes por esta vía:
+          Celer las guarda, copia la primera y abre el issue creado para que las pegues en un comentario.
+        </p>
+      </Show>
       <div class="report-preview">
         <div class="report-preview-title">{issue().title}</div>
         <div class="report-labels"><For each={issue().labels}>{(label) => <span class="tag tiny">{label}</span>}</For></div>
@@ -232,31 +244,97 @@ function ReportPreview() {
           </section>
         </Show>
       </div>
-      <Show when={cut().length}>
+      <Show when={report.sendError}>
+        <p class="settings-note warn" role="alert">
+          No se ha podido enviar: {report.sendError} El borrador sigue guardado y «Abrir en GitHub» funciona igual.
+        </p>
+      </Show>
+      <GithubAccount />
+      <Show when={cut().length && !report.hasToken}>
         <p class="settings-note warn">El texto es demasiado largo para la dirección: se recorta y el texto completo se copia al portapapeles para que lo pegues.</p>
       </Show>
       <footer>
         <button type="button" class="btn" onClick={() => setReport("view", "form")}>Volver a editar</button>
         <span class="spacer" />
         <button type="button" class="btn" onClick={() => void copyText(issueText(issue()), "Reporte copiado")}>Copiar texto</button>
-        <button type="button" class="btn primary" onClick={() => void sendReport()}><ExternalLink size={13} /> Abrir en GitHub</button>
+        <button type="button" class="btn" classList={{ primary: !report.hasToken }} disabled={report.sending} onClick={() => void sendReport()}>
+          <ExternalLink size={13} /> Abrir en GitHub
+        </button>
+        <Show when={report.hasToken}>
+          <button type="button" class="btn primary" disabled={report.sending} onClick={() => void sendReportWithApi()}>
+            <Send size={13} /> {report.sending ? "Enviando…" : "Enviar a GitHub"}
+          </button>
+        </Show>
       </footer>
     </div>
   );
 }
 
+/**
+ * «Enviar con mi cuenta de GitHub»: a token (classic, public_repo) kept in the system's credential store, so a report
+ * becomes an issue without leaving Celer. The token is never shown again once saved.
+ */
+function GithubAccount() {
+  const [token, setToken] = createSignal("");
+  const save = async () => {
+    if (token().trim() && (await saveGithubToken(token()))) setToken("");
+  };
+  return (
+    <details class="report-account" open={!report.hasToken && Boolean(report.sendError)}>
+      <summary>Enviar con mi cuenta de GitHub {report.hasToken ? "· token guardado" : ""}</summary>
+      <p class="settings-note">
+        Con un token de GitHub, «Enviar a GitHub» crea el issue directamente. Crea un token clásico con solo el permiso <b>public_repo</b>{" "}
+        (<button type="button" class="link" onClick={() => void openLink(TOKEN_URL)}>cómo crearlo</button>) y pégalo aquí: se guarda en el almacén de
+        credenciales del sistema, nunca en un fichero. Las etiquetas (bug / mejora, status:triage) solo se aplican si tu cuenta puede clasificar issues en
+        el repositorio; si no, GitHub las omite y el issue se crea igual.
+      </p>
+      <div class="report-account-row">
+        <Show
+          when={!report.hasToken}
+          fallback={<button type="button" class="btn" onClick={() => void saveGithubToken("")}>Quitar el token</button>}
+        >
+          <input
+            type="password"
+            placeholder="ghp_…"
+            autocomplete="off"
+            value={token()}
+            onInput={(event) => setToken(event.currentTarget.value)}
+            onKeyDown={(event) => event.key === "Enter" && void save()}
+          />
+          <button type="button" class="btn" disabled={!token().trim()} onClick={() => void save()}>Guardar</button>
+        </Show>
+      </div>
+    </details>
+  );
+}
+
 function ReportSent() {
   const last = () => report.last;
+  const target = () => (last()?.via === "api" ? "un comentario del issue" : "«Capturas»");
   const [link, setLink] = createSignal("");
   return (
     <div class="report-body">
-      <p class="dialog-lead">
-        Se ha abierto GitHub con el reporte relleno. Revísalo allí y pulsa <b>Submit new issue</b> (necesitas iniciar sesión en GitHub).
-      </p>
+      <Show
+        when={last()?.via === "api"}
+        fallback={
+          <p class="dialog-lead">
+            Se ha abierto GitHub con el reporte relleno. Revísalo allí y pulsa <b>Submit new issue</b> (necesitas iniciar sesión en GitHub).
+          </p>
+        }
+      >
+        <p class="dialog-lead">
+          Se ha creado el issue{" "}
+          <button type="button" class="link" onClick={() => void openLink(last()!.sent.issueUrl)}>#{last()!.sent.issueUrl.split("/").pop()}</button> en GitHub
+          con tu cuenta. Está en «Mis reportes» con su enlace.
+        </p>
+      </Show>
+      <Show when={last()?.via === "api" && last()?.images.length}>
+        <p class="settings-note">GitHub no deja adjuntar imágenes por la API: se ha abierto el issue en el navegador para que las añadas en un comentario.</p>
+      </Show>
       <Show when={last()?.images.length}>
         <p class="settings-note">
           {last()!.images.length === 1 ? "La imagen está" : `Las ${last()!.images.length} imágenes están`} en una carpeta de Celer
-          {last()!.copied === "image" ? " y la primera, en el portapapeles: pégala (Ctrl+V) en «Capturas»." : ": arrástralas a «Capturas»."}{" "}
+          {last()!.copied === "image" ? ` y la primera, en el portapapeles: pégala (Ctrl+V) en ${target()}.` : `: arrástralas a ${target()}.`}{" "}
           <Show when={isTauri()}>
             <button type="button" class="link" onClick={() => void revealPath(last()!.images[0])}><FolderOpen size={12} /> Abrir la carpeta</button>
           </Show>
@@ -265,19 +343,21 @@ function ReportSent() {
       <Show when={last()?.copied === "text"}>
         <p class="settings-note warn">El texto se recortó en la dirección: el completo está en el portapapeles.</p>
       </Show>
-      <label class="field">
-        <span>Enlace del issue creado (opcional, para «Mis reportes»)</span>
-        <input
-          placeholder="https://github.com/e-omunoz/celer/issues/…"
-          value={link()}
-          onInput={(event) => setLink(event.currentTarget.value)}
-          onChange={(event) => {
-            const url = parseIssueUrl(event.currentTarget.value);
-            if (url && last()) setSentLink(last()!.sent.id, url);
-            else if (event.currentTarget.value.trim()) notify("No es un enlace a un issue de Celer en GitHub", "warning");
-          }}
-        />
-      </label>
+      <Show when={last()?.via !== "api"}>
+        <label class="field">
+          <span>Enlace del issue creado (opcional, para «Mis reportes»)</span>
+          <input
+            placeholder="https://github.com/e-omunoz/celer/issues/…"
+            value={link()}
+            onInput={(event) => setLink(event.currentTarget.value)}
+            onChange={(event) => {
+              const url = parseIssueUrl(event.currentTarget.value);
+              if (url && last()) setSentLink(last()!.sent.id, url);
+              else if (event.currentTarget.value.trim()) notify("No es un enlace a un issue de Celer en GitHub", "warning");
+            }}
+          />
+        </label>
+      </Show>
       <footer>
         <button type="button" class="btn" onClick={() => setReport("view", "mine")}>Mis reportes</button>
         <span class="spacer" />

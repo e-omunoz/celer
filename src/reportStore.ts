@@ -1,6 +1,7 @@
 // The report window's state (#112): the draft being written, the drafts kept offline and «Mis reportes», in
-// reports.json in the data folder. Sending is opening a prefilled github.com issue page: nothing leaves Celer before
-// the user presses «Abrir en GitHub» after the preview, and even then the issue is created by them on GitHub.
+// reports.json in the data folder. Sending is opening a prefilled github.com issue page, or, with the user's GitHub
+// token saved (in the credential store, through the core), creating the issue through the API: nothing leaves Celer
+// before the user presses «Abrir en GitHub» or «Enviar a GitHub» after the preview.
 import { createStore } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { entriesText, type ErrorEntry } from "./errorLogText";
@@ -11,6 +12,7 @@ import {
   buildIssue,
   draftIsEmpty,
   engineLine,
+  issueBody,
   issueText,
   issueUrl,
   osFromUserAgent,
@@ -18,6 +20,7 @@ import {
   type ReportEnv,
   type ReportImage,
   type ReportKind,
+  sentFromApi,
   type SentReport,
 } from "./report";
 import { activeTab, connectionById, copyText, notify, resolvedTheme, revealPath, state, uid } from "./state";
@@ -35,7 +38,13 @@ export const [report, setReport] = createStore({
   /** The newest entries of the error log, as the preview shows them before they are attached. */
   errors: [] as ErrorEntry[],
   /** The report just opened on GitHub (its paths and what was copied), for the «sent» view. */
-  last: null as { sent: SentReport; images: string[]; copied: "text" | "image" | ""; cut: string[] } | null,
+  last: null as { sent: SentReport; images: string[]; copied: "text" | "image" | ""; cut: string[]; via: "browser" | "api" } | null,
+  /** A GitHub token is saved in the credential store: «Enviar a GitHub» creates the issue through the API. */
+  hasToken: false,
+  /** «Enviar a GitHub» is waiting for GitHub. */
+  sending: false,
+  /** Why the last «Enviar a GitHub» failed (the draft stays; «Abrir en GitHub» still works). */
+  sendError: "",
   /** The window hides itself while a screenshot is taken. */
   capturing: false,
   loaded: false,
@@ -85,14 +94,16 @@ export async function openReport(kind: ReportKind, opts: { attachErrors?: boolea
   const kept = report.drafts.find((d) => d.kind === kind);
   const draft = kept ? { ...kept } : blankDraft(kind, uid());
   if (opts.attachErrors) draft.attachErrors = true;
-  setReport({ open: true, view: "form", draft, last: null });
+  setReport({ open: true, view: "form", draft, last: null, sendError: "" });
   void refreshErrors();
+  void refreshToken();
 }
 
 /** «Mis reportes»: the drafts and the reports opened on GitHub. */
 export async function openMyReports() {
   if (!report.loaded) await load();
   setReport({ open: true, view: "mine", last: null });
+  void refreshToken();
 }
 
 export function closeReport() {
@@ -103,6 +114,7 @@ export function closeReport() {
 
 export function editDraft(patch: Partial<ReportDraft>) {
   setReport("draft", (d) => ({ ...d, ...patch, updatedAt: Date.now() }));
+  setReport("sendError", "");
   keepDraft();
 }
 
@@ -124,6 +136,23 @@ export function switchKind(kind: ReportKind) {
   keepDraft();
   const kept = report.drafts.find((d) => d.kind === kind && d.id !== report.draft.id);
   setReport("draft", kept ? { ...kept } : blankDraft(kind, uid()));
+}
+
+async function refreshToken() {
+  setReport("hasToken", await api().reportTokenStatus().catch(() => false));
+}
+
+/** «Enviar con mi cuenta de GitHub»: the token to the credential store ("" removes it). */
+export async function saveGithubToken(token: string): Promise<boolean> {
+  try {
+    await api().reportTokenSet(token.trim());
+    setReport({ hasToken: Boolean(token.trim()), sendError: "" });
+    notify(token.trim() ? "Token de GitHub guardado en el almacén de credenciales" : "Token de GitHub quitado", "success");
+    return true;
+  } catch (err) {
+    notify("No se pudo guardar el token de GitHub", "error", errorText(err));
+    return false;
+  }
 }
 
 export async function refreshErrors() {
@@ -229,6 +258,42 @@ export async function captureWindow() {
 
 // ---------------------------------------------------------------- sending
 
+/** The images saved to the data folder, and what went to the clipboard (the whole text when the address cut it). */
+async function saveAndCopy(d: ReportDraft, fullText: string | null): Promise<{ images: string[]; copied: "text" | "image" | "" }> {
+  let images: string[] = [];
+  let copied: "text" | "image" | "" = "";
+  try {
+    if (d.images.length) images = await api().reportSaveImages(d.id, d.images.map((img) => [img.name, img.dataUrl]));
+  } catch (err) {
+    notify("No se pudieron guardar las imágenes", "error", errorText(err));
+  }
+  if (fullText !== null) {
+    await copyText(fullText, "Texto completo del reporte copiado");
+    copied = "text";
+  } else if (d.images.length && (await copyImage(d.images[0].dataUrl))) copied = "image";
+  return { images, copied };
+}
+
+async function openInBrowser(url: string) {
+  if (isTauri()) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  } else window.open(url, "_blank", "noopener");
+}
+
+/** The report into «Mis reportes» and out of the drafts, and the «sent» view. */
+async function markSent(d: ReportDraft, sent: SentReport, last: Omit<NonNullable<typeof report.last>, "sent">) {
+  setReport({
+    sent: [sent, ...report.sent.filter((s) => s.id !== sent.id)],
+    drafts: report.drafts.filter((x) => x.id !== d.id),
+    draft: blankDraft(d.kind, uid()),
+    view: "sent",
+    sendError: "",
+    last: { sent, ...last },
+  });
+  await saveNow();
+}
+
 /**
  * «Abrir en GitHub»: the images saved (and the first one copied, or the whole text when the address had to cut it),
  * the prefilled issue page opened, and the report moved to «Mis reportes».
@@ -237,36 +302,43 @@ export async function sendReport() {
   const d = report.draft;
   const issue = currentIssue();
   const { url, cut } = issueUrl(issue);
-  let images: string[] = [];
-  let copied: "text" | "image" | "" = "";
+  const { images, copied } = await saveAndCopy(d, cut.length ? issueText(issue) : null);
   try {
-    if (d.images.length) images = await api().reportSaveImages(d.id, d.images.map((img) => [img.name, img.dataUrl]));
-  } catch (err) {
-    notify("No se pudieron guardar las imágenes", "error", errorText(err));
-  }
-  if (cut.length) {
-    await copyText(issueText(issue), "Texto completo del reporte copiado");
-    copied = "text";
-  } else if (d.images.length && (await copyImage(d.images[0].dataUrl))) copied = "image";
-  try {
-    if (isTauri()) {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
-    } else window.open(url, "_blank", "noopener");
+    await openInBrowser(url);
   } catch (err) {
     notify("No se pudo abrir GitHub", "error", errorText(err));
     return;
   }
   const sent: SentReport = { id: d.id, kind: d.kind, title: issue.title, at: Date.now(), issueUrl: "" };
-  setReport({
-    sent: [sent, ...report.sent.filter((s) => s.id !== sent.id)],
-    drafts: report.drafts.filter((x) => x.id !== d.id),
-    draft: blankDraft(d.kind, uid()),
-    view: "sent",
-    last: { sent, images, copied, cut },
-  });
-  await saveNow();
+  await markSent(d, sent, { images, copied, cut, via: "browser" });
   if (images.length && isTauri()) void revealPath(images[0]);
+}
+
+/**
+ * «Enviar a GitHub» (a token saved): the core creates the issue with the same text the form would get. On success the
+ * report goes to «Mis reportes» with its link and, when it has images (the API cannot attach them), the issue opens
+ * in the browser with them saved and the first copied, to drop them in. On failure nothing changes but the message.
+ */
+export async function sendReportWithApi() {
+  if (report.sending) return;
+  const d = report.draft;
+  const issue = currentIssue();
+  setReport({ sending: true, sendError: "" });
+  let created: { number: number; html_url: string };
+  try {
+    created = await api().reportCreateIssue(issue.title, issueBody(issue), issue.labels);
+  } catch (err) {
+    setReport({ sending: false, sendError: errorText(err) });
+    void refreshToken();
+    return;
+  }
+  setReport("sending", false);
+  const { images, copied } = await saveAndCopy(d, null);
+  await markSent(d, sentFromApi(d, issue, created), { images, copied, cut: [], via: "api" });
+  if (images.length) {
+    await openInBrowser(created.html_url).catch((err) => notify("No se pudo abrir el issue en el navegador", "error", errorText(err)));
+    if (isTauri()) void revealPath(images[0]);
+  }
 }
 
 /** A PNG on the clipboard (to paste it into the GitHub page); false where the webview does not allow it. */

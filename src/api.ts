@@ -100,6 +100,12 @@ export interface Backend {
   saveJson(name: "settings" | "workspace" | "library" | "variables" | "reports", value: unknown, merge?: boolean): Promise<void>;
   /** A report's images (data URLs) as PNG files in the data folder, to attach by hand; returns their paths. */
   reportSaveImages(id: string, images: [name: string, dataUrl: string][]): Promise<string[]>;
+  /** Whether a GitHub token for sending reports is saved in the credential store (the token never comes back). */
+  reportTokenStatus(): Promise<boolean>;
+  /** Keeps the GitHub token in the credential store; "" removes it. */
+  reportTokenSet(token: string): Promise<void>;
+  /** Creates the report's issue on GitHub with the saved token. */
+  reportCreateIssue(title: string, body: string, labels: string[]): Promise<{ number: number; html_url: string }>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */
@@ -272,6 +278,9 @@ function tauriBackend(): Backend {
     errorLogClear: () => invoke("error_log_clear"),
     errorLogPath: () => invoke("error_log_path"),
     reportSaveImages: (id, images) => invoke("report_save_images", { id, images }),
+    reportTokenStatus: () => invoke("report_token_status"),
+    reportTokenSet: (token) => invoke("report_token_set", { token }),
+    reportCreateIssue: (title, body, labels) => invoke("report_create_issue", { title, body, labels }),
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),
