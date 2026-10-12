@@ -333,7 +333,8 @@ export function exportConnectionsJson(conns: ConnConfig[], folders: string[], ex
       const value = conn[key];
       // An unset environment is left out, so a connection without one exports exactly as before environments.
       if (value === "" && ENV_KEYS.has(key)) continue;
-      if (value !== undefined) out[key] = key === "odbcConnStr" || key === "extra" ? withoutInlinePassword(String(value)) : value;
+      // A "key=value;…" list loses its password and every other secret entry (sslpassword=, Token=…).
+      if (value !== undefined) out[key] = key === "odbcConnStr" || key === "extra" ? splitSecretParams(withoutInlinePassword(String(value))).kept : value;
     }
     if (conn.startupSql) out.startupSql = conn.startupSql;
     if (conn.keepaliveMin) out.keepaliveMin = conn.keepaliveMin;

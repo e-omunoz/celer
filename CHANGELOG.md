@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Connections: «Exportar» without «Incluir contraseñas» also leaves out the other secret entries of «Parámetros
+  extra» and the ODBC string (`sslpassword=`, `Token=`, `api_key=`…), as the export with passwords already did (#162).
 - Import from DBeaver/DbVisualizer: MySQL `sessionVariables` keep a quoted value with commas whole
   (`sql_mode='A,B'`), and a PostgreSQL `currentSchema` with spaces (`ventas, public`) is escaped in `options`, so the
   imported connection opens (#161).

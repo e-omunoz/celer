@@ -132,6 +132,9 @@ const inline = exportConnectionsJson([conn("id-2", "Odbc", "", "odbc", { odbcCon
 assert.ok(!inline.includes("a;b") && !inline.includes("p2"), inline);
 assert.equal(JSON.parse(inline).connections[0].odbcConnStr, "DSN=x;UID=u;Trusted=no");
 assert.equal(JSON.parse(inline).connections[0].extra, "ssl=1");
+// Nor any other entry Celer treats as a secret (#162).
+const tokens = JSON.parse(exportConnectionsJson([conn("id-3", "Tok", "", "odbc", { odbcConnStr: "DSN=x;Token={t;1};UID=u", extra: "sslpassword=k1;sslmode=require;api_key=z9" })], [], new Date())).connections[0];
+assert.deepEqual([tokens.odbcConnStr, tokens.extra], ["DSN=x;UID=u", "sslmode=require;"]);
 assert.equal(inlinePassword("DSN=x;Pwd = {a;b}}c} ;UID=u"), "a;b}c");
 assert.equal(inlinePassword("DSN=x;PasswordFile=y"), null);
 assert.equal(withoutInlinePassword("PWD=s;DSN=x"), "DSN=x");
@@ -171,14 +174,16 @@ assert.deepEqual(sshBack[0].ssh, { enabled: true, host: "bastion", port: 2222, u
 assert.equal(sshBack[1].ssh, undefined);
 assert.deepEqual(parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 1, connections: [{ kind: "mysql", ssh: { enabled: true, host: "b", port: "x", auth: "rot13", jumps: [1, "j"] } }] })).connections[0].ssh, { enabled: true, host: "b", port: 22, user: "", auth: "password", keyPath: "", jumps: ["j"] });
 // ---------------------------------------------------------------- export with passwords (#101)
-// Without «Incluir contraseñas» the file is byte for byte what Celer 2.2.0 wrote (v1): the SHA-256 of that output.
+// Without «Incluir contraseñas» the file is the v1 file Celer 2.2.0 wrote, less the secret entries of "Parámetros
+// extra" / the ODBC string (#162): the SHA-256 of that output.
 const golden = [
   conn("a", "Producción", "Clientes/Egarsat", "mssql", { host: "sql01", port: 1433, user: "sa", password: "S3creta", database: "crm", production: true, startupSql: "SET LOCK_TIMEOUT 5000;" }),
   conn("b", "Almacén", "", "informix", { host: "ifx", instance: "ol_demo", extra: "DB_LOCALE=en_US.819;sslpassword=x" }),
   conn("c", "Odbc", "", "odbc", { odbcConnStr: "DSN=x;UID=u;PWD={a;b}}c};Trusted=no", password: "p" }),
 ].map(({ id, name, folder, kind, ...rest }) => ({ ...emptyConn(kind), ...rest, id, name, folder, kind }));
 const v1 = exportConnectionsJson(golden, ["Vacía"], new Date("2026-10-08T10:00:00Z"));
-assert.equal(createHash("sha256").update(v1).digest("hex"), "954b4aaae34b4daad0d76c134f9907b6cbb625a6f5d7a57d011f4fcd03fbc18a", v1);
+assert.equal(createHash("sha256").update(v1).digest("hex"), "a2f86fa2634178fbe64a6b018d4daf10b972393add8c676aeb580b7faec0aa7d", v1);
+assert.ok(!v1.includes("sslpassword"), v1);
 // An environment and a keepalive travel when set (and only then, so the golden file above is unchanged).
 const staged = exportConnectionsJson([{ ...golden[0], environment: "staging", envLabel: "", envColor: "", keepaliveMin: 15 }], [], new Date());
 assert.deepEqual([JSON.parse(staged).connections[0].environment, JSON.parse(staged).connections[0].envLabel, JSON.parse(staged).connections[0].keepaliveMin], ["staging", undefined, 15]);
