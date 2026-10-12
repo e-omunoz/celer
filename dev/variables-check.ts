@@ -5,6 +5,7 @@ import {
   aiVariableLines,
   findVariables,
   migrateVariables,
+  nameInUse,
   normalizeVariables,
   resolveVariables,
   serializeVariables,
@@ -86,5 +87,12 @@ assert.ok(!withheld.includes("secreto") && !withheld.includes("Brien"), "no valu
 assert.ok(withheld.includes("nota: con valor (global); el valor no se envía") && withheld.includes("otra: sin valor"));
 const shown = aiVariableLines(["nota"], secret, true, scope, "postgres").join("\n");
 assert.ok(shown.includes("nota = 'O''Brien secreto' (global)"), shown);
+
+// Renaming onto a name the scope already uses is refused (#154): upsertVariable would drop the other one.
+const ab = [{ name: "a", value: "x" }, { name: "b", value: "y" }];
+assert.equal(nameInUse(ab, "a", "b"), true, "b → a: a is taken");
+assert.equal(nameInUse(ab, "c", "b"), false);
+assert.equal(nameInUse(ab, "b", "b"), false, "the same name is not a conflict");
+assert.equal(nameInUse([], "a", "b"), false);
 
 console.log("variables-check: all good");

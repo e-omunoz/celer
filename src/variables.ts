@@ -73,6 +73,11 @@ export function serializeVariables(data: VariablesData, extra: Record<string, un
   return { ...extra, version: VARIABLES_VERSION, global: data.global, connections };
 }
 
+/** A rename of `previous` to `name` would take the name of another variable of the same list. */
+export function nameInUse(list: Variable[], name: string, previous: string): boolean {
+  return name !== previous && list.some((v) => v.name === name);
+}
+
 /** Adds or replaces `variable` in a list (by name; `previous` is its old name when renamed). */
 export function upsertVariable(list: Variable[], variable: Variable, previous?: string): Variable[] {
   const key = previous ?? variable.name;

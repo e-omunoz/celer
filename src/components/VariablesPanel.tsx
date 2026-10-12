@@ -5,7 +5,7 @@ import { createMemo, For, Index, onMount, Show } from "solid-js";
 import { activeSql, connectionById, insertIntoActive, notify, serverOf } from "../state";
 import { literalDialect } from "../snippets";
 import { deleteVariable, loadVariables, resolvedFor, saveVariable, scopeList, scopeText } from "../variableStore";
-import { findVariables, validVarName, variableLiteral, type Variable, type VarScope } from "../variables";
+import { findVariables, nameInUse, validVarName, variableLiteral, type Variable, type VarScope } from "../variables";
 
 export function VariablesPanel() {
   onMount(() => void loadVariables());
@@ -100,6 +100,12 @@ function VariableRow(props: { scope: VarScope; owner: string | null | undefined;
           if (name === props.variable.name) return;
           if (!validVarName(name)) {
             notify("Nombre de variable no válido", "warning", "Letras, números y _, sin empezar por un número.");
+            event.currentTarget.value = props.variable.name;
+            return;
+          }
+          // Another variable of this scope already has that name: the rename would replace it, so it is refused.
+          if (nameInUse(scopeList(props.scope, props.owner), name, props.variable.name)) {
+            notify(`Ya hay una variable «${name}» aquí`, "warning", "Bórrala o cámbiale el nombre antes.");
             event.currentTarget.value = props.variable.name;
             return;
           }

@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Variables: renaming a variable to a name its scope already uses is refused with a notice, instead of silently
+  replacing (and deleting) the other variable (#154).
 - Variables and parameters: a value of true / false goes in as the engine takes it (1 / 0 on SQL Server, 't' / 'f'
   on Informix, and over ODBC as the server behind it), instead of a bare TRUE / FALSE those engines reject (#138).
 - Library: «Ejecutar en…» with one target that reuses the script's open console runs the saved script, every
