@@ -346,6 +346,17 @@ pub fn tcp_keepalive() -> socket2::TcpKeepalive {
 
 /// Primera palabra clave de una sentencia, ignorando comentarios y espacios.
 pub fn first_keyword(sql: &str) -> String {
+    let rest = skip_leading_comments(sql);
+    let b = rest.as_bytes();
+    let mut end = 0;
+    while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_') {
+        end += 1;
+    }
+    rest[..end].to_ascii_uppercase()
+}
+
+/// The statement from its first keyword on: leading spaces, comments and `(` / `;` skipped.
+pub fn skip_leading_comments(sql: &str) -> &str {
     let b = sql.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -372,12 +383,7 @@ pub fn first_keyword(sql: &str) -> String {
             break;
         }
     }
-    let start = i.min(b.len());
-    let mut end = start;
-    while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_') {
-        end += 1;
-    }
-    sql[start..end].to_ascii_uppercase()
+    &sql[i.min(b.len())..]
 }
 
 /// A fetch with no open result: something else used the session and closed it (a fetch never ends one in silence).

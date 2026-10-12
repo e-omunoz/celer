@@ -211,6 +211,12 @@ All notable changes to Celer are documented here. The format follows
 
 ### Fixed
 - MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
+- **MySQL's transaction indicator follows the server** (#128): a script that fails after `START TRANSACTION` leaves the
+  transaction shown as open (Commit/Rollback enabled, a warning before closing the console rolls it back), and so do
+  `SET autocommit = 0` followed by a change in the same script and XA transactions; statements that commit implicitly
+  (`ANALYZE TABLE`, `OPTIMIZE TABLE`…), a `ROLLBACK TO SAVEPOINT` behind a comment and a reconnection after a lost
+  connection no longer leave it wrong. Celer asks MySQL 5.7+ for its transaction state instead of guessing it from
+  the text of the statements.
 - Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
 - **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
   «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
