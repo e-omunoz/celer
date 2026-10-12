@@ -411,6 +411,16 @@ fn mssql_engine() {
     let out = d.execute("INSERT INTO dbo.celer_msg VALUES (1)", 10).unwrap();
     assert!(out.messages.iter().any(|m| m == "fila insertada"), "{:?}", out.messages);
     assert_eq!(out.results[0].rows_affected, Some(1));
+    // When the statement fails, what the trigger printed before its RAISERROR comes first, as in SSMS (#159).
+    d.execute("CREATE OR ALTER TRIGGER dbo.celer_msg_chk ON dbo.celer_msg AFTER INSERT, UPDATE, DELETE AS BEGIN PRINT 'hola'; IF EXISTS (SELECT 1 FROM inserted WHERE a < 0) OR EXISTS (SELECT 1 FROM deleted WHERE a < 0) RAISERROR('negativo', 16, 1) END", 10).unwrap();
+    let out = d.execute("UPDATE dbo.celer_msg SET a = a", 10).unwrap();
+    assert!(out.messages.iter().any(|m| m == "hola"), "{:?}", out.messages);
+    for dml in ["INSERT INTO dbo.celer_msg VALUES (-1)", "UPDATE dbo.celer_msg SET a = -a WHERE a = 1", "DELETE FROM dbo.celer_msg WHERE a < 0", "MERGE dbo.celer_msg AS t USING (SELECT -2 AS a) s ON t.a = s.a WHEN NOT MATCHED THEN INSERT (a) VALUES (s.a);"] {
+        let err = d.execute(dml, 10).map(|o| format!("{o:?}")).expect_err(dml).to_string();
+        let hola = err.find("hola").unwrap_or_else(|| panic!("{dml}: the PRINT before the error was lost: {err}"));
+        assert!(err.find("negativo").is_some_and(|at| at > hola), "{dml}: {err}");
+    }
+    d.execute("DROP TRIGGER dbo.celer_msg_chk; DELETE FROM dbo.celer_msg; INSERT INTO dbo.celer_msg VALUES (1)", 10).unwrap();
     // A PRINT after a result read in pages comes with the page that reaches it.
     let out = d.execute("SELECT TOP 50 a.object_id FROM sys.all_objects a; PRINT 'tras el resultado'", 10).unwrap();
     assert!(out.results[0].has_more);

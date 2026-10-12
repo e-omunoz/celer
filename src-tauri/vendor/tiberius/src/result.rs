@@ -55,19 +55,31 @@ impl<'a> ExecuteResult {
     pub(crate) async fn new<S: AsyncRead + AsyncWrite + Unpin + Send>(
         connection: &'a mut Connection<S>,
     ) -> crate::Result<Self> {
-        let mut token_stream = TokenStream::new(connection).try_unfold();
         let mut rows_affected = Vec::new();
         let mut messages = Vec::new();
-
-        while let Some(token) = token_stream.try_next().await? {
-            match token {
-                ReceivedToken::Info(info) => messages.push(info.into()),
-                ReceivedToken::DoneProc(done) if done.is_final() => (),
-                ReceivedToken::DoneProc(done) => rows_affected.push(done.rows()),
-                ReceivedToken::DoneInProc(done) => rows_affected.push(done.rows()),
-                ReceivedToken::Done(done) => rows_affected.push(done.rows()),
-                _ => (),
+        connection.messages_before_error.clear();
+        let failed = {
+            let mut token_stream = TokenStream::new(&mut *connection).try_unfold();
+            loop {
+                let token = match token_stream.try_next().await {
+                    Ok(Some(token)) => token,
+                    Ok(None) => break None,
+                    Err(e) => break Some(e),
+                };
+                match token {
+                    ReceivedToken::Info(info) => messages.push(info.into()),
+                    ReceivedToken::DoneProc(done) if done.is_final() => (),
+                    ReceivedToken::DoneProc(done) => rows_affected.push(done.rows()),
+                    ReceivedToken::DoneInProc(done) => rows_affected.push(done.rows()),
+                    ReceivedToken::Done(done) => rows_affected.push(done.rows()),
+                    _ => (),
+                }
             }
+        };
+        if let Some(e) = failed {
+            // Celer: the messages sent before the error are kept for the caller (`Client::take_messages_before_error`).
+            connection.messages_before_error = messages;
+            return Err(e);
         }
 
         Ok(Self { rows_affected, messages })

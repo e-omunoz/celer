@@ -710,6 +710,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         Ok(())
     }
 
+    /// Celer: the informational messages (PRINT, RAISERROR with severity 10 or less) that the last
+    /// [`execute`](#method.execute) received before the server error it returned, in order; empty after a
+    /// successful one, where [`ExecuteResult::messages`] has them.
+    pub fn take_messages_before_error(&mut self) -> Vec<crate::ServerMessage> {
+        std::mem::take(&mut self.connection.messages_before_error)
+    }
+
     /// Closes this database connection explicitly.
     pub async fn close(self) -> crate::Result<()> {
         self.connection.close().await

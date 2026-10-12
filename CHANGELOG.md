@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- SQL Server: when a single INSERT, UPDATE, DELETE or MERGE fails, what it printed before the error (a trigger's
+  PRINT before its RAISERROR) is shown before the error, as SSMS does; it was lost (#159).
 - **SQL Server: an error raised while a result's rows are read fails the statement** (#129): a conversion that fails
   or a division by zero on row n (or in a later statement of the batch) was shown as a success with the rows read
   before it, an export wrote a truncated file and reported success, and a GO script went on with the next batches.

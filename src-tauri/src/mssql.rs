@@ -1670,6 +1670,10 @@ async fn stream_query(
             }
             Err(e) => {
                 let fatal = is_fatal(&e);
+                // What the statement printed before failing (a trigger's PRINT, then its RAISERROR), as SSMS shows it.
+                for m in client.take_messages_before_error().iter().filter_map(info_text) {
+                    let _ = tx.send(Item::Info(m)).await;
+                }
                 let _ = tx.send(Item::Error(friendly_error(&e))).await;
                 if fatal {
                     Outcome::Broken(None)

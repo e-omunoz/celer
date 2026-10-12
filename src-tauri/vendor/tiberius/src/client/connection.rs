@@ -83,6 +83,9 @@ where
     ///
     /// [`ensure_not_poisoned`]: Self::ensure_not_poisoned
     command_desync: Arc<AtomicBool>,
+    /// Celer: the INFO tokens an `execute` read before the server error that failed it (a trigger's PRINT before
+    /// its RAISERROR), for [`Client::take_messages_before_error`](crate::Client::take_messages_before_error).
+    pub(crate) messages_before_error: Vec<crate::tds::stream::ServerMessage>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Debug for Connection<S> {
@@ -175,6 +178,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             buf: BytesMut::new(),
             poisoned: false,
             command_desync: Arc::new(AtomicBool::new(false)),
+            messages_before_error: Vec::new(),
         };
 
         let fed_auth_required = matches!(config.auth, AuthMethod::AADToken(_));
@@ -897,6 +901,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                     buf: BytesMut::new(),
                     poisoned: false,
                     command_desync,
+                    messages_before_error: Vec::new(),
                 })
             }
         }
@@ -943,6 +948,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             buf: BytesMut::new(),
             poisoned,
             command_desync: Arc::new(AtomicBool::new(false)),
+            messages_before_error: Vec::new(),
         }
     }
 }

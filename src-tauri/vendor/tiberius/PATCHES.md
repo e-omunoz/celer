@@ -14,6 +14,9 @@ What changed (each spot is marked `Celer:` in the source):
   `into_results`, `into_first_result`, `into_row` and `into_row_stream` ignore the new items.
 - `src/result.rs`: `ExecuteResult::messages()` with the INFO tokens of an `execute`; `ServerMessage` re-exported.
 - `src/tds/codec/token/token_info.rs`: comment only (the fields are now read).
+- `src/result.rs`, `src/client/connection.rs`, `src/client.rs`: when an `execute` fails on a server error, the INFO
+  tokens it read before the error (a trigger's PRINT before its RAISERROR) are kept on the connection and returned
+  by `Client::take_messages_before_error()` (issue #159).
 - `Cargo.toml`: test, example and dev-dependency sections removed.
 
 To move to a newer tiberius: replace this folder with the new crate, apply the same changes, and run
