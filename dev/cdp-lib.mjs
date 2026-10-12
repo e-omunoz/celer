@@ -66,6 +66,15 @@ async function open(target) {
     await send("Runtime.enable");
     return errors;
   };
+  // The app's page can reload once right after DevTools first answers (start-up): wait until it has been loaded and
+  // unchanged for a moment, so a check never starts in a context that is about to vanish. Other pages go on at once.
+  if (/^http:\/\/tauri\.localhost\//.test(target.url)) {
+    for (let stable = 0, tries = 0; stable < 3 && tries < 150; tries++) {
+      const page = await js("return location.href + ' ' + document.readyState").catch(() => "");
+      stable = / complete$/.test(page) ? stable + 1 : 0;
+      await sleep(200);
+    }
+  }
   const label = await js("return window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? null").catch(() => null);
   return { send, on, js, shot, errors, watchErrors, label, title: target.title, url: target.url, close: () => ws.close() };
 }
