@@ -17,6 +17,9 @@ What changed (each spot is marked `Celer:` in the source):
 - `src/result.rs`, `src/client/connection.rs`, `src/client.rs`: when an `execute` fails on a server error, the INFO
   tokens it read before the error (a trigger's PRINT before its RAISERROR) are kept on the connection and returned
   by `Client::take_messages_before_error()` (issue #159).
+- `src/client/connection.rs`: `cancel_request` looks for the DONE_ATTN acknowledging an Attention over the next few
+  messages, not only the first: SQL Server ends the cancelled request's response (a DONE with the error bit, end of
+  message) and acknowledges in a message of its own, so the connection can be kept after a cancel (issue #146).
 - `Cargo.toml`: test, example and dev-dependency sections removed.
 
 To move to a newer tiberius: replace this folder with the new crate, apply the same changes, and run

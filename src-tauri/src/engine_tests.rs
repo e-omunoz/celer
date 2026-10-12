@@ -710,6 +710,59 @@ fn mssql_abandoned_cursor() {
     assert_eq!(b.current_database().unwrap(), "tempdb");
 }
 
+/// Detener and the time limit cut a statement with ATTENTION and keep the session's connection: an open manual
+/// transaction survives (same SPID, @@TRANCOUNT 1, its rows), as in SSMS (#146). A cut in the middle of a long value
+/// may leave the stream out of step: then the connection is dropped and the session says so, but never answers from
+/// a desynchronised stream.
+#[test]
+fn mssql_cancel_keeps_the_transaction() {
+    let Some(mut d) = mssql("tempdb") else { return };
+    let d: &mut dyn Driver = &mut d;
+    d.execute("IF OBJECT_ID('dbo.celer_cancel_tx') IS NOT NULL DROP TABLE dbo.celer_cancel_tx; CREATE TABLE dbo.celer_cancel_tx (id int)", 10).unwrap();
+    d.set_autocommit(false).unwrap();
+    d.execute("INSERT INTO dbo.celer_cancel_tx VALUES (1)", 10).unwrap();
+    let spid = scalar(d, "SELECT @@SPID");
+    let kept = |d: &mut dyn Driver, what: &str| {
+        let row: Vec<String> = all_rows(d, "SELECT @@TRANCOUNT, @@SPID, (SELECT COUNT(*) FROM dbo.celer_cancel_tx)").1[0].iter().map(txt).collect();
+        assert_eq!(row, vec!["1".to_string(), spid.clone(), "1".to_string()], "{what}: the transaction and its connection are kept");
+    };
+    // The time limit (Ajustes › Ejecución), then Detener.
+    let t0 = Instant::now();
+    let cancel = d.canceller();
+    let r = crate::session::with_deadline(cancel, 2, || d.execute("WAITFOR DELAY '00:00:30'", 10));
+    assert_eq!(r.err().as_deref(), Some(crate::session::timeout_error(2).as_str()));
+    assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
+    kept(d, "time limit");
+    let cancel = d.canceller();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(800));
+        cancel();
+    });
+    let err = d.execute("UPDATE dbo.celer_cancel_tx SET id = id; WAITFOR DELAY '00:00:30'", 10).expect_err("cancelled").to_string();
+    t.join().unwrap();
+    assert_eq!(err, "Consulta cancelada por el usuario");
+    kept(d, "Detener");
+    // Cut while a 40 MB value streams: kept and in step, or dropped and said so; never a wrong answer.
+    let cancel = d.canceller();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        cancel();
+    });
+    let r = d.execute("SELECT REPLICATE(CONVERT(nvarchar(max), N'x'), 20000000) AS v FROM (SELECT TOP 20 1 AS k FROM sys.all_objects) q", 10);
+    t.join().unwrap();
+    let err = r.map(|_| String::new()).unwrap_or_else(|e| e.to_string());
+    eprintln!("cancelar a mitad de un valor largo: {err}");
+    if err == "Consulta cancelada por el usuario" {
+        kept(d, "cut mid-value");
+    } else {
+        let after = d.execute("SELECT 1", 10);
+        eprintln!("  la siguiente: {:?}", after.as_ref().map(|o| o.messages.clone()).map_err(|e| e.to_string()));
+    }
+    let _ = d.rollback();
+    d.set_autocommit(true).unwrap();
+    let _ = d.execute("IF OBJECT_ID('dbo.celer_cancel_tx') IS NOT NULL DROP TABLE dbo.celer_cancel_tx", 10);
+}
+
 /// "cols → table(cols)": the format the interface reads FK nodes with.
 fn regex_lite(detail: &str) -> bool {
     let Some((left, right)) = detail.split_once('→') else { return false };

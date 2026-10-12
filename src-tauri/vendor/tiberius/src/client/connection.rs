@@ -461,7 +461,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         self.flush_sink().await?;
         self.poisoned = false;
 
-        TokenStream::new(self).flush_done_attention().await
+        // Celer: the server may end the cancelled request's response first (a
+        // DONE with the error bit, end of message) and send the DONE_ATTN in
+        // the next message, so the acknowledgement is looked for over a few
+        // messages instead of failing at the end of the first one (issue #146).
+        let mut messages = 0;
+        loop {
+            match TokenStream::new(self).flush_done_attention().await {
+                Ok(done) => return Ok(done),
+                Err(_) if self.is_eof() && messages < 4 => {
+                    messages += 1;
+                    self.flushed = false;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Cleans the packet stream from previous use. It is important to use the

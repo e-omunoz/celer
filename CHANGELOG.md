@@ -210,6 +210,10 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- SQL Server: Detener and «Tiempo máximo de una consulta» cut the statement with ATTENTION and keep the connection, so
+  an open transaction (manual mode, BEGIN TRAN) survives as in SSMS instead of being rolled back with a reconnect.
+  Only a cut in the middle of a very long value still reopens the connection, and the next statement says what was
+  lost (#146).
 - Settings: a damaged settings.json is again reported when Celer starts («No se pudieron leer los ajustes», with
   where the copy was kept) instead of being set aside silently while every setting went back to its default (#145).
 - Import: a spreadsheet with one value far from its data (a stray cell in column XFD or row 1,048,576) no longer

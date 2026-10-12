@@ -8,8 +8,10 @@
 //!   con progreso (`progress`) y Detener como única forma de cortarlo.
 //!
 //! tiberius 0.13 manda ATTENTION (`cancel_query`), pero en las pruebas con SQL Server 2022 la conexión no quedó
-//! utilizable después: por eso no se usa para conservar la sesión, solo para que el servidor deje de trabajar en la
-//! conexión que se deja. Cómo fue (y su error) sale en los tiempos de la sentencia siguiente.
+//! utilizable después de cortar un resultado a medias: por eso no se usa para conservar la sesión al dejar un
+//! resultado, solo para que el servidor deje de trabajar en la conexión que se deja. Cómo fue (y su error) sale en los
+//! tiempos de la sentencia siguiente. Detener y el tiempo máximo sí conservan la conexión (y su transacción) cuando
+//! el servidor acusa el ATTENTION y la conexión responde después; si no, se cierra.
 //!
 //! Las conexiones de las sesiones que se cierran sin estado propio quedan libres un rato (`pool`) para la siguiente
 //! sesión de la misma configuración, que se ahorra el login (con su TLS). Con `CELER_MSSQL_TRACE` en el entorno, los
@@ -44,6 +46,8 @@ const BINARY_PREVIEW: usize = 4096;
 const PACKET_SIZE: u32 = 8000;
 /// Lo que se espera el acuse del ATTENTION al cortar en segundo plano la conexión que se deja.
 const ATTENTION_CAP: Duration = Duration::from_secs(10);
+/// Detener: lo que se espera el acuse del ATTENTION, y después la respuesta de la conexión, antes de cerrarla.
+const CANCEL_CAP: Duration = Duration::from_secs(5);
 /// Conexiones libres: cuánto se guardan, a partir de cuándo se comprueban antes de usarlas y cuántas por configuración.
 const IDLE_TTL: Duration = Duration::from_secs(300);
 const IDLE_PING: Duration = Duration::from_secs(20);
@@ -1638,17 +1642,39 @@ async fn run_query(
     let outcome = {
         let work = stream_query(&mut client, sql, dml, &tx, &abandon, &drained);
         tokio::select! {
-            o = work => o,
-            _ = token.cancelled() => {
-                let _ = tx.try_send(Item::Error("Consulta cancelada por el usuario (la conexión se ha reiniciado)".into()));
-                Outcome::Broken(None)
-            }
+            biased;
+            o = work => Some(o),
+            _ = token.cancelled() => None,
+        }
+    };
+    // Detener (or the time limit): an ATTENTION stops the statement and, once the server acknowledges it and the
+    // connection answers again, the session keeps its connection, with its open transaction, as in SSMS. Without
+    // an acknowledgement (or cut while a request was being written) the connection is dropped.
+    let outcome = match outcome {
+        Some(o) => o,
+        None if attention(&mut client).await => {
+            let _ = tx.try_send(Item::Error("Consulta cancelada por el usuario".into()));
+            Outcome::Ok(None)
+        }
+        None => {
+            let _ = tx.try_send(Item::Error("Consulta cancelada por el usuario (la conexión se ha reiniciado)".into()));
+            Outcome::Broken(None)
         }
     };
     match outcome {
         Outcome::Ok(cut) => Finished { client: Some(client), cut },
         Outcome::Broken(cut) => Finished { client: None, cut },
     }
+}
+
+/// Cuts the statement in flight with ATTENTION and checks that the connection answers again: true when it can be
+/// kept. A desynchronised stream (cut in the middle of a value) fails the check and the connection is dropped.
+async fn attention(client: &mut Cli) -> bool {
+    if !matches!(tokio::time::timeout(CANCEL_CAP, client.cancel_query()).await, Ok(Ok(()))) {
+        return false;
+    }
+    let check = async { client.simple_query("SELECT 1").await?.into_results().await };
+    matches!(tokio::time::timeout(CANCEL_CAP, check).await, Ok(Ok(r)) if r.len() == 1 && r[0].len() == 1)
 }
 
 async fn stream_query(

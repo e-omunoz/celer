@@ -493,7 +493,9 @@ importar, lo que Celer no entiende se ignora y se dice cuál.
   con cabeceras, CSV, Markdown o JSON). Los formatos solo cambian cómo se ve: al copiar, exportar o editar se usa el
   valor tal como lo da el servidor.
 - **Ejecución**: **tiempo máximo de una consulta** (en segundos; 0 es sin límite). Pasado ese tiempo Celer cancela la
-  sentencia de la consola igual que el botón Detener, en cualquier motor, y el error lo dice. Y el modo de transacción
+  sentencia de la consola igual que el botón Detener, en cualquier motor, y el error lo dice. En SQL Server la
+  sentencia se corta y la transacción abierta sigue, como en SSMS; solo si se corta mientras llega un valor muy largo
+  la conexión se reabre y la transacción se pierde (el aviso lo dice). Y el modo de transacción
   con el que empiezan las consolas nuevas: automático o manual (Commit / Rollback).
 - **Ventana y pestañas**: restaurar o no las pestañas y ventanas de la última sesión al iniciar, y si abrir una tabla
   que ya está abierta va a su pestaña o abre otra.
