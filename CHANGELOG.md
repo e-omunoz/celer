@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Transactions: a detached plan or result comparison no longer reminds of a console's open transaction (it kept doing
+  so after the Commit); the window that owns the console is the one that reminds (#166).
 - Transactions: closing a console, a window or Celer (or anything else that asks Commit or Rollback) while the console
   with the open transaction is still running a statement stops that statement first, as closing did in 2.2.0, and the
   dialog says so: it no longer waits for the statement to end, and «Commit» no longer includes it (#147).

@@ -2470,6 +2470,8 @@ export function txThresholdsOf(tab: SqlTab) {
  * a window of an earlier version, or reconnected) starts counting, and one past the red threshold gets a reminder.
  */
 function watchTransactions() {
+  // A detached panel (plan, comparison) holds a copy of its console as it was: the window that owns it reminds (#166).
+  if (isPanelWindow()) return;
   const open = openTransactions();
   if (!open.length) return;
   const at = Date.now();
