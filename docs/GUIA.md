@@ -561,7 +561,8 @@ derecha reúne explorador, pestañas, editor, resultados, un diálogo y a Gib pa
   importar, exportar y borrar. Si sales del editor con cambios sin guardar, Celer pregunta antes.
 
 Un tema exportado es un fichero `.celer-theme.json`: al importarlo en otro equipo se ve igual (lleva su color de
-acento). Un fichero que no es un tema de Celer, que está dañado o que hizo una versión más nueva se rechaza con el
+acento). Un fichero que no es un tema de Celer, que está dañado, que hizo una versión más nueva o que trae valores que
+un tema no admite (un color que no es un color, una fuente rara, medidas fuera de rango) se rechaza entero con el
 motivo, sin aplicar nada. Los temas propios aparecen junto a los de serie, en la paleta (*Tema: …*) y en las ventanas
 separadas, y viajan con *Exportar ajustes…*.
 

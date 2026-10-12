@@ -359,7 +359,56 @@ export function importThemeJson(text: string, id: string, taken: string[]): Cust
   if (typeof version === "number" && version > 1) throw new Error("El tema se hizo con una versión más nueva de Celer");
   const theme = sanitizeTheme(raw, id);
   if (!theme) throw new Error("El tema no indica un tema base válido");
+  const problems = themeFileProblems(raw as Record<string, unknown>);
+  if (problems.length) throw new Error(`El tema tiene valores no válidos y no se importa: ${problems.join("; ")}`);
   return { ...theme, name: uniqueThemeName(theme.name, taken) };
+}
+
+/**
+ * What an imported file sets that a theme cannot have: a colour that is not a plain colour (url(), expression()…)
+ * or names an unknown token, a font that is not a plain family name, numbers out of range. A file Celer exported
+ * never has any; one that does is refused as a whole instead of being imported with parts silently dropped.
+ */
+export function themeFileProblems(raw: Record<string, unknown>): string[] {
+  const problems: string[] = [];
+  const short = (value: unknown) => {
+    const text = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+    return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  };
+  if (raw.name !== undefined && (typeof raw.name !== "string" || raw.name.length > 60 || /[\u0000-\u001f\u007f]/.test(raw.name))) {
+    problems.push("nombre no válido");
+  }
+  if (raw.colors !== undefined) {
+    if (!raw.colors || typeof raw.colors !== "object" || Array.isArray(raw.colors)) problems.push("colores no válidos");
+    else {
+      for (const name of Object.getOwnPropertyNames(raw.colors)) {
+        const color = (raw.colors as Record<string, unknown>)[name];
+        if (!ALL_TOKENS.has(name)) problems.push(`color desconocido ${short(name)}`);
+        else if (typeof color !== "string" || !isSafeColor(color)) problems.push(`${name}: ${short(color)} no es un color`);
+      }
+    }
+  }
+  if (raw.fonts !== undefined) {
+    if (!raw.fonts || typeof raw.fonts !== "object" || Array.isArray(raw.fonts)) problems.push("fuentes no válidas");
+    else {
+      for (const [key, label] of [["ui", "fuente de la interfaz"], ["editor", "fuente del editor"]] as const) {
+        const font = (raw.fonts as Record<string, unknown>)[key];
+        if (font !== undefined && font !== "" && (typeof font !== "string" || !isSafeFont(font))) problems.push(`${label} no válida`);
+      }
+    }
+  }
+  const inRange = (key: string, label: string, min: number, max: number, integer: boolean, nullable: boolean) => {
+    const value = raw[key];
+    if (value === undefined || (nullable && value === null)) return;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+      problems.push(`${label} ${short(value)} fuera de ${min}–${max}`);
+    }
+  };
+  inRange("radius", "radio", RADIUS_RANGE.min, RADIUS_RANGE.max, true, true);
+  inRange("rowHeight", "alto de fila", ROW_RANGE.min, ROW_RANGE.max, true, true);
+  inRange("motionScale", "velocidad de animación", 0.5, 2, false, false);
+  if (raw.shadow !== undefined && !SHADOWS.some((item) => item.id === raw.shadow)) problems.push(`sombras ${short(raw.shadow)} no válidas`);
+  return problems;
 }
 
 const SHADOW_VALUES: Record<Exclude<ShadowLevel, "base">, { md: string; lg: string }> = {

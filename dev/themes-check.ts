@@ -77,18 +77,37 @@ assert.throws(() => importThemeJson("{", "x", []), /JSON/);
 assert.throws(() => importThemeJson('{"kind":"other"}', "x", []), /no es un tema/);
 assert.throws(() => importThemeJson('{"kind":"celer-theme","version":9,"base":"dark"}', "x", []), /más nueva/);
 assert.throws(() => importThemeJson('{"kind":"celer-theme","version":1,"base":"neon"}', "x", []), /base/);
-// A file can only set known tokens with safe values, and numbers within range.
-const hostile = importThemeJson(
-  JSON.stringify({ kind: "celer-theme", version: 1, name: "x", base: "dark", colors: { "--bg": "url(http://x)", "--text": "#eee", "--unknown": "#fff", "--sans": "#000" }, fonts: { ui: 'A", url(x)' }, radius: 999, rowHeight: -4, motionScale: 40, shadow: "huge" }),
-  "h1",
-  [],
-);
-assert.deepEqual(hostile.colors, { "--text": "#eee" });
-assert.equal(hostile.uiFont, "");
-assert.equal(hostile.radius, 16);
-assert.equal(hostile.rowHeight, 20);
-assert.equal(hostile.motionScale, 2);
-assert.equal(hostile.shadow, "base");
+// A file that sets anything a theme cannot have is refused as a whole, saying what is wrong (not silently cleaned).
+const hostileFile = { kind: "celer-theme", version: 1, name: "<img src=x onerror=alert(1)>", base: "dark", colors: { "--bg": "url(http://x)", "--text": "#eee", "--unknown": "#fff", "--sans": "#000" }, fonts: { ui: 'A", url(x)' }, radius: 9999, rowHeight: -5, motionScale: 1e9, shadow: "huge" };
+assert.throws(() => importThemeJson(JSON.stringify(hostileFile), "h1", []), (err: Error) => {
+  for (const part of ["no se importa", "--bg", "color desconocido --unknown", "color desconocido --sans", "fuente de la interfaz", "radio 9999", "alto de fila -5", "velocidad", "sombras huge"]) {
+    assert.ok(err.message.includes(part), `the refusal names ${part}: ${err.message}`);
+  }
+  return true;
+});
+for (const bad of [
+  { colors: { "--bg": "expression(alert(1))" } },
+  { colors: { "--bg": "red; } body { display: none" } },
+  { colors: JSON.parse('{"__proto__": "#fff"}') },
+  { fonts: { editor: 'Consolas", monospace; x: url(y)' } },
+  { radius: 4.5 },
+  { rowHeight: 40 },
+  { motionScale: 0 },
+  { name: "a\u0000b" },
+]) {
+  assert.throws(() => importThemeJson(JSON.stringify({ kind: "celer-theme", version: 1, base: "dark", ...bad }), "h2", []), /no se importa/, JSON.stringify(bad));
+}
+assert.ok(!("polluted" in {}), "no prototype pollution");
+// The same values read from settings.json are cleaned instead (a damaged settings file still opens).
+const cleaned = sanitizeTheme({ ...hostileFile, id: "h3" });
+assert.deepEqual(cleaned?.colors, { "--text": "#eee" });
+assert.equal(cleaned?.uiFont, "");
+assert.equal(cleaned?.radius, 16);
+assert.equal(cleaned?.rowHeight, 20);
+assert.equal(cleaned?.motionScale, 2);
+assert.equal(cleaned?.shadow, "base");
+// Optional fields left out, a null radius/row height and empty fonts are fine.
+assert.equal(importThemeJson('{"kind":"celer-theme","version":1,"base":"sand","radius":null,"rowHeight":null,"fonts":{"ui":"","editor":""}}', "ok", []).base, "sand");
 
 // ---- settings.json: damaged entries are left out, duplicates once
 const kept = readCustomThemes([edited, { ...edited }, { id: "z", base: "nope" }, null, "x", { ...base, id: "../evil" }]);
