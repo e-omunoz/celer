@@ -1061,11 +1061,14 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .dialog.runon-dialog { width: min(620px, calc(100vw - 32px)); }
 .runon-desc { white-space: pre-wrap; }
 .runon-facts { margin: -4px 0 12px; }
-.runon-targets { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
+/* On a short window the target list scrolls and the footer stays in the dialog. */
+.runon-dialog > form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.runon-targets { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 80px; overflow: auto; }
+.runon-targets > *, .runon-dialog > form > :not(.runon-targets) { flex: none; }
 .runon-target { display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 8px; align-items: end; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
 .runon-target:has(.runon-schema) { grid-template-columns: 1.3fr 1fr 0.8fr auto; }
 .runon-row-actions { display: flex; gap: 4px; align-items: center; min-height: 32px; }
-.runon-add { margin: 8px 0 12px; }
+.runon-add { margin: 8px 0 12px; align-self: flex-start; }
 .runon-action { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; padding: 0; border: none; }
 .runon-action .check small { margin-left: 2px; }
 .lib-empty p { margin: 0 0 12px; }
