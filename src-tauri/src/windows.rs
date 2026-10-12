@@ -42,6 +42,9 @@ pub struct Windows {
     drag: Mutex<Option<Drag>>,
     /// Cada arrastre tiene su número: el hilo que mueve el contorno de un arrastre termina cuando empieza otro.
     drag_gen: AtomicU64,
+    /// El arrastre en curso se canceló con Esc (Windows: el hilo del contorno lo ve; la interfaz no recibe teclas
+    /// mientras el sistema lleva el arrastre).
+    drag_cancelled: AtomicBool,
     /// La última ventana completa que tuvo el foco.
     focused: Mutex<String>,
 }
@@ -49,6 +52,9 @@ pub struct Windows {
 struct Drag {
     source: String,
     claim: Option<(String, usize)>,
+    /// Dónde estaba el puntero la última vez que se vio el botón pulsado (Windows): el punto donde se soltó, aunque
+    /// la interfaz pregunte un poco después y el ratón ya se haya movido.
+    drop_point: Option<(f64, f64)>,
 }
 
 /// El contorno que sigue al puntero mientras una pestaña se arrastra fuera de las ventanas: no es una ventana de
@@ -57,8 +63,8 @@ pub const GHOST: &str = "drag-ghost";
 /// Dónde queda el puntero dentro del contorno, en píxeles físicos: lo mismo que `DROP_OFFSET` en windowModel.ts,
 /// así el contorno está justo donde se abrirá la ventana nueva.
 const GHOST_OFFSET: (f64, f64) = (120.0, 18.0);
-/// The size of the window that opens (see `window_open`, "full"), in logical pixels.
-const GHOST_SIZE: (f64, f64) = (1280.0, 820.0);
+/// El tamaño de una ventana completa nueva (`window_open`, "full"), en píxeles lógicos: el contorno tiene el mismo.
+const FULL_SIZE: (f64, f64) = (1280.0, 820.0);
 
 /// Una ventana con pestañas (la principal o `win-N`), no un panel.
 fn is_full(label: &str) -> bool {
@@ -184,7 +190,7 @@ pub async fn window_open(app: AppHandle, windows: State<'_, Windows>, request: O
         windows.inbox.lock().insert(label.clone(), request.messages);
     }
     let (width, height, min_width, min_height) = match kind {
-        "full" => (1280.0, 820.0, 960.0, 640.0),
+        "full" => (FULL_SIZE.0, FULL_SIZE.1, 960.0, 640.0),
         "library" | "ai" => (440.0, 760.0, 320.0, 420.0),
         _ => (1100.0, 760.0, 520.0, 360.0),
     };
@@ -208,8 +214,16 @@ pub async fn window_open(app: AppHandle, windows: State<'_, Windows>, request: O
         }
     };
     if let Some([x, y]) = request.at {
-        let (x, y) = clamp_to_work_area(&window, x.round() as i32, y.round() as i32);
-        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        // Where the outline showed it (drop_frame): the monitor under the drop point, kept inside its work area.
+        let logical = if kind == "full" { FULL_SIZE } else { (width, height) };
+        let frame = drop_frame(&app, (x + GHOST_OFFSET.0, y + GHOST_OFFSET.1), logical).unwrap_or(Frame { x: x.round() as i32, y: y.round() as i32, width: 0, height: 0 });
+        let _ = window.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
+        if frame.width > 0 {
+            // On a monitor with another scale the system resizes the window once it lands there (and may nudge it):
+            // the size it will have there, then the corner again.
+            let _ = window.set_size(tauri::PhysicalSize::new(frame.width, frame.height));
+            let _ = window.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
+        }
     }
     // Red de seguridad: se muestra igualmente si la interfaz no lo ha hecho al poco.
     let shown = window.clone();
@@ -428,7 +442,8 @@ pub fn window_quit(app: AppHandle) {
 #[tauri::command]
 pub fn tab_drag_start(app: AppHandle, window: WebviewWindow, windows: State<'_, Windows>, tab: String, title: String, ghost: Option<Value>, card: Option<Value>) {
     let source = window.label().to_string();
-    *windows.drag.lock() = Some(Drag { source: source.clone(), claim: None });
+    *windows.drag.lock() = Some(Drag { source: source.clone(), claim: None, drop_point: None });
+    windows.drag_cancelled.store(false, Ordering::SeqCst);
     let generation = windows.drag_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let _ = app.emit("celer://drag", json!({ "active": true, "source": source, "tab": tab, "title": title, "card": card }));
     if let Some(style) = ghost {
@@ -436,13 +451,31 @@ pub fn tab_drag_start(app: AppHandle, window: WebviewWindow, windows: State<'_, 
     }
 }
 
-/// Mueve la esquina (`x`, `y`) de `window` lo justo para que quepa en el área de trabajo del monitor que hay bajo ella
-/// (una ventana soltada junto al borde derecho o inferior no se abre casi fuera de la pantalla).
-fn clamp_to_work_area(window: &WebviewWindow, x: i32, y: i32) -> (i32, i32) {
-    let Ok(size) = window.outer_size() else { return (x, y) };
-    let Ok(Some(monitor)) = window.monitor_from_point(x as f64 + 120.0, y as f64 + 18.0) else { return (x, y) };
+/// Un rectángulo en píxeles físicos del escritorio: dónde se abrirá una ventana (y dónde se dibuja su contorno).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Frame {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+/// Dónde queda una ventana de `logical` píxeles lógicos soltada con el puntero en `cursor`: su esquina a
+/// `GHOST_OFFSET` del puntero, su tamaño en píxeles del monitor que hay bajo el puntero (su escala: 100 %, 150 %…)
+/// y todo dentro del área de trabajo de ese monitor. El contorno y la ventana usan esta misma cuenta, así el
+/// contorno está siempre justo donde se abrirá la ventana. `None` si no se sabe qué monitor hay ahí.
+fn drop_frame(app: &AppHandle, cursor: (f64, f64), logical: (f64, f64)) -> Option<Frame> {
+    let monitor = app.monitor_from_point(cursor.0, cursor.1).ok().flatten().or_else(|| app.primary_monitor().ok().flatten())?;
     let area = monitor.work_area();
-    clamp_corner((x, y), (size.width as i32, size.height as i32), (area.position.x, area.position.y, area.size.width as i32, area.size.height as i32))
+    Some(frame_in(cursor, logical, monitor.scale_factor(), (area.position.x, area.position.y, area.size.width as i32, area.size.height as i32)))
+}
+
+/// La cuenta de `drop_frame` sin el monitor (pruebas): `area` es (x, y, ancho, alto) del área de trabajo.
+fn frame_in(cursor: (f64, f64), logical: (f64, f64), scale: f64, area: (i32, i32, i32, i32)) -> Frame {
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    let size = ((logical.0 * scale).round() as i32, (logical.1 * scale).round() as i32);
+    let (x, y) = clamp_corner(ghost_corner(cursor), size, area);
+    Frame { x, y, width: size.0 as u32, height: size.1 as u32 }
 }
 
 /// La esquina más cercana a `corner` con la ventana de `size` dentro de `area` (x, y, ancho, alto); si no cabe, su esquina superior izquierda.
@@ -465,7 +498,7 @@ fn inside(point: (f64, f64), area: &Area) -> bool {
     point.0 >= area.x && point.0 < area.x + area.width && point.1 >= area.y && point.1 < area.y + area.height
 }
 
-/// La esquina del contorno para el puntero en `cursor`: la de la ventana que se abriría al soltar.
+/// La esquina de la ventana que se abriría con el puntero en `cursor`, antes de encajarla en la pantalla.
 fn ghost_corner(cursor: (f64, f64)) -> (i32, i32) {
     ((cursor.0 - GHOST_OFFSET.0).round() as i32, (cursor.1 - GHOST_OFFSET.1).round() as i32)
 }
@@ -486,8 +519,27 @@ fn visible_areas(app: &AppHandle) -> Vec<Area> {
         .collect()
 }
 
-/// Mientras dura el arrastre `generation`: fuera de toda ventana de Celer, el contorno sigue al puntero; dentro de
-/// una, se esconde (allí la barra de pestañas enseña dónde caerá). Al terminar, se cierra.
+/// El botón izquierdo y Esc mientras el sistema lleva el arrastre (la interfaz no recibe ni teclas ni ratón fuera
+/// de su ventana). `None` donde no se puede saber.
+#[cfg(windows)]
+fn drag_keys() -> Option<(bool, bool)> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_RBUTTON};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    // Con los botones cambiados (zurdos), el botón que arrastra es el derecho físico.
+    let primary = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 { VK_RBUTTON } else { VK_LBUTTON };
+    let down = |key: u16| unsafe { GetAsyncKeyState(key as i32) } as u16 & 0x8000 != 0;
+    Some((down(primary), down(VK_ESCAPE)))
+}
+
+#[cfg(not(windows))]
+fn drag_keys() -> Option<(bool, bool)> {
+    None
+}
+
+/// Mientras dura el arrastre `generation`: fuera de toda ventana de Celer, el contorno de la ventana nueva se
+/// dibuja donde se abrirá (`drop_frame`, del tamaño que tendrá); dentro de una, se esconde (allí la barra de
+/// pestañas enseña dónde caerá). Se esconde también en cuanto se suelta el botón o se pulsa Esc (Windows), sin
+/// esperar a que la interfaz cierre el arrastre, y se cierra al terminar.
 fn follow_with_ghost(app: AppHandle, generation: u64, style: Value) {
     std::thread::spawn(move || {
         let current = |app: &AppHandle| {
@@ -504,7 +556,7 @@ fn follow_with_ghost(app: AppHandle, generation: u64, style: Value) {
             None => {
                 let built = WebviewWindowBuilder::new(&app, GHOST, WebviewUrl::App("drag-ghost.html".into()))
                     .title("Celer")
-                    .inner_size(GHOST_SIZE.0, GHOST_SIZE.1)
+                    .inner_size(FULL_SIZE.0, FULL_SIZE.1)
                     .decorations(false)
                     .transparent(true)
                     .background_color(tauri::window::Color(0, 0, 0, 0))
@@ -515,6 +567,7 @@ fn follow_with_ghost(app: AppHandle, generation: u64, style: Value) {
                     .focused(false)
                     .focusable(false)
                     .visible(false)
+                    .disable_drag_drop_handler()
                     .initialization_script(format!("window.__celerGhost = {data};"))
                     .build();
                 match built {
@@ -527,24 +580,56 @@ fn follow_with_ghost(app: AppHandle, generation: u64, style: Value) {
         // Las ventanas cambian poco durante un arrastre: se miran unas veces por segundo, el puntero en cada paso.
         let mut areas = visible_areas(&app);
         let mut shown = false;
+        let mut placed: Option<Frame> = None;
         let mut tick = 0u32;
+        // Over: the button was let go or Esc pressed (the interface ends the drag a moment later).
+        let mut over = false;
+        let hide = |shown: &mut bool| {
+            if *shown {
+                let _ = ghost.hide();
+                *shown = false;
+            }
+        };
         while current(&app) {
             std::thread::sleep(std::time::Duration::from_millis(16));
+            if over {
+                continue;
+            }
             tick = tick.wrapping_add(1);
             if tick % 15 == 0 {
                 areas = visible_areas(&app);
             }
             let Ok(cursor) = ghost.cursor_position() else { continue };
             let point = (cursor.x, cursor.y);
-            if areas.iter().any(|area| inside(point, area)) {
-                if shown {
-                    let _ = ghost.hide();
-                    shown = false;
+            if let Some((button, escape)) = drag_keys() {
+                if escape {
+                    if let Some(windows) = app.try_state::<Windows>() {
+                        windows.drag_cancelled.store(true, Ordering::SeqCst);
+                    }
                 }
+                if escape || !button {
+                    over = true;
+                    hide(&mut shown);
+                    continue;
+                }
+                if let Some(windows) = app.try_state::<Windows>() {
+                    if let Some(drag) = windows.drag.lock().as_mut() {
+                        drag.drop_point = Some(point);
+                    }
+                }
+            }
+            if areas.iter().any(|area| inside(point, area)) {
+                hide(&mut shown);
                 continue;
             }
-            let (x, y) = ghost_corner(point);
-            let _ = ghost.set_position(tauri::PhysicalPosition::new(x, y));
+            let Some(frame) = drop_frame(&app, point, FULL_SIZE) else { continue };
+            if placed != Some(frame) {
+                if placed.map(|p| (p.width, p.height)) != Some((frame.width, frame.height)) {
+                    let _ = ghost.set_size(tauri::PhysicalSize::new(frame.width, frame.height));
+                }
+                let _ = ghost.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
+                placed = Some(frame);
+            }
             if !shown {
                 let _ = ghost.show();
                 shown = true;
@@ -592,9 +677,11 @@ pub struct WindowRect {
 #[serde(rename_all = "camelCase")]
 pub struct DragEnd {
     claim: Option<DropClaim>,
-    /// Dónde está el puntero, en píxeles físicos del escritorio.
+    /// Dónde se soltó (o dónde está el puntero, si no se sabe), en píxeles físicos del escritorio.
     cursor: Option<[f64; 2]>,
     windows: Vec<WindowRect>,
+    /// Se canceló con Esc: la pestaña se queda donde estaba.
+    cancelled: bool,
 }
 
 /// Termina el arrastre: qué ventana se quedó la pestaña, dónde está el puntero y dónde están las ventanas (la
@@ -606,8 +693,11 @@ pub fn tab_drag_end(app: AppHandle, window: WebviewWindow, windows: State<'_, Wi
         let _ = ghost.hide();
     }
     let _ = app.emit("celer://drag", json!({ "active": false }));
+    // Esc ends the system's drag with the button still held; a drop lets it go (Windows; elsewhere never cancelled).
+    let cancelled = windows.drag_cancelled.swap(false, Ordering::SeqCst) || drag_keys().is_some_and(|(button, _)| button);
+    let drop_point = drag.as_ref().and_then(|d| d.drop_point);
     let claim = drag.and_then(|d| d.claim).map(|(label, index)| DropClaim { label, index });
-    let cursor = window.cursor_position().ok().map(|p| [p.x, p.y]);
+    let cursor = drop_point.map(|(x, y)| [x, y]).or_else(|| window.cursor_position().ok().map(|p| [p.x, p.y]));
     let rects = app
         .webview_windows()
         .into_iter()
@@ -619,7 +709,7 @@ pub fn tab_drag_end(app: AppHandle, window: WebviewWindow, windows: State<'_, Wi
             Some(WindowRect { label, x: position.x, y: position.y, width: size.width, height: size.height, minimized })
         })
         .collect();
-    DragEnd { claim, cursor, windows: rects }
+    DragEnd { claim, cursor, windows: rects, cancelled }
 }
 
 // ───────────── Requests of an assistant (MCP, "Controlar la aplicación") ─────────────
@@ -706,7 +796,7 @@ pub fn mcp_app_reply(pending: State<'_, Arc<crate::mcp_app::Pending>>, id: Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_corner, compose, ghost_corner, inside, Area, GHOST_OFFSET};
+    use super::{clamp_corner, compose, frame_in, ghost_corner, inside, Area, Frame, FULL_SIZE, GHOST_OFFSET};
     use serde_json::json;
 
     #[test]
@@ -721,6 +811,28 @@ mod tests {
         assert_eq!(clamp_corner((1800, 900), (1280, 820), (0, 0, 1920, 1040)), (640, 220));
         assert_eq!(clamp_corner((-50, 10), (1280, 820), (0, 0, 1920, 1040)), (0, 10));
         assert_eq!(clamp_corner((10, 10), (2000, 1200), (0, 0, 1920, 1040)), (0, 0));
+    }
+
+    #[test]
+    fn the_outline_is_the_window_that_will_open_kept_on_its_monitor() {
+        // Sprint 2.3: dragged to (500, 1050) on a 2560x1440 screen the outline hung off the bottom (corner at
+        // y≈1032) while the window opened clamped at y=563. Both now come from the same frame, inside the work area.
+        let area = (0, 0, 2560, 1392);
+        let frame = frame_in((500.0, 1050.0), FULL_SIZE, 1.0, area);
+        assert_eq!(frame, Frame { x: 380, y: 572, width: 1280, height: 820 });
+        assert!(frame.y as u32 + frame.height <= 1392, "its bottom edge (and the label) stays on screen");
+        // At 150 %, the window is 1920x1230 physical pixels: the outline too.
+        let scaled = frame_in((500.0, 300.0), FULL_SIZE, 1.5, (0, 0, 3840, 2100));
+        assert_eq!((scaled.width, scaled.height), (1920, 1230));
+        assert_eq!((scaled.x, scaled.y), (380, 282), "away from the edges the pointer keeps its spot on the tab strip");
+        // A second monitor left of the first one (negative coordinates) clamps to its own work area.
+        let left = frame_in((-100.0, 20.0), FULL_SIZE, 1.0, (-1920, 0, 1920, 1040));
+        assert_eq!((left.x, left.y), (-1280, 2));
+        // A screen smaller than the window: its top-left corner, so the tab strip and the label are on screen.
+        let small = frame_in((700.0, 600.0), FULL_SIZE, 1.0, (0, 0, 1280, 680));
+        assert_eq!((small.x, small.y), (0, 0));
+        // A broken scale factor is read as 100 %.
+        assert_eq!(frame_in((500.0, 300.0), FULL_SIZE, 0.0, area).width, 1280);
     }
 
     #[test]

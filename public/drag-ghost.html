@@ -1,8 +1,10 @@
 <!doctype html>
 <!--
   The outline of the new window that follows the pointer while a tab is dragged out of every Celer window
-  (src-tauri/src/windows.rs, follow_with_ghost). A transparent window that never takes the mouse; the core hands
-  it the tab's title, preview and the theme's colours (window.__celerGhost, then __celerGhostUpdate).
+  (src-tauri/src/windows.rs, follow_with_ghost): the core sizes and places it exactly where the window will open
+  (drop_frame, kept inside the monitor's work area). A transparent window that never takes the mouse or the
+  focus; the core hands it the tab's title, preview and the theme's colours (window.__celerGhost, then
+  __celerGhostUpdate).
 -->
 <html lang="es">
   <head>
@@ -33,7 +35,8 @@
         font: 10.5px/1.45 var(--mono, "JetBrains Mono", Consolas, monospace);
       }
       pre:empty { display: none; }
-      .label { margin-top: auto; align-self: center; padding: 5px 12px; border-radius: 999px; background: var(--accent, #d97757); color: var(--accent-fg, #fff); font-weight: 600; font-size: 12px; }
+      /* At the top, next to the pointer: a window taller than the screen is cut at the bottom, never here. */
+      .label { align-self: center; margin-top: 6px; padding: 5px 12px; border-radius: 999px; background: var(--accent, #d97757); color: var(--accent-fg, #fff); font-weight: 600; font-size: 12px; }
       @keyframes in { from { opacity: 0; transform: scale(0.96); } }
       @media (prefers-reduced-motion: reduce) { .frame { animation: none; } }
       :root[data-motion="reduce"] .frame { animation: none; }
@@ -43,8 +46,8 @@
     <div class="frame">
       <div class="bar"><div class="tab"><span id="title"></span></div></div>
       <div class="body">
-        <pre id="preview"></pre>
         <div class="label" id="label">Soltar para abrir en una ventana nueva</div>
+        <pre id="preview"></pre>
       </div>
     </div>
     <script>

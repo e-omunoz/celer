@@ -175,6 +175,14 @@ assert.match(rust, new RegExp(`GHOST_OFFSET: \\(f64, f64\\) = \\(${DROP_OFFSET.x
 const ghostPage = readFileSync(new URL("../public/drag-ghost.html", import.meta.url), "utf8");
 assert.ok(ghostPage.includes("Soltar para abrir en una ventana nueva"));
 assert.ok(!/<script[^>]+src=/.test(ghostPage), "the outline page loads nothing");
+// Sprint 2.3 failure: the outline hung off the screen with its label while the window opened elsewhere. The outline
+// and the dropped window share one frame (size of a full window at the monitor's scale, inside its work area)…
+assert.match(rust, /"full" => \(FULL_SIZE\.0, FULL_SIZE\.1,/, "a full window opens at FULL_SIZE");
+assert.match(rust, /drop_frame\(&app, point, FULL_SIZE\)/, "the outline is placed by drop_frame with the full window's size");
+assert.match(rust, /drop_frame\(&app, \(x \+ GHOST_OFFSET\.0, y \+ GHOST_OFFSET\.1\), logical\)/, "a dropped window is placed by the same drop_frame");
+// …and its label sits at the top, next to the pointer, before the preview.
+assert.ok(ghostPage.indexOf('id="label"') < ghostPage.indexOf('id="preview"'), "the label comes before the preview");
+assert.ok(!/\.label \{[^}]*margin-top: auto/.test(ghostPage), "the label is not pushed to the bottom");
 
 assert.deepEqual(insertAt(["a", "b", "c"], ["x"], 1), ["a", "x", "b", "c"]);
 assert.deepEqual(insertAt(["a"], ["x", "y"], null), ["a", "x", "y"]);

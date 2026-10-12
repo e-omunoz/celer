@@ -526,8 +526,9 @@ export async function endTabDrag(tabId: string, handled: boolean) {
   dragging = "";
   // The window it was dropped on claims it meanwhile (its drop event may come after this one).
   if (!handled) await sleep(180);
-  const end = await invoke<{ claim: { label: string; index: number } | null; cursor: [number, number] | null; windows: WindowRect[] }>("tab_drag_end").catch(() => null);
-  if (!end || handled) return;
+  const end = await invoke<{ claim: { label: string; index: number } | null; cursor: [number, number] | null; windows: WindowRect[]; cancelled?: boolean }>("tab_drag_end").catch(() => null);
+  // Esc during the drag: the tab stays where it was (the core tells, the page gets no keys while the system drags).
+  if (!end || handled || end.cancelled) return;
   const where = dropTarget(windowLabel, end.cursor, end.windows, end.claim);
   if (where.kind === "window") await sendTab(tabId, where.label, { index: where.index });
   else if (where.kind === "new") await sendTab(tabId, null, { at: [where.x, where.y] });
