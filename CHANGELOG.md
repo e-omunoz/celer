@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Settings: a damaged settings.json is again reported when Celer starts («No se pudieron leer los ajustes», with
+  where the copy was kept) instead of being set aside silently while every setting went back to its default (#145).
 - Import: a spreadsheet with one value far from its data (a stray cell in column XFD or row 1,048,576) no longer
   closes Celer while it opens: a used area of more than 30 million cells is refused with «La hoja ocupa demasiadas
   celdas», where it is and how to clear it. .xlsb workbooks are read cell by cell too, with progress and «Cancelar»

@@ -110,6 +110,20 @@ fn setting(store: &Store, key: &str) -> Option<String> {
     settings.get(key).and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.trim().is_empty())
 }
 
+/// The history retention of Ajustes › Historial, set at start before any window adds to the history.
+fn apply_history_retention(store: &Store) {
+    // A plain read, like `setting`: a damaged settings.json stays where it is for the interface's load, which sets it
+    // aside and tells the user.
+    let Some(settings) = store.read("settings.json").and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok()) else {
+        return;
+    };
+    let max = settings.get("historyMax").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let days = settings.get("historyDays").and_then(|v| v.as_u64()).unwrap_or(0);
+    if max > 0 || days > 0 {
+        let _ = store.set_history_retention(if max > 0 { max } else { 5000 }, days);
+    }
+}
+
 /// Informix: the protocol a connection really uses. "auto" takes the Client SDK when its ODBC driver is registered
 /// and JDBC otherwise; connections saved before there was a choice (no mode) keep DRDA.
 fn informix_mode(cfg: &ConnConfig) -> &'static str {
@@ -1255,6 +1269,25 @@ mod read_only_tests {
 }
 
 #[cfg(test)]
+mod startup_tests {
+    use super::{apply_history_retention, Store};
+
+    #[test]
+    fn a_damaged_settings_file_is_left_for_the_interface_to_report() {
+        let dir = std::env::temp_dir().join(format!("celer-startup-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        std::fs::write(dir.join("settings.json"), "{\"theme\": \"dark\",").unwrap();
+        apply_history_retention(&store);
+        assert!(dir.join("settings.json").exists(), "start-up does not set it aside");
+        // The interface's load then sets it aside and says where it was kept.
+        let err = store.load_json("settings.json").unwrap_err().to_string();
+        assert!(err.contains("settings.json.unreadable-"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
 mod text_tests {
     use super::{decode_base64, decode_text, driver_label, ConnConfig, DbKind};
 
@@ -1795,14 +1828,7 @@ pub fn run() {
             // Panics and errors from here on go to <data>/logs (Ayuda › Registro de errores).
             errlog::init(&dir);
             let store = Store::new(dir.clone());
-            // The history retention of Ajustes › Historial, before any window adds to it.
-            if let Ok(settings) = store.load_json("settings.json") {
-                let max = settings.get("historyMax").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let days = settings.get("historyDays").and_then(|v| v.as_u64()).unwrap_or(0);
-                if max > 0 || days > 0 {
-                    let _ = store.set_history_retention(if max > 0 { max } else { 5000 }, days);
-                }
-            }
+            apply_history_retention(&store);
             let mut conns = store.load_connections();
             move_inline_passwords(&store, &mut conns);
             let mcp = mcp::McpServer::new(dir.clone(), true);
