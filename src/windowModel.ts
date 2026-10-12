@@ -326,6 +326,11 @@ export function riskSummary(tabs: TabRisk[]): string {
   return `${parts.slice(0, -1).join(", ")} y ${parts[parts.length - 1]}`;
 }
 
+/** «Moverla» / «moverlas»: the pronoun for the tabs at risk (one tab, or several), as in the close-window dialog. */
+export function riskPronoun(tabs: TabRisk[]): "la" | "las" {
+  return tabs.length === 1 ? "la" : "las";
+}
+
 // ---------------------------------------------------------------- Gib
 
 /**

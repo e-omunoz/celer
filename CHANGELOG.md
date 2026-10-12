@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Windows: closing a window with a single tab at risk says «Puedes moverla…» / «Moverla a …» instead of the plural
+  (#157).
 - Variables: hovering a `${name}` inside a comment or string that spans several lines (a `/* … */` block) no longer
   shows a value, since nothing is substituted there (#156).
 - Settings › Seguridad: a manual-transaction threshold below 0.5 min is saved as 0.5 min and the field shows the

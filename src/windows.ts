@@ -82,6 +82,7 @@ import {
   panelOf,
   placeOnScreen,
   readLayout,
+  riskPronoun,
   riskSummary,
   riskyTabs,
   SINGLE_PANELS,
@@ -729,21 +730,22 @@ async function handOverTabs(target: string): Promise<boolean> {
   const risky = riskyTabs(tabRisks());
   if (!risky.length) return true;
   const tx = risky.some((tab) => tab.transaction);
+  const them = riskPronoun(risky);
   // Open transactions: Commit or Rollback here, or the consoles go on in the other window (never an implicit commit).
   const choice = await askWindow(
     `Cerrar ${windowName(windowLabel)}`,
     tx
-      ? `Tiene ${riskSummary(risky)}. Puedes moverlas a ${windowName(target)}, con sus sesiones y transacciones como están; si no, elige qué hacer con las transacciones (lo demás se pierde).`
-      : `Tiene ${riskSummary(risky)}. Puedes moverlas a ${windowName(target)}, con sus sesiones como están; si no, se pierden.`,
+      ? `Tiene ${riskSummary(risky)}. Puedes mover${them} a ${windowName(target)}, con sus sesiones y transacciones como están; si no, elige qué hacer con las transacciones (lo demás se pierde).`
+      : `Tiene ${riskSummary(risky)}. Puedes mover${them} a ${windowName(target)}, con sus sesiones como están; si no, se pierden.`,
     tx
       ? [
           { label: "Commit y cerrar", value: "commit" },
           { label: "Rollback y cerrar", value: "discard", style: "danger" },
-          { label: `Moverlas a ${windowName(target)}`, value: "move", style: "primary" },
+          { label: `Mover${them} a ${windowName(target)}`, value: "move", style: "primary" },
         ]
       : [
           { label: "Cerrar y descartar", value: "discard", style: "danger" },
-          { label: `Moverlas a ${windowName(target)}`, value: "move", style: "primary" },
+          { label: `Mover${them} a ${windowName(target)}`, value: "move", style: "primary" },
         ],
   );
   if (choice === "commit" || choice === "discard") return endTransactions(txTabIds(), choice === "discard");
@@ -756,7 +758,7 @@ async function handOverTabs(target: string): Promise<boolean> {
     return false;
   }
   if (!(await post(target, tabMessage(tabs, null)))) {
-    notify(`No se pudieron mover: ${windowName(target)} ya no está abierta`, "error");
+    notify(`${tabs.length === 1 ? "No se pudo mover" : "No se pudieron mover"}: ${windowName(target)} ya no está abierta`, "error");
     return false;
   }
   for (const tab of tabs) detachTab(tab.id);
