@@ -168,6 +168,12 @@ fn result_set(d: &mut dyn Driver, sql: &str) -> ResultSet {
 /// A test that hangs fails instead: after `secs` it prints the JDBC bridge's threads (if it runs) and ends the process.
 struct Watchdog(Option<std::sync::mpsc::Sender<()>>);
 
+/// Where a test leaves a file for the engines workflow to collect: `CELER_ENGINE_OUT` (the workflow sets it), else the
+/// system's temp folder, never the checkout.
+fn engine_out(name: &str) -> std::path::PathBuf {
+    std::env::var_os("CELER_ENGINE_OUT").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(name)
+}
+
 fn watchdog(what: &'static str, secs: u64) -> Watchdog {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
@@ -468,7 +474,7 @@ fn mssql_engine() {
         let out = d.execute(sql, 10).unwrap();
         let xml = out.results.iter().find(|r| !r.columns.is_empty()).map(|r| txt(&r.rows[0][0])).unwrap_or_default();
         assert!(xml.contains("<ShowPlanXML") && xml.contains("<QueryPlan"), "{name}: {xml:.200}");
-        let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-showplan-").to_string() + name + ".xml", &xml);
+        let _ = std::fs::write(engine_out(&format!("target-showplan-{name}.xml")), &xml);
     }
     d.execute("SET SHOWPLAN_XML OFF", 1).unwrap();
     assert_eq!(scalar(d, "SELECT importe FROM dbo.celer_t WHERE id = 1"), "120.50", "el UPDATE bajo SHOWPLAN no debe ejecutarse");
@@ -1187,7 +1193,7 @@ fn informix_speed() {
     }
     let text = report.join("\n");
     println!("\n{text}\n");
-    let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-informix-speed.txt"), text);
+    let _ = std::fs::write(engine_out("target-informix-speed.txt"), text);
 }
 
 // ───────────────────────────────────────────────────────────────── reconnection and the pool (guard.rs)
@@ -2941,4 +2947,202 @@ fn informix_types_drda_and_jdbc() {
         assert_eq!(names(&cols), ["decimal", "decimal", "datetime year to fraction(3)", "datetime hour to minute", "boolean"]);
         assert_eq!(got, ["12345678901234567890.123456789", "12345678901234567890.123456789", "2024-01-15 10:30:15.123", "10:30", "true"]);
     }
+}
+
+/// «Historial de la fila» over JDBC (rowhistory.rs): a row inserted and updated three times, another inserted and
+/// deleted, read back from the logical logs through the CDC API, with full row logging turned on only for the read.
+/// The preconditions that stop it (no log, RAW table, no key, read-only) answer with their reason.
+#[test]
+fn informix_jdbc_row_history() {
+    use crate::rowhistory::{self, KeyPart, Request};
+    use std::sync::atomic::AtomicBool;
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let _guard = watchdog("historial de la fila", 420);
+    // The server's CDC reader keeps what earlier reads left (it stops for good where a read met the tail of a log, and
+    // after errors on the records of dropped tables: measured), which the app reports as partial. A test needs a
+    // reader that works, so a server that can be restarted is: the first read after a restart is reliable.
+    if let Ok(container) = std::env::var("CELER_INFORMIX_CONTAINER") {
+        assert!(Command::new("docker").args(["restart", container.as_str()]).status().is_ok_and(|s| s.success()), "no se pudo reiniciar el contenedor de Informix");
+        let up = (0..80).any(|_| {
+            let ok = Command::new("docker")
+                .args(["exec", container.as_str(), "bash", "-lc", "echo 'SELECT COUNT(*) FROM systables' | dbaccess sysmaster -"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                std::thread::sleep(Duration::from_secs(3));
+            }
+            ok
+        });
+        assert!(up, "Informix no volvió a arrancar tras reiniciarlo");
+    }
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    let db = d.current_database().unwrap();
+    // A run cut short (the watchdog) may have left full row logging on, which forbids the DROP.
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.rh_t', 0)", cfg.user), 10);
+    // The server's CDC reader sees a log only up to where an earlier read of it stopped at the tail (measured), so the
+    // changes go into a log nobody has read yet (a switch before they are made) and are completed by another switch
+    // (after), as a DBA would do both.
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
+    let mut switch_log = || {
+        let switched = admin.execute("EXECUTE FUNCTION task('onmode', 'l')", 10).is_ok()
+            || std::env::var("CELER_INFORMIX_CONTAINER")
+                .is_ok_and(|c| Command::new("docker").args(["exec", c.as_str(), "bash", "-lc", "onmode -l"]).status().is_ok_and(|s| s.success()));
+        assert!(switched, "no se pudo cambiar de log lógico (sysadmin:task ni onmode en el contenedor)");
+    };
+    // Dropping a table and creating another reuses its partition number, and the CDC API fails on the log records of
+    // the dropped one (-83800) when a read covers them, which leaves its server-side reader stuck for the next run
+    // (measured). So the old table is dropped, the log switched, and only then the new one created: the read starts
+    // in a log after the drop.
+    for sql in ["DROP TABLE IF EXISTS rh_t", "DROP TABLE IF EXISTS rh_raw", "DROP TABLE IF EXISTS rh_fill", "DROP TABLE IF EXISTS rh_fix"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    switch_log();
+    d.execute("CREATE TABLE rh_t (id INT PRIMARY KEY, nombre VARCHAR(40), qty INT, precio DECIMAL(10,2), momento DATETIME YEAR TO SECOND, notas TEXT)", 10).unwrap();
+    d.execute("CREATE TABLE rh_fix (id INT PRIMARY KEY, q INT, d DECIMAL(8,2), v DATETIME YEAR TO SECOND)", 10).unwrap();
+    let id1 = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() % 2_000_000_000).to_string();
+    let id2 = (id1.parse::<u64>().unwrap() + 1).to_string();
+    let id3 = (id1.parse::<u64>().unwrap() + 2).to_string();
+    let (id4, id5) = ((id1.parse::<u64>().unwrap() + 3).to_string(), (id1.parse::<u64>().unwrap() + 4).to_string());
+    for sql in [
+        format!("INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES ({id1}, 'alfa', 10, 1.50, DATETIME(2024-03-15 10:20:30) YEAR TO SECOND)"),
+        format!("INSERT INTO rh_t (id, nombre, qty, precio) VALUES ({id2}, 'beta', 20, 2.50)"),
+        format!("INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES ({id3}, 'gamma', 5, 0.25, DATETIME(2024-02-29 23:59:59) YEAR TO SECOND)"),
+        format!("UPDATE rh_t SET qty = 11 WHERE id = {id1}"),
+        format!("UPDATE rh_t SET nombre = 'alfa-2', precio = 1.75 WHERE id = {id1}"),
+        format!("UPDATE rh_t SET qty = 12, momento = NULL WHERE id = {id1}"),
+        format!("DELETE FROM rh_t WHERE id = {id2}"),
+        // A key moved away: the old key's history ends with that update, and nothing is missing.
+        format!("INSERT INTO rh_t (id, nombre, qty, precio) VALUES ({id4}, 'delta', 4, 4.00)"),
+        format!("UPDATE rh_t SET id = {id5} WHERE id = {id4}"),
+        // Fixed-length columns only: the server logs these updates as partial records, not as full images.
+        format!("INSERT INTO rh_fix VALUES ({id1}, 10, 1.00, DATETIME(2024-02-29 23:59:59) YEAR TO SECOND)"),
+        format!("UPDATE rh_fix SET q = 20, d = 2.00 WHERE id = {id1}"),
+        format!("UPDATE rh_fix SET q = 30, d = 3.00 WHERE id = {id1}"),
+        "CREATE RAW TABLE rh_raw (id INT)".to_string(),
+        // The CDC API reads complete log pages only: a busy server fills them, this one is idle, so the log is pushed
+        // past the changes above with some logged traffic.
+        "CREATE TABLE rh_fill (c CHAR(1500))".to_string(),
+        "INSERT INTO rh_fill SELECT FIRST 60 'x' FROM systables".to_string(),
+        "DROP TABLE rh_fill".to_string(),
+    ] {
+        d.execute(&sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    switch_log();
+    let rt2 = rt.clone();
+    let conn = crate::jdbc::JdbcConn::connect(&cfg, rt, crate::jdbc::informix_params).expect("conexión para el historial");
+    let stop = AtomicBool::new(false);
+    let request = |database: &str, table: &str, id: Option<&str>, enable: bool| Request {
+        database: database.into(),
+        owner: String::new(),
+        table: table.into(),
+        key: id.map(|v| vec![KeyPart { column: "id".into(), value: v.into() }]).unwrap_or_default(),
+        enable_full_row_logging: enable,
+    };
+    let (fresh_cfg, fresh_rt) = (cfg.clone(), rt2);
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let env = rowhistory::Env { ledger: None, fresh: &fresh };
+    let run = |req: &Request, read_only: bool| rowhistory::run(&conn, req, read_only, &cfg.user, &stop, &env);
+    let ask = |table: &str, id: &str, enable: bool| {
+        let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
+        // The server's CDC reader stuck is a failure of this test only, said as such, not a hang that kills the suite.
+        assert!(!h.stalled, "el lector CDC del servidor no responde (historial de {table} {id}): {:?}", h.partial);
+        h
+    };
+    let raw = ask("rh_raw", "1", true);
+    assert!(raw.status == "unavailable" && raw.reason.contains("RAW"), "{raw:?}");
+    let no_key = run(&request(&db, "rh_t", None, true), false).unwrap();
+    assert!(no_key.reason.contains("clave primaria"), "{no_key:?}");
+
+    let first = ask("rh_t", &id1, false);
+    if first.status == "unavailable" && first.reason.contains("syscdcv1") {
+        println!("Historial de la fila: el servidor no tiene syscdcv1 ({}): solo se comprueba que lo dice", first.reason);
+        return;
+    }
+    assert_eq!(first.status, "needsFullRowLogging", "{first:?}");
+    assert!(first.reason.contains("full row logging"), "{}", first.reason);
+    // The offer says what happens to the changes made before it, for this table.
+    assert!(first.notes.iter().any(|n| n.contains("se leen enteros")), "{:?}", first.notes);
+    let fix_offer = ask("rh_fix", &id1, false);
+    assert!(fix_offer.status == "needsFullRowLogging" && fix_offer.notes.iter().any(|n| n.contains("no aparecerán")), "{fix_offer:?}");
+    // A read-only connection does not change the server.
+    let ro = run(&request(&db, "rh_t", Some(&id1), true), true).unwrap();
+    assert!(ro.status == "unavailable" && ro.reason.contains("solo lectura"), "{ro:?}");
+
+    let t0 = Instant::now();
+    let h = ask("rh_t", &id1, true);
+    println!(
+        "Historial de la fila {} en {:?}: {:?}\n  rango {:?}\n  parcial {:?}\n  notas {:?}",
+        id1,
+        t0.elapsed(),
+        h.events.iter().map(|e| (e.op, &e.lsn, e.time, &e.user, &e.after)).collect::<Vec<_>>(),
+        h.range,
+        h.partial,
+        h.notes
+    );
+    assert_eq!(h.status, "ok", "{h:?}");
+    assert_eq!(h.columns, vec!["id", "qty", "precio", "momento", "nombre"], "fixed-length columns first, as CDC sends them");
+    assert_eq!(h.skipped, vec!["notas"], "TEXT is not captured");
+    let s = |v: &[&str]| v.iter().map(|x| if *x == "NULL" { None } else { Some(x.to_string()) }).collect::<Vec<_>>();
+    assert_eq!(h.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update", "update", "update"]);
+    assert_eq!(h.events[0].after, Some(s(&[&id1, "10", "1.50", "2024-03-15 10:20:30", "alfa"])));
+    assert_eq!(h.events[1].before, h.events[0].after);
+    assert_eq!(h.events[1].after, Some(s(&[&id1, "11", "1.50", "2024-03-15 10:20:30", "alfa"])));
+    assert_eq!(h.events[2].after, Some(s(&[&id1, "11", "1.75", "2024-03-15 10:20:30", "alfa-2"])));
+    assert_eq!(h.events[3].after, Some(s(&[&id1, "12", "1.75", "NULL", "alfa-2"])));
+    assert!(h.events.iter().all(|e| e.user.as_deref() == Some(cfg.user.as_str())), "the user of each change");
+    // Four statements in autocommit: four transactions, each told apart by its commit (the records' own number is a
+    // reused slot).
+    let txs: std::collections::HashSet<_> = h.events.iter().map(|e| e.tx.as_str()).collect();
+    assert_eq!(txs.len(), 4, "{:?}", h.events.iter().map(|e| &e.tx).collect::<Vec<_>>());
+    assert!(!h.cut_short);
+    // Inserted inside the logs on disk: complete, except for logs the server's reader does not give past a point
+    // (earlier runs read them at their tail), which are said and are not the logs with these changes.
+    assert!(h.partial.iter().all(|p| p.contains("no entrega el log")), "{:?}", h.partial);
+    assert!(h.notes.iter().any(|n| n.contains("full row logging")), "{:?}", h.notes);
+    let range = h.range.as_ref().expect("the log range");
+    assert!(range.first_log > 0 && range.current_log >= range.first_log, "{range:?}");
+    // Full row logging is off again: the next read asks for it once more.
+    assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging");
+
+    let gone = ask("rh_t", &id2, true);
+    assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"]);
+    assert_eq!(gone.events[1].before, Some(s(&[&id2, "20", "2.50", "NULL", "beta"])));
+    let fix = ask("rh_fix", &id1, true);
+    // The two updates are logged as partial records the CDC API does not send: the history must not pass as complete.
+    assert_eq!(fix.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert"], "{fix:?}");
+    assert!(fix.partial.iter().any(|p| p.contains("Faltan cambios") && p.contains("q, d")), "{:?}", fix.partial);
+    assert!(fix.partial.iter().any(|p| p.contains("longitud fija")), "{:?}", fix.partial);
+    // A row whose history is complete (with a DATETIME and a VARCHAR) is not flagged.
+    let whole = ask("rh_t", &id3, true);
+    assert!(whole.events.len() == 1 && whole.partial.iter().all(|p| p.contains("no entrega el log")), "{whole:?}");
+    assert!(!whole.cut_short, "{whole:?}");
+    let moved = ask("rh_t", &id4, true);
+    assert_eq!(moved.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"], "{moved:?}");
+    assert!(moved.partial.iter().all(|p| p.contains("no entrega el log")), "the key moved away is not a missing change: {:?}", moved.partial);
+    let moved_in = ask("rh_t", &id5, true);
+    assert!(moved_in.partial.iter().any(|p| p.contains("clave primaria") && p.contains(&id4)), "{:?}", moved_in.partial);
+    assert!(!moved_in.partial.iter().any(|p| p.contains("Faltan cambios")), "{:?}", moved_in.partial);
+    // A key with no change in the logs: nothing invented, and said to be partial.
+    let none = ask("rh_t", "99", true);
+    assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");
+    assert!(!none.cut_short && none.partial.iter().any(|p| p.contains("Ningún cambio")), "{none:?}");
+    // A read stopped before it read anything: partial, cut short, and it claims nothing about the row; full row
+    // logging goes off again all the same.
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let stopped = ask("rh_t", &id1, true);
+    stop.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(stopped.status == "ok" && stopped.cut_short && stopped.events.is_empty(), "{stopped:?}");
+    assert!(stopped.partial.iter().any(|p| p.contains("Lectura cancelada")), "{:?}", stopped.partial);
+    assert!(!stopped.partial.iter().any(|p| p.contains("Ningún cambio")), "{:?}", stopped.partial);
+    assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "full row logging is off again after a stopped read");
+
+    // A database without log (creating it moves the connection there: the RAW table goes first).
+    d.execute("DROP TABLE rh_raw", 10).unwrap();
+    let _ = d.execute("CREATE DATABASE celer_nolog", 10);
+    let nolog = run(&request("celer_nolog", "x", Some("1"), true), false).unwrap();
+    assert!(nolog.status == "unavailable" && nolog.reason.contains("no tiene log"), "{nolog:?}");
 }

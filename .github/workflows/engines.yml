@@ -82,6 +82,8 @@ jobs:
           docker exec ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster -"
           # A second database: informix_silent_cut connects to celerdemo and switches to celer.
           docker exec ifx bash -lc "echo 'CREATE DATABASE celerdemo WITH LOG' | dbaccess sysmaster -"
+          # The CDC API's database, as a DBA creates it once: the row history test reads the logs through it.
+          docker exec ifx bash -lc "dbaccess - \$INFORMIXDIR/etc/syscdcv1.sql" >/dev/null
           docker exec ifx bash -lc "cat \$INFORMIXDIR/etc/\$ONCONFIG | grep -E '^(DBSERVERNAME|DBSERVERALIASES)'; cat \$INFORMIXSQLHOSTS" || true
           # JDBC goes to the container's own address: Informix's cancel is TCP urgent data, which Docker's port proxy
           # (localhost) may drop. The cancel test also goes through localhost on purpose, to try Celer's fallback.
@@ -101,6 +103,7 @@ jobs:
           CELER_JDBC_JARS: ${{ github.workspace }}/jdbc/jdbc-15.0.1.4.jar:${{ github.workspace }}/jdbc/bson-3.8.0.jar
           CELER_REQUIRE_BRIDGE: "1"
           CELER_NODE: node
+          CELER_ENGINE_OUT: ${{ github.workspace }}
         run: cargo test --lib engine_tests::informix_speed -- --exact --nocapture --test-threads=1
 
       # A test that hangs prints the JDBC bridge's threads (jcmd) and fails before the step's timeout.
@@ -119,6 +122,7 @@ jobs:
           CELER_NODE: node
           # Reconnection tests end sessions with onmode -z when the SQL admin API is not there.
           CELER_INFORMIX_CONTAINER: ifx
+          CELER_ENGINE_OUT: ${{ github.workspace }}
         run: cargo test --lib engine_tests -- --skip informix_speed --nocapture --test-threads=1
 
       - name: Execution plans and server logs

@@ -283,6 +283,27 @@ Doble clic en una tabla del explorador la abre.
     booleano.
 - **Pegar en la tabla**: Ctrl+V en la rejilla de una tabla pega el bloque copiado desde la celda activa como cambios
   pendientes (las filas que sobran pasan a ser filas nuevas); se guardan con *Guardar*, como cualquier edición.
+- **Historial de la fila** (Informix, menú de una fila de la tabla): los cambios de esa fila que quedan en los logs
+  lógicos del servidor, del más reciente al más antiguo, con la hora del commit, la transacción (por la posición de su
+  commit en el log: los cambios con la misma son de la misma transacción), el usuario y cada columna antes → después.
+  *Ver la fila en este momento* enseña la fila entera tras ese cambio y *Todas las columnas* lo hace en todos. Arriba se
+  ve qué logs se leyeron. Se lee con la API CDC de Informix, así que:
+  - Hace falta la conexión por **JDBC**: por DRDA o por el Client SDK el diálogo dice «No se puede reconstruir» y por
+    qué. También hacen falta una base de datos **con log**, una tabla que no sea RAW y con **clave primaria**, la base
+    `syscdcv1` (un administrador la crea una vez con `dbaccess - $INFORMIXDIR/etc/syscdcv1.sql`) y un usuario que
+    pueda usar la API CDC (el usuario `informix`). Lo que falte se dice como «No se puede reconstruir: …».
+  - La API exige *full row logging* en la tabla. Si no lo tiene, Celer lo dice y ofrece **Activar solo durante la
+    lectura y leer**: lo desactiva al terminar y lo dice (o avisa si no pudo, con la sentencia para hacerlo a mano). Con
+    una conexión de solo lectura no se ofrece. En una tabla con alguna columna de longitud variable (VARCHAR…) los
+    cambios anteriores se leen enteros; en una tabla solo con columnas de longitud fija, las modificaciones hechas sin
+    *full row logging* no llegan, y el historial sale como **parcial**.
+  - El historial sale **parcial**, con el motivo, cuando puede faltar algo: la fila ya existía antes del log más
+    antiguo que queda en disco, su clave cambió, el servidor dio un error o se cortó la conexión, se pulsó *Detener*, el
+    lector CDC del servidor se quedó parado («no entrega el log N más allá de…», «no respondió…»; un cambio de log
+    lógico con `onmode -l` o reiniciar Informix lo recupera), o el último valor leído no es el que tiene la fila hoy.
+    Una lectura cortada nunca dice «sin cambios». Nunca se rellena un valor que el log no tenga.
+  - En un resultado de consulta la opción remite a abrir la tabla (un resultado no dice de qué fila sale cada línea).
+    En los demás motores aparece desactivada con «No disponible en …».
 
 Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,
 UPSERT/MERGE, DELETE, DROP y su DDL.
