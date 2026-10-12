@@ -962,6 +962,18 @@ export function createDemoBackend(): Backend {
     async mcpWslRegister() {
       throw new Error("Registrar en WSL solo es posible en la aplicación de escritorio");
     },
+    async reportTokenStatus() {
+      return Boolean(sessionStorage.getItem("celer.report-token"));
+    },
+    async reportTokenSet(token) {
+      // Browser demo only: kept for this tab session, never persisted.
+      if (token.trim()) sessionStorage.setItem("celer.report-token", token.trim());
+      else sessionStorage.removeItem("celer.report-token");
+    },
+    // The preview never creates issues: it answers like a failed send, so the draft stays and «Abrir en GitHub» is offered.
+    async reportCreateIssue() {
+      throw new Error("En la vista previa del navegador no se crean issues: usa «Abrir en GitHub».");
+    },
     async mcpAppReply() {
       return false;
     },

@@ -1229,6 +1229,10 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .report-labels { display: flex; gap: 6px; }
 .report-preview h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .report-preview pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.report-account { font-size: 12.5px; color: var(--text-muted); }
+.report-account summary { cursor: pointer; font-weight: 500; margin-bottom: 6px; }
+.report-account-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.report-account-row input { flex: 1; max-width: 360px; height: 28px; padding: 0 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; }
 .report-h { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .report-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel); }
 .report-row .btn { display: inline-flex; align-items: center; gap: 4px; }

@@ -17,6 +17,7 @@ mod odbc;
 mod odbc_driver;
 mod postgres;
 mod probe;
+mod report;
 mod secrets;
 mod session;
 mod sheets;
@@ -1578,6 +1579,24 @@ fn report_save_images(state: State<'_, Arc<AppState>>, id: String, images: Vec<(
     Ok(paths)
 }
 
+/// Whether a GitHub token for sending reports is saved (the token itself never goes back to the interface).
+#[tauri::command]
+fn report_token_status() -> bool {
+    report::token_get().is_some()
+}
+
+/// Keeps the GitHub token in the system's credential store; an empty one removes it.
+#[tauri::command]
+fn report_token_set(token: String) -> CmdResult<()> {
+    report::token_set(&token)
+}
+
+/// Creates the report's issue on GitHub with the saved token: its number and address.
+#[tauri::command(async)]
+fn report_create_issue(title: String, body: String, labels: Vec<String>) -> CmdResult<report::CreatedIssue> {
+    report::create_issue(&title, &body, &labels)
+}
+
 /// Standard base64 (with or without padding); None if it is not.
 fn decode_base64(text: &str) -> Option<Vec<u8>> {
     let value = |c: u8| -> Option<u32> {
@@ -1976,6 +1995,9 @@ pub fn run() {
             error_log_clear,
             error_log_path,
             report_save_images,
+            report_token_status,
+            report_token_set,
+            report_create_issue,
             migration_sources,
             migration_dbeaver_credentials,
             update_check,

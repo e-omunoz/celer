@@ -546,6 +546,17 @@ en GitHub**: se abre la página de un issue nuevo con todo relleno y lo creas t�
 caben en la dirección: Celer las guarda en la carpeta de datos (`reports`), abre esa carpeta y copia la primera al
 portapapeles para que la pegues en «Capturas». Las rutas con tu nombre de usuario se quitan de lo que escribes.
 
+**Enviar con tu cuenta de GitHub.** En la revisión, *Enviar con mi cuenta de GitHub* guarda un token de GitHub para que
+el issue se cree sin salir de Celer. Crea un token clásico con solo el permiso `public_repo` (el enlace *cómo crearlo*
+abre la página de GitHub ya preparada), pégalo y pulsa **Guardar**: se guarda en el almacén de credenciales del sistema,
+nunca en un fichero, y no se vuelve a mostrar; **Quitar el token** lo borra. Con el token guardado, el botón principal
+es **Enviar a GitHub** (y **Abrir en GitHub** sigue disponible): el issue se crea con el mismo texto y queda en *Mis
+reportes* con su enlace. Las etiquetas (fallo o mejora y `status:triage`) solo se aplican si tu cuenta puede clasificar
+issues en el repositorio; si no, GitHub las omite y el issue se crea igual. GitHub no permite adjuntar imágenes por esta
+vía: Celer las guarda, copia la primera y abre el issue en el navegador para que las añadas en un comentario. Si el envío
+falla (token no válido o caducado, sin permiso, límite de GitHub, sin conexión), el mensaje dice qué hacer y el
+borrador no se pierde.
+
 Lo que no terminas queda como **borrador** en este equipo. *Mis reportes* lista los borradores y los reportes abiertos
 en GitHub; pega el enlace del issue creado para tenerlo a mano.
 

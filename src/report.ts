@@ -1,6 +1,7 @@
 // «Reportar / Sugerir» (#112): what a report holds, what it says about this copy of Celer, and the GitHub issue it
 // becomes. Pure logic (dev/report-check.ts); the window is src/components/ReportDialog.tsx. Nothing is sent from
-// here: the report opens as a prefilled github.com/…/issues/new page and the user submits it there.
+// here: the report opens as a prefilled github.com/…/issues/new page and the user submits it there, or, with a GitHub
+// token saved, the core creates the issue through the API (src-tauri/src/report.rs).
 import { scrubPaths } from "./scrub.ts";
 import type { DbKind } from "./types";
 
@@ -182,6 +183,22 @@ export function buildIssue(d: ReportDraft, env: ReportEnv, errorsText: string, u
 /** The whole issue as text: what «Copiar» gives and what the preview shows, field by field. */
 export function issueText(issue: Issue): string {
   return [`# ${issue.title}`, `Etiquetas: ${issue.labels.join(", ")}`, ...issue.fields.map((f) => `## ${f.label}\n\n${f.value}`)].join("\n\n");
+}
+
+/**
+ * The issue's text for the API: what GitHub writes when the form is submitted with the fields the address fills
+ * (each one under its label as a heading), so both paths give the same issue. Nothing is cut here.
+ */
+export function issueBody(issue: Issue): string {
+  return issue.fields.map((f) => `### ${f.label}\n\n${f.value}`).join("\n\n");
+}
+
+/** A classic token with only public_repo, prefilled on GitHub (fine-grained tokens cannot open issues in others' repositories). */
+export const TOKEN_URL = "https://github.com/settings/tokens/new?scopes=public_repo&description=Celer%20%E2%80%94%20reportes";
+
+/** «Mis reportes» entry of an issue created through the API: its real link from the start. */
+export function sentFromApi(d: Pick<ReportDraft, "id" | "kind">, issue: Issue, created: { number: number; html_url: string }, now = Date.now()): SentReport {
+  return { id: d.id, kind: d.kind, title: issue.title, at: now, issueUrl: parseIssueUrl(created.html_url) };
 }
 
 /** GitHub answers 414 past about 8 KB of address: fields are cut to fit, longest first. */
