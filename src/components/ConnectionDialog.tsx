@@ -703,7 +703,7 @@ function EnvironmentField(props: { cfg: ConnConfig; onChange: (patch: Partial<Co
         </For>
       </div>
       <Show when={current() === "custom"}>
-        <div class="form-row env-custom">
+        <div class="form-row env-custom-row">
           <label class="field grow">
             <span>Nombre del entorno</span>
             <input value={props.cfg.envLabel ?? ""} maxLength={40} placeholder="QA, Formación, Cliente…" onInput={(event) => props.onChange({ envLabel: event.currentTarget.value })} />

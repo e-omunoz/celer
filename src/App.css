@@ -2358,7 +2358,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .env-chip.tiny { height: 16px; font-size: 10px; padding: 0 5px; gap: 3px; }
 .tab.env .tab-strip { height: 3px; opacity: 1; }
 .env-field .env-seg { flex-wrap: wrap; }
-.env-field .env-custom { margin-top: 8px; align-items: flex-end; }
+.env-field .env-custom-row { margin-top: 8px; align-items: flex-end; }
 .env-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
 .env-preview small { flex-basis: 100%; }
 

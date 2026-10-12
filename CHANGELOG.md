@@ -210,6 +210,7 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Connection dialog: the «Otro…» environment button sits in line with the other five instead of 8 px lower (#149).
 - Library: on a short window (1024×640, or 1366×768 at 125 %) the «Ejecutar en…» dialog keeps its Cancelar and
   Ejecutar buttons inside it; the list of targets scrolls instead (#136).
 - Reports: «Capturar la ventana» shows the window as it is on screen: a scrolled explorer no longer comes out empty,
