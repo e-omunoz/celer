@@ -324,7 +324,16 @@ pub fn quiet_uninstall_string(dir: &Path) -> String {
 }
 
 pub fn open_command(exe: &Path) -> String {
-    format!("\"{}\" \"%1\"", exe.display())
+    match app_args() {
+        a if a.is_empty() => format!("\"{}\" \"%1\"", exe.display()),
+        a => format!("\"{}\" {a} \"%1\"", exe.display()),
+    }
+}
+
+/// Arguments every way of starting the app gets (shortcuts, the file association): in test mode, the sandbox's own
+/// data folder, so the sandboxed Celer never opens the real one. Empty otherwise.
+pub fn app_args() -> String {
+    sandbox().map(|root| format!("--data-dir \"{}\"", root.join("data").display())).unwrap_or_default()
 }
 
 pub fn icon_ref(exe: &Path) -> String {
@@ -674,7 +683,7 @@ pub fn install(
             if let Some(parent) = lnk.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            win::create_shortcut(lnk, &exe, &dir, "Celer - cliente SQL")
+            win::create_shortcut(lnk, &exe, &app_args(), &dir, "Celer - cliente SQL")
                 .map_err(|e| format!("No se pudo crear el acceso directo del {label}: {}", e.message()))?;
         } else {
             remove_shortcut_if_ours(lnk, &ours);
