@@ -7,8 +7,8 @@
 //!   el núcleo avisa a la otra con `celer://inbox`; así una ventana que aún no ha cargado no pierde nada;
 //! - guarda `workspace.json` con la disposición de todas las ventanas (cada una manda la suya: un solo escritor);
 //! - sigue el arrastre de una pestaña fuera de su ventana y dice dónde se soltó; fuera de toda ventana de Celer
-//!   muestra bajo el puntero el contorno de la ventana nueva (`drag-ghost`, una ventana transparente que no recibe
-//!   el ratón, con `public/drag-ghost.html`);
+//!   muestra bajo el puntero el contorno de la ventana nueva (`drag-ghost`, una ventana transparente que no toma
+//!   el foco y acepta la pestaña soltada, con `public/drag-ghost.html`);
 //! - dice qué ventana tiene el foco (`celer://focus`, para que Gib viva solo en una) y cuándo se abre o se cierra
 //!   una (`celer://windows`).
 //!
@@ -605,7 +605,10 @@ fn follow_with_ghost(app: AppHandle, generation: u64, style: Value) {
                 }
             }
         };
-        let _ = ghost.set_ignore_cursor_events(true);
+        // It takes the pointer (never the focus) while it shows: the system's drag is over it, and the page there
+        // accepts the drop, so Windows shows the move cursor instead of its no-drop sign over another
+        // application. Where it lands is still decided by the pointer (tab_drag_end), not by this window.
+        let _ = ghost.set_ignore_cursor_events(false);
         // Las ventanas cambian poco durante un arrastre: se miran unas veces por segundo, el puntero en cada paso.
         let mut areas = visible_areas(&app);
         let mut shown = false;

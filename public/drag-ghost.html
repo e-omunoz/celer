@@ -2,9 +2,9 @@
 <!--
   The outline of the new window that follows the pointer while a tab is dragged out of every Celer window
   (src-tauri/src/windows.rs, follow_with_ghost): the core sizes and places it exactly where the window will open
-  (drop_frame, kept inside the monitor's work area). A transparent window that never takes the mouse or the
-  focus; the core hands it the tab's title, preview and the theme's colours (window.__celerGhost, then
-  __celerGhostUpdate).
+  (drop_frame, kept inside the monitor's work area). A transparent window that never takes the focus but takes
+  the drop, so the system shows its move cursor and not a no-drop sign; the core hands it the tab's title,
+  preview and the theme's colours (window.__celerGhost, then __celerGhostUpdate).
 -->
 <html lang="es">
   <head>
@@ -68,6 +68,15 @@
       }
       window.__celerGhostUpdate = apply;
       apply(window.__celerGhost);
+      // The dragged tab is over this outline: it can be let go here (the move cursor, not the system's no-drop
+      // sign of whatever application is underneath). Nothing is read from the drop; the core opens the window.
+      const accept = (event) => {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      };
+      document.addEventListener("dragenter", accept);
+      document.addEventListener("dragover", accept);
+      document.addEventListener("drop", (event) => event.preventDefault());
     </script>
   </body>
 </html>
