@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Library: «Ejecutar en…» with one target that reuses the script's open console runs the saved script, every
+  statement, instead of that console's selection or unsaved text; when that console is still running something, a
+  notice says so instead of doing nothing (#137).
 - Result and data comparison: the «cambiadas», «solo en B» and «solo en A» chips reach 4.5:1 in every theme (they
   were below it in Sand, Celer Claro and, for «solo en A», Fjord) (#153).
 - Transactions: the reminder of a long open transaction names the connection only when the console's title is not

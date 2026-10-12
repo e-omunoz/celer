@@ -474,7 +474,13 @@ export async function runLibraryOn(id: string, targets: RunTarget[], action: "ru
     // The editor of the new console mounts first; the run happens in that console.
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     selectTab(tabId);
-    const ran = await runActive("script", undefined, {
+    // The script's own console may be running something else: say so instead of doing nothing.
+    if (reuse && open.running) {
+      notify(`«${script.name}» está ejecutando otra sentencia: espera a que termine`, "warning");
+      continue;
+    }
+    // The saved script, not that console's selection or unsaved edits (the dialog promises the whole script).
+    const ran = await runActive("script", script.sql, {
       params,
       onParams: (answer) => (params = answer),
       onParamsCancelled: () => (cancelled = true),
