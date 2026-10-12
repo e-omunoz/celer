@@ -61,6 +61,15 @@ export function txLabel(ms: number, statements: number): string {
   return `Transacción abierta · ${txDuration(ms)} · ${statements} ${statements === 1 ? "sentencia" : "sentencias"}`;
 }
 
+/**
+ * The reminder past the red threshold: «Consola» (Conexión): transacción abierta · …, with the connection only when the
+ * console's title is not already its name.
+ */
+export function txReminderText(title: string, connName: string | undefined, ms: number, statements: number): string {
+  const conn = connName && connName !== title ? ` (${connName})` : "";
+  return `«${title}»${conn}: ${txLabel(ms, statements).toLowerCase()}. Mientras no hagas commit o rollback puede bloquear a otros.`;
+}
+
 /** Statements in what was run (pieces that are only comments do not count); at least one. */
 export function countStatements(sql: string, kind?: string): number {
   return Math.max(1, splitSql(sql, kind).filter((part) => codeOnly(part.sql, kind).trim()).length);

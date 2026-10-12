@@ -1,6 +1,6 @@
 // Checks for src/txWatch.ts (open manual transactions): node --experimental-strip-types dev/txwatch-check.ts
 import assert from "node:assert/strict";
-import { countStatements, NO_TX, reminderDue, txAfterRun, txDuration, txLabel, txLevel, txThresholds, worstLevel } from "../src/txWatch.ts";
+import { countStatements, NO_TX, reminderDue, txAfterRun, txDuration, txLabel, txLevel, txReminderText, txThresholds, worstLevel } from "../src/txWatch.ts";
 import { defaultSettings } from "../src/types.ts";
 
 // Defaults: 1 min / 5 min, stricter on production.
@@ -50,5 +50,10 @@ assert.equal(reminderDue(299_000, normal, 0), false);
 assert.equal(reminderDue(300_000, normal, 0), true);
 assert.equal(reminderDue(400_000, normal, 1), false);
 assert.equal(reminderDue(600_000, normal, 1), true);
+
+// The reminder names the connection only when the console's title is not already its name (#152).
+assert.equal(txReminderText("Producción", "Producción", 2 * 60_000, 1), "«Producción»: transacción abierta · 2 min · 1 sentencia. Mientras no hagas commit o rollback puede bloquear a otros.");
+assert.ok(txReminderText("Consola 2", "Producción", 2 * 60_000, 1).startsWith("«Consola 2» (Producción): transacción abierta"));
+assert.ok(txReminderText("Consola 2", undefined, 0, 1).startsWith("«Consola 2»: "));
 
 console.log("txwatch-check: ok");

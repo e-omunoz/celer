@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Transactions: the reminder of a long open transaction names the connection only when the console's title is not
+  already the connection's name («Producción» (Producción) became «Producción») (#152).
 - Quitting with a single open transaction in another window: the buttons read «Commit» and «Rollback», as with one
   window, instead of «Commit en todas» / «Rollback en todas» (#151).
 - Gib: while his speech bubble is open, notices appear to the left of it instead of covering it in the bottom-right

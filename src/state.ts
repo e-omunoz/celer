@@ -40,7 +40,7 @@ import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
 import { envOf, normalizeEnvironment } from "./environment";
-import { NO_TX, countStatements, reminderDue, txAfterRun, txDuration, txLabel, txThresholds } from "./txWatch";
+import { NO_TX, countStatements, reminderDue, txAfterRun, txDuration, txReminderText, txThresholds } from "./txWatch";
 import { gibDisplayName, gibShownIn, gibTint, normalizeGibPrefs, type GibPlace, type GibPrefs } from "./gib/prefs";
 import type { ColumnOrder } from "./columnOrder";
 
@@ -2493,7 +2493,7 @@ window.setInterval(watchTransactions, 5000);
 /** The reminder: Gib says it when he is around, a notice otherwise. Neither takes the focus. */
 function remindTransaction(tab: SqlTab, ms: number) {
   const conn = connectionById(tab.connId);
-  const text = `«${tab.title}»${conn ? ` (${conn.name})` : ""}: ${txLabel(ms, tab.txStatements).toLowerCase()}. Mientras no hagas commit o rollback puede bloquear a otros.`;
+  const text = txReminderText(tab.title, conn?.name, ms, tab.txStatements);
   if (gibShows("companion")) gib("tx-open", { detail: text, production: Boolean(conn?.production) });
   else notify("Transacción abierta", "warning", text, { label: "Ir a la consola", run: () => selectTab(tab.id) });
 }
