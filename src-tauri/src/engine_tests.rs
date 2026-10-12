@@ -3108,26 +3108,36 @@ fn informix_jdbc_row_history() {
     // Full row logging is off again: the next read asks for it once more.
     assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging");
 
-    let gone = ask("rh_t", &id2, true);
+    // The server's reader may stop at the tail of the current log after an earlier read met it there (measured; the
+    // history then says so and is partial). A DBA's log switch moves past it: done once, and the read asked again.
+    let mut ask_whole = |table: &str, id: &str| {
+        let h = ask(table, id, true);
+        if !h.partial.iter().any(|p| p.contains("se detuvo en la posición")) {
+            return h;
+        }
+        switch_log();
+        ask(table, id, true)
+    };
+    let gone = ask_whole("rh_t", &id2);
     assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"]);
     assert_eq!(gone.events[1].before, Some(s(&[&id2, "20", "2.50", "NULL", "beta"])));
-    let fix = ask("rh_fix", &id1, true);
+    let fix = ask_whole("rh_fix", &id1);
     // The two updates are logged as partial records the CDC API does not send: the history must not pass as complete.
     assert_eq!(fix.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert"], "{fix:?}");
     assert!(fix.partial.iter().any(|p| p.contains("Faltan cambios") && p.contains("q, d")), "{:?}", fix.partial);
     assert!(fix.partial.iter().any(|p| p.contains("longitud fija")), "{:?}", fix.partial);
     // A row whose history is complete (with a DATETIME and a VARCHAR) is not flagged.
-    let whole = ask("rh_t", &id3, true);
+    let whole = ask_whole("rh_t", &id3);
     assert!(whole.events.len() == 1 && whole.partial.iter().all(|p| p.contains("no entrega el log")), "{whole:?}");
     assert!(!whole.cut_short, "{whole:?}");
-    let moved = ask("rh_t", &id4, true);
+    let moved = ask_whole("rh_t", &id4);
     assert_eq!(moved.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"], "{moved:?}");
     assert!(moved.partial.iter().all(|p| p.contains("no entrega el log")), "the key moved away is not a missing change: {:?}", moved.partial);
-    let moved_in = ask("rh_t", &id5, true);
+    let moved_in = ask_whole("rh_t", &id5);
     assert!(moved_in.partial.iter().any(|p| p.contains("clave primaria") && p.contains(&id4)), "{:?}", moved_in.partial);
     assert!(!moved_in.partial.iter().any(|p| p.contains("Faltan cambios")), "{:?}", moved_in.partial);
     // A key with no change in the logs: nothing invented, and said to be partial.
-    let none = ask("rh_t", "99", true);
+    let none = ask_whole("rh_t", "99");
     assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");
     assert!(!none.cut_short && none.partial.iter().any(|p| p.contains("Ningún cambio")), "{none:?}");
     // A read stopped before it read anything: partial, cut short, and it claims nothing about the row; full row
