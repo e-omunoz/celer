@@ -37,6 +37,9 @@ use crate::session::{Canceller, Driver, FkColumn};
 
 const BINARY_PREVIEW: usize = 4096;
 const DEFAULT_PORT: u16 = 5432;
+/// Commit of a transaction an error (or a stopped statement) aborted: PostgreSQL would roll it back.
+const TX_ABORTED: &str =
+    "La transacción quedó anulada por un error o una sentencia detenida: PostgreSQL no puede confirmarla y nada se guardó. Haz Rollback.";
 
 // ───────────────────────────── estructuras ─────────────────────────────
 
@@ -795,6 +798,13 @@ impl Driver for PostgresDriver {
     fn commit(&mut self) -> Result<bool> {
         self.close_cursor()?;
         if self.in_tx {
+            // An error or a stopped statement aborted the transaction: the server would take COMMIT as a ROLLBACK,
+            // in silence. It stays open (aborted) for the user to roll back, knowing nothing was saved.
+            if let Err(e) = self.client.simple_query("SELECT 1") {
+                if e.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) {
+                    bail!(TX_ABORTED);
+                }
+            }
             self.control("COMMIT")?;
         }
         self.refresh_tx_state();
@@ -2390,6 +2400,34 @@ mod tests {
         let other = driver().unwrap();
         crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "INSERT INTO tx_close VALUES (4)", "SELECT count(*) FROM tx_close");
         d.execute("DROP TABLE tx_close", 10).unwrap();
+    }
+
+    /// A statement stopped inside a transaction aborts it: Commit says so instead of rolling it back in silence (#147).
+    #[test]
+    fn pg_commit_of_an_aborted_transaction() {
+        let Some(mut d) = driver() else { return };
+        d.execute("DROP TABLE IF EXISTS tx_aborted; CREATE TABLE tx_aborted (id int)", 10).unwrap();
+        d.set_autocommit(false).unwrap();
+        d.execute("INSERT INTO tx_aborted VALUES (1)", 10).unwrap();
+        let cancel = d.canceller();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            cancel();
+        });
+        assert!(d.execute("SELECT pg_sleep(20)", 10).is_err());
+        t.join().unwrap();
+        let err = d.commit().unwrap_err();
+        assert_eq!(err.to_string(), TX_ABORTED);
+        assert!(!d.rollback().unwrap());
+        d.set_autocommit(true).unwrap();
+        assert_eq!(txt(&d.execute("SELECT count(*) FROM tx_aborted", 10).unwrap().results[0].rows[0][0]), "0");
+        // A healthy transaction still commits.
+        d.set_autocommit(false).unwrap();
+        d.execute("INSERT INTO tx_aborted VALUES (2)", 10).unwrap();
+        assert!(!d.commit().unwrap());
+        d.set_autocommit(true).unwrap();
+        assert_eq!(txt(&d.execute("SELECT count(*) FROM tx_aborted", 10).unwrap().results[0].rows[0][0]), "1");
+        d.execute("DROP TABLE tx_aborted", 10).unwrap();
     }
 
     #[test]

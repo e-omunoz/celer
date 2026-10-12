@@ -214,7 +214,9 @@ All notable changes to Celer are documented here. The format follows
   so after the Commit); the window that owns the console is the one that reminds (#166).
 - Transactions: closing a console, a window or Celer (or anything else that asks Commit or Rollback) while the console
   with the open transaction is still running a statement stops that statement first, as closing did in 2.2.0, and the
-  dialog says so: it no longer waits for the statement to end, and «Commit» no longer includes it (#147).
+  dialog says so: it no longer waits for the statement to end, and «Commit» no longer includes it. On PostgreSQL,
+  where stopping a statement (or any error) aborts the transaction, «Commit» now says that nothing can be saved and
+  leaves it for a Rollback, instead of rolling it back in silence and reporting it confirmed (#147).
 - Result comparison: looking up the primary key of a console's result no longer runs on the console's own session
   while its result is still loading (it uses a session of its own then), so on SQL Server the result and the
   comparison are no longer cut short at the first page and on MySQL, MariaDB and SQLite «Cargar todo» no longer fails;
