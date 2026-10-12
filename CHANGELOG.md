@@ -210,6 +210,8 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Variables: hovering a `${name}` inside a comment or string that spans several lines (a `/* … */` block) no longer
+  shows a value, since nothing is substituted there (#156).
 - Settings › Seguridad: a manual-transaction threshold below 0.5 min is saved as 0.5 min and the field shows the
   threshold in force, instead of saving 0 and showing «0 min» while the default applied (#155).
 - Variables: renaming a variable to a name its scope already uses is refused with a notice, instead of silently

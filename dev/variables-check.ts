@@ -95,4 +95,13 @@ assert.equal(nameInUse(ab, "c", "b"), false);
 assert.equal(nameInUse(ab, "b", "b"), false, "the same name is not a conflict");
 assert.equal(nameInUse([], "a", "b"), false);
 
+// The hover reads the whole text (#156): ${x} on a middle line of a /* … */ comment is not a variable.
+const commented = "SELECT 1 /* first line\n  ${x} here\n end */, ${x}";
+const inComment = commented.indexOf("${x}") + 2;
+assert.equal(variableAt(commented, inComment, "postgres"), null, "inside a multi-line comment");
+assert.equal(variableAt(commented.split("\n")[1], 4, "postgres")?.name, "x", "the line alone would wrongly see it");
+assert.equal(variableAt(commented, commented.lastIndexOf("${x}") + 2, "postgres")?.name, "x", "after the comment it is one");
+const strung = "SELECT 'a\n${x}\nb', 1";
+assert.equal(variableAt(strung, strung.indexOf("${x}") + 2, "postgres"), null, "inside a multi-line string");
+
 console.log("variables-check: all good");

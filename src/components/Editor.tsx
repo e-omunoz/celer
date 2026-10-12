@@ -244,14 +244,16 @@ function variableSource(get: () => { vars: Map<string, ResolvedVar>; dialect: st
 function variableHover(get: () => { vars: Map<string, ResolvedVar>; dialect: string; scopeOf: (v: ResolvedVar) => string }) {
   return hoverTooltip((view, pos) => {
     const line = view.state.doc.lineAt(pos);
+    if (!line.text.includes("${")) return null;
     const { vars, dialect, scopeOf } = get();
-    // The line is enough to find it (a variable does not span lines); strings and comments are told apart there too.
-    const ref = variableAt(line.text, pos - line.from, dialect);
+    // Read in the whole text: a comment or string opened on an earlier line (/* … */ over several lines) hides it,
+    // as it does when it runs.
+    const ref = variableAt(view.state.doc.toString(), pos, dialect);
     if (!ref) return null;
     const variable = vars.get(ref.name);
     return {
-      pos: line.from + ref.from,
-      end: line.from + ref.to,
+      pos: ref.from,
+      end: ref.to,
       above: true,
       create: () => {
         const dom = document.createElement("div");
