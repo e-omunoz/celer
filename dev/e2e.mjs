@@ -63,6 +63,8 @@ async function check(name, body, verify) {
     // A check cut by a page reload runs once more (once only: a check that reloads the page itself still fails).
     const value = await js(HELPERS + body).catch(async (err) => {
       if (!reloaded(err)) throw err;
+      // Said aloud: a reload caused by the app (not by start-up) must not pass unnoticed.
+      console.log(`NOTE  ${name}: the page reloaded during the check; running it once more`);
       await new Promise((r) => setTimeout(r, 1500));
       return js(HELPERS + body);
     });

@@ -121,11 +121,30 @@ pub struct Layout {
     pub sys: SysDirs,
 }
 
-/// Test mode: with `CELER_SETUP_SANDBOX=<folder>` everything the installer would create outside the install folder
-/// (registry key, shortcuts, file association, the app's data) goes under that folder or under names of its own,
-/// so a release can be installed, started and uninstalled on a machine with a real Celer without touching it.
+/// Test mode: with `CELER_SETUP_SANDBOX=<folder>` (or `--sandbox <folder>`) everything the installer would create
+/// outside the install folder (registry key, shortcuts, file association, the app's data) goes under that folder or
+/// under names of its own, so a release can be installed, started and uninstalled on a machine with a real Celer
+/// without touching it. The sandbox's uninstall entry carries `--sandbox <folder>`, so uninstalling it from
+/// Settings › Apps (no environment variable there) stays in the sandbox too.
 pub fn sandbox() -> Option<PathBuf> {
-    std::env::var_os("CELER_SETUP_SANDBOX").filter(|v| !v.is_empty()).map(PathBuf::from)
+    sandbox_from(std::env::args().skip(1), std::env::var_os("CELER_SETUP_SANDBOX"))
+}
+
+fn sandbox_from(args: impl Iterator<Item = String>, env: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let mut args = args;
+    while let Some(a) = args.next() {
+        if a.eq_ignore_ascii_case("--sandbox") {
+            if let Some(v) = args.next().filter(|v| !v.trim().is_empty()) {
+                return Some(PathBuf::from(v.trim()));
+            }
+        }
+    }
+    env.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// ` --sandbox "<folder>"` in test mode, nothing otherwise.
+fn sandbox_arg() -> String {
+    sandbox().map(|root| format!(" --sandbox \"{}\"", root.display())).unwrap_or_default()
 }
 
 impl Layout {
@@ -297,11 +316,11 @@ pub fn uninstaller_path(dir: &Path) -> PathBuf {
 }
 
 pub fn uninstall_string(dir: &Path) -> String {
-    format!("\"{}\" --uninstall", uninstaller_path(dir).display())
+    format!("\"{}\" --uninstall{}", uninstaller_path(dir).display(), sandbox_arg())
 }
 
 pub fn quiet_uninstall_string(dir: &Path) -> String {
-    format!("\"{}\" --uninstall --silent", uninstaller_path(dir).display())
+    format!("\"{}\" --uninstall --silent{}", uninstaller_path(dir).display(), sandbox_arg())
 }
 
 pub fn open_command(exe: &Path) -> String {
@@ -863,6 +882,15 @@ mod tests {
             ],
             exact: vec![PathBuf::from(r"C:\Users\ana"), PathBuf::from(r"C:\Users\ana\AppData\Local\Programs")],
         }
+    }
+
+    #[test]
+    fn the_sandbox_comes_from_the_command_line_or_the_environment() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert_eq!(sandbox_from(args(&["--uninstall", "--sandbox", r"D:\s b"]), None), Some(PathBuf::from(r"D:\s b")));
+        assert_eq!(sandbox_from(args(&["--uninstall"]), Some(r"D:\env".into())), Some(PathBuf::from(r"D:\env")));
+        assert_eq!(sandbox_from(args(&["--sandbox"]), None), None);
+        assert_eq!(sandbox_from(args(&["--uninstall"]), Some("".into())), None);
     }
 
     #[test]

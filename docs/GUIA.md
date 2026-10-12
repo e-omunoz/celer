@@ -702,7 +702,8 @@ Los ficheros de cada versión tienen siempre el mismo nombre, y
 **Carpeta de datos propia.** `Celer-Portable-Windows.exe --data-dir E:\Celer` (o la variable de entorno
 `CELER_DATA_DIR`) guarda conexiones, ajustes, historial y biblioteca en esa carpeta en vez de la habitual, por ejemplo
 en un USB. Esa copia tiene también su propio perfil del navegador interno (`<carpeta>\webview`), guarda las contraseñas
-aparte de las de la copia instalada y puede abrirse a la vez que ella.
+aparte de las de la copia instalada (si le falta una, usa la de la copia instalada sin cambiarla) y puede abrirse a
+la vez que ella.
 
 Celer comprueba al arrancar, y cada pocas horas, si hay una versión nueva (se desactiva en el diálogo de
 actualizaciones). Solo avisa: no descarga ni ejecuta nada hasta que pulsas **Actualizar**. Entonces, en una copia

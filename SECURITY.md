@@ -102,6 +102,10 @@ Celer is a database client, so it is useful to know exactly what it touches. Not
   the OpenSSH agent (`\\.\pipe\openssh-ssh-agent`) and then Pageant, elsewhere the agent in `SSH_AUTH_SOCK`.
 - **Credentials.** Your passwords and API keys go to the operating system's credential store (Windows Credential
   Manager, macOS Keychain, Secret Service), under the service `Celer`. Celer does not read other programs' entries.
-- **Files.** Its own data folders (`%APPDATA%\es.celer.app`, `%LOCALAPPDATA%\es.celer.app`), and the files you open,
+  A copy started with its own data folder (`--data-dir <folder>` or `CELER_DATA_DIR`) writes under the service
+  `Celer-dev` instead, and reads an entry of the installed copy (`Celer`) only when it has none of its own, so it never
+  changes the installed copy's passwords.
+- **Files.** Its own data folders (`%APPDATA%\es.celer.app`, `%LOCALAPPDATA%\es.celer.app`; with `--data-dir`, that
+  folder instead, with the WebView2 profile in `<folder>\webview`), and the files you open,
   save or export. For Informix over DRDA it writes a `db2dsdriver.cfg` there (database, host and port of those
   connections, no passwords) that turns off the IBM driver's own reconnection, unless you have your own.
