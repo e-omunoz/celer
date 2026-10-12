@@ -2,6 +2,7 @@
 // passwords, moving and deleting several items) and src/treeSelect.ts (multi-selection):
 // node --experimental-strip-types dev/explorer-check.ts
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   allFolders,
   buildConnTree,
@@ -9,6 +10,11 @@ import {
   connMatches,
   countConns,
   exportConnectionsJson,
+  exportConnectionsJsonWithSecrets,
+  joinParams,
+  secretRequests,
+  splitSecretParams,
+  withImportedSecrets,
   filterActive,
   folderName,
   inlinePassword,
@@ -126,6 +132,9 @@ const inline = exportConnectionsJson([conn("id-2", "Odbc", "", "odbc", { odbcCon
 assert.ok(!inline.includes("a;b") && !inline.includes("p2"), inline);
 assert.equal(JSON.parse(inline).connections[0].odbcConnStr, "DSN=x;UID=u;Trusted=no");
 assert.equal(JSON.parse(inline).connections[0].extra, "ssl=1");
+// Nor any other entry Celer treats as a secret (#162).
+const tokens = JSON.parse(exportConnectionsJson([conn("id-3", "Tok", "", "odbc", { odbcConnStr: "DSN=x;Token={t;1};UID=u", extra: "sslpassword=k1;sslmode=require;api_key=z9" })], [], new Date())).connections[0];
+assert.deepEqual([tokens.odbcConnStr, tokens.extra], ["DSN=x;UID=u", "sslmode=require;"]);
 assert.equal(inlinePassword("DSN=x;Pwd = {a;b}}c} ;UID=u"), "a;b}c");
 assert.equal(inlinePassword("DSN=x;PasswordFile=y"), null);
 assert.equal(withoutInlinePassword("PWD=s;DSN=x"), "DSN=x");
@@ -151,6 +160,68 @@ assert.throws(() => parseConnectionsJson("{"), /JSON válido/);
 assert.throws(() => parseConnectionsJson(JSON.stringify({ connections: [] })), /exportación de conexiones de Celer/);
 assert.throws(() => parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 1, connections: [{ kind: "oracle" }] })), /motor desconocido/);
 assert.throws(() => parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 9, connections: [] })), /Versión/);
+// An SSH tunnel travels with its settings, never with its password, passphrase or key; without one, no "ssh" key.
+const tunnelled = conn("id-3", "Por SSH", "", "postgres", {
+  host: "db.internal",
+  ssh: { enabled: true, host: "bastion", port: 2222, user: "ops", auth: "key", keyPath: "~/.ssh/id_ed25519", jumps: ["edge"], password: "ssh-pw", passphrase: "frase", privateKey: "-----BEGIN KEY-----" },
+});
+const sshText = exportConnectionsJson([tunnelled, ifx], [], new Date());
+for (const word of ["ssh-pw", "frase", "BEGIN KEY", "passphrase", "privateKey"]) assert.ok(!sshText.includes(word), word);
+assert.deepEqual(JSON.parse(sshText).connections[0].ssh, { enabled: true, host: "bastion", port: 2222, user: "ops", auth: "key", keyPath: "~/.ssh/id_ed25519", jumps: ["edge"] });
+assert.equal(JSON.parse(sshText).connections[1].ssh, undefined);
+const sshBack = parseConnectionsJson(sshText).connections;
+assert.deepEqual(sshBack[0].ssh, { enabled: true, host: "bastion", port: 2222, user: "ops", auth: "key", keyPath: "~/.ssh/id_ed25519", jumps: ["edge"] });
+assert.equal(sshBack[1].ssh, undefined);
+assert.deepEqual(parseConnectionsJson(JSON.stringify({ format: "celer-connections", version: 1, connections: [{ kind: "mysql", ssh: { enabled: true, host: "b", port: "x", auth: "rot13", jumps: [1, "j"] } }] })).connections[0].ssh, { enabled: true, host: "b", port: 22, user: "", auth: "password", keyPath: "", jumps: ["j"] });
+// ---------------------------------------------------------------- export with passwords (#101)
+// Without «Incluir contraseñas» the file is the v1 file Celer 2.2.0 wrote, less the secret entries of "Parámetros
+// extra" / the ODBC string (#162): the SHA-256 of that output.
+const golden = [
+  conn("a", "Producción", "Clientes/Egarsat", "mssql", { host: "sql01", port: 1433, user: "sa", password: "S3creta", database: "crm", production: true, startupSql: "SET LOCK_TIMEOUT 5000;" }),
+  conn("b", "Almacén", "", "informix", { host: "ifx", instance: "ol_demo", extra: "DB_LOCALE=en_US.819;sslpassword=x" }),
+  conn("c", "Odbc", "", "odbc", { odbcConnStr: "DSN=x;UID=u;PWD={a;b}}c};Trusted=no", password: "p" }),
+].map(({ id, name, folder, kind, ...rest }) => ({ ...emptyConn(kind), ...rest, id, name, folder, kind }));
+const v1 = exportConnectionsJson(golden, ["Vacía"], new Date("2026-10-08T10:00:00Z"));
+assert.equal(createHash("sha256").update(v1).digest("hex"), "a2f86fa2634178fbe64a6b018d4daf10b972393add8c676aeb580b7faec0aa7d", v1);
+assert.ok(!v1.includes("sslpassword"), v1);
+// An environment and a keepalive travel when set (and only then, so the golden file above is unchanged).
+const staged = exportConnectionsJson([{ ...golden[0], environment: "staging", envLabel: "", envColor: "", keepaliveMin: 15 }], [], new Date());
+assert.deepEqual([JSON.parse(staged).connections[0].environment, JSON.parse(staged).connections[0].envLabel, JSON.parse(staged).connections[0].keepaliveMin], ["staging", undefined, 15]);
+assert.deepEqual([parseConnectionsJson(staged).connections[0].environment, parseConnectionsJson(staged).connections[0].keepaliveMin], ["staging", 15]);
+// Secret entries of the parameters (not PWD=/Password=, which are the password) are split out for the core.
+assert.deepEqual(splitSecretParams("DB_LOCALE=en_US.819;sslpassword=x;passfile=/p;PWD=y;api_key={a;b}"), { kept: "DB_LOCALE=en_US.819;passfile=/p;PWD=y;", secret: "sslpassword=x;api_key={a;b}" });
+assert.deepEqual(splitSecretParams("application_name=x\ntoken=t\nconnect_timeout=5"), { kept: "application_name=x\nconnect_timeout=5", secret: "token=t" });
+assert.equal(joinParams("DB_LOCALE=en_US.819;", "sslpassword=x"), "DB_LOCALE=en_US.819;sslpassword=x");
+assert.equal(joinParams("", "token=t"), "token=t");
+assert.equal(joinParams("a=1\nb=2", "token=t"), "a=1\nb=2\ntoken=t");
+const asked = secretRequests(golden);
+assert.deepEqual(asked.requests, [
+  { id: "a", inline: null },
+  { id: "b", inline: { extra: "sslpassword=x" } },
+  { id: "c", inline: null },
+]);
+// With them: v2, saying so on top, the sealed block as the core gave it, and no secret anywhere else.
+const sealed = { encrypted: true, cipher: "AES-256-GCM", kdf: { name: "Argon2id", memoryKiB: 65536, iterations: 3, parallelism: 1, salt: "c2FsdA==" }, nonce: "bm9uY2U=", data: "ZGF0YQ==" };
+const v2 = exportConnectionsJsonWithSecrets(golden, ["Vacía"], new Date("2026-10-08T10:00:00Z"), sealed);
+const v2doc = JSON.parse(v2);
+assert.equal(v2doc.version, 2);
+assert.match(v2doc.containsSecrets, /cifradas/);
+assert.deepEqual(v2doc.secrets, sealed);
+for (const word of ["S3creta", "sslpassword", "a;b}}c"]) assert.ok(!v2.includes(word), word);
+assert.equal(v2doc.connections[1].extra, "DB_LOCALE=en_US.819;");
+assert.match(JSON.parse(exportConnectionsJsonWithSecrets(golden, [], new Date(), { encrypted: false })).containsSecrets, /SIN CIFRAR/);
+// Reading: v1 files still import (no secrets); v2 hands over its block; a v2 without it is refused.
+assert.equal(parseConnectionsJson(v1).secrets, null);
+const read = parseConnectionsJson(v2);
+assert.deepEqual(read.secrets, { encrypted: true, block: sealed });
+assert.equal(read.connections.length, 3);
+assert.throws(() => parseConnectionsJson(JSON.stringify({ ...v2doc, secrets: undefined })), /secrets/);
+assert.throws(() => parseConnectionsJson(JSON.stringify({ ...v2doc, version: 3 })), /Versión/);
+// What the core opens goes back into each connection: password, SSH secrets, secret parameters.
+const restored = withImportedSecrets({ ...read.connections[1], ssh: { enabled: true, host: "b", port: 22, user: "u", auth: "key", keyPath: "", jumps: [] } }, { password: "pw", sshPassphrase: "frase", sshKey: "KEY", inline: { extra: "sslpassword=x" } });
+assert.deepEqual([restored.password, restored.savePassword, restored.extra, restored.ssh?.passphrase, restored.ssh?.privateKey, restored.ssh?.password], ["pw", true, "DB_LOCALE=en_US.819;sslpassword=x", "frase", "KEY", null]);
+assert.equal(withImportedSecrets(read.connections[0], undefined), read.connections[0], "a connection without secrets is saved as it came");
+
 // Duplicates: the same server, database and user (case-insensitive) are not imported twice, not even within the file.
 assert.equal(connIdentity({ ...secret, host: "SQL01" }), connIdentity(secret));
 const plan = planImport([secret], [...back.connections, { ...back.connections[1] }]);

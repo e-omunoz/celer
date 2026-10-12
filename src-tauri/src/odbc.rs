@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
-use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, LazyLock};
 
@@ -26,6 +25,8 @@ const SQL_ERROR: i16 = -1;
 const SQL_INVALID_HANDLE: i16 = -2;
 const SQL_NTS: i16 = -3;
 const SQL_NULL_DATA: isize = -1;
+/// Prefilled into the indicator arrays before a block fetch; no driver writes it (see `fetch_block`).
+const IND_SENTINEL: isize = 0x5A5A_5A5A_5A5A_5A5A;
 const SQL_NO_TOTAL: isize = -4;
 const SQL_ATTR_ODBC_VERSION: i32 = 200;
 const SQL_ATTR_AUTOCOMMIT: i32 = 102;
@@ -94,6 +95,8 @@ type FnCatalog4 = unsafe extern "system" fn(
 ) -> i16;
 type FnCatalog3 =
     unsafe extern "system" fn(H, *const u16, i16, *const u16, i16, *const u16, i16) -> i16;
+/// SQLForeignKeys: catalog, schema and table of the primary key's side, then of the foreign key's.
+type FnCatalog6 = unsafe extern "system" fn(H, *const u16, i16, *const u16, i16, *const u16, i16, *const u16, i16, *const u16, i16, *const u16, i16) -> i16;
 type FnGetInfo = unsafe extern "system" fn(H, u16, *mut c_void, i16, *mut i16) -> i16;
 type FnEnum =
     unsafe extern "system" fn(H, u16, *mut u16, i16, *mut i16, *mut u16, i16, *mut i16) -> i16;
@@ -123,11 +126,13 @@ pub struct Api {
     tables: FnCatalog4,
     columns: FnCatalog4,
     primary_keys: FnCatalog3,
+    foreign_keys: Option<FnCatalog6>,
     get_info: FnGetInfo,
     drivers: Option<FnEnum>,
     data_sources: Option<FnEnum>,
-    /// SQLLEN is 32 bits: IBM's CLI driver outside Windows (built without ODBC64) writes 4-byte lengths and
-    /// indicators where the ODBC headers of a 64-bit system say 8. Windows and unixODBC use 8.
+    /// SQLLEN is 32 bits: IBM's CLI driver loaded directly (built without ODBC64) writes 4-byte lengths and
+    /// indicators where the ODBC headers of a 64-bit system say 8, on Windows (db2cli64.dll) as on Linux and macOS.
+    /// A driver manager (odbc32.dll, unixODBC) and the other drivers use 8.
     len32: bool,
 }
 
@@ -136,7 +141,8 @@ unsafe impl Sync for Api {}
 
 /// IBM Data Server Driver (CLI) library: libdb2.so / libdb2.dylib (db2cli64.dll on Windows).
 fn is_ibm_cli(path: &str) -> bool {
-    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    // The file name after either separator: a Windows path is recognised on every system (and in the unit test).
+    let name = path.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();
     name.starts_with("libdb2") || name.starts_with("db2cli") || name.starts_with("libdb2o")
 }
 
@@ -160,7 +166,7 @@ impl Api {
         let lib: Library = {
             // Permite que el driver encuentre sus DLL dependientes en su propia carpeta.
             const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x8;
-            let p = Path::new(path);
+            let p = std::path::Path::new(path);
             let l = if p.is_absolute() {
                 libloading::os::windows::Library::load_with_flags(p, LOAD_WITH_ALTERED_SEARCH_PATH)
             } else {
@@ -207,16 +213,19 @@ impl Api {
             tables: sym!("SQLTablesW"),
             columns: sym!("SQLColumnsW"),
             primary_keys: sym!("SQLPrimaryKeysW"),
+            foreign_keys: opt!("SQLForeignKeysW"),
             get_info: sym!("SQLGetInfoW"),
             drivers: opt!("SQLDriversW"),
             data_sources: opt!("SQLDataSourcesW"),
             _lib: lib,
-            len32: !cfg!(windows) && is_ibm_cli(path),
+            len32: is_ibm_cli(path),
         })
     }
 
     /// A length or indicator as the driver wrote it: with a 32-bit SQLLEN only the low 4 bytes are its own (the
-    /// variable was zeroed before the call), and -1 / -4 arrive as 0xFFFFFFFF / 0xFFFFFFFC there.
+    /// variable was zeroed before the call), and -1 / -4 arrive as 0xFFFFFFFF / 0xFFFFFFFC there. Reading the low 4
+    /// bytes is also right for a 64-bit driver (every length fits, -1 / -4 keep their sign), so IBM's CLI driver is
+    /// always read this way, on Windows too: its Windows build was seen padding names with NULs like the Linux one.
     fn len(&self, raw: isize) -> isize {
         if self.len32 {
             raw as i32 as isize
@@ -446,6 +455,25 @@ impl OdbcConn {
         st.collect_all()
     }
 
+    /// SQLForeignKeys: the keys of table `fk` ([catalog, schema, table]; `None` = not given), as ODBC lists them
+    /// (FK_NAME in column 12, PK and FK table and column in 1-4 and 5-8, KEY_SEQ in 9). With no table at all some
+    /// drivers list every key of the source; the standard says that is an error (HY009).
+    /// The driver has SQLForeignKeys.
+    pub fn has_foreign_keys(&self) -> bool {
+        self.api.foreign_keys.is_some()
+    }
+
+    pub fn catalog_fks(&self, fk: [Option<&str>; 3]) -> Result<Vec<Vec<Cell>>> {
+        let f = self.api.foreign_keys.ok_or_else(|| anyhow!("El driver ODBC no tiene SQLForeignKeys"))?;
+        let mut st = self.alloc_stmt()?;
+        let a = fk.map(|s| s.filter(|s| !s.is_empty()).map(wide));
+        let p = |w: &Option<Vec<u16>>| w.as_ref().map(|v| v.as_ptr()).unwrap_or(null());
+        let l = |w: &Option<Vec<u16>>| if w.is_some() { SQL_NTS } else { 0 };
+        let rc = unsafe { f(st.h, null(), 0, null(), 0, null(), 0, p(&a[0]), l(&a[0]), p(&a[1]), l(&a[1]), p(&a[2]), l(&a[2])) };
+        self.api.check(rc, SQL_HANDLE_STMT, st.h)?;
+        st.collect_all()
+    }
+
     pub fn catalog_pks(&self, catalog: &str, schema: &str, table: &str) -> Result<Vec<Vec<Cell>>> {
         let mut st = self.alloc_stmt()?;
         let a = [catalog, schema, table].map(|s| if s.is_empty() { None } else { Some(wide(s)) });
@@ -470,6 +498,9 @@ impl OdbcConn {
 impl Drop for OdbcConn {
     fn drop(&mut self) {
         unsafe {
+            // An open transaction is rolled back first: some drivers refuse to disconnect with one (SQLSTATE 25000)
+            // and others commit it. Closing never commits. With autocommit on there is nothing to undo.
+            (self.api.end_tran)(SQL_HANDLE_DBC, self.dbc, 1);
             (self.api.disconnect)(self.dbc);
             (self.api.free_handle)(SQL_HANDLE_DBC, self.dbc);
             (self.api.free_handle)(SQL_HANDLE_ENV, self.env);
@@ -484,6 +515,23 @@ struct ColPlan {
     lob: bool,
     /// Timestamps and times: the column's fractional digits (the text is cut to them; DRDA sends six).
     frac: Option<u8>,
+    /// DECIMAL / NUMERIC read as text: a driver that writes it with the system's decimal comma (IBM's CLI on a
+    /// Spanish Windows: `12,50`) gets it back as a point.
+    decimal: bool,
+}
+
+/// A DECIMAL as the driver wrote it, as a plain number: "12,50" → "12.50" (a number written as text by the driver
+/// has no grouping, so a comma can only be the decimal separator), and ".10" / "-.75" (Microsoft's old «SQL Server»
+/// driver) → "0.10" / "-0.75".
+pub(crate) fn decimal_point(s: String) -> String {
+    let s = if s.contains(',') { s.replace(',', ".") } else { s };
+    if s.starts_with('.') {
+        format!("0{s}")
+    } else if let Some(rest) = s.strip_prefix("-.") {
+        format!("-0.{rest}")
+    } else {
+        s
+    }
 }
 
 /// "2024-03-15 10:20:30.123450" with `digits` fractional digits ("…30.12345"; none: "…30").
@@ -713,6 +761,11 @@ impl Stmt {
         if self.finished {
             return Ok(());
         }
+        if let Some(b) = &mut self.bound {
+            for ind in &mut b.inds {
+                ind.fill(IND_SENTINEL);
+            }
+        }
         let rc = unsafe { (self.api.fetch)(self.h) };
         match rc {
             SQL_NO_DATA => {
@@ -726,12 +779,20 @@ impl Stmt {
             }
         }
         if let Some(b) = &self.bound {
-            let n = *b.fetched;
+            // Never more than the arrays hold, whatever the driver wrote (the unsafe read below relies on it).
+            let n = (*b.fetched).min(b.inds.first().map_or(0, |i| i.len()));
+            // An indicator array is filled 4 bytes per row by a driver with a 32-bit SQLLEN (IBM's CLI) and 8 by the
+            // others, whatever the platform: from two rows on, the last slot is still the sentinel when the entries
+            // were narrow. With one row the slot is only half overwritten: its high 4 bytes still hold the sentinel's.
+            let narrow = (self.api.len32 && !cfg!(windows))
+                || (n >= 2 && b.inds.iter().any(|i| i[n - 1] == IND_SENTINEL))
+                || (n == 1
+                    && b.inds.iter().any(|i| (i[0] as u64) >> 32 == (IND_SENTINEL as u64) >> 32));
             for r in 0..n {
                 let mut row = Vec::with_capacity(self.plans.len());
                 for (c, p) in self.plans.iter().enumerate() {
                     // A 32-bit SQLLEN driver fills the indicator array 4 bytes per row.
-                    let ind = if self.api.len32 {
+                    let ind = if narrow {
                         // SAFETY: the array holds `rows` isize values, room for `rows` i32 ones; r < fetched <= rows.
                         unsafe { *(b.inds[c].as_ptr() as *const i32).add(r) as isize }
                     } else {
@@ -799,9 +860,12 @@ impl Stmt {
                             return Ok(Cell::Text(s));
                         }
                     }
-                    let s = String::from_utf16_lossy(&out);
+                    // The IBM CLI driver on Windows pads some catalog values with NULs.
+                    let mut s = String::from_utf16_lossy(&out);
+                    s.truncate(s.trim_end_matches('\0').len());
                     Ok(Cell::Text(match p.frac {
                         Some(digits) => fit_fraction(s, digits),
+                        None if p.decimal => decimal_point(s),
                         None => s,
                     }))
                 }
@@ -911,12 +975,14 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
         elem: (chars + 1) * 2,
         lob: false,
         frac: None,
+        decimal: false,
     };
     let wlob = ColPlan {
         ctype: SQL_C_WCHAR,
         elem: 0,
         lob: true,
         frac: None,
+        decimal: false,
     };
     match dtype {
         -7 => (
@@ -925,6 +991,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 1,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Bool,
         ),
@@ -934,6 +1001,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 8,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Number,
         ),
@@ -943,16 +1011,18 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 8,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Number,
         ),
-        2 | 3 => (wchar(size.clamp(1, 100) + 3), ColKind::Number),
+        2 | 3 => (ColPlan { decimal: true, ..wchar(size.clamp(1, 100) + 3) }, ColKind::Number),
         -2 | -3 if size > 0 && size <= 8000 => (
             ColPlan {
                 ctype: SQL_C_BINARY,
                 elem: size,
                 lob: false,
                 frac: None,
+                decimal: false,
             },
             ColKind::Binary,
         ),
@@ -962,6 +1032,7 @@ fn plan_for(dtype: i16, size: usize) -> (ColPlan, ColKind) {
                 elem: 0,
                 lob: true,
                 frac: None,
+                decimal: false,
             },
             ColKind::Binary,
         ),
@@ -1042,8 +1113,12 @@ fn decode(p: &ColPlan, data: &[u8], ind: isize) -> Cell {
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let mut s = String::from_utf16_lossy(&u);
+            s.truncate(s.trim_end_matches('\0').len());
             if let Some(digits) = p.frac {
                 s = fit_fraction(s, digits);
+            }
+            if p.decimal {
+                s = decimal_point(s);
             }
             if trunc {
                 s.push('…');
@@ -1130,7 +1205,18 @@ const _: i16 = SQL_ERROR;
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_fraction, is_ibm_cli};
+    use super::{decimal_point, fit_fraction, is_ibm_cli};
+
+    #[test]
+    fn decimals_keep_a_point() {
+        assert_eq!(decimal_point("12,50".into()), "12.50");
+        assert_eq!(decimal_point("-0,75".into()), "-0.75");
+        assert_eq!(decimal_point("1234.56".into()), "1234.56");
+        assert_eq!(decimal_point("7".into()), "7");
+        assert_eq!(decimal_point(".10".into()), "0.10");
+        assert_eq!(decimal_point("-.75".into()), "-0.75");
+        assert_eq!(decimal_point("-,5".into()), "-0.5");
+    }
 
     #[test]
     fn fractions_fit_the_column() {

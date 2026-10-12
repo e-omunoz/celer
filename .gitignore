@@ -37,3 +37,7 @@ installer/src-tauri/gen/schemas/
 
 # Macro review scratch output (screenshots, downloads)
 review-out/
+
+# Written by the engine tests (engine_tests.rs): Informix timings and SQL Server showplans.
+/target-informix-speed.txt
+/target-showplan-*.xml

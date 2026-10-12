@@ -135,6 +135,8 @@ pub struct FetchOutput {
     #[serde(rename = "hasMore")]
     pub has_more: bool,
     pub extra: Vec<ResultSet>,
+    /// Messages of the server that came with these rows (SQL Server: PRINT between two results).
+    pub messages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -176,7 +178,17 @@ pub struct ConnConfig {
     /// Parámetros extra que se añaden a la cadena de conexión.
     pub extra: String,
     pub color: String,
+    /// Confirmations before dangerous statements, the MCP's write cap and the stricter transaction warnings. Always
+    /// true for the "prod" environment, false for the other built-in ones; a custom environment keeps its own.
     pub production: bool,
+    /// "" (none) | "dev" | "test" | "staging" | "prod" | "custom": colours the consoles, tabs and explorer node.
+    #[serde(default)]
+    pub environment: String,
+    /// A custom environment's name and colour (`#rrggbb`).
+    #[serde(default)]
+    pub env_label: String,
+    #[serde(default)]
+    pub env_color: String,
     pub read_only: bool,
     pub folder: String,
     /// SQLite: ruta del fichero, o `:memory:` para una base en memoria.
@@ -185,6 +197,89 @@ pub struct ConnConfig {
     /// Sentencias que se ejecutan en cada sesión nueva nada más conectar (SET search_path…, SET LOCK_TIMEOUT…).
     #[serde(default)]
     pub startup_sql: String,
+    /// Keepalive (#97): the server ends sessions idle for this many minutes; Celer checks idle sessions a bit before
+    /// (src/connWatch.ts → `keep_alive_session`). 0: off.
+    #[serde(default)]
+    pub keepalive_min: u32,
+    /// SSH tunnel to reach the server through a bastion (src/ssh.rs). Left out of the file while it is unused.
+    #[serde(default, skip_serializing_if = "SshConfig::is_unset")]
+    pub ssh: SshConfig,
+}
+
+/// An SSH tunnel: Celer logs in to `host` (through the `jumps`, in order) and forwards a local port to the database
+/// server. Secrets travel in memory only: on disk they are in the system's credential store (`SshConfig::ACCOUNTS`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SshConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: Option<u16>,
+    pub user: String,
+    /// "password" | "key" | "agent" (ssh-agent, Pageant or the OpenSSH agent of Windows).
+    pub auth: String,
+    /// A private key file (OpenSSH, PEM or PuTTY .ppk). Empty: the key pasted in the form, kept in the credential store.
+    pub key_path: String,
+    /// Jump hosts in the order they are crossed, as `user@host:port` (user and port optional): the same
+    /// authentication as the SSH server.
+    pub jumps: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+    /// The private key itself, when it was pasted instead of read from `key_path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_key: Option<String>,
+    /// Only while connecting through the tunnel (the host is then 127.0.0.1 and a local port): the server the port
+    /// leads to, so that the free connections of different servers are never mixed up. Never saved.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub forwarded_to: String,
+    /// Only while connecting through the tunnel: the database server's name as given (the tunnel's target), which
+    /// the drivers check the TLS certificate against instead of 127.0.0.1. Never saved.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tls_host: String,
+}
+
+impl SshConfig {
+    /// The credential store accounts of a connection's SSH secrets, after its id: password, key passphrase, key.
+    pub const ACCOUNTS: [&'static str; 3] = ["ssh-password", "ssh-passphrase", "ssh-key"];
+
+    pub fn is_unset(&self) -> bool {
+        *self == SshConfig::default()
+    }
+
+    /// The tunnel is used (an engine without network, SQLite or ODBC, never uses it).
+    pub fn active(&self, kind: DbKind) -> bool {
+        self.enabled && !matches!(kind, DbKind::Sqlite | DbKind::Odbc)
+    }
+
+    /// The secret kept under `account` (one of `ACCOUNTS`), as a mutable slot.
+    pub fn secret_mut(&mut self, account: &str) -> &mut Option<String> {
+        match account {
+            "ssh-password" => &mut self.password,
+            "ssh-passphrase" => &mut self.passphrase,
+            _ => &mut self.private_key,
+        }
+    }
+
+    /// Whether the authentication method uses the secret of `account` (the others are deleted on save).
+    pub fn uses(&self, account: &str) -> bool {
+        self.enabled
+            && match account {
+                "ssh-password" => self.auth == "password",
+                "ssh-passphrase" => self.auth == "key",
+                _ => self.auth == "key" && self.key_path.trim().is_empty(),
+            }
+    }
+
+    /// Without the secrets, for connections.json.
+    pub fn without_secrets(&self) -> SshConfig {
+        SshConfig { password: None, passphrase: None, private_key: None, forwarded_to: String::new(), tls_host: String::new(), ..self.clone() }
+    }
+}
+
+/// The credential store account of one of a connection's SSH secrets.
+pub fn ssh_account(conn_id: &str, which: &str) -> String {
+    format!("{conn_id}#{which}")
 }
 
 impl Default for ConnConfig {
@@ -208,15 +303,32 @@ impl Default for ConnConfig {
             extra: String::new(),
             color: String::new(),
             production: false,
+            environment: String::new(),
+            env_label: String::new(),
+            env_color: String::new(),
             read_only: false,
             folder: String::new(),
             file_path: String::new(),
             startup_sql: String::new(),
+            keepalive_min: 0,
+            ssh: SshConfig::default(),
         }
     }
 }
 
 impl ConnConfig {
+    /// The environment and the production flag agree: a connection saved before environments existed with the
+    /// production flag is "prod"; "prod" is always production and the other built-in environments never are. An
+    /// unknown environment (a later version's) is left as it is. src/environment.ts does the same.
+    pub fn normalize_environment(&mut self) {
+        match self.environment.as_str() {
+            "" if self.production => self.environment = "prod".into(),
+            "prod" => self.production = true,
+            "dev" | "test" | "staging" => self.production = false,
+            _ => {}
+        }
+    }
+
     /// Moves a `PWD=` / `Password=` written into the ODBC connection string or "Parámetros extra" out of them, so it
     /// is kept in the credential store and never in connections.json. A password typed in the field wins.
     /// Returns true when something was moved.
@@ -366,6 +478,19 @@ pub struct ObjectRef {
     pub kind: String,
 }
 
+/// A foreign key of a schema, as `Driver::schema_foreign_keys` reads them all at once (the E-R diagram): the table
+/// that has it and its columns, and the table and columns it references, in key order. Names are as the catalog
+/// has them (unquoted).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaForeignKey {
+    pub name: String,
+    pub table: ObjectRef,
+    pub columns: Vec<String>,
+    pub target: ObjectRef,
+    pub target_columns: Vec<String>,
+}
+
 /// Información para autocompletado: tablas y sus columnas.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct CompletionSchema {
@@ -399,5 +524,25 @@ mod tests {
         cfg.password = Some("typed".into());
         assert!(cfg.take_inline_password());
         assert_eq!((cfg.extra.as_str(), cfg.password.as_deref()), ("", Some("typed")));
+    }
+
+    #[test]
+    fn environments_follow_the_production_flag() {
+        // connections.json written before environments: no field, the production flag maps to "prod".
+        let mut old: ConnConfig = serde_json::from_str(r#"{"id":"a","name":"CRM","kind":"postgres","production":true}"#).unwrap();
+        assert_eq!(old.environment, "");
+        old.normalize_environment();
+        assert_eq!((old.environment.as_str(), old.production), ("prod", true));
+        let mut plain: ConnConfig = serde_json::from_str(r#"{"id":"b","name":"Dev","kind":"mysql"}"#).unwrap();
+        plain.normalize_environment();
+        assert_eq!((plain.environment.as_str(), plain.production), ("", false));
+        let mut staging = ConnConfig { environment: "staging".into(), production: true, ..Default::default() };
+        staging.normalize_environment();
+        assert!(!staging.production);
+        let mut custom = ConnConfig { environment: "custom".into(), env_label: "Cliente".into(), production: true, ..Default::default() };
+        custom.normalize_environment();
+        assert!(custom.production, "a custom environment keeps its own flag");
+        let json = serde_json::to_value(&custom).unwrap();
+        assert_eq!((json["environment"].as_str(), json["envLabel"].as_str()), (Some("custom"), Some("Cliente")));
     }
 }

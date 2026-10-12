@@ -1,3 +1,5 @@
+import { defaultGibPrefs, type GibPrefs } from "./gib/prefs.ts";
+
 export type Cell = null | boolean | number | string;
 
 export type ColKind = "number" | "text" | "bool" | "date" | "binary" | "other";
@@ -26,6 +28,8 @@ export interface FetchOutput {
   rows: Cell[][];
   hasMore: boolean;
   extra: ResultSet[];
+  /** Server messages that came with these rows (SQL Server: PRINT between two results). */
+  messages?: string[];
 }
 
 export type DbKind = "postgres" | "mysql" | "mssql" | "sqlite" | "informix" | "odbc";
@@ -62,16 +66,62 @@ export interface ConnConfig {
   odbcConnStr: string;
   extra: string;
   color: string;
+  /**
+   * Confirmations before dangerous statements, the MCP's write cap and stricter transaction warnings. Always true for
+   * the "prod" environment and false for the other built-in ones (src/environment.ts); a custom one keeps its own.
+   */
   production: boolean;
+  /** "" (none) | dev | test | staging | prod | custom: colours the consoles, tabs and explorer node (environment.ts). */
+  environment?: string;
+  /** A custom environment's name and colour. */
+  envLabel?: string;
+  envColor?: string;
   readOnly: boolean;
   folder: string;
   filePath: string;
   /** Statements run on every new session right after connecting (SET search_path…, SET LOCK_TIMEOUT…). */
   startupSql?: string;
+  /** Keepalive: the server ends sessions idle this many minutes, and Celer checks idle ones a bit before (0: off). */
+  keepaliveMin?: number;
+  /** SSH tunnel to the server (network engines only). Absent: none. */
+  ssh?: SshConfig;
+}
+
+/** How a connection reaches its server through an SSH bastion (src-tauri/src/ssh.rs). */
+export interface SshConfig {
+  enabled: boolean;
+  host: string;
+  port: number | null;
+  user: string;
+  /** "password" | "key" (a file or a pasted key, with its passphrase) | "agent" (ssh-agent, Pageant, OpenSSH agent). */
+  auth: string;
+  /** Private key file; empty when the key is pasted (it is kept in the credential store). */
+  keyPath: string;
+  /** Jump hosts in the order they are crossed: "user@host:port" (user and port optional). */
+  jumps: string[];
+  /** Secrets: only on their way to the credential store ("" or absent = keep the saved one). */
+  password?: string | null;
+  passphrase?: string | null;
+  privateKey?: string | null;
+}
+
+/** An SSH server's host key shown to the user before trusting it. */
+export interface SshHostKeyInfo {
+  host: string;
+  port: number;
+  keyType: string;
+  /** SHA256:… as OpenSSH shows it (ssh-keygen -lf). */
+  fingerprint: string;
+}
+
+export function emptySsh(): SshConfig {
+  return { enabled: false, host: "", port: 22, user: "", auth: "password", keyPath: "", jumps: [] };
 }
 
 export interface ConnSummary extends ConnConfig {
   hasPassword: boolean;
+  /** Which SSH secrets the credential store keeps (only for connections with a tunnel). */
+  sshSaved?: { password: boolean; passphrase: boolean; key: boolean };
 }
 
 export interface MetaNode {
@@ -88,6 +138,15 @@ export interface ObjectRef {
   schema: string;
   name: string;
   kind: string;
+}
+
+/** A foreign key of a schema, read with all the others in one catalog query (E-R diagram). Names unquoted. */
+export interface SchemaForeignKey {
+  name: string;
+  table: ObjectRef;
+  columns: string[];
+  target: ObjectRef;
+  targetColumns: string[];
 }
 
 export interface TableColumn {
@@ -129,6 +188,8 @@ export interface SessionInfo {
   connectMs: number;
   /** A free connection of the same settings was taken instead of logging in again. */
   reused: boolean;
+  /** The driver and protocol in a few words ("nativo", "IBM CLI (DRDA)", "ODBC · PostgreSQL Unicode"), for reports. */
+  driver?: string;
 }
 
 /** How a session should start: right in a database and transaction mode (no extra round trips afterwards). */
@@ -139,7 +200,7 @@ export interface OpenSessionOptions {
 
 /** One step of "Probar conexión", timed. */
 export interface ConnTestStep {
-  /** resolve | tcp | tls | login | database */
+  /** resolve | tcp | tls | login | database; ssh | forward through an SSH tunnel */
   id: string;
   label: string;
   status: "ok" | "failed" | "skipped";
@@ -187,8 +248,6 @@ export interface ExportOptions {
 
 export type ThemeName = "system" | "light" | "dark" | "darcula" | "contrast" | "contrast-light" | "fjord" | "sand";
 
-export type CompanionMode = "off" | "quiet" | "normal";
-
 export const ACCENTS = [
   { name: "Clay", value: "#D97757" },
   { name: "Ember", value: "#F26B1D" },
@@ -212,7 +271,6 @@ export interface Settings {
   sidebarWidth: number;
   inspectorWidth: number;
   editorRatio: number;
-  companion: CompanionMode;
   density: "compact" | "comfortable";
   zebra: boolean;
   confirmMutations: boolean;
@@ -243,13 +301,76 @@ export interface Settings {
   favoriteConns: string[];
   /** Explorer: the connections connected to last, newest first. */
   recentConns: { id: string; at: number }[];
+  /** Manual transactions: seconds open before the console's indicator turns amber, then red (src/txWatch.ts). */
+  txWarnSecs: number;
+  txAlertSecs: number;
+  /** The same on production connections (stricter). */
+  txProdWarnSecs: number;
+  txProdAlertSecs: number;
+  /** A reminder (Gib, or a notice when he is off) once a transaction passes the red threshold, and again each time. */
+  txRemind: boolean;
+  // ---- Editor
+  /** Editor font family (empty: Celer's monospace). */
+  editorFont: string;
+  /** Spaces per indentation level and tab width. */
+  tabSize: number;
+  /** Tab inserts spaces (true) or a tab character. */
+  indentSpaces: boolean;
+  wordWrap: boolean;
+  lineNumbers: boolean;
+  /** Completion list while typing (Ctrl+Space always opens it). */
+  autocomplete: boolean;
+  /** Milliseconds after the last key before the completion list opens. */
+  autocompleteDelay: number;
+  /** Case of the keywords the editor writes (completion and «Formatear SQL»). */
+  keywordCase: KeywordCase;
+  // ---- Results
+  /** How a NULL cell reads in the grid. */
+  nullText: string;
+  /** Dates in the grid: as the server sends them, or day/month/year. */
+  dateFormat: DateFormat;
+  /** Numbers in the grid: as they come, or with a thousands separator. */
+  numberFormat: NumberFormat;
+  /** Characters of a value drawn in a grid cell (the whole value is in the value panel and in copies). */
+  maxCellChars: number;
+  /** What Ctrl+C copies from the grid. */
+  copyFormat: CopyFormatSetting;
+  // ---- Execution
+  /** Seconds a console statement may run before Celer cancels it (0: no limit). */
+  queryTimeout: number;
+  /** New consoles start in auto-commit (true) or in manual mode. */
+  autocommitDefault: boolean;
+  // ---- Window and tabs
+  /** Reopen the tabs of the last session on start. */
+  restoreSession: boolean;
+  /** Opening a table: show its open tab, or always open a new one. */
+  tableTabs: "reuse" | "new";
+  // ---- History
+  /** Queries kept in the history (newest first). */
+  historyMax: number;
+  /** Days a query stays in the history (0: no limit). */
+  historyDays: number;
+  // ---- Notifications
+  /** Seconds a notice stays on screen (errors and notices with a button stay twice as long). */
+  toastSeconds: number;
+  /** Desktop notification when a query longer than this many seconds ends while Celer is in the background (0: off). */
+  notifyAfter: number;
+  /** Gib: how he looks and how present he is (Settings › Apariencia › Gib; src/gib/prefs.ts). */
+  gib: GibPrefs;
 }
+
+export type KeywordCase = "upper" | "lower";
+export type DateFormat = "iso" | "dmy";
+export type NumberFormat = "plain" | "grouped";
+export type CopyFormatSetting = "tsv" | "tsv-head" | "csv" | "markdown" | "json";
 
 /** A live template for the SQL editor (see src/snippets.ts). */
 export interface Snippet {
   name: string;
   description: string;
   body: string;
+  /** The engine it is written for, as the user set it ("generic": standard SQL); else guessed from the body. */
+  engine?: DbKind | "generic";
 }
 
 export interface UpdateInfo {
@@ -281,7 +402,6 @@ export const defaultSettings: Settings = {
   sidebarWidth: 280,
   inspectorWidth: 320,
   editorRatio: 0.45,
-  companion: "normal",
   density: "compact",
   zebra: true,
   confirmMutations: true,
@@ -299,6 +419,33 @@ export const defaultSettings: Settings = {
   connSort: "manual",
   favoriteConns: [],
   recentConns: [],
+  txWarnSecs: 60,
+  txAlertSecs: 300,
+  txProdWarnSecs: 30,
+  txProdAlertSecs: 120,
+  txRemind: true,
+  editorFont: "",
+  tabSize: 2,
+  indentSpaces: true,
+  wordWrap: false,
+  lineNumbers: true,
+  autocomplete: true,
+  autocompleteDelay: 100,
+  keywordCase: "upper",
+  nullText: "NULL",
+  dateFormat: "iso",
+  numberFormat: "plain",
+  maxCellChars: 400,
+  copyFormat: "tsv",
+  queryTimeout: 0,
+  autocommitDefault: true,
+  restoreSession: true,
+  tableTabs: "reuse",
+  historyMax: 5000,
+  historyDays: 0,
+  toastSeconds: 4.5,
+  notifyAfter: 0,
+  gib: defaultGibPrefs,
 };
 
 export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
@@ -323,6 +470,9 @@ export function emptyConn(kind: DbKind = "sqlite"): ConnConfig {
     extra: "",
     color: "",
     production: false,
+    environment: "",
+    envLabel: "",
+    envColor: "",
     readOnly: false,
     folder: "",
     filePath: kind === "sqlite" ? "" : "",
@@ -369,6 +519,8 @@ export interface McpConfig {
   timeoutSecs: number;
   redactPattern: string;
   connections: Record<string, { level: McpLevel; maxRows?: number | null }>;
+  /** «Controlar la aplicación» (#100): what an assistant may do in the running Celer. */
+  appControl: { enabled: boolean; openTabs: boolean; writeLibrary: boolean; runOpened: boolean };
 }
 
 export interface McpAuditEntry {
@@ -381,6 +533,10 @@ export interface McpAuditEntry {
   rows?: number | null;
   ms?: number | null;
   error?: string | null;
+  /** Where the assistant ran: "Windows", "WSL (Ubuntu)"… (older entries: none). */
+  client?: string | null;
+  /** The MCP client program ("claude-code"…). */
+  clientApp?: string | null;
 }
 
 export interface McpClientInfo {
@@ -389,4 +545,46 @@ export interface McpClientInfo {
   claudeDesktopConfigPath: string;
   claudeDesktopConfigured: boolean;
   claudeCodeCommand: string;
+  /** Claude Code on this system: "yes", "stale" (registered with another path) or "no". */
+  claudeCodeRegistered: "yes" | "stale" | "no";
+  /** Windows: the WSL section applies. */
+  wslSupported: boolean;
+}
+
+/** A WSL distro as Settings › IA y MCP shows it (src-tauri/src/mcp_wsl.rs). */
+export interface WslDistro {
+  name: string;
+  default: boolean;
+  running: boolean;
+  /** Looked into (it was running, or the user asked). */
+  checked: boolean;
+  interop: boolean | null;
+  home: string;
+  /** Where `claude` is in the distro ("" when not found). */
+  claude: string;
+  automountRoot: string;
+  /** celer.exe as the distro sees it (/mnt/c/…). */
+  exePath: string;
+  command: string;
+  registered: "yes" | "stale" | "no" | "unknown";
+  registeredCommand: string;
+  error: string;
+}
+
+export interface WslInfo {
+  available: boolean;
+  distros: WslDistro[];
+  error: string;
+  checkedAt: number;
+}
+
+/** The status bar's MCP indicator. */
+export interface McpStatus {
+  enabled: boolean;
+  /** «Controlar la aplicación» is on. */
+  appControl: boolean;
+  clients: { name: string; place: string; state: "yes" | "stale" }[];
+  /** The WSL distros have been read (it takes a moment after start). */
+  wslChecked: boolean;
+  lastCall: McpAuditEntry | null;
 }

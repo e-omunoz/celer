@@ -26,13 +26,14 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ::mysql::consts::{ColumnFlags, ColumnType};
+use ::mysql::consts::{CapabilityFlags, ColumnFlags, ColumnType};
 use ::mysql::prelude::Queryable;
+use ::mysql::session_state_change::SessionStateChange;
 use ::mysql::{Conn, Opts, OptsBuilder, SslOpts, Value};
 use anyhow::{anyhow, bail, Result};
 
 use crate::model::*;
-use crate::session::{first_keyword, Canceller, Driver};
+use crate::session::{first_keyword, Canceller, Driver, FkColumn};
 
 const BINARY_PREVIEW: usize = 4096;
 /// Filas leídas por adelantado como máximo (además de los búferes del socket).
@@ -190,6 +191,18 @@ impl ColMeta {
             _ => ColKind::Other,
         }
     }
+}
+
+/// Every foreign key of a schema (`db`, already a literal), one row per column pair in key order: constraint, table,
+/// column, referenced schema, table and column. Only the base tables the explorer lists (not views).
+fn schema_fks_sql(db: &str) -> String {
+    format!(
+        "SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME \
+         FROM information_schema.KEY_COLUMN_USAGE k \
+         JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = k.TABLE_SCHEMA AND t.TABLE_NAME = k.TABLE_NAME \
+         WHERE k.TABLE_SCHEMA = {db} AND k.REFERENCED_TABLE_NAME IS NOT NULL AND t.TABLE_TYPE IN ('BASE TABLE','SYSTEM VERSIONED') \
+         ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
+    )
 }
 
 fn column_info(c: &::mysql::Column, m: &ColMeta) -> ColumnInfo {
@@ -587,6 +600,8 @@ enum Item {
     Message(String),
     /// La base de datos actual cambió (sentencia `USE`).
     Database(String),
+    /// MySQL: a statement that succeeded opened (`true`) or ended (`false`) a transaction.
+    Tx(bool),
     Error(String),
 }
 
@@ -674,14 +689,33 @@ fn run_statement(conn: &mut Conn, sql: &str, tx: &SyncSender<Item>) -> Outcome {
     Outcome::Done
 }
 
-/// Ejecuta las sentencias en orden. Devuelve la conexión si sigue siendo utilizable.
-fn worker(mut conn: Conn, stmts: Vec<String>, tx: &SyncSender<Item>, left: &AtomicUsize) -> Option<Conn> {
+/// The transaction state the server reported in the last OK packet (`session_track_transaction_info`): `Some(true)`
+/// while one is open, explicit or implicit (`autocommit = 0`), `Some(false)` once none is, `None` if it did not change.
+/// The server reports a change in the first OK packet after it (a result set ends with EOF, which carries none).
+fn tracked_tx(conn: &Conn) -> Option<bool> {
+    conn.session_state_changes().ok()?.iter().rev().find_map(|info| match info.decode() {
+        Ok(SessionStateChange::TransactionState(t)) => Some(t.as_bytes().first().is_some_and(|c| *c != b'_')),
+        _ => None,
+    })
+}
+
+/// Ejecuta las sentencias en orden. Devuelve la conexión si sigue siendo utilizable. `track`: the server reports its
+/// transaction state; without it, the statement's text says whether it opens or ends one.
+fn worker(mut conn: Conn, stmts: Vec<String>, tx: &SyncSender<Item>, left: &AtomicUsize, track: bool) -> Option<Conn> {
     let total = stmts.len();
     for (i, stmt) in stmts.into_iter().enumerate() {
         // Statements not started yet: those a closed cursor drops.
         left.store(total - i - 1, Ordering::Relaxed);
         match run_statement(&mut conn, &stmt, tx) {
-            Outcome::Done => {}
+            Outcome::Done => {
+                // Only a statement that ran changes the transaction: one that failed leaves it as it was.
+                let change = if track { tracked_tx(&conn) } else { explicit_tx_change(&stmt) };
+                if let Some(open) = change {
+                    if tx.send(Item::Tx(open)).is_err() {
+                        return Some(conn);
+                    }
+                }
+            }
             Outcome::Aborted => return Some(conn),
             Outcome::Failed(m) => {
                 let _ = tx.send(Item::Error(m));
@@ -747,6 +781,12 @@ pub struct MysqlDriver {
     in_tx: bool,
     /// Solo MySQL (sin `@@in_transaction`): hubo sentencias desde el último COMMIT/ROLLBACK.
     dirty: bool,
+    /// Solo MySQL: a transaction is open. With `track`, as the server last reported it; without, a START TRANSACTION /
+    /// BEGIN not yet ended (`@@autocommit` stays 1 inside one, so `dirty` and `@@autocommit` alone miss it).
+    explicit_tx: bool,
+    /// Solo MySQL: the server reports its transaction state (`session_track_transaction_info`, MySQL 5.7+), which has
+    /// no `@@in_transaction` as MariaDB does.
+    track: bool,
     /// Statements of a script dropped with its open result, told in the next execute's messages.
     discarded: usize,
     database: String,
@@ -786,6 +826,8 @@ impl MysqlDriver {
             .prefer_socket(false)
             .stmt_cache_size(0)
             .tcp_nodelay(true)
+            // MySQL reports its transaction state in OK packets (`tracked_tx`).
+            .additional_capabilities(CapabilityFlags::CLIENT_SESSION_TRACK)
             // El sistema comprueba la conexión parada (y la mantiene viva en cortafuegos y NAT).
             .tcp_keepalive_time_ms(Some(60_000))
             .tcp_connect_timeout(Some(
@@ -802,10 +844,13 @@ impl MysqlDriver {
         if let Some(sock) = &extra.socket {
             base = base.socket(Some(sock.clone())).prefer_socket(true);
         }
+        // Through an SSH tunnel the driver connects to 127.0.0.1, which no certificate names, and the mysql crate has
+        // no way to check another name: the certificate's chain is still validated, its name is not.
+        let tunnelled = !cfg.ssh.tls_host.is_empty();
         let ssl = |verify: bool| {
             SslOpts::default()
                 .with_danger_accept_invalid_certs(!verify)
-                .with_danger_skip_domain_validation(!verify)
+                .with_danger_skip_domain_validation(!verify || tunnelled)
                 .with_root_cert_path(extra.ssl_ca.as_ref().map(PathBuf::from))
         };
         let (conn, opts) = match tls_mode(&cfg.encryption) {
@@ -839,11 +884,14 @@ impl MysqlDriver {
             autocommit: true,
             in_tx: false,
             dirty: false,
+            explicit_tx: false,
+            track: false,
             discarded: 0,
             database: db.to_string(),
             mariadb: false,
             version: String::new(),
-            endpoint: format!("{host}:{port}"),
+            // Through an SSH tunnel, the server behind it (not the local port).
+            endpoint: if cfg.ssh.forwarded_to.is_empty() { format!("{host}:{port}") } else { format!("{} (túnel SSH)", cfg.ssh.forwarded_to) },
         };
         let rows = d.query("SELECT VERSION(), DATABASE(), @@autocommit")?;
         if let Some(r) = rows.first() {
@@ -852,6 +900,9 @@ impl MysqlDriver {
             d.autocommit = r.get(2).is_none_or(|c| cell_i64(c) != 0);
         }
         d.mariadb = d.version.to_ascii_lowercase().contains("mariadb");
+        if !d.mariadb {
+            d.track = d.conn.as_mut().is_some_and(enable_tx_tracking);
+        }
         Ok(d)
     }
 
@@ -866,8 +917,13 @@ impl MysqlDriver {
             if !self.autocommit {
                 c.query_drop("SET autocommit = 0").map_err(mysql_err)?;
             }
+            if self.track {
+                self.track = enable_tx_tracking(&mut c);
+            }
             self.in_tx = false;
             self.dirty = false;
+            // A transaction of the lost connection is gone with it.
+            self.explicit_tx = false;
             self.conn = Some(c);
         }
         self.conn
@@ -882,7 +938,11 @@ impl MysqlDriver {
         let conn = self.ensure_conn()?;
         busy.store(true, Ordering::Relaxed);
         let r = collect_rows(conn, sql);
+        let state = tracked_tx(conn);
         busy.store(false, Ordering::Relaxed);
+        if let Some(open) = state {
+            self.explicit_tx = open;
+        }
         match r {
             Ok(rows) => Ok(rows),
             Err(e) => {
@@ -914,12 +974,13 @@ impl MysqlDriver {
         let left = Arc::new(AtomicUsize::new(stmts.len()));
         let worker_left = left.clone();
         let full_binary = crate::model::full_binary();
+        let track = self.track;
         self.busy.store(true, Ordering::Relaxed);
         let spawned = std::thread::Builder::new()
             .name("celer-mysql-reader".into())
             .spawn(move || {
                 crate::model::set_full_binary(full_binary);
-                let conn = worker(conn, stmts, &tx, &worker_left);
+                let conn = worker(conn, stmts, &tx, &worker_left, track);
                 drop(tx);
                 if let Some(c) = conn {
                     let _ = done_tx.send(c);
@@ -1028,6 +1089,7 @@ impl MysqlDriver {
                 }
                 Some(Item::Message(m)) => messages.push(m),
                 Some(Item::Database(db)) => self.database = db,
+                Some(Item::Tx(open)) => self.explicit_tx = open,
                 Some(Item::Error(e)) => {
                     // MariaDB envía las columnas antes de calcular las filas: si la sentencia
                     // falla (o se cancela) sin haber dado ninguna fila, el resultado vacío sobra.
@@ -1047,7 +1109,7 @@ impl MysqlDriver {
 
     fn refresh_tx_state(&mut self) {
         if self.cursor.is_some() {
-            if !self.autocommit {
+            if !self.autocommit || (!self.mariadb && self.explicit_tx) {
                 self.in_tx = true;
             }
             return;
@@ -1057,8 +1119,12 @@ impl MysqlDriver {
         if self.conn.is_none() {
             return;
         }
+        // `DO 0` ends the round trip with an OK packet, which carries the state a statement ending in a result set
+        // (or failing) changed.
         let sql = if self.mariadb {
             "SELECT @@autocommit, @@in_transaction"
+        } else if self.track {
+            "SELECT @@autocommit; DO 0"
         } else {
             "SELECT @@autocommit"
         };
@@ -1067,8 +1133,10 @@ impl MysqlDriver {
                 self.autocommit = r.first().is_none_or(|c| cell_i64(c) != 0);
                 self.in_tx = if self.mariadb {
                     r.get(1).is_some_and(|c| cell_i64(c) != 0)
+                } else if self.track {
+                    self.explicit_tx
                 } else {
-                    self.dirty && !self.autocommit
+                    (self.dirty && !self.autocommit) || self.explicit_tx
                 };
             }
         }
@@ -1081,6 +1149,39 @@ impl MysqlDriver {
             self.current_database().unwrap_or_default()
         }
     }
+}
+
+/// How a statement that ran changes an explicit transaction on MySQL servers that do not report it (`track` off):
+/// `Some(true)` opens one (START TRANSACTION, BEGIN, XA START), `Some(false)` ends it (COMMIT, ROLLBACK without TO, XA
+/// COMMIT/ROLLBACK/PREPARE and the statements that commit implicitly), `None` neither.
+fn explicit_tx_change(stmt: &str) -> Option<bool> {
+    let upper = crate::session::skip_leading_comments(stmt).to_ascii_uppercase();
+    let words: Vec<&str> = upper
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .take(3)
+        .collect();
+    let w = |i: usize| words.get(i).copied().unwrap_or("");
+    match w(0) {
+        "START" => (w(1) == "TRANSACTION").then_some(true),
+        "BEGIN" => Some(true),
+        "XA" => match w(1) {
+            "START" | "BEGIN" => Some(true),
+            "COMMIT" | "ROLLBACK" | "PREPARE" => Some(false),
+            _ => None,
+        },
+        "COMMIT" => Some(false),
+        "ROLLBACK" => (w(1) != "TO" && w(2) != "TO").then_some(false),
+        "CREATE" | "DROP" if w(1) == "TEMPORARY" => None,
+        "ALTER" | "CREATE" | "DROP" | "RENAME" | "TRUNCATE" | "GRANT" | "REVOKE" | "LOCK" | "ANALYZE" | "CHECK"
+        | "OPTIMIZE" | "REPAIR" | "FLUSH" | "CACHE" | "RESET" => Some(false),
+        _ => None,
+    }
+}
+
+/// Asks a MySQL server to report its transaction state in each OK packet; `false` if it cannot (before 5.7).
+fn enable_tx_tracking(conn: &mut Conn) -> bool {
+    conn.query_drop("SET SESSION session_track_transaction_info = 'STATE'").is_ok()
 }
 
 impl Drop for MysqlDriver {
@@ -1144,6 +1245,7 @@ impl Driver for MysqlDriver {
                 }
                 Some(Item::Message(_)) => {}
                 Some(Item::Database(db)) => self.database = db,
+                Some(Item::Tx(open)) => self.explicit_tx = open,
                 Some(Item::Error(e)) => {
                     self.release_cursor();
                     self.refresh_tx_state();
@@ -1195,6 +1297,7 @@ impl Driver for MysqlDriver {
     fn commit(&mut self) -> Result<bool> {
         self.query("COMMIT")?;
         self.dirty = false;
+        self.explicit_tx = false;
         self.refresh_tx_state();
         Ok(self.in_tx)
     }
@@ -1202,6 +1305,7 @@ impl Driver for MysqlDriver {
     fn rollback(&mut self) -> Result<bool> {
         self.query("ROLLBACK")?;
         self.dirty = false;
+        self.explicit_tx = false;
         self.refresh_tx_state();
         Ok(self.in_tx)
     }
@@ -1424,6 +1528,26 @@ impl Driver for MysqlDriver {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// One catalog query: information_schema.KEY_COLUMN_USAGE of the schema's base tables (the explorer's), one row
+    /// per column pair in key order. The referenced table keeps its own database (a key may point to another one).
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        self.release_cursor();
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        let rows = self.query(&schema_fks_sql(&self.lit(db)))?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| {
+            let ref_db = cell_str(&r[3]);
+            let ref_db = if ref_db.is_empty() { db.to_string() } else { ref_db };
+            FkColumn {
+                key: format!("{}\u{0}{}", cell_str(&r[1]), cell_str(&r[0])),
+                name: cell_str(&r[0]),
+                table: ObjectRef::new(db, schema, &cell_str(&r[1]), "table"),
+                column: cell_str(&r[2]),
+                target: ObjectRef::new(&ref_db, &ref_db, &cell_str(&r[4]), "table"),
+                target_column: cell_str(&r[5]),
+            }
+        })))
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {
@@ -1855,6 +1979,36 @@ mod tests {
         Some(MysqlDriver::connect(cfg).expect("conexión de prueba"))
     }
 
+    /// Ajustes › Ejecución › tiempo máximo (MySQL and MariaDB): the core's deadline cancels through the driver. An
+    /// interrupted SLEEP ends with 1 instead of an error: the output stays, with the note that the deadline was hit.
+    #[test]
+    fn it_times_out() {
+        let Some(mut d) = connect() else { return };
+        let t0 = Instant::now();
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || d.execute("SELECT SLEEP(20) AS s", 10));
+        assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
+        match r {
+            Ok(out) => assert!(out.messages.contains(&crate::session::timeout_note(1)), "{:?}", out.messages),
+            Err(e) => assert_eq!(e, crate::session::timeout_error(1)),
+        }
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || d.execute("SELECT COUNT(*) FROM events a JOIN events b ON a.kind = b.kind JOIN events c ON b.kind = c.kind", 10));
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        let out = d.execute("SELECT 5", 10).unwrap();
+        assert_eq!(cell_i64(&out.results[0].rows[0][0]), 5);
+    }
+
+    /// Ayuda › Registro de errores (MySQL and MariaDB): the syntax error quotes the statement; its entry does not.
+    #[test]
+    fn it_scrubs_error_log_entries() {
+        let Some(mut d) = connect() else { return };
+        let e = d.execute("SELECT nombre FROMM clientes WHERE pwd = 'celer-secret-42'", 10).expect_err("error de sintaxis").to_string();
+        crate::errlog::assert_scrubbed("MySQL/MariaDB", &e, "celer-secret-42");
+        let cfg = test_cfg().unwrap();
+        crate::assert_report_banner("MySQL/MariaDB", &d.server_info().unwrap(), &[&cfg.host, "127.0.0.1", &cfg.user, &cfg.database]);
+    }
+
     #[test]
     fn it_pages_large_results() {
         let Some(mut d) = connect() else { return };
@@ -1867,7 +2021,8 @@ mod tests {
         assert!(rs.has_more);
         assert_eq!(rs.columns[0].name, "id");
         assert_eq!(rs.columns[0].kind, ColKind::Number);
-        assert_eq!(rs.columns[6].type_name, "text"); // JSON en MariaDB = LONGTEXT
+        // JSON en MariaDB = LONGTEXT; MySQL has a JSON type.
+        assert_eq!(rs.columns[6].type_name, if d.mariadb { "text" } else { "json" });
         let mut total = rs.rows.len();
         let mut last_id = cell_i64(&rs.rows[99][0]);
         let extra;
@@ -2079,6 +2234,31 @@ mod tests {
     }
 
     #[test]
+    fn explicit_transactions_are_tracked() {
+        assert_eq!(explicit_tx_change("START TRANSACTION"), Some(true));
+        assert_eq!(explicit_tx_change(" begin work"), Some(true));
+        assert_eq!(explicit_tx_change("COMMIT"), Some(false));
+        assert_eq!(explicit_tx_change("rollback"), Some(false));
+        assert_eq!(explicit_tx_change("ROLLBACK TO SAVEPOINT a"), None);
+        assert_eq!(explicit_tx_change("ROLLBACK WORK TO a"), None);
+        assert_eq!(explicit_tx_change("CREATE TABLE t (id INT)"), Some(false));
+        assert_eq!(explicit_tx_change("CREATE TEMPORARY TABLE t (id INT)"), None);
+        assert_eq!(explicit_tx_change("INSERT INTO t VALUES (1)"), None);
+        // Leading comments, statements that commit implicitly, XA, and START that is not a transaction.
+        assert_eq!(explicit_tx_change("/* x */ ROLLBACK TO SAVEPOINT s1"), None);
+        assert_eq!(explicit_tx_change("-- y\nrollback to s1"), None);
+        assert_eq!(explicit_tx_change("/* x */ START TRANSACTION"), Some(true));
+        assert_eq!(explicit_tx_change("ANALYZE TABLE t"), Some(false));
+        assert_eq!(explicit_tx_change("optimize table t"), Some(false));
+        assert_eq!(explicit_tx_change("FLUSH TABLES"), Some(false));
+        assert_eq!(explicit_tx_change("XA START 'x'"), Some(true));
+        assert_eq!(explicit_tx_change("XA END 'x'"), None);
+        assert_eq!(explicit_tx_change("XA PREPARE 'x'"), Some(false));
+        assert_eq!(explicit_tx_change("XA ROLLBACK 'x'"), Some(false));
+        assert_eq!(explicit_tx_change("START REPLICA"), None);
+    }
+
+    #[test]
     fn it_handles_transactions() {
         let Some(mut d) = connect() else { return };
         d.execute("CREATE TEMPORARY TABLE tx_t (id INT PRIMARY KEY) ENGINE=InnoDB", 10)
@@ -2100,6 +2280,10 @@ mod tests {
         let out = d.execute("START TRANSACTION; INSERT INTO tx_t VALUES (4)", 10).unwrap();
         assert!(out.in_transaction);
         assert!(!d.rollback().unwrap());
+        // Ended by a COMMIT written in the console, not only by the Commit button.
+        assert!(d.execute("BEGIN; INSERT INTO tx_t VALUES (5)", 10).unwrap().in_transaction);
+        assert!(!d.execute("COMMIT", 10).unwrap().in_transaction);
+        d.execute("DELETE FROM tx_t WHERE id = 5", 10).unwrap();
         // Como saveTable: un lote cuya segunda sentencia falla es un error y el ROLLBACK lo deshace todo.
         d.execute("CREATE TEMPORARY TABLE tx_nn (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB; \
                    INSERT INTO tx_nn VALUES (1, 1), (2, 2)", 10)
@@ -2114,8 +2298,85 @@ mod tests {
         assert_eq!(scalar_i64(&mut d, "SELECT v FROM tx_nn WHERE id = 1"), 1);
     }
 
+    /// The transaction indicator follows the server: only statements that ran open or end a transaction (#128). On
+    /// MySQL, both with the server's own report and with the text of the statements (servers before 5.7).
+    #[test]
+    fn it_tracks_transactions() {
+        let Some(d) = connect() else { return };
+        let modes: &[bool] = if d.mariadb { &[false] } else { &[true, false] };
+        for &track in modes {
+            let mut d = connect().unwrap();
+            if !d.mariadb {
+                assert!(d.track, "MySQL 5.7+ reports its transaction state");
+                if !track {
+                    d.execute("SET SESSION session_track_transaction_info = 'OFF'", 10).unwrap();
+                    d.track = false;
+                }
+            }
+            let mut other = connect().unwrap();
+            let t = format!("tx_track_{track}");
+            d.execute(&format!("DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (id INT) ENGINE=InnoDB"), 10).unwrap();
+            let count = |o: &mut MysqlDriver| scalar_i64(o, &format!("SELECT COUNT(*) FROM {t}"));
+            let in_tx = |d: &mut MysqlDriver| d.execute("SELECT 1", 10).unwrap().in_transaction;
+            // A script failing after START TRANSACTION leaves it open: the COMMIT after the error never ran.
+            let err = d
+                .execute(&format!("START TRANSACTION; INSERT INTO {t} VALUES (1); INSERT INTO tx_missing VALUES (1); COMMIT"), 10)
+                .unwrap_err();
+            assert!(err.to_string().contains("1146"), "{err}");
+            assert!(in_tx(&mut d), "track={track}: open after the failed script");
+            assert!(d.execute(&format!("INSERT INTO {t} VALUES (2)"), 10).unwrap().in_transaction);
+            assert_eq!(count(&mut other), 0);
+            assert!(!d.rollback().unwrap());
+            assert_eq!(count(&mut d), 0);
+            // A START TRANSACTION after the failing statement never ran.
+            d.execute("INSERT INTO tx_missing VALUES (1); START TRANSACTION", 10).unwrap_err();
+            assert!(!in_tx(&mut d), "track={track}: START TRANSACTION after an error");
+            // ANALYZE TABLE commits implicitly.
+            assert!(d.execute(&format!("START TRANSACTION; INSERT INTO {t} VALUES (3)"), 10).unwrap().in_transaction);
+            assert!(!d.execute(&format!("ANALYZE TABLE {t}"), 10).unwrap().in_transaction, "track={track}: ANALYZE");
+            assert_eq!(count(&mut other), 1);
+            // ROLLBACK TO SAVEPOINT behind a comment keeps the transaction.
+            d.execute(&format!("BEGIN; INSERT INTO {t} VALUES (4); SAVEPOINT s1"), 10).unwrap();
+            assert!(d.execute("/* x */ ROLLBACK TO SAVEPOINT s1", 10).unwrap().in_transaction, "track={track}: savepoint");
+            assert!(!d.rollback().unwrap());
+            // XA.
+            assert!(d.execute(&format!("XA START 'celer_{track}'; INSERT INTO {t} VALUES (5)"), 10).unwrap().in_transaction);
+            assert!(!d.execute(&format!("XA END 'celer_{track}'; XA ROLLBACK 'celer_{track}'"), 10).unwrap().in_transaction);
+            assert_eq!(count(&mut d), 1);
+            // A connection lost inside a transaction: the new one has none.
+            assert!(d.execute(&format!("START TRANSACTION; INSERT INTO {t} VALUES (6)"), 10).unwrap().in_transaction);
+            let id = d.conn_id.load(Ordering::Relaxed);
+            other.execute(&format!("KILL {id}"), 10).unwrap();
+            let _ = d.execute("SELECT 1", 10);
+            assert!(!in_tx(&mut d), "track={track}: reconnected");
+            assert_eq!(count(&mut d), 1);
+            if track || d.mariadb {
+                // Turning autocommit off and changing rows in one script (the text alone cannot tell).
+                let out = d.execute(&format!("SET autocommit = 0; INSERT INTO {t} VALUES (7)"), 10).unwrap();
+                assert!(out.in_transaction, "track={track}: SET autocommit = 0 in the script");
+                assert!(!d.rollback().unwrap());
+                d.set_autocommit(true).unwrap();
+            }
+            assert_eq!(count(&mut d), 1);
+            d.execute(&format!("DROP TABLE {t}"), 10).unwrap();
+        }
+        drop(d);
+    }
+
     fn scalar_i64(d: &mut MysqlDriver, sql: &str) -> i64 {
         cell_i64(&d.execute(sql, 10).unwrap().results[0].rows[0][0])
+    }
+
+    /// A console closed (or Celer quitting) with its manual transaction open never commits it.
+    #[test]
+    fn close_never_commits() {
+        let Some(mut d) = connect() else { return };
+        d.execute("DROP TABLE IF EXISTS tx_close; CREATE TABLE tx_close (id INT) ENGINE=InnoDB; INSERT INTO tx_close VALUES (1), (2), (3)", 10).unwrap();
+        let other = connect().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "DELETE FROM tx_close WHERE id > 1", "SELECT COUNT(*) FROM tx_close");
+        let other = connect().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "INSERT INTO tx_close VALUES (4)", "SELECT COUNT(*) FROM tx_close");
+        d.execute("DROP TABLE tx_close", 10).unwrap();
     }
 
     #[test]

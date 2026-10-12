@@ -47,11 +47,27 @@ const HELPERS = `
   const pane = () => document.querySelector('.pane-host.active');
 `;
 
+// The page can still reload right after DevTools first answers (the webview swaps its first document): wait until
+// it has been the app, fully loaded, for a moment, so the first check does not run in a context about to vanish.
+const reloaded = (err) => /Execution context was destroyed|Cannot find context|Inspected target navigated/.test(err.message);
+for (let stable = 0, tries = 0; stable < 3 && tries < 150; tries++) {
+  const page = await js(`return location.href + ' ' + document.readyState;`).catch(() => "");
+  stable = /^http:\/\/tauri\.localhost\/.* complete$/.test(page) ? stable + 1 : 0;
+  await new Promise((r) => setTimeout(r, 200));
+}
+
 let failures = 0;
 async function check(name, body, verify) {
   const started = Date.now();
   try {
-    const value = await js(HELPERS + body);
+    // A check cut by a page reload runs once more (once only: a check that reloads the page itself still fails).
+    const value = await js(HELPERS + body).catch(async (err) => {
+      if (!reloaded(err)) throw err;
+      // Said aloud: a reload caused by the app (not by start-up) must not pass unnoticed.
+      console.log(`NOTE  ${name}: the page reloaded during the check; running it once more`);
+      await new Promise((r) => setTimeout(r, 1500));
+      return js(HELPERS + body);
+    });
     const ok = verify(value);
     if (!ok) failures++;
     console.log(`${ok ? "PASS" : "FAIL"}  ${name}  (${Date.now() - started} ms)  ${String(JSON.stringify(value)).slice(0, 300)}`);

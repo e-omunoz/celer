@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
-import { raw } from "./raw";
+import { asRaw, raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
 import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
 import type {
@@ -17,26 +17,34 @@ import type {
   MetaNode,
   ObjectRef,
   ResultSet,
+  SchemaForeignKey,
   Settings,
+  SshHostKeyInfo,
   TableColumn,
   ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
 import { binaryKeysWritable, changeStatements, explainPrefix, paramNamesFor, selectLimit, upsertSql, whereOf } from "./sqlgen";
-import { bindParams, findParams, hasUnfilteredWrite, paramNames } from "./snippets";
+import { bindParams, findParams, hasUnfilteredWrite, literalDialect, paramNames } from "./snippets";
 import { erNeighbourhood, erNeighbours, type ErEdge, type ErTable } from "./erLayout";
 import { parseMssqlPlan, parseMysqlPlan, parsePostgresPlan, parseSqlitePlan, parseSynapsePlan, type Plan } from "./plan";
 import { activitySpec, readSessions, synapseDedicated, type ServerSession } from "./activity";
 import type { AiMessage } from "./ai";
 import { insertAt } from "./windowModel";
-import { forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
-import { libraryDirty } from "./library";
+import { askWindow, forwardFromPanel, forwardGib, gibHere, isPanelWindow, otherFullWindows, raisePanel, restoreWindowLayout, saveWindowLayout } from "./windows";
+import { libraryDirty, scriptById } from "./library";
+import type { ScriptParam } from "./libraryModel";
+import { normalizeVariables, substituteVariables, type Variable } from "./variables";
+import { loadVariables, resolvedFor } from "./variableStore";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
 import { labelColorOn } from "./contrast";
+import { envOf, normalizeEnvironment } from "./environment";
+import { NO_TX, countStatements, reminderDue, txAfterRun, txDuration, txReminderText, txThresholds } from "./txWatch";
+import { gibDisplayName, gibShownIn, gibTint, normalizeGibPrefs, type GibPlace, type GibPrefs } from "./gib/prefs";
 import type { ColumnOrder } from "./columnOrder";
 
-export type InspectorMode = "value" | "record" | "history" | "library" | "ai";
+export type InspectorMode = "value" | "record" | "history" | "library" | "variables" | "ai";
 
 export interface OutputEntry {
   at: number;
@@ -68,6 +76,10 @@ export interface SqlTab {
   startedAt: number | null;
   running: boolean;
   inTransaction: boolean;
+  /** The open manual transaction: when it began, statements run in it, reminders given (src/txWatch.ts). */
+  txStartedAt: number | null;
+  txStatements: number;
+  txReminders: number;
   autocommit: boolean;
   completion: CompletionSchema | null;
   lastSql: string;
@@ -84,6 +96,8 @@ export interface SqlTab {
   fileSaved?: string;
   /** The script library entry the console was opened from (saving to the library updates it). */
   libraryId?: string;
+  /** The console's own variables (variables.ts): they win over the connection's and the global ones. */
+  vars?: Variable[];
   /** The last execution plan (Ctrl+Shift+E), shown in its own result tab. */
   plan: { plan: Plan; sql: string } | null;
   activePlan: boolean;
@@ -91,8 +105,31 @@ export interface SqlTab {
   pinned: PinnedResult[];
   /** The pinned result on show instead of the current ones (null: the current ones). */
   activePinned: string | null;
-  /** A pinned result compared with the current one (key: columns that match rows; null: guessed). */
-  compare: { pinId: string; key: string[] | null } | null;
+  /** Two results compared in this console's results area, until closed. */
+  compare: ResultComparison | null;
+  /** Opened by an assistant through MCP (#100): when, and who ("claude-code · WSL (Ubuntu)"). Not saved. */
+  aiOpenedAt?: number;
+  aiClient?: string;
+}
+
+/**
+ * A result that can be compared: one of a console's results (`index` -1: the one on show, whatever runs next), a
+ * pinned one, or the rows a table tab has loaded.
+ */
+export type ResultRef = { kind: "result"; tabId: string; index: number } | { kind: "pin"; tabId: string; pinId: string } | { kind: "table"; tabId: string };
+
+/**
+ * `base` (the first result, "A") against `other` (the second, "B", whose columns the comparison shows). `key`: the
+ * columns that match rows (null: automatic, the primary key when one was found, else a unique column); `pk`: the
+ * primary key found for either side's table.
+ */
+export interface ResultComparison {
+  base: ResultRef;
+  other: ResultRef;
+  key: string[] | null;
+  pk: string[] | null;
+  /** Only the rows that differ are listed. */
+  onlyDiff: boolean;
 }
 
 export interface PinnedResult {
@@ -101,6 +138,8 @@ export interface PinnedResult {
   sql: string;
   at: number;
   result: ResultSet;
+  /** The result had pages not loaded yet when it was pinned: only the rows loaded then are in it. */
+  partial?: boolean;
 }
 
 export interface TableTab {
@@ -138,6 +177,9 @@ export interface TableTab {
   inserts: (string | null)[][];
   /** Restored from the last session and not loaded yet: it loads (and connects) when it is first shown. */
   restored?: boolean;
+  /** Opened by an assistant through MCP (#100): when, and who. Not saved. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 export type Tab = SqlTab | TableTab;
@@ -187,6 +229,8 @@ interface ConnSession {
   metaId: string;
   database: string;
   serverInfo: string;
+  /** The driver and protocol the connection uses (SessionInfo.driver). */
+  driver?: string;
   databases: string[];
   connecting?: boolean;
 }
@@ -206,6 +250,7 @@ export interface SavedSqlTab {
   /** The file's text as last read or written, kept only when the console differs from it. */
   fileSaved?: string;
   libraryId?: string;
+  vars?: Variable[];
 }
 
 export interface SavedTableTab {
@@ -228,6 +273,8 @@ export type SavedTab = SavedSqlTab | SavedTableTab;
 export interface MenuItem {
   label?: string;
   hint?: string;
+  /** A tooltip (why it is greyed out: «No disponible en SQLite»). */
+  title?: string;
   icon?: string;
   danger?: boolean;
   disabled?: boolean;
@@ -279,7 +326,7 @@ export const [state, setState] = createStore({
   // ---- shared by every window (mirrored from the core)
   connections: [] as ConnSummary[],
   settings: { ...defaultSettings } as Settings,
-  appInfo: { version: "", dataDir: "" },
+  appInfo: { version: "", dataDir: "", os: "" } as { version: string; dataDir: string; os?: string },
   driverPath: null as string | null,
   // ---- this window's own
   sessions: {} as Record<string, ConnSession>,
@@ -326,6 +373,12 @@ export const [state, setState] = createStore({
   informixDrivers: null as InformixDrivers | null,
   /** A JDBC connection lacks Java or the driver: what is missing, and what to retry once it is downloaded. */
   jdbcSetup: null as { missing: ("java" | "jdbc")[]; text: string; retry: (() => void) | null } | null,
+  /** «Exportar conexiones»: the dialog with «Incluir contraseñas» (ids empty = all). */
+  connExport: null as { ids: string[]; title: string; count: number } | null,
+  /** Importing a file with encrypted passwords: its passphrase (false = without passwords, null = cancel). */
+  secretsAsk: null as { error: string; resolve: (value: string | false | null) => void } | null,
+  /** An SSH server's key Celer has not seen (SSH_HOST_UNKNOWN): shown with «Confiar en esta clave». */
+  sshHostKey: null as { token: string; text: string; info: SshHostKeyInfo | null; retry: (() => void) | null } | null,
   /** The Informix drivers guide, open on a topic (jdbc, sdk, drda, locale, server), with the error that led there. */
   informixGuide: null as { topic: string; message: string } | null,
   /** "Probar conexión" failed with something the guide explains: its topic. */
@@ -333,7 +386,7 @@ export const [state, setState] = createStore({
   /** "Probar conexión": every step with its time, the way it connected and, if it failed, what to do. */
   testReport: null as ConnTestReport | null,
   confirm: null as { title: string; body: string; confirmLabel: string; danger: boolean; run: () => void } | null,
-  passwordAsk: null as { name: string; resolve: (value: string | null) => void } | null,
+  passwordAsk: null as { name: string; label?: string; resolve: (value: string | null) => void } | null,
   /** Values for the parameters of the statement about to run (:name, ?, ${name}). */
   paramAsk: null as ParamAsk | null,
   /** The entity-relationship diagram on show (a schema's tables and their foreign keys). */
@@ -354,7 +407,7 @@ export const [resolvedTheme, setResolvedTheme] = createSignal<Exclude<ThemeName,
 
 /** Things Gib reacts to. The companion decides how (mood, tip, nothing). */
 export interface GibEvent {
-  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off";
+  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off" | "tx-open" | "export-done" | "conn-lost" | "conn-back";
   at: number;
   ms?: number;
   detail?: string;
@@ -363,6 +416,10 @@ export interface GibEvent {
   /** query-ok: columns of the first result with a grid, and the engine (for Gib's advice about the statement). */
   columns?: number;
   kind?: string;
+  /** query-ok: the first grid came back without rows. */
+  empty?: boolean;
+  /** export-done: rows written. */
+  rows?: number;
 }
 export const [gibEvent, setGibEvent] = createSignal<GibEvent | null>(null);
 export function gib(type: GibEvent["type"], extra: Omit<GibEvent, "type" | "at"> = {}) {
@@ -386,7 +443,9 @@ window.setInterval(() => {
 export function notify(text: string, kind: Toast["kind"] = "info", detail?: string, action?: Toast["action"]) {
   const id = ++toastId;
   setState("toasts", (list) => [...list.slice(-3), { id, kind, text, detail, action }]);
-  window.setTimeout(() => dismissToast(id), kind === "error" || action ? 9000 : 4500);
+  // Ajustes › Avisos: errors and notices with a button stay twice as long.
+  const ms = Math.max(2, state.settings.toastSeconds || 4.5) * 1000;
+  window.setTimeout(() => dismissToast(id), kind === "error" || action ? ms * 2 : ms);
 }
 
 export function dismissToast(id: number) {
@@ -448,10 +507,10 @@ function tabIndex(id: string) {
   return state.tabs.findIndex((tab) => tab.id === id);
 }
 
+/** A connection's colour: its environment's (production red, preproduction amber…), else its own or its engine's. */
 export function connColor(conn: ConnSummary | undefined) {
   if (!conn) return "var(--text-faint)";
-  if (conn.production) return "var(--danger)";
-  return conn.color || engineOf(conn.kind).color;
+  return envOf(conn)?.color ?? (conn.color || engineOf(conn.kind).color);
 }
 
 // ---------------------------------------------------------------- theme
@@ -468,6 +527,19 @@ export function applyTheme(settings: Settings = state.settings, preview?: ThemeN
   root.dataset.density = settings.density;
   root.dataset.motion = reducedMotion(settings) ? "reduce" : "full";
   root.style.setProperty("--accent", settings.accent);
+  // Gib's look, for every Gib on the page (App.css, "Gib: personalisation").
+  const look = settings.gib ?? defaultSettings.gib;
+  const tint = gibTint(look.color);
+  if (tint) {
+    root.style.setProperty("--gib-tint", tint);
+    root.dataset.gibTint = "";
+  } else {
+    root.style.removeProperty("--gib-tint");
+    delete root.dataset.gibTint;
+  }
+  root.dataset.gibAcc = look.accessories.join(" ");
+  // Read by every Gib at each pointer move (Gib.tsx): his eyes follow the cursor, or look ahead.
+  root.dataset.gibEyes = look.eyes ? "on" : "off";
   // White on Clay, Ember, Teal or Green is below 4.5:1: those buttons get a black label.
   root.style.setProperty("--accent-fg", labelColorOn(settings.accent));
   root.style.fontSize = `${settings.fontSize}px`;
@@ -495,7 +567,7 @@ export async function boot() {
   try {
     const loaded = await api().loadJson("settings");
     if (loaded && typeof loaded === "object") {
-      setState("settings", { ...defaultSettings, ...(loaded as Settings) });
+      setState("settings", withDefaults(loaded as Partial<Settings>));
     }
   } catch (err) {
     // Defaults this time (a damaged file was set aside, or it could not be read: the message says which). One
@@ -505,6 +577,8 @@ export async function boot() {
     notify("No se pudieron leer los ajustes: se usan los de serie", "error", message);
   }
   applyTheme();
+  // The desktop core applies the history retention itself at start; the browser demo keeps its history here.
+  if (!isTauri()) void applyHistoryRetention();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (state.settings.theme === "system") applyTheme();
   });
@@ -513,7 +587,7 @@ export async function boot() {
   });
   let connectionsLoaded = false;
   try {
-    setState("connections", await api().listConnections());
+    setState("connections", (await api().listConnections()).map(normalizeEnvironment));
     connectionsLoaded = true;
     const problem = await api().connectionsProblem();
     if (problem) notify("Problema al leer las conexiones guardadas", "error", problem);
@@ -557,6 +631,7 @@ export function restoreTabs(saved: SavedTab[], activeTabId: string, known: (conn
             fileCrlf: tab.fileCrlf,
             fileSaved: tab.filePath ? (tab.fileSaved ?? tab.sql) : undefined,
             libraryId: tab.libraryId,
+            vars: normalizeVariables(tab.vars).length ? normalizeVariables(tab.vars) : undefined,
           },
     );
   if (!tabs.length) return;
@@ -594,7 +669,9 @@ export function blankSql(id: string, connId: string | null = null, sql = "", tit
     startedAt: null,
     running: false,
     inTransaction: false,
-    autocommit: true,
+    ...NO_TX,
+    // Ajustes › Ejecución: new consoles start in the chosen mode (a restored one keeps its own).
+    autocommit: state.settings.autocommitDefault,
     completion: null,
     lastSql: "",
     runId: 0,
@@ -661,7 +738,7 @@ export function savedTabs(): SavedTab[] {
   return state.tabs.map(
     (tab): SavedTab =>
       tab.kind === "sql"
-        ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, fileSaved: tab.filePath && tab.fileSaved !== tab.sql ? tab.fileSaved : undefined, libraryId: tab.libraryId }
+        ? { id: tab.id, kind: "sql", title: tab.title, connId: tab.connId, sql: tab.sql, database: tab.database, cursor: tab.cursor, autocommit: tab.autocommit, filePath: tab.filePath, fileEncoding: tab.fileEncoding, fileCrlf: tab.fileCrlf, fileSaved: tab.filePath && tab.fileSaved !== tab.sql ? tab.fileSaved : undefined, libraryId: tab.libraryId, vars: tab.vars }
         : { id: tab.id, kind: "table", title: tab.title, connId: tab.connId, database: tab.database, obj: tab.obj, section: tab.section, where: tab.where, orderBy: tab.orderBy, filters: tab.filters, sort: tab.sort },
   );
 }
@@ -674,11 +751,11 @@ export function persistNow() {
 
 /** Before the window closes: warn about open transactions and unsaved table edits, then save the workspace. */
 export async function beforeClose(): Promise<boolean> {
-  const tx = state.tabs.filter((tab) => tab.kind === "sql" && tab.inTransaction).length;
+  // Open transactions: Commit, Rollback or stay (never an implicit commit).
+  if (!(await settleTransactions(state.tabs, "cerrar Celer"))) return false;
   const dirty = state.tabs.filter((tab) => tab.kind === "table" && tableDirty(tab)).length;
-  if (tx || dirty) {
-    const parts = [tx ? `${tx} ${tx === 1 ? "consola con una transacción abierta (se deshará)" : "consolas con transacciones abiertas (se desharán)"}` : "", dirty ? `${dirty} ${dirty === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}` : ""].filter(Boolean);
-    const ok = await confirmDialog("¿Cerrar Celer?", `Hay ${parts.join(" y ")}.`, "Cerrar de todos modos", true);
+  if (dirty) {
+    const ok = await confirmDialog("¿Cerrar Celer?", `Hay ${dirty} ${dirty === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}.`, "Cerrar de todos modos", true);
     if (!ok) return false;
   }
   await persistNow().catch(() => {});
@@ -699,18 +776,48 @@ export async function saveSettings(patch: Partial<Settings>) {
   // Only what changed: the core merges it into settings.json and tells the other windows, so two windows changing
   // different settings at once do not undo each other.
   await api().saveJson("settings", patch, true);
+  if ("historyMax" in patch || "historyDays" in patch) await applyHistoryRetention(settings);
+}
+
+/** Ajustes › Historial: the core keeps that many queries, that many days; the panel shows what is left. */
+export async function applyHistoryRetention(settings: Settings = state.settings) {
+  const dropped = await api().setHistoryRetention(settings.historyMax, settings.historyDays).catch(() => 0);
+  if (dropped && state.inspectorOpen && state.inspectorMode === "history") void refreshHistory();
+  return dropped;
+}
+
+/** Settings as stored, completed with the defaults (and Gib's, which may be missing, old or edited by hand, made valid). */
+function withDefaults(value: Partial<Settings>): Settings {
+  // "companion" is the old Compañero setting (normal / quiet / off), read once into Gib's preferences.
+  const { companion, ...rest } = value as Partial<Settings> & { companion?: unknown };
+  return { ...defaultSettings, ...rest, gib: normalizeGibPrefs(value.gib, companion) };
+}
+
+/** Gib appears in that place (Settings › Apariencia › Gib: on, and the place not switched off). */
+export function gibShows(place: GibPlace): boolean {
+  return gibShownIn(state.settings.gib, place);
+}
+
+/** Changes some of Gib's preferences (the rest stay). */
+export function saveGib(patch: Partial<GibPrefs>) {
+  return saveSettings({ gib: { ...state.settings.gib, ...patch } });
+}
+
+/** Gib's name for his messages (Settings › Apariencia › Gib), «Gib» unless the user named him. */
+export function gibName(): string {
+  return gibDisplayName(state.settings.gib);
 }
 
 /** Settings changed by another window (the core sends the whole file). */
 export function applySharedSettings(value: Partial<Settings>) {
-  setState("settings", { ...defaultSettings, ...value });
+  setState("settings", withDefaults(value));
   applyTheme();
 }
 
 // ---------------------------------------------------------------- connections
 
-export function askPassword(name: string) {
-  return new Promise<string | null>((resolve) => setState("passwordAsk", { name, resolve }));
+export function askPassword(name: string, label = "Contraseña") {
+  return new Promise<string | null>((resolve) => setState("passwordAsk", { name, label, resolve }));
 }
 
 export interface ErState {
@@ -735,37 +842,85 @@ export interface ErState {
   shown: string[];
   /** Every table of the schema (up to ER_LIMIT) has its columns read: going back to the whole schema needs no reading. */
   whole: boolean;
+  /** An assistant opened this diagram (MCP, #100): when and for which client, for the badge. */
+  aiOpenedAt?: number;
+  aiClient?: string;
 }
 
 const ER_LIMIT = 250;
-/** Around one table only the keys of each table are read (one query, not two): many more tables fit. */
+/** Only when the schema's keys cannot be read in one query: around one table, the keys of up to this many tables. */
 const ER_SCAN_LIMIT = 2000;
 let erToken = 0;
 
 const erId = (obj: { schema: string; name: string }) => `${obj.schema}.${obj.name}`;
 
-/** The path openErDiagram takes for a table's schema: [database, schema], or [database] on Informix and ODBC. */
+/**
+ * The path openErDiagram takes for a table's schema: [database, schema], [database] on Informix, and the root on a
+ * generic ODBC source (its explorer lists every table of the source in one "Tablas" folder).
+ */
 export function erSchemaPath(connId: string, obj: ObjectRef, database = ""): string[] {
   const db = obj.database || database || "main";
   const kind = kindOf(connId);
-  return kind === "informix" || kind === "odbc" ? [db] : [db, obj.schema || "main"];
+  if (kind === "odbc") return [];
+  return kind === "informix" ? [db] : [db, obj.schema || "main"];
 }
 
 function erTable(obj: ObjectRef, columns: TableColumn[], fkCols: Set<string>): ErTable {
   return { id: erId(obj), name: obj.name, schema: obj.schema, columns: columns.map((c) => ({ name: c.name, type: c.typeName, pk: c.primaryKey, fk: fkCols.has(c.name), nullable: c.nullable })) };
 }
 
+/** The diagram's edge for a foreign key; its referenced table goes into `objects` (to open it or read its columns). */
+function erEdge(fk: SchemaForeignKey, objects: Record<string, ObjectRef>): ErEdge {
+  const target = { ...fk.target, database: fk.target.database || fk.table.database };
+  objects[erId(target)] ??= target;
+  return { name: fk.name, from: erId(fk.table), to: erId(target), fromCols: fk.columns, toCols: fk.targetColumns };
+}
+
+/**
+ * The foreign keys of the tables in `nodes` (of the schema at `path`): every key of the schema in one catalog query
+ * (#98). If the driver cannot (an old server, a catalog it does not know), the keys of each table in turn, as before,
+ * with progress, up to `limit` tables. `read`: how many of `nodes` had their keys read. Null when the diagram was
+ * closed or replaced meanwhile.
+ */
+async function erKeys(sessionId: string, path: string[], nodes: MetaNode[], limit: number, current: () => boolean): Promise<{ keys: SchemaForeignKey[]; read: number } | null> {
+  const ids = new Set(nodes.map((node) => erId(node.obj!)));
+  try {
+    const keys = await api().schemaForeignKeys(sessionId, path);
+    if (!current()) return null;
+    return { keys: keys.filter((fk) => fk.columns.length && ids.has(erId(fk.table))), read: nodes.length };
+  } catch {
+    if (!current()) return null;
+  }
+  const some = nodes.slice(0, limit);
+  setState("er", { total: some.length, done: 0, truncated: nodes.length - some.length });
+  const keys: SchemaForeignKey[] = [];
+  for (const [i, node] of some.entries()) {
+    const obj = node.obj!;
+    const fkNodes = await api().metaChildren(sessionId, [...node.path, "fks"]).catch(() => [] as MetaNode[]);
+    if (!current()) return null;
+    for (const fk of parseForeignKeys(fkNodes, obj).filter((fk) => fk.columns.length)) keys.push({ name: fk.name, table: obj, columns: fk.columns, target: fk.target, targetColumns: fk.targetColumns });
+    if (i % 16 === 15 || i === some.length - 1) setState("er", { done: i + 1 });
+  }
+  return { keys, read: some.length };
+}
+
 /**
  * Loads the tables of a schema (path [database, schema], or [database] on engines without schemas) with their
- * columns and foreign keys, on a side session, and shows the diagram as it arrives. With `focus`, the diagram of
- * that table and the tables its foreign keys link it with, both ways: what points to a table is only known from
- * the keys of every table of its schema (there is no per-table query for it), so those are read first, without
- * the columns, which are read only for the tables on show.
+ * columns and foreign keys, on a side session, and shows the diagram as it arrives. The keys of the whole schema come
+ * first, in one query. With `focus`, the diagram of that table and the tables its foreign keys link it with, both
+ * ways (what points to a table is only known from the keys of the whole schema), with the columns read only for the
+ * tables on show.
  */
+/** Marks the diagram on show as opened by an assistant. */
+export function markErFromAi(client: string) {
+  if (state.er) setState("er", { aiOpenedAt: Date.now(), aiClient: client || undefined });
+}
+
 export async function openErDiagram(connId: string, path: string[], focus?: ObjectRef) {
   const token = ++erToken;
   // "main · main" (SQLite, MySQL: database and schema share the name) reads as just "main".
-  const title = path.filter((part, i) => part !== path[i - 1]).join(" · ");
+  // A generic ODBC source (the root path) is named after its connection.
+  const title = path.filter((part, i) => part !== path[i - 1]).join(" · ") || connectionById(connId)?.name || "Tablas";
   const centre = focus ? erId(focus) : "";
   setState("er", { connId, title, path, loading: true, done: 0, total: 0, error: "", truncated: 0, tables: [], edges: [], objects: {}, focus: centre, shown: centre ? [centre] : [], whole: false });
   const current = () => token === erToken && state.er !== null;
@@ -784,36 +939,39 @@ export async function openErDiagram(connId: string, path: string[], focus?: Obje
   }
   try {
     if (path[0]) await api().useDatabase(opened.sessionId, path[0]).catch(() => {});
-    const folders = await api().metaChildren(opened.sessionId, path);
-    const folder = folders.find((node) => node.kind === "folder" && (node.path[node.path.length - 1] === "tables" || /^(tablas|tables)$/i.test(node.name)));
+    const isTables = (node: MetaNode) => node.kind === "folder" && (node.path[node.path.length - 1] === "tables" || /^(tablas|tables)$/i.test(node.name));
+    let folder = (await api().metaChildren(opened.sessionId, path).catch(() => [] as MetaNode[])).find(isTables);
+    // A generic ODBC source has no database level: its tree starts at the folders (Tablas, Vistas).
+    if (!folder && kindOf(connId) === "odbc" && path.length) folder = (await api().metaChildren(opened.sessionId, [])).find(isTables);
     if (!folder) throw new Error("Aquí no hay una carpeta de tablas");
     const all = (await api().metaChildren(opened.sessionId, folder.path)).filter((node) => node.obj?.kind === "table");
     if (!current()) return;
     if (centre) {
-      await scanAround(opened.sessionId, all, centre, current);
+      await scanAround(opened.sessionId, path, all, centre, current);
       return;
     }
     const nodes = all.slice(0, ER_LIMIT);
-    setState("er", { total: nodes.length, truncated: all.length - nodes.length });
-    const tables: ErTable[] = [];
-    const edges: ErEdge[] = [];
+    setState("er", { total: nodes.length + 1, truncated: all.length - nodes.length });
+    const found = await erKeys(opened.sessionId, path, nodes, nodes.length, current);
+    if (!found) return;
     const objects: Record<string, ObjectRef> = {};
+    const edges = found.keys.map((fk) => erEdge(fk, objects));
+    const fkCols = new Map<string, Set<string>>();
+    for (const edge of edges) for (const col of edge.fromCols) fkCols.set(edge.from, (fkCols.get(edge.from) ?? new Set()).add(col));
+    setState("er", { edges, total: nodes.length + 1, done: 1, truncated: all.length - nodes.length });
+    // Then the columns of each table, shown as they come.
+    const tables: ErTable[] = [];
     for (const [i, node] of nodes.entries()) {
       const obj = node.obj!;
       const id = erId(obj);
-      const [columns, fkNodes] = await Promise.all([
-        api().tableColumns(opened.sessionId, obj).catch(() => [] as TableColumn[]),
-        api().metaChildren(opened.sessionId, [...node.path, "fks"]).catch(() => [] as MetaNode[]),
-      ]);
+      const columns = await api().tableColumns(opened.sessionId, obj).catch(() => [] as TableColumn[]);
       if (!current()) return;
-      const fks = parseForeignKeys(fkNodes, obj).filter((fk) => fk.columns.length);
-      tables.push(erTable(obj, columns, new Set(fks.flatMap((fk) => fk.columns))));
-      for (const fk of fks) edges.push({ name: fk.name, from: id, to: erId(fk.target), fromCols: fk.columns, toCols: fk.targetColumns });
+      tables.push(erTable(obj, columns, fkCols.get(id) ?? new Set()));
       objects[id] = obj;
       // Show progress (and the tables so far) every few tables.
-      if (i % 8 === 7 || i === nodes.length - 1) setState("er", { done: i + 1, tables: [...tables], edges: [...edges], objects: { ...objects } });
+      if (i % 8 === 7 || i === nodes.length - 1) setState("er", { done: i + 2, tables: [...tables], objects: { ...objects } });
     }
-    if (current()) setState("er", { loading: false, done: nodes.length, whole: true });
+    if (current()) setState("er", { loading: false, done: nodes.length + 1, whole: true, objects: { ...objects } });
   } catch (err) {
     if (current()) setState("er", { loading: false, error: errorText(err) });
   } finally {
@@ -821,30 +979,21 @@ export async function openErDiagram(connId: string, path: string[], focus?: Obje
   }
 }
 
-/** The diagram of one table: the keys of every table of the schema, then the columns of it and its neighbours. */
-async function scanAround(sessionId: string, all: MetaNode[], centre: string, current: () => boolean) {
+/** The diagram of one table: the keys of the whole schema (one query), then the columns of it and its neighbours. */
+async function scanAround(sessionId: string, path: string[], all: MetaNode[], centre: string, current: () => boolean) {
   const own = all.find((node) => erId(node.obj!) === centre);
   if (!own) throw new Error(`La tabla ${centre} no está en este esquema`);
-  // The table itself first: its own keys count even past the limit.
-  const nodes = [own, ...all.filter((node) => node !== own)].slice(0, ER_SCAN_LIMIT);
-  setState("er", { total: nodes.length, truncated: all.length - nodes.length });
-  const edges: ErEdge[] = [];
+  // The table itself first: its own keys count even past the limit of the per-table fallback.
+  const nodes = [own, ...all.filter((node) => node !== own)];
+  setState("er", { total: 1, done: 0 });
+  const found = await erKeys(sessionId, path, nodes, ER_SCAN_LIMIT, current);
+  if (!found) return;
   const objects: Record<string, ObjectRef> = {};
-  for (const [i, node] of nodes.entries()) {
-    const obj = node.obj!;
-    const id = erId(obj);
-    objects[id] = obj;
-    const fkNodes = await api().metaChildren(sessionId, [...node.path, "fks"]).catch(() => [] as MetaNode[]);
-    if (!current()) return;
-    for (const fk of parseForeignKeys(fkNodes, obj).filter((fk) => fk.columns.length)) {
-      edges.push({ name: fk.name, from: id, to: erId(fk.target), fromCols: fk.columns, toCols: fk.targetColumns });
-      // A table of another schema it points to is shown too (its own keys are not read).
-      objects[erId(fk.target)] ??= fk.target;
-    }
-    if (i % 16 === 15 || i === nodes.length - 1) setState("er", { done: i + 1 });
-  }
+  for (const node of nodes.slice(0, found.read)) objects[erId(node.obj!)] = node.obj!;
+  // A table of another schema it points to is shown too (its own keys are not read).
+  const edges = found.keys.map((fk) => erEdge(fk, objects));
   setState("er", { edges, objects, shown: erNeighbourhood(centre, edges, 1) });
-  if (await readErColumns(sessionId, state.er!.shown, current, nodes.length)) setState("er", { loading: false });
+  if (await readErColumns(sessionId, state.er!.shown, current, 1)) setState("er", { loading: false });
 }
 
 /**
@@ -1025,26 +1174,40 @@ export function closeActivity() {
   if (sessionId) void api().closeSession(sessionId).catch(() => {});
 }
 
+/** The values typed for the parameters (raw: written in as SQL, not as a quoted literal). */
+export interface ParamAnswer {
+  values: Record<string, string>;
+  raw: Record<string, boolean>;
+}
+
 /** What the parameters dialog edits; values are remembered per console. */
 export interface ParamAsk {
   names: string[];
   values: Record<string, string>;
   raw: Record<string, boolean>;
+  /** What each parameter is, from the library script's declaration (shown under its field). */
+  notes: Record<string, string>;
   sql: string;
-  resolve: (answer: { values: Record<string, string>; raw: Record<string, boolean> } | null) => void;
+  resolve: (answer: ParamAnswer | null) => void;
 }
 
-const rememberedParams: Record<string, { values: Record<string, string>; raw: Record<string, boolean> }> = {};
+const rememberedParams: Record<string, ParamAnswer> = {};
 
-function askParamValues(tabId: string, names: string[], sql: string) {
+/**
+ * Asks for the values of `names`. Pre-filled with what was typed before in this console, else the library script's
+ * declared default; the script's descriptions document each field.
+ */
+function askParamValues(tabId: string, names: string[], sql: string, declared: ScriptParam[] = []) {
   // Only one dialog: a second ask cancels the first (its run does not happen).
   if (state.paramAsk) answerParams(null);
   const previous = rememberedParams[tabId] ?? { values: {}, raw: {} };
-  return new Promise<{ values: Record<string, string>; raw: Record<string, boolean> } | null>((resolve) =>
+  const byName = new Map(declared.map((p) => [p.name, p]));
+  return new Promise<ParamAnswer | null>((resolve) =>
     setState("paramAsk", {
       names,
-      values: Object.fromEntries(names.map((name) => [name, previous.values[name] ?? ""])),
+      values: Object.fromEntries(names.map((name) => [name, previous.values[name] ?? byName.get(name)?.default ?? ""])),
       raw: Object.fromEntries(names.map((name) => [name, previous.raw[name] ?? false])),
+      notes: Object.fromEntries(names.flatMap((name) => (byName.get(name)?.description ? [[name, byName.get(name)!.description]] : []))),
       sql,
       resolve: (answer) => {
         if (answer) rememberedParams[tabId] = { values: { ...previous.values, ...answer.values }, raw: { ...previous.raw, ...answer.raw } };
@@ -1054,7 +1217,7 @@ function askParamValues(tabId: string, names: string[], sql: string) {
   );
 }
 
-export function answerParams(answer: { values: Record<string, string>; raw: Record<string, boolean> } | null) {
+export function answerParams(answer: ParamAnswer | null) {
   state.paramAsk?.resolve(answer);
   setState("paramAsk", null);
 }
@@ -1064,12 +1227,26 @@ export function answerPassword(value: string | null) {
   setState("passwordAsk", null);
 }
 
+/** ODBC takes its password from the connection string unless it names a user and carries none (an import). */
+function odbcNeedsPassword(conn: ConnSummary) {
+  return conn.kind === "odbc" && !!conn.user.trim() && !/\b(pwd|password)\s*=/i.test(`${conn.odbcConnStr};${conn.extra}`);
+}
+
 function needsPassword(conn: ConnSummary) {
-  return !conn.integratedAuth && conn.kind !== "sqlite" && conn.kind !== "odbc" && !conn.hasPassword && !state.passwords[conn.id];
+  const network = conn.kind !== "sqlite" && (conn.kind !== "odbc" || odbcNeedsPassword(conn));
+  return !conn.integratedAuth && network && !conn.hasPassword && !state.passwords[conn.id];
+}
+
+/** The tunnel logs in with a password nobody saved (an import): asked once per run. */
+const sshAsked = new Set<string>();
+function needsSshPassword(conn: ConnSummary) {
+  const ssh = conn.ssh;
+  return !!ssh?.enabled && ssh.auth === "password" && !conn.sshSaved?.password && !sshAsked.has(conn.id);
 }
 
 export async function refreshConnections() {
-  setState("connections", await api().listConnections());
+  // The core already maps an old production flag to the "prod" environment; the browser demo does not.
+  setState("connections", (await api().listConnections()).map(normalizeEnvironment));
 }
 
 /** Folders in use by the saved connections, in order of first appearance. */
@@ -1107,7 +1284,8 @@ export async function moveConnection(id: string, folder: string, beforeId?: stri
 
 export function openConnDialog(cfg?: ConnConfig) {
   setState({ testOutput: "", testOk: null, testing: false, testGuide: "", testReport: null });
-  setState("connDialog", cfg ? { ...cfg, password: "" } : emptyConn(isTauri() ? "postgres" : "sqlite"));
+  // A connection saved before environments shows its production flag as Producción.
+  setState("connDialog", cfg ? normalizeEnvironment({ ...cfg, password: "" }) : emptyConn(isTauri() ? "postgres" : "sqlite"));
 }
 
 export async function submitConnection(cfg: ConnConfig) {
@@ -1122,6 +1300,7 @@ export async function submitConnection(cfg: ConnConfig) {
 export async function removeConnection(id: string) {
   const conn = connectionById(id);
   if (!conn) return;
+  if (!(await settleTransactions(state.tabs.filter((tab) => tab.connId === id), `eliminar «${conn.name}»`))) return;
   const ok = await confirmDialog(`Eliminar «${conn.name}»`, "Se borrará la conexión y su contraseña guardada. Las consolas abiertas se quedarán sin conexión.", "Eliminar", true);
   if (!ok) return;
   await disconnect(id, false);
@@ -1169,13 +1348,13 @@ export async function testConnection(cfg: ConnConfig) {
       ? [report.serverInfo, report.route ? `Vía: ${report.route}` : "", `Total: ${formatMs(report.totalMs)}`]
       : [report.hint, plainError(report.error)];
     setState({ testReport: report, testOutput: summary.filter(Boolean).join("\n"), testOk: report.ok, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
-    if (code?.code === "JDBC_SETUP") offerDriverHelp(report.error, () => void testConnection(cfg));
+    if (code?.code === "JDBC_SETUP" || code?.code === "SSH_HOST_UNKNOWN") offerDriverHelp(report.error, () => void testConnection(cfg));
   } catch (err) {
     const message = errorText(err);
     const code = errorCode(message);
     setState({ testOutput: plainError(message), testOk: false, testGuide: code?.code === "INFORMIX_GUIDE" ? code.arg || "jdbc" : "" });
     // The dialog stays open: only what has to be downloaded is offered on top of it.
-    if (code?.code === "JDBC_SETUP") offerDriverHelp(message, () => void testConnection(cfg));
+    if (code?.code === "JDBC_SETUP" || code?.code === "SSH_HOST_UNKNOWN") offerDriverHelp(message, () => void testConnection(cfg));
   } finally {
     setState("testing", false);
   }
@@ -1187,7 +1366,7 @@ export async function testConnection(cfg: ConnConfig) {
  * went with it), CONN_RESET (it dropped and a write was not repeated), CONN_DOWN (it dropped and could not reconnect).
  */
 export function errorCode(message: string): { code: string; arg: string; text: string } | null {
-  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING|SESSION_LOST|CONN_RESET|CONN_DOWN)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
+  const match = /^(JDBC_SETUP|JDBC_BRIDGE_MISSING|INFORMIX_GUIDE|IBM_DRIVER_MISSING|SESSION_LOST|CONN_RESET|CONN_DOWN|SSH_HOST_UNKNOWN|SSH_HOST_CHANGED)(?::([\w,]+))?: ([\s\S]*)$/.exec(message);
   return match ? { code: match[1], arg: match[2] ?? "", text: match[3] } : null;
 }
 
@@ -1213,6 +1392,18 @@ export function offerDriverHelp(message: string, retry: (() => void) | null): bo
     setState("informixGuide", { topic: code.arg || "jdbc", message: code.text });
     return true;
   }
+  if (code.code === "SSH_HOST_UNKNOWN" && code.arg) {
+    // Never accepted in silence: the user sees the fingerprint and decides.
+    const token = code.arg;
+    setState("sshHostKey", { token, text: code.text, info: null, retry });
+    void api()
+      .sshHostKey(token)
+      .then((info) => {
+        if (state.sshHostKey?.token === token) setState("sshHostKey", "info", info);
+      })
+      .catch(() => {});
+    return true;
+  }
   if (code.code === "IBM_DRIVER_MISSING" || code.code === "JDBC_BRIDGE_MISSING") {
     setState({ settingsOpen: true, settingsSection: "drivers" });
     return true;
@@ -1231,6 +1422,12 @@ export async function connect(connId: string, password?: string) {
     if (!typed) return;
     setState("passwords", connId, typed);
   }
+  if (needsSshPassword(conn)) {
+    const typed = await askPassword(conn.name, `Contraseña SSH (${conn.ssh?.user || "túnel"}@${conn.ssh?.host})`);
+    if (!typed) return;
+    await api().setSessionSshPassword(connId, typed);
+    sshAsked.add(connId);
+  }
   const pwd = state.passwords[connId];
   const generation = connectGeneration(connId);
   setState("connecting", connId, true);
@@ -1242,7 +1439,7 @@ export async function connect(connId: string, password?: string) {
       return;
     }
     markConn(connId, "on", { connectMs: opened.connectMs, reused: opened.reused, note: "" });
-    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, databases: [] });
+    setState("sessions", connId, { metaId: opened.sessionId, database: opened.database, serverInfo: opened.serverInfo, driver: opened.driver ?? "", databases: [] });
     try {
       localStorage.setItem(`celer.server.${connId}`, opened.serverInfo.slice(0, 120));
     } catch {
@@ -1286,6 +1483,11 @@ export async function connect(connId: string, password?: string) {
         delete draft.passwords[connId];
       }));
     }
+    // The same for the SSH password typed at the prompt: the core forgets it too (it is read before the saved one).
+    if (sshAsked.has(connId) && /SSH: .*(no aceptó la autenticación por contraseña|falta la contraseña SSH)/.test(message)) {
+      sshAsked.delete(connId);
+      void api().setSessionSshPassword(connId, "").catch(() => {});
+    }
     offerDriverHelp(message, () => void connect(connId));
   } finally {
     // A disconnect in between owns the flag now (a newer connect may be running).
@@ -1319,6 +1521,7 @@ const connectGeneration = (connId: string) => generations[connId] ?? 0;
  * confirmed first (they would be lost); consoles and tables stay open and reconnect on their next run or reload.
  */
 export async function disconnect(connId: string, confirm = true) {
+  if (confirm && !(await settleTransactions(state.tabs.filter((tab) => tab.connId === connId), `desconectar «${connectionById(connId)?.name ?? ""}»`))) return;
   const affected = state.tabs.filter((tab) => tab.connId === connId);
   const inTransaction = affected.filter((tab) => tab.kind === "sql" && tab.inTransaction).length;
   const dirty = affected.filter((tab) => tab.kind === "table" && tableDirty(tab)).length;
@@ -1447,7 +1650,13 @@ export async function refreshNode(connId: string, path: string[]) {
 
 // ---------------------------------------------------------------- consoles
 
-export function openQuery(connId: string | null, sql = "", title?: string) {
+/**
+/**
+ * A new console on `connId`, active and warming up its session. `background`: added without becoming the active tab
+ * (an assistant opened it while the user was typing); `database`: the one it starts in, instead of the connection's;
+ * `libraryId` links it to a library script from the start.
+ */
+export function openQuery(connId: string | null, sql = "", title?: string, options: { background?: boolean; database?: string; libraryId?: string } = {}) {
   const conn = connectionById(connId);
   const tab = blankSql(uid(), connId, sql, title ?? conn?.name ?? CONSOLE_TITLE);
   const session = connId ? state.sessions[connId] : undefined;
@@ -1455,8 +1664,10 @@ export function openQuery(connId: string | null, sql = "", title?: string) {
     tab.database = session.database;
     tab.serverInfo = session.serverInfo;
   }
+  if (connId && options.database) tab.database = options.database;
+  if (options.libraryId) tab.libraryId = options.libraryId;
   setState("tabs", [...state.tabs, tab]);
-  setState("activeTabId", tab.id);
+  if (!options.background) setState("activeTabId", tab.id);
   persistSoon();
   warmSqlSession(tab.id);
   return tab.id;
@@ -1472,18 +1683,12 @@ export function updateSql(id: string, sql: string, cursor: number, selection: st
 export async function setTabConnection(tabId: string, connId: string) {
   const before = state.tabs[tabIndex(tabId)];
   if (!before || before.kind !== "sql" || before.connId === connId) return;
-  // Its session closes: same confirmation as closing the console.
-  if (before.inTransaction || before.running) {
-    const ok = await confirmDialog(
-      before.inTransaction ? "Transacción abierta" : "Sentencia en curso",
-      before.inTransaction
-        ? "La consola tiene una transacción sin confirmar. Al cambiar de conexión se deshará (rollback)."
-        : "La consola está ejecutando una sentencia. Al cambiar de conexión se interrumpirá.",
-      before.inTransaction ? "Cambiar y deshacer" : "Cambiar de conexión",
-      true,
-    );
+  // Its session closes: same questions as closing the console.
+  if (before.running) {
+    const ok = await confirmDialog("Sentencia en curso", "La consola está ejecutando una sentencia. Al cambiar de conexión se interrumpirá.", "Cambiar de conexión", true);
     if (!ok) return;
   }
+  if (!(await settleTransactions([before], "cambiar de conexión"))) return;
   const index = tabIndex(tabId);
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "sql" || tab.connId === connId) return;
@@ -1509,7 +1714,7 @@ export async function setTabConnection(tabId: string, connId: string) {
 export function formatActive() {
   const tab = activeSql();
   if (!tab) return;
-  setState("tabs", tabIndex(tab.id), { sql: formatSql(tab.sql, kindOf(tab.connId)), revision: tab.revision + 1 } as Partial<SqlTab>);
+  setState("tabs", tabIndex(tab.id), { sql: formatSql(tab.sql, kindOf(tab.connId), state.settings.keywordCase), revision: tab.revision + 1 } as Partial<SqlTab>);
   persistSoon();
 }
 
@@ -1539,6 +1744,18 @@ function ensureSqlSession(tab: SqlTab): Promise<SqlTab> {
 }
 
 /**
+ * Opens the console's session now and runs `setup` on it (a target's SET search_path): what the console runs next
+ * runs after it. Errors are thrown (the caller says where it failed).
+ */
+export async function prepareConsoleSession(tabId: string, setup: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "sql") throw new Error("La pestaña ya no existe");
+  const ready = await ensureSqlSession(tab);
+  await api().execute(ready.sessionId!, setup, 1);
+  pushOutput(tabId, { at: Date.now(), sql: setup, ok: true, text: "Hecho", elapsedMs: null });
+}
+
+/**
  * Opens the session of a console in the background as soon as the console opens or is shown: the first run does not
  * pay the login (TLS included), as when a tool keeps its connection open. A connection that is not connected yet
  * connects on its own when it needs no password (connect() then warms the active console).
@@ -1548,7 +1765,7 @@ export function warmSqlSession(tabId: string) {
   if (!tab || tab.kind !== "sql" || !tab.connId || tab.sessionId) return;
   const conn = connectionById(tab.connId);
   if (!state.sessions[tab.connId]) {
-    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
+    if (conn && !state.connecting[tab.connId] && !needsPassword(conn) && !needsSshPassword(conn) && connLink(tab.connId).link !== "down") void connect(tab.connId);
     return;
   }
   void ensureSqlSession(tab).catch(() => {});
@@ -1560,6 +1777,8 @@ async function openSqlSession(tab: SqlTab): Promise<SqlTab> {
   const moved = state.tabs[tabIndex(tab.id)];
   if (moved?.kind === "sql" && moved.sessionId) return moved;
   if (!state.sessions[tab.connId]) await connect(tab.connId);
+  // connect() returns at once when another call (the console's warm-up) is already connecting: wait for that one.
+  for (let i = 0; i < 600 && !state.sessions[tab.connId] && state.connecting[tab.connId]; i++) await new Promise((r) => setTimeout(r, 100));
   if (!state.sessions[tab.connId]) throw new Error("Sin conexión");
   const fresh = state.tabs[tabIndex(tab.id)];
   if (!fresh || fresh.kind !== "sql") throw new Error("La pestaña ya no existe");
@@ -1675,20 +1894,65 @@ export function formatMs(ms: number | null | undefined) {
   return `${m} min ${Math.round((ms % 60000) / 1000)} s`;
 }
 
-/** Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive). */
-export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string) {
-  const current = activeSql();
-  if (!current || current.running) return;
+export interface RunOptions {
+  /** Parameter values already asked: a script run on several targets asks once, on the first one. */
+  params?: ParamAnswer;
+  /** Gets the values typed for the parameters (so the next target can use them). */
+  onParams?: (answer: ParamAnswer) => void;
+  /** The parameters dialog was cancelled (nothing ran). */
+  onParamsCancelled?: () => void;
+  /** The database it must run in (a target of «Ejecutar en…»): if the session is in another one, nothing runs. */
+  database?: string;
+  /** The library script's declared parameters (defaults and descriptions for the prompt). */
+  declared?: ScriptParam[];
+  /** Runs in this console instead of the active one (an assistant's, which may be in the background). */
+  tabId?: string;
+  /** Asked by an assistant (its client, or "ai"): said in the confirmations, which then wait at most AI_CONFIRM_MS. */
+  fromAi?: string;
+}
+
+/** An assistant's run waits this long for the user's confirmation; the core gives up on the assistant's call at 145 s. */
+const AI_CONFIRM_MS = 120_000;
+
+/**
+ * Runs the selection or the statement at the cursor of the active console, or `text` when given (runText, rerunActive,
+ * the library). True when the statements were sent (whatever the server answered).
+ */
+export async function runActive(mode: "statement" | "script" | "explain" | "analyze", text?: string, options: RunOptions = {}): Promise<boolean> {
+  const { tabId, fromAi = "" } = options;
+  const byId = tabId ? state.tabs[tabIndex(tabId)] : undefined;
+  const current = tabId ? (byId?.kind === "sql" ? byId : undefined) : activeSql();
+  if (!current || current.running) return false;
   const conn = connectionById(current.connId);
   let sql = text?.trim() || current.selection.trim() || (mode === "script" ? current.sql.trim() : statementAt(current.sql, current.cursor, conn?.kind));
-  if (!sql) return;
+  if (!sql) return false;
+  // Variables (${name}): the console's, its connection's or the global value, written in as literals. What is sent,
+  // and so what the history and the output log keep, has the values; a name nobody defines is asked for below.
+  await loadVariables();
+  // Values are written for the server: an ODBC connection's TRUE/FALSE go in as that server takes them.
+  const literals = literalDialect(conn?.kind, current.serverInfo || serverOf(current.connId));
+  sql = substituteVariables(sql, resolvedFor(current), literals).sql;
   // Parameters (:name, ?, ${name}): ask for their values and write them in as literals.
   if (state.settings.askParams) {
     const refs = findParams(sql, conn?.kind);
     if (refs.length) {
-      const answer = await askParamValues(current.id, paramNames(refs), sql);
-      if (!answer) return;
-      sql = bindParams(sql, refs, answer.values, answer.raw, conn?.kind);
+      const declared = options.declared ?? (current.libraryId ? scriptById(current.libraryId)?.params : undefined) ?? [];
+      const names = paramNames(refs);
+      const given = options.params;
+      // Values already given cover it (another target of the same run); a name they lack (a variable this target's
+      // connection does not define) is asked, with the given ones pre-filled.
+      const prefill = names.map((name): ScriptParam => {
+        const own = declared.find((p) => p.name === name);
+        return { name, default: given && name in given.values ? given.values[name] : (own?.default ?? ""), description: own?.description ?? "" };
+      });
+      let answer = given && names.every((name) => name in given.values) ? given : await askParamValues(current.id, names, sql, prefill);
+      if (!answer) {
+        options.onParamsCancelled?.();
+        return false;
+      }
+      if (given && answer !== given) answer = { values: { ...given.values, ...answer.values }, raw: { ...given.raw, ...answer.raw } };
+      options.onParams?.(answer);
+      sql = bindParams(sql, refs, answer.values, answer.raw, literals);
     }
   }
   if (mode === "explain" || mode === "analyze") {
@@ -1696,36 +1960,45 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     // Pieces that are only comments ("SELECT 1; -- fin") are not statements.
     const parts = splitSql(sql, conn?.kind).filter((part) => codeOnly(part.sql, conn?.kind).trim());
     if (parts.length > 1) notify("La selección tiene varias sentencias: se muestra el plan de la primera", "info");
-    return explainStatement(current.id, parts[0]?.sql ?? sql, mode === "analyze");
+    await explainStatement(current.id, parts[0]?.sql ?? sql, mode === "analyze");
+    return true;
   }
   // hasUnfilteredWrite also sees the DELETE / UPDATE inside a CTE (WITH d AS (DELETE …) SELECT … WHERE …).
   if (conn?.production && state.settings.confirmMutations && (needsProductionConfirm(sql, conn.kind) || hasUnfilteredWrite(sql, conn.kind))) {
     const ok = await confirmDialog(
       `Ejecutar en ${conn.name} (producción)`,
-      "La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.",
+      `${fromAi ? `La IA${fromAi === "ai" ? "" : ` (${fromAi})`} pide ejecutar esta sentencia. ` : ""}La sentencia modifica datos sin WHERE o cambia la estructura (DROP, TRUNCATE, ALTER). Revisa antes de continuar.`,
       "Ejecutar de todos modos",
       true,
+      fromAi ? AI_CONFIRM_MS : 0,
     );
-    if (!ok) return;
+    if (!ok) return false;
   } else if (state.settings.confirmNoWhere && hasUnfilteredWrite(sql, conn?.kind)) {
     const ok = await confirmDialog(
       "DELETE / UPDATE sin WHERE",
-      "La sentencia no tiene WHERE: afectará a todas las filas de la tabla.",
+      `${fromAi ? `La IA${fromAi === "ai" ? "" : ` (${fromAi})`} pide ejecutar esta sentencia. ` : ""}La sentencia no tiene WHERE: afectará a todas las filas de la tabla.`,
       "Ejecutar de todos modos",
       true,
+      fromAi ? AI_CONFIRM_MS : 0,
     );
-    if (!ok) return;
+    if (!ok) return false;
   }
   const fresh = state.tabs[tabIndex(current.id)];
-  if (!fresh || fresh.kind !== "sql") return;
-  patchTab(current.id, { running: true, error: "", messages: [], startedAt: Date.now(), lastSql: sql });
+  if (!fresh || fresh.kind !== "sql") return false;
+  const startedAt = Date.now();
+  patchTab(current.id, { running: true, error: "", messages: [], startedAt, lastSql: sql });
   const token = tokenOf(current.id);
   try {
     const hadSession = Boolean(fresh.sessionId);
     const tab = await ensureSqlSession(fresh);
-    const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize);
+    // A target database that could not be opened (the session fell back to the connection's own): not run there.
+    if (options.database && !sameDatabase(tab.database, options.database)) {
+      throw new NotRun(`No se pudo abrir la base de datos «${options.database}» (la sesión está en «${tab.database || "la predeterminada"}»): no se ha ejecutado nada`);
+    }
+    const output = await api().execute(tab.sessionId!, sql, state.settings.pageSize, state.settings.queryTimeout);
     // Disconnected while it ran: this answer belongs to a closed session.
-    if (tokenOf(current.id) !== token) return;
+    if (tokenOf(current.id) !== token) return true;
+    notifyLongQuery(current.title, startedAt, describeResults(output.results, output.elapsedMs));
     // The session opened for this run: how long that took goes with the output. One that dropped and came back on
     // its own says so (the core's note) and the tab shows it.
     const opened = hadSession ? null : tabLink(tab);
@@ -1744,16 +2017,20 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       resultsSql: sql,
       messages: output.messages,
       elapsedMs: output.elapsedMs,
-      inTransaction: output.inTransaction,
+      ...txAfterRun(txOf(tab.id), output.inTransaction, countStatements(sql, conn?.kind), Date.now()),
       error: "",
     });
     const summary = describeResults(output.results, output.elapsedMs);
+    const grid = output.results.find((result) => result.columns.length);
     gib("query-ok", {
       ms: output.elapsedMs,
       hasMore: output.results.some((result) => result.hasMore),
       detail: sql,
-      columns: output.results.find((result) => result.columns.length)?.columns.length ?? 0,
+      columns: grid?.columns.length ?? 0,
       kind: conn?.kind,
+      // A query that returned a grid without a single row (and no more on the server): Gib wonders about the filter.
+      empty: Boolean(grid && !grid.rows.length && !grid.hasMore),
+      production: conn?.production,
     });
     pushOutput(tab.id, { at: Date.now(), sql, ok: true, text: [summary, ...output.messages].join("\n"), elapsedMs: output.elapsedMs });
     // Statements of a script that wait behind a paged result, or that were dropped with one (the core's notes).
@@ -1767,9 +2044,17 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
       if (tab.connId) void refreshNode(tab.connId, []);
     } else if (completionAfterResult.has(tab.id)) refreshCompletion(tab.id, output.results);
     await remember(tab, sql, true, output.elapsedMs, rows);
+    return true;
   } catch (err) {
-    if (tokenOf(current.id) !== token) return;
+    if (tokenOf(current.id) !== token) return true;
     const full = errorText(err);
+    if (err instanceof NotRun) {
+      // Nothing reached the server: no history entry.
+      patchTab(current.id, { running: false, startedAt: null, error: full, elapsedMs: null, activeResult: -1 });
+      pushOutput(current.id, { at: Date.now(), sql, ok: false, text: full, elapsedMs: null });
+      return false;
+    }
+    notifyLongQuery(current.title, startedAt, plainError(full), true);
     // The connection dropped: the core reconnected (or could not) and says what was lost; the tab shows it.
     const dropped = noteDropped(current.id, current.title, full);
     const message = dropped ? plainError(full) : full;
@@ -1779,7 +2064,29 @@ export async function runActive(mode: "statement" | "script" | "explain" | "anal
     gib("query-error", { detail: message });
     await remember(current, sql, false, 0, null);
     offerDriverHelp(full, null);
+    // The run failed: callers counting executed targets (library «Ejecutar en…») must not count it.
+    return false;
   }
+}
+
+/** A run stopped before anything was sent to the server. */
+class NotRun extends Error {}
+
+/** Database names as engines compare them (case aside; SQL Server and MySQL on Windows ignore it, the rest rarely clash). */
+function sameDatabase(a: string, b: string) {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Ajustes › Avisos: a desktop notification when a statement that ran longer than `notifyAfter` seconds ends while
+ * this window is in the background (the user went elsewhere to wait).
+ */
+function notifyLongQuery(title: string, startedAt: number, text: string, failed = false) {
+  const after = state.settings.notifyAfter;
+  if (!after || Date.now() - startedAt < after * 1000) return;
+  if (document.hasFocus() && !document.hidden) return;
+  const head = failed ? `La consulta de «${title}» falló` : `La consulta de «${title}» ha terminado`;
+  void api().desktopNotify(head, `${text} · ${formatMs(Date.now() - startedAt)}`).catch(() => {});
 }
 
 /**
@@ -1813,10 +2120,18 @@ export function canAnalyze(tab: SqlTab, sql: string): boolean {
 function afterSideStatement(tabId: string, inTransaction: boolean | null): Partial<SqlTab> {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "sql") return {};
-  const patch: Partial<SqlTab> = {};
+  let patch: Partial<SqlTab> = {};
   if (tab.results.some((result) => result.hasMore)) patch.results = tab.results.map((result) => (result.hasMore ? { ...result, hasMore: false } : result));
-  if (inTransaction !== null) patch.inTransaction = inTransaction;
+  if (inTransaction !== null) patch = { ...patch, ...txAfterRun(txOf(tabId), inTransaction, 1, Date.now()) };
   return patch;
+}
+
+/** A console's transaction as txWatch.ts reads it. */
+function txOf(tabId: string) {
+  const tab = state.tabs[tabIndex(tabId)];
+  return tab?.kind === "sql"
+    ? { inTransaction: tab.inTransaction, txStartedAt: tab.txStartedAt ?? null, txStatements: tab.txStatements ?? 0, txReminders: tab.txReminders ?? 0 }
+    : { inTransaction: false, ...NO_TX };
 }
 
 /**
@@ -1945,6 +2260,8 @@ export async function fetchMore(tabId: string, n = state.settings.pageSize): Pro
       results[resultIndex] = { ...result, rows: concatRows(result.rows, more.rows), hasMore: more.hasMore };
       if (!more.hasMore) results.push(...more.extra);
       patchTab(tab.id, { results, running: false });
+      // Messages that came while reading on (SQL Server PRINT after a result), under the statement that sent them.
+      if (more.messages?.length) pushOutput(tab.id, { at: Date.now(), sql: fresh.output[fresh.output.length - 1]?.sql ?? "", ok: true, text: more.messages.join("\n"), elapsedMs: null });
       if (completionAfterResult.has(tabId)) refreshCompletion(tabId, results);
       return true;
     } catch (err) {
@@ -2042,16 +2359,18 @@ function concatRows(current: Cell[][], extra: Cell[][]): Cell[][] {
   const out = new Array<Cell[]>(base.length + extra.length);
   for (let i = 0; i < base.length; i++) out[i] = base[i];
   for (let i = 0; i < extra.length; i++) out[base.length + i] = extra[i];
-  return out;
+  return asRaw(out);
 }
 
 export async function changeAutocommit(on: boolean) {
   const tab = activeSql();
   if (!tab) return;
+  // Back to Auto with a transaction open: some drivers would commit it on their own (JDBC does), so it is asked.
+  if (on && !(await settleTransactions([tab], "pasar a modo automático"))) return;
   try {
     const ready = await ensureSqlSession(tab);
     const inTransaction = await api().setAutocommit(ready.sessionId!, on);
-    patchTab(ready.id, { autocommit: on, inTransaction });
+    patchTab(ready.id, { autocommit: on, ...txAfterRun(txOf(ready.id), inTransaction, 0, Date.now()) });
     persistSoon();
   } catch (err) {
     notify(errorText(err), "error");
@@ -2063,7 +2382,7 @@ export async function commitActive(rollback = false) {
   if (!tab?.sessionId) return;
   try {
     const inTransaction = rollback ? await api().rollback(tab.sessionId) : await api().commit(tab.sessionId);
-    patchTab(tab.id, { inTransaction });
+    patchTab(tab.id, { inTransaction, ...NO_TX });
     pushOutput(tab.id, { at: Date.now(), sql: rollback ? "ROLLBACK" : "COMMIT", ok: true, text: rollback ? "Transacción deshecha" : "Transacción confirmada", elapsedMs: null });
     notify(rollback ? "Rollback hecho" : "Commit hecho", "success");
     gib(rollback ? "rollback" : "commit");
@@ -2072,12 +2391,127 @@ export async function commitActive(rollback = false) {
   }
 }
 
+/**
+ * Before something that would end consoles' open transactions (closing them or the window, disconnecting, another
+ * connection or database, Auto mode, quitting): Commit, Rollback or Cancelar, never an implicit commit. True when it
+ * can go on, with every transaction ended as chosen; false when cancelled or a commit failed.
+ */
+export async function settleTransactions(tabs: readonly Tab[], doing: string): Promise<boolean> {
+  const open = tabs.filter((tab): tab is SqlTab => tab.kind === "sql" && tab.inTransaction && Boolean(tab.sessionId));
+  if (!open.length) return true;
+  const at = Date.now();
+  const describe = (tab: SqlTab) => `«${tab.title}»${tab.txStartedAt ? ` (${txDuration(at - tab.txStartedAt)}, ${tab.txStatements} ${tab.txStatements === 1 ? "sentencia" : "sentencias"})` : ""}`;
+  const one = open.length === 1;
+  const running = open.filter((tab) => tab.running);
+  const stopping = running.length
+    ? ` ${running.length === 1 ? `«${running[0].title}» está ejecutando una sentencia, que se detendrá` : `${running.map((tab) => `«${tab.title}»`).join(", ")} están ejecutando sentencias, que se detendrán`} antes (no entra${running.length === 1 ? "" : "n"} en el Commit).`
+    : "";
+  const choice = await askWindow(
+    one ? "Transacción abierta" : `${open.length} transacciones abiertas`,
+    `${one ? `La consola ${describe(open[0])} tiene una transacción` : `Las consolas ${open.map(describe).join(", ")} tienen transacciones`} sin confirmar. Antes de ${doing}, confírma${one ? "la" : "las"} (Commit) o deshaz${one ? "la" : "las"} (Rollback).${stopping}`,
+    [
+      { label: one ? "Commit" : "Commit en todas", value: "commit", style: "primary" },
+      { label: one ? "Rollback" : "Rollback en todas", value: "rollback", style: "danger" },
+    ],
+  );
+  if (choice !== "commit" && choice !== "rollback") return false;
+  // A statement still running would hold the session (the Commit or Rollback would wait for it to end) and would go
+  // into the Commit: it is stopped first, as closing did before transactions were asked about (#147).
+  if (!(await stopRunning(open.map((tab) => tab.id)))) return false;
+  return endTransactions(open.map((tab) => tab.id), choice === "rollback");
+}
+
+/** Stops the statements running in these consoles and waits for them to end; false when one does not stop in time. */
+async function stopRunning(ids: string[], timeoutMs = 15000): Promise<boolean> {
+  const busy = () => ids.map((id) => state.tabs[tabIndex(id)]).filter((tab): tab is SqlTab => tab?.kind === "sql" && tab.running);
+  const first = busy();
+  if (!first.length) return true;
+  await Promise.all(first.map((tab) => (tab.sessionId ? api().cancel(tab.sessionId).catch(() => {}) : undefined)));
+  const until = Date.now() + timeoutMs;
+  while (busy().length && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  const left = busy();
+  if (left.length) notify(`No se pudo detener la sentencia de ${left.map((tab) => `«${tab.title}»`).join(", ")}`, "error", "Detenla o espera a que termine y vuelve a intentarlo.");
+  return !left.length;
+}
+
+/**
+ * Commits or rolls back the open transactions of these consoles. A failed commit stops (false: its changes are not
+ * saved, the user decides); a failed rollback does not (the session closing undoes it, see guard.rs and the drivers).
+ */
+export async function endTransactions(ids: string[], rollback: boolean): Promise<boolean> {
+  let ok = true;
+  for (const id of ids) {
+    const tab = state.tabs[tabIndex(id)];
+    if (tab?.kind !== "sql" || !tab.inTransaction || !tab.sessionId) continue;
+    try {
+      const inTransaction = rollback ? await api().rollback(tab.sessionId) : await api().commit(tab.sessionId);
+      patchTab(id, { inTransaction, ...NO_TX });
+      pushOutput(id, { at: Date.now(), sql: rollback ? "ROLLBACK" : "COMMIT", ok: true, text: rollback ? "Transacción deshecha" : "Transacción confirmada", elapsedMs: null });
+    } catch (err) {
+      pushOutput(id, { at: Date.now(), sql: rollback ? "ROLLBACK" : "COMMIT", ok: false, text: errorText(err), elapsedMs: null });
+      notify(rollback ? `No se pudo deshacer la transacción de «${tab.title}»` : `No se pudo confirmar la transacción de «${tab.title}»: sigue abierta`, "error", errorText(err));
+      if (!rollback) ok = false;
+    }
+  }
+  if (ok) gib(rollback ? "rollback" : "commit");
+  return ok;
+}
+
+/** This window's consoles with an open transaction (the status bar, the reminders). */
+export function openTransactions(): SqlTab[] {
+  return state.tabs.filter((tab): tab is SqlTab => tab.kind === "sql" && tab.inTransaction);
+}
+
+/** How long a console's transaction has been open, at `at` (0 when it has none). */
+export function txAge(tab: SqlTab, at = now()): number {
+  return tab.inTransaction && tab.txStartedAt ? Math.max(0, at - tab.txStartedAt) : 0;
+}
+
+/** The thresholds for a console's connection (stricter on production). */
+export function txThresholdsOf(tab: SqlTab) {
+  return txThresholds(state.settings, Boolean(connectionById(tab.connId)?.production));
+}
+
+/**
+ * Every few seconds while a transaction is open: the clocks move on, a console known open without a start (moved from
+ * a window of an earlier version, or reconnected) starts counting, and one past the red threshold gets a reminder.
+ */
+function watchTransactions() {
+  // A detached panel (plan, comparison) holds a copy of its console as it was: the window that owns it reminds (#166).
+  if (isPanelWindow()) return;
+  const open = openTransactions();
+  if (!open.length) return;
+  const at = Date.now();
+  setNow(at);
+  for (const tab of open) {
+    if (!tab.txStartedAt) {
+      patchTab(tab.id, { txStartedAt: at, txStatements: tab.txStatements || 1, txReminders: 0 });
+      continue;
+    }
+    const th = txThresholdsOf(tab);
+    const ms = at - tab.txStartedAt;
+    if (!reminderDue(ms, th, tab.txReminders ?? 0)) continue;
+    patchTab(tab.id, { txReminders: Math.floor(ms / (th.alertSecs * 1000)) });
+    if (state.settings.txRemind) remindTransaction(tab, ms);
+  }
+}
+window.setInterval(watchTransactions, 5000);
+
+/** The reminder: Gib says it when he is around, a notice otherwise. Neither takes the focus. */
+function remindTransaction(tab: SqlTab, ms: number) {
+  const conn = connectionById(tab.connId);
+  const text = txReminderText(tab.title, conn?.name, ms, tab.txStatements);
+  if (gibShows("companion")) gib("tx-open", { detail: text, production: Boolean(conn?.production) });
+  else notify("Transacción abierta", "warning", text, { label: "Ir a la consola", run: () => selectTab(tab.id) });
+}
+
 export async function switchDatabase(database: string) {
   const tab = activeTab();
   const connId = tab?.connId;
   if (!connId) return;
   const session = state.sessions[connId];
   if (!session) return;
+  if (tab?.kind === "sql" && tab.database !== database && !(await settleTransactions([tab], `cambiar a la base de datos ${database}`))) return;
   try {
     if (tab?.kind === "sql" && tab.sessionId) {
       const used = await api().useDatabase(tab.sessionId, database);
@@ -2122,6 +2556,8 @@ const sessionDatabase = new Map<string, string>();
 /** A side session (a table, a count, a comparison…), straight in `database` when one is given. */
 export async function openSessionFor(connId: string, database?: string) {
   if (!state.sessions[connId]) await connect(connId);
+  // connect() returns at once when another call (an AI console's warm-up, say) is already connecting: wait for that one.
+  for (let i = 0; i < 600 && !state.sessions[connId] && state.connecting[connId]; i++) await new Promise((r) => setTimeout(r, 100));
   if (!state.sessions[connId]) return null;
   const generation = connectGeneration(connId);
   const opened = await api()
@@ -2187,22 +2623,41 @@ export async function followForeignKey(tab: TableTab, fk: ForeignKey, row?: Reco
   await openTable(tab.connId, fk.target, "data", filters);
 }
 
-export async function openTable(connId: string, obj: ObjectRef, section: TableTab["section"] = "data", filters: ColumnFilter[] = []) {
+/**
+ * Opens a table (or brings its tab forward). `options` are an assistant's (#100): `background` adds the tab without
+ * making it active, `where` / `orderBy` start it filtered and ordered. Returns the tab's id.
+ */
+export async function openTable(
+  connId: string,
+  obj: ObjectRef,
+  section: TableTab["section"] = "data",
+  filters: ColumnFilter[] = [],
+  options: { background?: boolean; where?: string; orderBy?: string } = {},
+): Promise<string | undefined> {
   if (forwardFromPanel("open-table", { connId, obj, section, filters })) return;
-  const existing = state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
+  const query = options.where !== undefined || options.orderBy !== undefined ? { where: options.where ?? "", orderBy: options.orderBy ?? "", filters: [] as ColumnFilter[], sort: null } : null;
+  // Ajustes › Ventana: a table already open is shown again, or (tableTabs "new") opened in another tab.
+  const existing =
+    state.settings.tableTabs === "new"
+      ? undefined
+      : state.tabs.find((tab) => tab.kind === "table" && tab.connId === connId && tab.obj.name === obj.name && tab.obj.schema === obj.schema && tab.obj.database === obj.database);
   if (existing) {
     // A restored tab not loaded yet loads once here (with the filters, if any), not again when it is shown.
     const restored = existing.kind === "table" && existing.restored;
-    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}) });
-    selectTab(existing.id);
-    if (section !== "data") patchTab(existing.id, { section });
+    if (restored) patchTab(existing.id, { restored: false, ...(filters.length ? { filters, where: "", section: "data" as const } : {}), ...(query ?? {}) });
+    if (!options.background) selectTab(existing.id);
+    // A filter or ordering is data: show the data section even if the tab was left on DDL or another section.
+    if (section !== "data" || filters.length || query) patchTab(existing.id, { section });
     if (restored) {
       void reloadTable(existing.id, true);
     } else if (filters.length && (await guardDirty(existing.id))) {
       patchTab(existing.id, { filters, where: "", section: "data" });
       void reloadTable(existing.id);
+    } else if (query && (await guardDirty(existing.id))) {
+      patchTab(existing.id, query);
+      void reloadTable(existing.id);
     }
-    return;
+    return existing.id;
   }
   const opened = await openSessionFor(connId, obj.database).catch((err) => {
     notify(errorText(err), "error");
@@ -2211,10 +2666,12 @@ export async function openTable(connId: string, obj: ObjectRef, section: TableTa
   if (!opened) return;
   const id = uid();
   const tab = blankTable(id, connId, obj, opened.sessionId, obj.database || opened.database, section, filters);
+  if (query) Object.assign(tab, query);
   setState("tabs", [...state.tabs, tab]);
   persistSoon();
-  setState("activeTabId", id);
+  if (!options.background) setState("activeTabId", id);
   await reloadTable(id, true);
+  return id;
 }
 
 export async function reloadTable(tabId: string, full = false) {
@@ -2462,6 +2919,32 @@ export function insertTableRow(tabId: string, from?: number) {
   patchTab(tab.id, { inserts: [...tab.inserts, row] });
 }
 
+/**
+ * A block pasted into the table viewer (copied from Excel or another grid): each cell becomes a pending edit, and
+ * rows past the last one become new rows. `row` counts loaded rows first, then the new ones. One update for all.
+ */
+export function pasteTableCells(tabId: string, cells: { row: number; col: number; value: string | null }[]) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab || tab.kind !== "table" || !cells.length) return;
+  const loaded = tab.rows.length;
+  const inserts = tab.inserts.map((line) => line.slice());
+  const edits = { ...tab.edits };
+  const deleted = new Set(tab.deleted);
+  for (const { row, col, value } of cells) {
+    if (col < 0 || col >= tab.columnsMeta.length || deleted.has(row)) continue;
+    if (row >= loaded) {
+      while (inserts.length <= row - loaded) inserts.push(tab.columnsMeta.map(() => null));
+      inserts[row - loaded][col] = value;
+      continue;
+    }
+    const original = tab.rows[row]?.[col];
+    const same = (original === null && value === null) || (original !== null && original !== undefined && value !== null && String(original) === value);
+    if (same) delete edits[`${row}:${col}`];
+    else edits[`${row}:${col}`] = value;
+  }
+  patchTab(tab.id, { edits, inserts });
+}
+
 /** Undoes pending changes: one cell's edit, or everything on a row (edits, its deletion, or the new row itself). */
 export function revertTableChange(tabId: string, row: number, col: number | null) {
   const tab = state.tabs[tabIndex(tabId)];
@@ -2675,10 +3158,7 @@ export async function closeTab(id: string) {
     const ok = await confirmDialog(`Descartar cambios en ${tab.title}`, `La consola tiene cambios que no se han guardado en ${where}.`, "Descartar", true);
     if (!ok) return;
   }
-  if (tab?.kind === "sql" && tab.inTransaction) {
-    const ok = await confirmDialog("Transacción abierta", "La consola tiene una transacción sin confirmar. Al cerrarla se deshará (rollback).", "Cerrar y deshacer", true);
-    if (!ok) return;
-  }
+  if (tab && !(await settleTransactions([tab], "cerrar la consola"))) return;
   if (tab?.sessionId) await api().closeSession(tab.sessionId).catch(() => {});
   const position = state.tabs.findIndex((item) => item.id === id);
   const tabs = state.tabs.filter((item) => item.id !== id);
@@ -2727,6 +3207,8 @@ export function adoptTab(tab: Tab, index: number | null) {
 export async function closeTabsQuietly(ids: string[]) {
   const closing = state.tabs.filter((tab) => ids.includes(tab.id));
   if (!closing.length) return;
+  // Their open transactions are undone on purpose before the sessions close: closing never commits.
+  await endTransactions(closing.filter((tab) => tab.kind === "sql" && tab.inTransaction).map((tab) => tab.id), true);
   for (const tab of closing) bumpToken(tab.id);
   setState("tabs", state.tabs.filter((tab) => !ids.includes(tab.id)));
   if (!state.tabs.some((tab) => tab.id === state.activeTabId)) setState("activeTabId", state.tabs[0]?.id ?? "");
@@ -2792,6 +3274,7 @@ export function pinResult(tabId: string) {
     sql: exportStatement(tab.resultsSql || tab.lastSql, kindOf(tab.connId), grids.indexOf(result), grids.length) ?? (tab.resultsSql || tab.lastSql),
     at: Date.now(),
     result: { ...result, hasMore: false },
+    partial: result.hasMore,
   };
   patchTab(tabId, { pinned: [...tab.pinned, pin], activePinned: pin.id });
   if (result.hasMore) notify("Resultado fijado con las filas cargadas", "info", "Las páginas pendientes no se incluyen: usa «Cargar todo» antes de fijar si las necesitas.");
@@ -2801,20 +3284,40 @@ export function showPinned(tabId: string, pinId: string) {
   patchTab(tabId, { activePinned: pinId, activePlan: false, compare: null });
 }
 
+const refersTo = (ref: ResultRef, tabId: string, pinId: string) => ref.kind === "pin" && ref.tabId === tabId && ref.pinId === pinId;
+
 export function unpinResult(tabId: string, pinId: string) {
   const tab = state.tabs[tabIndex(tabId)];
   if (tab?.kind !== "sql") return;
   patchTab(tabId, {
     pinned: tab.pinned.filter((pin) => pin.id !== pinId),
     activePinned: tab.activePinned === pinId ? null : tab.activePinned,
-    compare: tab.compare?.pinId === pinId ? null : tab.compare,
   });
+  // A comparison with it (in any console of this window) has nothing left to compare.
+  for (const other of state.tabs) {
+    if (other.kind === "sql" && other.compare && (refersTo(other.compare.base, tabId, pinId) || refersTo(other.compare.other, tabId, pinId))) patchTab(other.id, { compare: null });
+  }
 }
 
 /** The result a pinned one is compared with: the current result on show, else the first one with rows. */
 export function currentResultOf(tab: SqlTab): ResultSet | undefined {
   const active = tab.activeResult >= 0 ? tab.results[tab.activeResult] : undefined;
   return active?.columns.length ? active : tab.results.find((r) => r.columns.length);
+}
+
+/** What a console has on show, as a result to compare: a pinned result, or one of its results. */
+export function shownResultRef(tab: SqlTab): ResultRef | null {
+  if (tab.activePinned && tab.pinned.some((pin) => pin.id === tab.activePinned)) return { kind: "pin", tabId: tab.id, pinId: tab.activePinned };
+  if (tab.activeResult >= 0 && tab.results[tab.activeResult]?.columns.length) return { kind: "result", tabId: tab.id, index: tab.activeResult };
+  return null;
+}
+
+/** Compares two results in the results area of console `tabId` (until closed): `base` is A, `other` is B. */
+export function openComparison(tabId: string, base: ResultRef, other: ResultRef, key: string[] | null = null) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql") return;
+  const compare: ResultComparison = { base, other, key, pk: null, onlyDiff: false };
+  patchTab(tabId, { compare, activePinned: null, activePlan: false });
 }
 
 /** Compares a pinned result with the current one (in the results area, until closed). */
@@ -2825,13 +3328,17 @@ export function compareWithCurrent(tabId: string, pinId: string) {
     notify("No hay un resultado actual con filas para comparar", "warning", "Ejecuta la consulta (otra vez, o una distinta) y compara el resultado fijado con el nuevo.");
     return;
   }
-  patchTab(tabId, { compare: { pinId, key: null }, activePinned: null, activePlan: false });
+  openComparison(tabId, { kind: "pin", tabId, pinId }, { kind: "result", tabId, index: -1 });
+}
+
+export function patchCompare(tabId: string, patch: Partial<ResultComparison>) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (tab?.kind !== "sql" || !tab.compare) return;
+  patchTab(tabId, { compare: { ...tab.compare, ...patch } });
 }
 
 export function setCompareKey(tabId: string, key: string[] | null) {
-  const tab = state.tabs[tabIndex(tabId)];
-  if (tab?.kind !== "sql" || !tab.compare) return;
-  patchTab(tabId, { compare: { ...tab.compare, key } });
+  patchCompare(tabId, { key });
 }
 
 export function closeCompare(tabId: string) {
@@ -2878,9 +3385,16 @@ export async function clearHistory() {
 
 // ---------------------------------------------------------------- dialogs
 
-export function confirmDialog(title: string, body: string, confirmLabel: string, danger = false) {
+export function confirmDialog(title: string, body: string, confirmLabel: string, danger = false, expireMs = 0) {
   dismissConfirm();
   return new Promise<boolean>((resolve) => {
+    // An assistant is waiting on this answer (#100): left unanswered, it closes as «no» before the assistant gives up.
+    if (expireMs) {
+      const mine = resolve;
+      window.setTimeout(() => {
+        if (confirmResolve === mine) dismissConfirm();
+      }, expireMs);
+    }
     confirmResolve = resolve;
     setState("confirm", {
       title,
@@ -3049,7 +3563,8 @@ export async function runExport() {
     setState({ exportRows: rows, exportRunning: false, exportOpen: false, exportId: "" });
     const target = path;
     notify(`Exportadas ${rows.toLocaleString()} filas en ${formatMs(performance.now() - started)}`, "success", target || undefined, target && isTauri() ? { label: "Mostrar en la carpeta", run: () => void revealPath(target) } : undefined);
-    gib("saved");
+    // Gib nods at an export, and cheers a big one.
+    gib("export-done", { rows, ms: performance.now() - started });
   } catch (err) {
     const cancelled = !state.exportRunning || /cancelada/i.test(errorText(err));
     setState({ exportRunning: false, exportId: "" });
@@ -3211,6 +3726,21 @@ export async function downloadJdbcPiece(what: "java" | "jdbc"): Promise<boolean>
 
 export function cancelDriverDownload() {
   void api().driverDownloadCancel();
+}
+
+/** «Confiar en esta clave»: the SSH server's key goes to Celer's known_hosts, then what failed runs again. */
+export async function trustSshHostKey() {
+  const ask = state.sshHostKey;
+  if (!ask) return;
+  try {
+    await api().sshTrustHostKey(ask.token);
+    setState("sshHostKey", null);
+    notify("Clave del servidor SSH guardada", "success", ask.info ? `${ask.info.host}:${ask.info.port} · ${ask.info.fingerprint}` : undefined);
+    ask.retry?.();
+  } catch (err) {
+    setState("sshHostKey", null);
+    notify("No se guardó la clave del servidor SSH", "error", errorText(err));
+  }
 }
 
 /** The JDBC setup dialog: downloads what is missing, in turn, then retries what failed. */

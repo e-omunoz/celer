@@ -38,6 +38,15 @@ for (const theme of Object.keys(themes)) {
   atLeast(theme, "--run-fg", "--run", 4.5);
   atLeast(theme, "--danger-fg", "--danger", 4.5);
 }
+// Connection environments (src/environment.ts): the chip's label reads on its fill, and the window strip, tab strip
+// and explorer dot stand out from the surfaces they sit on (3:1, non-text). Every theme defines its own.
+for (const theme of Object.keys(themes)) {
+  for (const env of ["dev", "test", "staging", "prod"]) {
+    if (theme !== "dark") assert.ok(block(`:root[data-theme="${theme}"]`)[`--env-${env}`], `${theme}: no --env-${env}`);
+    atLeast(theme, `--env-${env}-fg`, `--env-${env}`, 4.5);
+    for (const bg of ["--bg", "--panel", "--surface"]) atLeast(theme, `--env-${env}`, bg, 3);
+  }
+}
 for (const theme of ["contrast", "contrast-light"]) {
   for (const token of Object.keys(themes[theme]).filter((t) => t.startsWith("--syntax-") || t.startsWith("--obj-"))) {
     atLeast(theme, token, "--surface", 4.5);
@@ -49,6 +58,26 @@ for (const theme of Object.keys(themes)) {
   for (const bg of ["--bg", "--panel", "--surface"]) {
     atLeast(theme, "--text-muted", bg, 4.5);
     atLeast(theme, "--text-faint", bg, 4.5);
+  }
+}
+
+// The comparison chips (cambiadas, solo en B, solo en A): half the state colour, half the text colour (#153).
+const mix = (a: string, b: string, share: number) => {
+  const rgb = (hex: string) => {
+    const h = hex.slice(1).length === 3 ? [...hex.slice(1)].map((c) => c + c).join("") : hex.slice(1);
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  };
+  const [x, y] = [rgb(a), rgb(b)];
+  return `#${x.map((v, i) => Math.round(v * share + y[i] * (1 - share)).toString(16).padStart(2, "0")).join("")}`;
+};
+assert.equal(mix("#000", "#ffffff", 0.5), "#808080");
+for (const theme of Object.keys(themes)) {
+  const tokens = themes[theme];
+  for (const state of ["--warning", "--success", "--danger"]) {
+    for (const bg of ["--panel", "--surface"]) {
+      const ratio = contrastRatio(mix(tokens[state], tokens["--text"], 0.5), tokens[bg]);
+      assert.ok(ratio >= 4.5, `${theme}: ${state} chip label on ${bg} is ${ratio.toFixed(2)}:1`);
+    }
   }
 }
 

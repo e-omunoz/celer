@@ -6,6 +6,379 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Own data folder in any build**: `--data-dir <folder>` (or `CELER_DATA_DIR`) makes the portable or installed app keep
+  its connections, settings, history and library there, with its own WebView2 profile and credential store entries,
+  next to an installed Celer without touching it (a portable copy on a USB stick; the release smoke test).
+- **SSH tunnels** (#115): «Túnel SSH» in the connection form reaches PostgreSQL, MySQL/MariaDB, SQL Server and Informix
+  (DRDA and JDBC) through a bastion, with a password, a private key (file or pasted, OpenSSH/PEM/PuTTY, with its
+  passphrase) or the SSH agent (Pageant, the OpenSSH agent of Windows, ssh-agent), and optional jump hosts. The Rust
+  core forwards a local port (one tunnel per connection, shared by its sessions) and rebuilds it when the bastion
+  drops: the next query reconnects through the session guard. An unknown host key is shown with its fingerprint and
+  «Confiar en esta clave», and a changed one is refused. «Probar conexión» reports the SSH step and the forward apart
+  from the database's. The SSH password, passphrase and key go to the OS credential store (long keys in parts), never
+  to connections.json; exports carry only the tunnel's settings, and DBeaver/DbVisualizer imports bring them too.
+  Hidden, with a note why, for SQLite and ODBC.
+- **Export connections with their passwords** (#101): «Exportar» opens a dialog with «Incluir contraseñas», off by
+  default (the file is then exactly the v1 file as before). With it on, a passphrase typed twice seals every secret
+  (database password, SSH password, passphrase and pasted key, secret entries of the ODBC string and "Parámetros
+  extra") with Argon2id + AES-256-GCM in the Rust core, so the secrets never reach the interface on export; the file
+  (format v2) says on top that it carries encrypted passwords. «Sin cifrar» exists only behind an explicit warning.
+  Importing a v2 file asks for the passphrase, refuses a wrong one without importing any secret (try again, or import
+  without passwords), and saves the secrets to the OS credential store, never to connections.json. v1 files import as
+  before.
+- **«Mantener viva la conexión»** (advanced options of a connection, off by default): the minutes after which the
+  server ends idle sessions; Celer checks idle sessions a bit before (80 %), so they are not cut (#97).
+- **MCP from Claude Code inside WSL** (#124): Settings › IA y MCP › "Claude Code en WSL" lists the installed distros,
+  whether Windows interop is on in each and where Claude Code is, and shows the `claude mcp add` command with
+  `celer.exe` as the distro sees it (`/mnt/c/…`, honouring a custom `automount.root`). "Registrar en WSL" shows that
+  command, asks for confirmation, runs it inside the distro and then reads the distro's `~/.claude.json` to confirm
+  it; a registration that points to an old path of Celer is flagged with "Volver a registrar". The WSL client is the
+  same Windows process (interop stdio), so it gets the same per-connection levels, masking, limits and audit. Claude
+  Code on Windows also shows whether it is registered.
+- **The MCP audit log records the client** (#124): Windows or WSL and the distro, and the client program
+  (`claude-code`…), shown in Settings › IA y MCP.
+- **MCP indicator in the status bar** (#124): «MCP · Windows + WSL (Ubuntu)» while MCP is on, with the registered
+  clients, the last call and a warning for an old registration in its tooltip. Hidden while MCP is off. A click shows
+  «Actividad de la IA» (#100): the last calls of the audit log, and the way to Settings › IA y MCP.
+- **The AI can act in the app** (#100): Settings › IA y MCP › "Controlar la aplicación" (off by default; sub-switches
+  "Abrir pestañas", "Escribir en la biblioteca", "Ejecutar lo que abre") adds MCP tools that work with the running
+  Celer through a local channel: `get_app_state` (windows and tabs, limited by each connection's level),
+  `list_library` / `get_library_script` / `add_library_script`, `open_console` (SQL written; run only when allowed and
+  within the connection's level, through the same read filter and masking as `run_query`), `open_table` (with filter
+  and order), `open_object` and `open_er_diagram`. With it off none of them is listed; with Celer closed they say so.
+  Every action is in the audit log. Tabs the AI opens carry a ✦ badge («Abierto por la IA · hace N min») and a short
+  highlight, a notice says what was opened and where with «Ir», and the focus is never taken: while the user types
+  the tab opens in the background, and a Celer window in the background flashes its taskbar button. Scripts the AI
+  adds to the library show the badge and their notes.
+- **Script library as a working tool** (#99):
+  - **«Ejecutar en…»** (Shift+Enter, a button on each script, its menu and the palette) picks where a script runs
+    without changing the connection it was saved with: a connection and, where the engine has them, a database (the
+    schema on MySQL and MariaDB) and, on PostgreSQL, a schema put first in that console's `search_path`. Several
+    targets run one after the other, one console per target with its results in its own tab; production and "no
+    WHERE" confirmations are asked per target and the parameters once. A target database that cannot be opened runs
+    nothing there. "Solo abrir" opens the consoles without running. The last targets are offered again next time.
+  - Scripts get a **description** (under the name, in the tooltip and in «Ejecutar en…»), an optional **engine**
+    («Genérico / SQL estándar» included) and **parameters** with a default value and a description: the parameters
+    prompt comes pre-filled with the default (or the value last typed in that console) and explains each field.
+  - **Favourites and recent** at the top of the panel (a star on each script; the five last used), and the search
+    also looks in the description.
+  - Multi-statement scripts say what runs: «Abrir y ejecutar todo (3 sentencias)»; to run one statement, open it and
+    press Ctrl+Enter on it.
+  - The library file moves to version 3; older files and `.sql` bundles load unchanged, and bundles now carry the
+    description, engine and parameters (favourites and targets stay on each machine).
+- **Engine compatibility at a glance** (#113): library scripts, your templates and history entries show the icons of
+  the engines they are written for (or «SQL estándar»), guessed from the SQL's dialect (TOP, GETDATE(), brackets,
+  ILIKE, `::`, backticks, FIRST/SKIP, NVL, PRAGMA, LIMIT…) or from the connection they were saved or run with, and
+  settable by hand («Genérico / SQL estándar» included). A mismatch with the active console's engine shows in yellow;
+  generic ODBC is never flagged. «Solo los compatibles con esta conexión» filters the library, the history and the
+  template settings, and other-engine templates sink in the editor's suggestions. «Ejecutar en…» warns per target and
+  asks before running a script marked or written for another engine.
+- **Variables** (#118): values written as `${name}` in consoles and library scripts, defined per console, per
+  connection or globally (the console's value wins, then the connection's, then the global one), edited in the new
+  «Variables» tab of the right panel (Alt+9), completed in the editor after `${` and shown on hover. Numbers, NULL and
+  booleans go in as they are and the rest quoted, or as raw SQL when marked; strings and comments are never touched,
+  and a name without a value is still asked for like a parameter. The same library script run on another connection
+  («Ejecutar en…» shows them per target) takes that connection's values. The history and the MCP audit log keep the
+  SQL actually sent, the MCP tools substitute the connection's and global variables too, and the AI assistant gets the
+  names, with their values only where the connection lets the AI read data. `${name}` is now also found on Informix,
+  where braces start a comment.
+- **Features an engine lacks are greyed out** with «No disponible en <motor>» instead of failing on click (one support
+  table): the execution plan (not on Informix or generic ODBC), the real plan (PostgreSQL and MariaDB), server
+  activity (not on SQLite or generic ODBC), and the E-R diagram and schema comparison (not on generic ODBC), in the
+  console's toolbar, the explorer's menus, the palette and the shortcuts.
+- **Compare any two results** (#119): «Comparar con…» in the results bar (and «Comparar resultado con…» in the
+  palette) sets the result on show against another one: a result or pinned result of the same console, of another
+  console or another connection, or the rows a table tab has loaded. Rows are matched by the primary key when a side
+  is a table (a table tab, or a plain `SELECT … FROM table`), else by a unique column, or by the key columns chosen
+  (several at once, or the whole row). The comparison shows A and B with their console and connection, counts
+  (equal, changed, only in A, only in B), changed cells marked with A's value on hover, «Solo diferencias» to list
+  only what differs, «Intercambiar» and an export of what is on show to CSV or JSON (a state column and, for each
+  changed column, its value in A). Values are compared by what they mean, so the same data from two engines matches
+  (12.50 and 12.5, true and 1, `2024-03-15T00:00:00` and `2024-03-15`). It works on the loaded rows: when a side has
+  more, the view says so and offers «Cargar todo»; at most 200,000 rows per side are compared. «Fijar resultado» is
+  also in the palette, and a result pinned before all its pages arrived says so.
+- **Excel import with types, header row and range** (#120): the import wizard finds the header row of a sheet
+  (skipping a title or notes above it; any row can be chosen, or none) and takes a cell range (`B3:F200`, `B3:F`,
+  `B:F`). Dates, numbers and booleans arrive with their type and are written for each column's type (a date-time into
+  a DATE keeps the date, a serial number into a date column is a date, no text round trip that breaks decimals);
+  mapping, examples, required-column warnings and the single transaction are the same as for CSV. The sheet is read
+  by the core with progress and «Cancelar», and imported in chunks, so a 100,000-row workbook never sits in the window
+  as text.
+- **Paste from Excel** (#120): Ctrl+V (or «Pegar celdas copiadas de Excel») in the import wizard imports the copied
+  cells the same way (header found, Spanish formats such as `1.234,50`, `15/03/2024` or `VERDADERO` read as numbers,
+  dates and booleans). In the table viewer, Ctrl+V pastes the block from the active cell as pending edits, with new
+  rows past the last one.
+- **Open manual transactions are timed and never left behind** (#116). In Manual mode the console shows
+  «Transacción abierta · N min · M sentencias» next to Commit/Rollback, and its tab a «TX N min» badge, amber after
+  the first threshold and red after the second (1 min / 5 min by default, 30 s / 2 min on production; *Ajustes ›
+  Seguridad › Transacciones manuales*). Past the red one Gib (or a notice, when he is off) reminds you without taking
+  the focus, and again each time that much more goes by. The status bar lists this window's open transactions; a
+  click goes to the console. Closing a console or a window, disconnecting, deleting the connection, changing the
+  console's connection or database, going back to Auto or quitting with a transaction open asks Commit / Rollback /
+  Cancelar, and Celer never commits on its own: a session closed with a transaction still open is rolled back first
+  (the generic ODBC and IBM CLI drivers and the Informix JDBC bridge are now told so; the other engines' servers undo
+  it when the connection goes), checked live on every engine.
+- **Environments: the whole window wears the connection's colour** (#117). Each connection has an environment
+  (Desarrollo, Pruebas, Preproducción, Producción, or a name and colour of your own) chosen in its form. Its consoles
+  and tables get a coloured band on top and a chip with icon and label (not only colour) in the toolbar and the status
+  bar; its tabs, its explorer node and the same consoles in other windows wear the same colour, production red and
+  preproduction amber by default, with contrast checked in every theme including high contrast. Production keeps its
+  confirmations, and the form suggests read-only and explains the stricter transaction warnings. A connection saved
+  as production before is Producción, read from connections.json as it was (the file changes only when the
+  connection is saved again); DBeaver's dev/test/prod types come in as the same environments, and the MCP server
+  lists each connection's environment.
+- **Settings reviewed and extended** (#106). Ajustes has a search box that finds any setting by name and takes you to it,
+  «Restablecer sección» on every section (with undo), and «Exportar ajustes…» / «Importar ajustes…» as JSON (an import
+  applies only the keys it understands, with valid values, and lists the rest). New settings, all applied without a
+  restart:
+  - Editor: font family, tab size and spaces or tabs, word wrap, line numbers, autocomplete on/off and its delay, and
+    keyword case (completion and «Formatear SQL»).
+  - Resultados: NULL text, dates as sent or day/month/year, numbers with a thousands separator, characters drawn per
+    cell and what Ctrl+C copies (TSV, TSV with headers, CSV, Markdown, JSON). Display only: copies, exports and edits
+    keep the server's value.
+  - Ejecución: a default query timeout, enforced by the core through each driver's own cancel (the «Detener» path), so
+    it works the same on PostgreSQL, MySQL, MariaDB, SQL Server, Informix (DRDA and JDBC), SQLite and ODBC; and the
+    transaction mode new consoles start in.
+  - Ventana y pestañas: restore the last session's tabs and windows on start (or not), and whether opening a table
+    already open goes to its tab or opens another.
+  - Historial: queries and days kept (applied by the core, the file is trimmed at once) and «Vaciar historial».
+  - Avisos: how long notices stay, and a desktop notification when a query longer than N seconds ends while Celer is in
+    the background.
+  Settings files from earlier versions load unchanged; new keys take their defaults, which keep today's behaviour.
+- **Local error log** (#122): Ayuda › Registro de errores (a new **?** button in the left bar, and the palette) lists
+  Rust panics, driver errors of every engine, unhandled interface errors and failed calls to the core, with time,
+  version, area and stack, and can copy them, show the file in its folder and clear them. Entries are scrubbed before
+  they are written (SQL text, quoted values, passwords, connection strings, hosts and IPs, paths with the user name);
+  the file (`<data>/logs/errors.log`) rotates at 256 KB. Nothing is sent anywhere. An unexpected interface error now
+  shows a notice that points to the log.
+- **Reportar / Sugerir** (#112): a window to report a bug or suggest an improvement on Celer's GitHub, from Ayuda, the
+  palette, the status bar and the notice after an unexpected error. A bug carries what happened, what was expected and
+  the steps, plus the version, system, theme and the active connection's engine and driver (never host, user, database
+  or data) and, if ticked, the last entries of the error log; an idea carries what, why and the area. Screenshot of the
+  window in one click, paste or drag images, and mark them with a rectangle or an arrow or pixelate what must not be
+  seen. A preview shows exactly what will be sent; «Abrir en GitHub» opens a prefilled issue form (labels `bug` or
+  `enhancement` plus `status:triage`) that the user submits, with the images saved in the data folder and the first one
+  copied. Drafts are kept offline and «Mis reportes» lists the reports sent, with their links. The issue forms in
+  `.github/ISSUE_TEMPLATE` match the window's fields, and CONTRIBUTING.md describes the triage flow
+  (`status:triage` → `status:ready`).
+- **Reports sent with your GitHub account** (#112): «Enviar con mi cuenta de GitHub» in the report preview keeps a
+  GitHub token (classic, `public_repo`) in the OS credential store, never in a file, and never shows it again. With it
+  saved, «Enviar a GitHub» creates the issue through the GitHub API with the same text the form would get (GitHub drops
+  the labels for accounts without triage rights), and the report goes to «Mis reportes» with its real link; images,
+  which the API cannot attach, are saved and the first copied, and the new issue opens in the browser to add them. A
+  failure (bad or expired token, missing permission, rate limit, no connection) says what to do and keeps the draft;
+  «Abrir en GitHub» works as before.
+- **Gib reacts to what happens, and only as much as you want** (#104): a long query that finally works, an error (and
+  a run of them), an empty result (he scratches his head), a big export, a connection that drops or comes back, the
+  first query of the day, two hours without a break, Friday afternoon (careful on production) and late nights. Idle
+  activities only when you are really idle (no typing, nothing running, no dialog, palette or menu), rarer and varied.
+  Every Gib can be petted (the cursor resting on him) and poked (a click; three make him grumpy), and his eyes follow
+  the cursor; empty states have their own Gib (waiting at his laptop in a new console, puzzled by an empty result or a
+  search that finds nothing, greeting you just out of bed late at night) and he thinks along while the AI answers.
+  *Ajustes › Apariencia › Gib* gathers everything: on/off, how often (at most 3, 8 or 16 messages an hour, never a
+  sound or the focus), reactions, idle activities, tips, eye tracking and where he appears (status bar, empty states
+  and AI, start-up, waits and dialogs). The old *Compañero* setting is carried over.
+- **Your own Gib** (#105): *Ajustes › Apariencia › Gib* has a live preview and sets his colour (the classic black tie,
+  the accent colour, which follows it, or any colour), accessories (cap, glasses, headphones, scarf: layers on every
+  pose that move with his head and leave his eyes alone), the name he uses in his messages and the palette (default
+  «Gib») and the companion's pose (standing, Monday, head only, with the laptop). The look applies to every Gib in the
+  app; the lab takes `acc=` and `tint=` to check the eyes with each accessory.
+
+### Changed
+- **The E-R diagram reads a schema's foreign keys in one catalog query** (#98) instead of asking table by table: the
+  diagram of one table no longer shows «Buscando las relaciones de … n/1557» on large schemas. On a 1,500-table
+  Informix schema it opens in about 0.1 s over JDBC and DRDA (about 6 s before on a local server, much more over a
+  slow link); the whole-schema diagram reads its keys the same way. Every engine has its own query (PostgreSQL,
+  MySQL/MariaDB, SQL Server, Informix, SQLite; `SQLForeignKeys` on generic ODBC), and the engine tests check it gives
+  exactly the keys read table by table.
+- **E-R diagram of a table on a generic ODBC connection**: it opens on the source's tables (it could not find a
+  table folder before), and the explorer shows each table's foreign keys under «Claves foráneas».
+- SQLite: a key declared as `REFERENCES t` without columns shows t's primary-key columns instead of nothing.
+- **Recovering from a connection the server or a firewall dropped while idle takes about 1.5 s, not 10-12 s** (#97):
+  a session idle for a minute is checked before use with a bounded round trip; if the connection does not answer in
+  1.5 s and the session has nothing to lose, Celer opens another one at once instead of waiting for the system's TCP
+  timeout (with a transaction, temporary tables or `SET` it still waits and says what was lost). Idle sessions are
+  also checked when Celer's window gets focus. While the new connection opens, the tab's dot pulses amber and the
+  running timer says «Reconectando…». Informix over JDBC logs in with `LOGINTIMEOUT` (8 s unless set). Measured on
+  every engine (`*_silent_cut` and `*_kill_and_requery` engine tests); generic ODBC sources are checked with a
+  catalog call now (before, a cut was only noticed by its error).
+- **Moving a result column lifts the whole column** (#109): dragging a header picks up the column with its visible
+  cells as a semi-transparent ghost with a shadow, and the other columns slide aside live to open the gap where it will
+  land (no drop line any more). Near the edges the grid scrolls by itself; dropping lets the column settle into its
+  place and Esc flies it back where it was. With "Animaciones: Reducidas" (or the system's reduced motion) the columns
+  jump instead of sliding. Only the rows on screen are drawn, so it stays smooth on wide, long results.
+- The settings dialog is split into one component per section (`src/components/settings/`), registered in
+  `src/settingsSections.ts`, so new sections plug in without touching the dialog. «Editor y resultados» is now two
+  sections, «Editor» and «Resultados».
+- Esc in a confirmation shown over another dialog (Ajustes) closes only the confirmation.
+- **Shorter texts in Settings** (Editor y resultados, Seguridad, IA y MCP, Drivers) and a tighter user guide: the
+  explorer's multi-selection, quick connect, reconnection and column moving read in half the words; the guide gains
+  *Historial* and *Exportar e importar* sections and names the *IA y MCP* and *Drivers* settings (#111).
+- **Docs**: what each area of the app is for (`docs/ARCHITECTURE.md › Areas`), `STATUS.md` and `docs/ROADMAP.md`
+  rewritten from what exists today and from the open issues, and the README lists several windows, connection
+  organisation and every download Celer can make (#111, #121).
+
+### Fixed
+- Sessions: with session state (a transaction, a temporary table, a SET), the check before using a session idle for
+  over a minute gives a silently dropped connection 10 s and then reports what was lost (`SESSION_LOST`), instead of
+  hanging the console until the system gave up; «Detener» ends that wait at once. A dropped connection is closed in
+  the background, so PostgreSQL no longer waits on it either (#143).
+- SSH tunnels: TLS with certificate validation («Confiar en el certificado» off) works through a tunnel: PostgreSQL
+  and SQL Server check the certificate against the database server's name instead of 127.0.0.1, which no
+  certificate names; MySQL and MariaDB validate its chain (their driver cannot check another name). The form says so
+  under the option (#141).
+- SSH tunnels: an SSH password mistyped at the connect prompt is forgotten when the bastion refuses it, so the next
+  connect asks again; and saving or deleting the SSH password in the properties replaces the one typed for the run,
+  instead of the wrong one failing every connect until Celer restarted (#140).
+- Connections: «Exportar» without «Incluir contraseñas» also leaves out the other secret entries of «Parámetros
+  extra» and the ODBC string (`sslpassword=`, `Token=`, `api_key=`…), as the export with passwords already did (#162).
+- Import from DBeaver/DbVisualizer: MySQL `sessionVariables` keep a quoted value with commas whole
+  (`sql_mode='A,B'`), and a PostgreSQL `currentSchema` with spaces (`ventas, public`) is escaped in `options`, so the
+  imported connection opens (#161).
+- Import from DBeaver/DbVisualizer: a MySQL/MariaDB URL with `connectTimeout=0` or `socketTimeout=0` (no timeout
+  in Connector/J) no longer becomes a 1-second timeout; the parameter is left out (#144).
+- Windows: closing a window with a single tab at risk says «Puedes moverla…» / «Moverla a …» instead of the plural
+  (#157).
+- Variables: hovering a `${name}` inside a comment or string that spans several lines (a `/* … */` block) no longer
+  shows a value, since nothing is substituted there (#156).
+- Settings › Seguridad: a manual-transaction threshold below 0.5 min is saved as 0.5 min and the field shows the
+  threshold in force, instead of saving 0 and showing «0 min» while the default applied (#155).
+- Variables: renaming a variable to a name its scope already uses is refused with a notice, instead of silently
+  replacing (and deleting) the other variable (#154).
+- Variables and parameters: a value of true / false goes in as the engine takes it (1 / 0 on SQL Server, 't' / 'f'
+  on Informix, and over ODBC as the server behind it), instead of a bare TRUE / FALSE those engines reject (#138).
+- Library: «Ejecutar en…» with one target that reuses the script's open console runs the saved script, every
+  statement, instead of that console's selection or unsaved text; when that console is still running something, a
+  notice says so instead of doing nothing (#137).
+- Result and data comparison: the «cambiadas», «solo en B» and «solo en A» chips reach 4.5:1 in every theme (they
+  were below it in Sand, Celer Claro and, for «solo en A», Fjord) (#153).
+- Transactions: the reminder of a long open transaction names the connection only when the console's title is not
+  already the connection's name («Producción» (Producción) became «Producción») (#152).
+- Quitting with a single open transaction in another window: the buttons read «Commit» and «Rollback», as with one
+  window, instead of «Commit en todas» / «Rollback en todas» (#151).
+- Gib: while his speech bubble is open, notices appear to the left of it instead of covering it in the bottom-right
+  corner (#150).
+- Connection dialog: the «Otro…» environment button sits in line with the other five instead of 8 px lower (#149).
+- Library: on a short window (1024×640, or 1366×768 at 125 %) the «Ejecutar en…» dialog keeps its Cancelar and
+  Ejecutar buttons inside it; the list of targets scrolls instead (#136).
+- Reports: «Capturar la ventana» shows the window as it is on screen: a scrolled explorer no longer comes out empty,
+  and a scrolled editor or result grid shows the lines and rows in view (with its header and row numbers where they
+  are), instead of their top (#135).
+- Tab bar: with many consoles in a manual transaction on a narrow window, a tab's «TX …» badge no longer sticks out
+  over the next tab and the «+» button; a tab with a transaction keeps room for its badge and close button (the tab
+  bar scrolls) and only its title gives way (#134).
+- Console toolbar: with an open transaction on a console of a production connection, the connection and database
+  pickers no longer spill past their buttons and under the environment chip; the transaction's label collapses to its
+  icon on consoles narrower than 1100 px, and a squeezed picker cuts its name inside its own box with the chevron
+  visible (#133).
+- Status bar: with the environment chip, an open transaction, MCP or a selection's aggregates on a 1024–1366 px
+  window, the items no longer overlap: the connection, the server version, the aggregates, the transaction and MCP
+  shrink with an ellipsis, and below 1280 px the server version and below 1100 px the MCP label give way (#132).
+- Transactions: a detached plan or result comparison no longer reminds of a console's open transaction (it kept doing
+  so after the Commit); the window that owns the console is the one that reminds (#166).
+- Transactions: closing a console, a window or Celer (or anything else that asks Commit or Rollback) while the console
+  with the open transaction is still running a statement stops that statement first, as closing did in 2.2.0, and the
+  dialog says so: it no longer waits for the statement to end, and «Commit» no longer includes it. On PostgreSQL,
+  where stopping a statement (or any error) aborts the transaction, «Commit» now says that nothing can be saved and
+  leaves it for a Rollback, instead of rolling it back in silence and reporting it confirmed (#147).
+- Result comparison: looking up the primary key of a console's result no longer runs on the console's own session
+  while its result is still loading (it uses a session of its own then), so on SQL Server the result and the
+  comparison are no longer cut short at the first page and on MySQL, MariaDB and SQLite «Cargar todo» no longer fails;
+  a SQL Server result closed by another operation now says so instead of looking complete (#131).
+- History: «Consultas que se guardan» is what limits the history again: its size bound grows with the setting (about
+  512 bytes per query, 4 MB at least) instead of a fixed 4 MB that kept only about 15,000 queries whatever the setting
+  said; Ajustes › Historial and the guide say how very long queries count (#163).
+- SSH tunnels: disconnecting, editing or deleting a tunnelled connection closes its tunnel (the SSH login on the
+  bastion and the local port) as soon as its last connection through it ends, instead of leaving it open for up to
+  about two and a half minutes (#164).
+- SSH tunnels: when the bastion cannot reach the database host (a firewall, a wrong address), «Probar conexión» fails
+  the forward step in 5 s and connecting fails in 15 s with what happened, instead of waiting about two minutes; an
+  SSH login that stalls while authenticating, or a jump host that cannot reach the next one, is bounded too (#142).
+- SQL Server: Detener and «Tiempo máximo de una consulta» cut the statement with ATTENTION and keep the connection, so
+  an open transaction (manual mode, BEGIN TRAN) survives as in SSMS instead of being rolled back with a reconnect.
+  Only a cut in the middle of a very long value still reopens the connection, and the next statement says what was
+  lost (#146).
+- Settings: a damaged settings.json is again reported when Celer starts («No se pudieron leer los ajustes», with
+  where the copy was kept) instead of being set aside silently while every setting went back to its default (#145).
+- Import: a spreadsheet with one value far from its data (a stray cell in column XFD or row 1,048,576) no longer
+  closes Celer while it opens: a used area of more than 30 million cells is refused with «La hoja ocupa demasiadas
+  celdas», where it is and how to clear it. .xlsb workbooks are read cell by cell too, with progress and «Cancelar»
+  (#130).
+- Informix: the guide and docs/DRIVERS.md list what DRDA changes in the values (a floating `DECIMAL(p)` arrives as a
+  DOUBLE with about 15 significant digits, DATETIME fractions with 6 digits, `HOUR TO MINUTE` with seconds, BOOLEAN
+  as 1/0) and recommend SQLI (JDBC) when exact floating decimals matter (#160).
+- SQL Server: when a single INSERT, UPDATE, DELETE or MERGE fails, what it printed before the error (a trigger's
+  PRINT before its RAISERROR) is shown before the error, as SSMS does; it was lost (#159).
+- **SQL Server: an error raised while a result's rows are read fails the statement** (#129): a conversion that fails
+  or a division by zero on row n (or in a later statement of the batch) was shown as a success with the rows read
+  before it, an export wrote a truncated file and reported success, and a GO script went on with the next batches.
+  Now the statement fails with SQL Server's message (and how many rows had arrived), the export fails and leaves no
+  file, and the script stops at the failing batch, as on every other engine.
+- MySQL: a `START TRANSACTION` or `BEGIN` written in a console with auto-commit on now shows the transaction as open (indicator, reminders on close), as it already did on MariaDB.
+- **MySQL's transaction indicator follows the server** (#128): a script that fails after `START TRANSACTION` leaves the
+  transaction shown as open (Commit/Rollback enabled, a warning before closing the console rolls it back), and so do
+  `SET autocommit = 0` followed by a change in the same script and XA transactions; statements that commit implicitly
+  (`ANALYZE TABLE`, `OPTIMIZE TABLE`…), a `ROLLBACK TO SAVEPOINT` behind a comment and a reconnection after a lost
+  connection no longer leave it wrong. Celer asks MySQL 5.7+ for its transaction state instead of guessing it from
+  the text of the statements.
+- PostgreSQL: a foreign key to a partitioned table is listed once (#139), as pg_dump and `\d` show it: the copies
+  PostgreSQL keeps for each partition no longer appear in the explorer's «claves foráneas», the E-R diagram (which drew
+  the partitions as related tables) or the table's DDL, whose script now runs.
+- SQLite: the E-R diagram draws a foreign key whose `REFERENCES` is written in another case than the table
+  (`customers` for `Customers`) and the keys between tables of an attached database (#158); the explorer's «claves
+  foráneas» open the right table, and a table of an attached database opened from the explorer reads that database's
+  table instead of `main`'s.
+- Imported connections: an SSH tunnel without a saved password asks for it when connecting (kept for the run only), and an ODBC connection with a user and no password asks for the password, so DbVisualizer imports connect without editing the form.
+- **Importing from DBeaver and DbVisualizer reads the JDBC URL in full** (#102): both go through the same parser as
+  «URL JDBC» in the connection form, so SSL/encryption and the certificate setting, `jdbc:ids` (Informix over DRDA),
+  `jdbc:informix-sqli` without a port, SQL Server URLs with nothing after `//` (`serverName`, `instanceName`,
+  `portNumber`, `databaseName`) and multi-host PostgreSQL/MySQL URLs (the first server, and a note about the others)
+  come through. An empty host or database in the tool no longer hides the one in the URL, DBeaver's driver properties
+  and SSL settings apply to every engine (not only Informix), `jdbc:odbc:<DSN>` becomes an ODBC connection, and the list
+  says what was left out. dbvis.xml is read by Celer's own XML reader.
+- **SQL Server `PRINT` and low-severity `RAISERROR` messages are shown** (#67): `PRINT 'hola'; SELECT 1` shows «hola»
+  in the Output area next to the result, as SSMS does, and so do `RAISERROR('…', 0, 1) WITH NOWAIT` from a procedure,
+  a trigger's `PRINT` after an `INSERT`, and a message sent after a result read in pages. Severity 11 and up still
+  fails the batch as before. Celer now builds with a patched copy of `tiberius` that hands those messages over
+  (`src-tauri/vendor/tiberius/PATCHES.md`).
+- **Informix DRDA on Windows** (#124, #100): text values and catalog names no longer come back truncated or empty (the IBM CLI driver packs block indicators 4 bytes apiece).
+- **Masking on generic ODBC sources** (#100, #124): column names are read from the ODBC catalog, so protected columns are hidden in expressions and filters too.
+- **AI «ejecutar» on a connection that is still connecting** (#100): the console waits for the connection instead of failing with «Sin conexión».
+- **Compare** (#119): «Cargar todo» while comparing a result with over 120,000 rows only in B no longer ends in a stack overflow that left the console on «Ejecutando…»; decimals written with a comma (Informix DRDA on Windows, `12,50`) equal their dot form.
+- **Informix over DRDA on Windows** (#117, #119, #120): the IBM CLI driver's indicator arrays are read the way the driver wrote them (4 or 8 bytes per row, detected on each block), so names are no longer cut or padded with NULs and NULLs are no longer read as empty text.
+- Result grid (#109): loading the rest of a very large result (200 columns, 100,000 rows) no longer freezes the window
+  for about 700 ms per page, and pressing or dropping a column header no longer works the column's statistics out in
+  one go, so dragging a header stays smooth.
+- Importing a workbook whose title sits in column A above a table that starts in column B (#120) no longer adds an
+  empty «columna A» to the columns and the mapping: without a range, the columns are those of the header row and
+  the rows under it.
+- DECIMAL and NUMERIC values read through ODBC or Informix DRDA keep a decimal point: IBM's CLI driver on a Spanish
+  Windows wrote them with a comma (`12,50`), and Microsoft's old «SQL Server» ODBC driver without the leading zero
+  (`.10`, `-.75`); both now read as plain numbers (`12.50`, `0.10`, `-0.75`).
+- Closing a console or tab whose result was still open (a large query read in part) on an ODBC or Informix DRDA
+  connection freed the statement after its connection, which could crash Celer; the statement is now freed first.
+- Importing into an Informix table wrote multi-row `VALUES`, which Informix rejects; it now sends one INSERT per row
+  in each batch, and dates go into Informix DATE columns as `MDY(…)` whatever DBDATE says.
+- **Informix over DRDA on Windows: database names and the explorer** (#117). IBM's CLI driver on Windows writes
+  32-bit lengths like on Linux and macOS, so names came back padded with invisible characters or empty, and an empty
+  one made the explorer stop updating until Celer restarted (stale environment chips, a connection still shown
+  connected and «Cargando…» after disconnecting). Names now read correctly, and an odd name from any driver can no
+  longer stop the explorer.
+- **Error log and reports** (#122, #112). The scrubber now also cleans the message at the head of UI error stacks, host
+  names and host:port, SQL Server duplicate-key values, EXEC/WITH statements and MySQL's «Can't connect» text. «Adjuntar
+  los últimos errores» is off unless you tick it (it starts ticked only on the report opened from an unexpected error),
+  and «Capturar la ventana» leaves hidden tabs out so it works with many tabs open.
+- **Browser preview**: a SELECT that finds no rows shows an empty grid with its columns, as every engine does,
+  instead of «0 filas afectadas».
+- **Gib's eyes, in every pose, mood and activity** (#103): the pupils are clipped to the eye whites and their movement
+  is clamped to the room each pose's eyes have, so they never leave the eye (an error face used to shrink them towards
+  the corner of the drawing and throw them off the face); the lids are flaps that slide down to close, so a blink
+  always shuts the eye completely and a wide-open or happy face keeps a sliver of lid instead of losing it; every pose
+  (standing, laptop, Monday, head only) now has lids, and its eyes and lids sit in the head group, so they move with the
+  head. The animation lab (`#giblab?grid` in the dev server) shows every pose × mood × activity at once, at every size
+  and theme, and `dev/gib-lab-shots.mjs --grid` captures it and checks the eyes' geometry.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added
@@ -36,6 +409,10 @@ All notable changes to Celer are documented here. The format follows
   - The menu of a selected row, Supr, Ctrl+C and Ctrl+Mayús+F act on the whole selection and say how many.
 
 ### Fixed
+- **Library «Ejecutar en…»** (#99): a run on a connection that is still connecting waits for it instead of failing with «Sin conexión»; the multi-target summary no longer counts failed runs as executed.
+- **IA activity list** (#100): the entries for app actions (open_table, add_library_script...) were invisible (a CSS class clash made them transparent).
+- **Informix over DRDA on Windows** (#100): catalog names padded with NULs no longer break open_table, open_object and the E-R diagram.
+- **E-R diagram on generic ODBC sources** (#100): no longer fails with «Aquí no hay una carpeta de tablas».
 - **The console's find/replace panel** (Ctrl+F / Ctrl+H) stayed on top of dialogs, covering their fields until it was
   closed. Dialogs and menus now cover it, and the panel follows Celer's look in every theme: fields, buttons and the
   *mayúsculas / regexp / palabra completa* toggles, which light up when on (#88).

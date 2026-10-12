@@ -25,12 +25,14 @@ import {
   closeCompare,
   closeErDiagram,
   closeTabsQuietly,
-  compareWithCurrent,
+  openComparison,
+  patchCompare,
   confirmDialog,
   connect,
   connectionById,
   detachTab,
   disconnect,
+  endTransactions,
   explainStatement,
   fileDirty,
   insertIntoActive,
@@ -43,10 +45,10 @@ import {
   refreshConnections,
   releaseWindowSessions,
   replaceActiveSql,
+  settleTransactions,
   restoreTabs,
   runText,
   savedTabs,
-  setCompareKey,
   setGibEvent,
   setState,
   showPlan,
@@ -59,10 +61,13 @@ import {
   type GibEvent,
   type SavedTab,
   type SqlTab,
+  type ResultComparison,
   type Tab,
   type TableTab,
 } from "./state";
-import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, openLibraryScript, revertConsole, saveToLibrary, scriptById } from "./library";
+import { applySharedVariables } from "./variableStore";
+import { applySharedLibrary, insertLibraryScript, libraryDirty, loadLibrary, openLibraryScript, openRunOn, revertConsole, saveToLibrary, scriptById } from "./library";
+import { handleMcpRequest } from "./mcpApp";
 import { closeSchemaCompare, openSyncScript, schemaCompare, setSchemaCompare, swapCompare } from "./schemaCompareRun";
 import { closeDataCompare, dataCompare, openDataSyncScript, setDataCompare, swapDataCompare } from "./dataCompareRun";
 import { installOnClose } from "./update";
@@ -77,6 +82,7 @@ import {
   panelOf,
   placeOnScreen,
   readLayout,
+  riskPronoun,
   riskSummary,
   riskyTabs,
   SINGLE_PANELS,
@@ -269,9 +275,12 @@ export async function restoreWindowLayout(connectionsLoaded: boolean) {
     }
     if (windowLabel === "main") {
       if (layoutError) notify("No se pudieron restaurar las pestañas de la última sesión", "error", layoutError);
+      // Ajustes › Ventana › «Restaurar la sesión al iniciar» off: the panels as they were, without the tabs or the
+      // other windows.
+      const restore = state.settings.restoreSession;
       const [first, ...rest] = readLayout(layoutFile);
-      if (first) applyEntry(first, known);
-      for (const entry of rest) {
+      if (first) applyEntry(first, known, restore);
+      for (const entry of restore ? rest : []) {
         const kind = entry.kind === "panel" ? entry.panel : "full";
         if (!kind) continue;
         void invoke("window_open", { request: { kind, layout: entry, messages: [{ kind: "restore", entry, from: windowLabel }] } }).catch(() => {});
@@ -291,20 +300,20 @@ let demoUnreadable = false;
 async function restoreDemo(known: (id: string | null) => boolean) {
   try {
     const first = readLayout(await api().loadJson("workspace"))[0];
-    if (first) applyEntry(first, known);
+    if (first) applyEntry(first, known, state.settings.restoreSession);
   } catch (err) {
     demoUnreadable = true;
     notify("No se pudieron restaurar las pestañas de la última sesión", "error", errorText(err));
   }
 }
 
-function applyEntry(entry: SavedWindow, known: (id: string | null) => boolean) {
-  restoreTabs(entry.tabs as SavedTab[], entry.activeTabId, known);
+function applyEntry(entry: SavedWindow, known: (id: string | null) => boolean, withTabs = true) {
+  if (withTabs) restoreTabs(entry.tabs as SavedTab[], entry.activeTabId, known);
   const ui: Partial<{ explorerOpen: boolean; inspectorOpen: boolean }> = {};
   if (entry.explorerOpen !== undefined) ui.explorerOpen = entry.explorerOpen;
   if (entry.inspectorOpen !== undefined) ui.inspectorOpen = entry.inspectorOpen;
   setState(ui);
-  if (entry.inspectorMode && ["value", "record", "history", "library", "ai"].includes(entry.inspectorMode)) setState("inspectorMode", entry.inspectorMode as typeof state.inspectorMode);
+  if (entry.inspectorMode && ["value", "record", "history", "library", "variables", "ai"].includes(entry.inspectorMode)) setState("inspectorMode", entry.inspectorMode as typeof state.inspectorMode);
 }
 
 // ---------------------------------------------------------------- saving the layout
@@ -348,6 +357,7 @@ export async function saveWindowLayout(): Promise<void> {
 function applyShared(name: string, value: unknown) {
   if (name === "settings" && value && typeof value === "object") applySharedSettings(value as Partial<Settings>);
   else if (name === "library") applySharedLibrary(value);
+  else if (name === "variables") applySharedVariables(value);
   else if (name === "connections") void connectionsChanged();
 }
 
@@ -451,6 +461,9 @@ async function focusSelf() {
   if (isTauri()) await thisWindow().then((win) => win.setFocus()).catch(() => {});
 }
 
+/** Brings this window to the front (the user asked: «Ir» on a notice). */
+export const focusThisWindow = focusSelf;
+
 // ---- dragging a tab out of the tab bar
 
 let dragging = "";
@@ -539,6 +552,10 @@ async function handle(message: Message, known: (id: string | null) => boolean = 
       waiting?.(message.answer);
       break;
     }
+    case "mcp":
+      // An assistant's request (MCP «Controlar la aplicación»): not awaited, a run may take a while.
+      void handleMcpRequest(message);
+      break;
   }
 }
 
@@ -606,9 +623,14 @@ function ownRisk(): WindowRisk {
   };
 }
 
+/** This window's consoles with an open transaction. */
+const txTabIds = () => state.tabs.filter((tab) => tab.kind === "sql" && tab.inTransaction).map((tab) => tab.id);
+
 async function answer(message: Message) {
   let value: unknown = null;
   if (message.question === "risk") value = ownRisk();
+  // Quitting Celer: the user chose Commit or Rollback for every window's open transactions (confirmQuit).
+  if (message.question === "tx-commit" || message.question === "tx-rollback") value = await endTransactions(txTabIds(), message.question === "tx-rollback");
   if (message.question === "flush") {
     await persistNow().catch(() => {});
     // The window that downloaded an update installs it as Celer closes.
@@ -638,7 +660,7 @@ export interface WindowChoice {
 const [windowAsk, setWindowAsk] = createStore({ current: null as { title: string; body: string; choices: WindowChoice[]; resolve: (value: string) => void } | null });
 export { windowAsk };
 
-function askWindow(title: string, body: string, choices: WindowChoice[]): Promise<string> {
+export function askWindow(title: string, body: string, choices: WindowChoice[]): Promise<string> {
   windowAsk.current?.resolve("");
   return new Promise<string>((resolve) => setWindowAsk("current", { title, body, choices, resolve }));
 }
@@ -708,15 +730,25 @@ async function handOverTabs(target: string): Promise<boolean> {
   const risky = riskyTabs(tabRisks());
   if (!risky.length) return true;
   const tx = risky.some((tab) => tab.transaction);
+  const them = riskPronoun(risky);
+  // Open transactions: Commit or Rollback here, or the consoles go on in the other window (never an implicit commit).
   const choice = await askWindow(
     `Cerrar ${windowName(windowLabel)}`,
-    `Tiene ${riskSummary(risky)}. Puedes moverlas a ${windowName(target)}, con sus sesiones como están; si no, se pierden${tx ? " y las transacciones se deshacen" : ""}.`,
-    [
-      { label: "Cerrar y descartar", value: "discard", style: "danger" },
-      { label: `Moverlas a ${windowName(target)}`, value: "move", style: "primary" },
-    ],
+    tx
+      ? `Tiene ${riskSummary(risky)}. Puedes mover${them} a ${windowName(target)}, con sus sesiones y transacciones como están; si no, elige qué hacer con las transacciones (lo demás se pierde).`
+      : `Tiene ${riskSummary(risky)}. Puedes mover${them} a ${windowName(target)}, con sus sesiones como están; si no, se pierden.`,
+    tx
+      ? [
+          { label: "Commit y cerrar", value: "commit" },
+          { label: "Rollback y cerrar", value: "discard", style: "danger" },
+          { label: `Mover${them} a ${windowName(target)}`, value: "move", style: "primary" },
+        ]
+      : [
+          { label: "Cerrar y descartar", value: "discard", style: "danger" },
+          { label: `Mover${them} a ${windowName(target)}`, value: "move", style: "primary" },
+        ],
   );
-  if (choice === "discard") return true;
+  if (choice === "commit" || choice === "discard") return endTransactions(txTabIds(), choice === "discard");
   if (choice !== "move") return false;
   const ids = new Set(risky.map((tab) => tab.id));
   const tabs = state.tabs.filter((tab) => ids.has(tab.id));
@@ -726,7 +758,7 @@ async function handOverTabs(target: string): Promise<boolean> {
     return false;
   }
   if (!(await post(target, tabMessage(tabs, null)))) {
-    notify(`No se pudieron mover: ${windowName(target)} ya no está abierta`, "error");
+    notify(`${tabs.length === 1 ? "No se pudo mover" : "No se pudieron mover"}: ${windowName(target)} ya no está abierta`, "error");
     return false;
   }
   for (const tab of tabs) detachTab(tab.id);
@@ -744,13 +776,34 @@ export async function confirmQuit(): Promise<boolean> {
   const risks = [ownRisk(), ...(await askAll<WindowRisk | null>("risk")).filter((r): r is WindowRisk => Boolean(r))];
   const tx = risks.reduce((n, r) => n + r.tx, 0);
   const edits = risks.reduce((n, r) => n + r.edits, 0);
-  if (tx || edits) {
-    const parts = [
-      tx ? `${tx} ${tx === 1 ? "consola con una transacción abierta (se deshará)" : "consolas con transacciones abiertas (se desharán)"}` : "",
-      edits ? `${edits} ${edits === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"}` : "",
-    ].filter(Boolean);
-    const where = risks.filter((r) => r.tx || r.edits).map((r) => windowName(r.label));
-    const ok = await confirmDialog("¿Salir de Celer?", `Hay ${parts.join(" y ")} en ${where.join(", ")}.`, "Salir de todos modos", true);
+  if (tx) {
+    // Only this window's: the same question as with one window.
+    if (tx === risks[0].tx) {
+      if (!(await settleTransactions(state.tabs, "salir de Celer"))) return false;
+    } else {
+      const where = risks.filter((r) => r.tx).map((r) => windowName(r.label));
+      const choice = await askWindow(
+        "¿Salir de Celer?",
+        `Hay ${tx} ${tx === 1 ? "consola con una transacción abierta" : "consolas con transacciones abiertas"} en ${where.join(", ")}. Antes de salir, confírma${tx === 1 ? "la" : "las"} (Commit) o deshaz${tx === 1 ? "la" : "las"} (Rollback).`,
+        [
+          { label: tx === 1 ? "Commit" : "Commit en todas", value: "commit", style: "primary" },
+          { label: tx === 1 ? "Rollback" : "Rollback en todas", value: "rollback", style: "danger" },
+        ],
+      );
+      if (choice !== "commit" && choice !== "rollback") return false;
+      const rollback = choice === "rollback";
+      const own = await endTransactions(txTabIds(), rollback);
+      // A window that does not answer in time keeps its transactions, and Celer stays open.
+      const answers = await askAll<boolean | null>(rollback ? "tx-rollback" : "tx-commit", 15000);
+      if (!own || answers.length < risks.length - 1 || answers.some((ok) => ok !== true)) {
+        notify("No se pudieron cerrar todas las transacciones: Celer sigue abierto", "error");
+        return false;
+      }
+    }
+  }
+  if (edits) {
+    const where = risks.filter((r) => r.edits).map((r) => windowName(r.label));
+    const ok = await confirmDialog("¿Salir de Celer?", `Hay ${edits} ${edits === 1 ? "tabla con cambios sin guardar" : "tablas con cambios sin guardar"} en ${where.join(", ")}.`, "Salir de todos modos", true);
     if (!ok) return false;
   }
   await Promise.all([persistNow().catch(() => {}), askAll("flush", 2000)]);
@@ -852,7 +905,9 @@ export async function detachPanel(kind: PanelKind) {
         return;
       }
       tabId = tab.id;
-      data = { kind: "panel-data", tab: clone(tab) };
+      // The other tabs whose results are compared go along (the window has only what it is sent).
+      const others = [tab.compare.base, tab.compare.other].map((ref) => ref.tabId).filter((id, at, all) => id !== tab.id && all.indexOf(id) === at);
+      data = { kind: "panel-data", tab: clone(tab), tabs: others.map((id) => state.tabs.find((item) => item.id === id)).filter(Boolean).map((item) => clone(item)) };
       hide = () => closeCompare(tab.id);
       break;
     }
@@ -907,12 +962,15 @@ function dock(kind: string, data: Record<string, unknown>) {
     case "er":
       if (data.er && typeof data.er === "object") setState("er", data.er as ErState);
       break;
-    case "compare":
-      if (tab?.kind === "sql" && typeof data.pinId === "string" && tab.pinned.some((pin) => pin.id === data.pinId)) {
-        compareWithCurrent(tab.id, data.pinId);
-        if (Array.isArray(data.key) || data.key === null) setCompareKey(tab.id, data.key as string[] | null);
+    case "compare": {
+      // Back as it was in its window (sides, key, only the differences), if what it compares is still here.
+      const compare = data.compare as ResultComparison | undefined;
+      if (tab?.kind === "sql" && compare?.base && compare.other && [compare.base, compare.other].every((ref) => state.tabs.some((item) => item.id === ref.tabId))) {
+        openComparison(tab.id, compare.base, compare.other, compare.key ?? null);
+        patchCompare(tab.id, { onlyDiff: Boolean(compare.onlyDiff), pk: compare.pk ?? null });
       }
       break;
+    }
   }
 }
 
@@ -935,6 +993,11 @@ async function panelAction(action: string, args: Record<string, unknown>) {
       break;
     case "library-insert":
       insertLibraryScript(text("id"));
+      break;
+    case "library-run-on":
+      await loadLibrary();
+      openRunOn(text("id"));
+      void focusSelf();
       break;
     case "library-save":
       await saveToLibrary(args.asNew === true, typeof args.folder === "string" ? args.folder : undefined);
@@ -1001,7 +1064,9 @@ function panelData(message: Message) {
   if (message.from && !SINGLE_PANELS.includes(panelKind)) setPanelOwner(message.from);
   if (message.tab && typeof message.tab === "object") {
     const tab = message.tab as Tab;
-    setState("tabs", [tab]);
+    // A comparison of results also gets the tabs holding its other side.
+    const others = Array.isArray(message.tabs) ? (message.tabs as Tab[]).filter((item) => item && item.id !== tab.id) : [];
+    setState("tabs", [tab, ...others]);
     setState("activeTabId", tab.id);
   }
   if (message.er && typeof message.er === "object") setState("er", message.er as ErState);
@@ -1032,10 +1097,7 @@ export async function dockPanel() {
   if (panelKind === "er" && state.er) data.er = clone(state.er);
   if (tab?.kind === "sql") {
     data.tabId = tab.id;
-    if (tab.compare) {
-      data.pinId = tab.compare.pinId;
-      data.key = clone(tab.compare.key);
-    }
+    if (tab.compare) data.compare = clone(tab.compare);
   }
   await post(panelTarget(), { kind: "panel-dock", panel: panelKind, data });
   await closeWindowNow();

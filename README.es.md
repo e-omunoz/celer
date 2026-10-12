@@ -83,11 +83,19 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
 - **IA con permisos.** Un asistente que escribe, explica, corrige y optimiza SQL con Claude usando tu esquema, nunca
   tus filas. Un **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y otros clientes usen tus
   conexiones con un nivel de permiso por conexión, límites de filas y tiempo, columnas enmascaradas y registro de
-  auditoría.
+  auditoría, también desde Claude Code dentro de WSL. Si lo permites, la IA puede además abrirte consolas, tablas y
+  diagramas en Celer y añadir scripts a la biblioteca, siempre marcados como suyos y con los mismos permisos.
 - **Trae tus conexiones.** Impórtalas desde **DBeaver** (con las contraseñas guardadas, si quieres) y
-  **DbVisualizer**, con carpetas y marcas de producción. Arrastra conexiones entre carpetas en el explorador.
+  **DbVisualizer**, con carpetas, marcas de producción y túneles SSH. Llega a servidores detrás de un bastión con un
+  **túnel SSH** (contraseña, clave o agente, con saltos). Expórtalas con sus contraseñas, cifradas con una contraseña
+  del fichero (Argon2id + AES-256-GCM). Organízalas en carpetas anidadas con favoritas y búsqueda, arrástralas entre
+  carpetas y actúa sobre varias a la vez. «Probar conexión» enseña cada paso y qué hacer si uno falla; una conexión
+  caída vuelve sola, y nunca en silencio si se perdería una transacción.
+- **Varias ventanas.** Arrastra una pestaña fuera para llevarla a su propia ventana, una por monitor si quieres: la
+  consola conserva su sesión, la transacción abierta y las filas que faltaban por cargar. La biblioteca, el asistente
+  de IA, los planes, los diagramas y las comparaciones también pueden tener su ventana, y todas vuelven a su sitio.
 - **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
-  configurables, biblioteca de scripts, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
+  configurables, biblioteca de scripts que ejecuta cualquier script guardado en cualquier conexión o en varias a la vez, `${variables}` por consola, conexión o globales, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
   tiene una idea cuando acaba una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como
   a una mosca si le molestas mientras espera.
 - **Actualizaciones en la app.** Celer comprueba en GitHub si hay versiones nuevas, te enseña las novedades y las
@@ -217,6 +225,7 @@ pasar a Celer Setup, desinstala la copia MSI (tus datos se conservan) e instala 
 | `Ctrl+Alt+E` | Historial |
 | `Ctrl+Alt+B` | Guardar la consola en la biblioteca de scripts |
 | `Alt+8` | Biblioteca de scripts |
+| `Alt+9` | Variables (valores de `${nombre}` por consola, conexión o globales) |
 | `Ctrl+Alt+S` | Ajustes |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
 
@@ -225,11 +234,17 @@ Todos los atajos se pueden cambiar en *Ajustes › Atajos de teclado*. En macOS,
 ## Privacidad y seguridad
 
 - Sin cuentas ni telemetría. Tus datos no salen del equipo salvo que tú lo pidas.
-- Las contraseñas y la clave de IA se guardan en el almacén de credenciales del sistema, nunca en ficheros.
+- Las contraseñas, la clave de IA y el token opcional de GitHub para los reportes se guardan en el almacén de
+  credenciales del sistema, nunca en ficheros.
 - Más allá de tus bases de datos, Celer solo se conecta para: comprobar actualizaciones en la API de GitHub Releases
-  (no envía nada sobre ti y se puede desactivar), descargar el driver de IBM cuando lo pides y el asistente de IA si
-  configuras tu propia clave (recibe el esquema, nunca filas).
+  (no envía nada sobre ti y se puede desactivar), descargar los drivers de Informix cuando lo pides (IBM CLI, el driver
+  JDBC de Maven Central y, solo si no hay Java, un JRE de Adoptium), el asistente de IA si configuras tu propia clave
+  (recibe el esquema, nunca filas) y un reporte o sugerencia que envías con «Enviar a GitHub» usando tu propio token
+  de GitHub (una petición a la API de GitHub que crea el issue, con exactamente el texto que viste en la vista previa;
+  sin token, «Abrir en GitHub» solo abre la página en tu navegador).
 - El servidor MCP funciona en local por stdio, está desactivado por defecto y solo ve lo que permite cada conexión.
+  Dejar que actúe en la aplicación es otro interruptor, también desactivado de serie; habla con el Celer abierto por
+  loopback con un token aleatorio.
 - Las conexiones de solo lectura rechazan escrituras, aunque vayan escondidas en un lote; las de producción piden
   confirmación antes de sentencias arriesgadas.
 

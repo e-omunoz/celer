@@ -85,11 +85,20 @@ without administrator rights, and keeps itself up to date.
   joins, INSERT, UPDATE, UPSERT/MERGE and DDL from the explorer.
 - **AI with permissions.** An assistant that writes, explains, fixes and optimises SQL with Claude using your schema,
   never your rows. An **MCP server** (`celer.exe --mcp`) lets Claude Desktop, Claude Code and other clients use your
-  connections with a permission level per connection, row and time limits, masked columns and an audit log.
+  connections with a permission level per connection, row and time limits, masked columns and an audit log, also from
+  Claude Code inside WSL. If you allow it, the AI can also open consoles, tables and diagrams in Celer and add library
+  scripts, always marked as the AI's and within the same permissions.
 - **Bring your connections.** Import them from **DBeaver** (saved passwords included, if you want) and
-  **DbVisualizer**, with folders and production flags. Drag connections between folders in the explorer.
+  **DbVisualizer**, with folders, production flags and SSH tunnels. Reach servers behind a bastion through an **SSH
+  tunnel** (password, key or agent, jump hosts). Export them with their passwords, sealed with a passphrase
+  (Argon2id + AES-256-GCM). Organise them in nested folders with favourites and search, drag them between folders and
+  act on several at once. "Probar conexión" shows each step and what to do when one fails; a dropped connection
+  comes back on its own, and never in silence when a transaction would be lost.
+- **Several windows.** Drag a tab out to its own window, one per monitor if you like: the console keeps its session,
+  its open transaction and the rows still to load. The library, the AI assistant, plans, diagrams and comparisons can
+  have their own window too, and every window comes back where it was.
 - **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift),
-  shortcuts you can change, a script library, a startup script per connection, and **Gib**: he thinks while queries
+  shortcuts you can change, a script library that runs any saved script on any connection or several at once, `${variables}` per console, connection or global, a startup script per connection, and **Gib**: he thinks while queries
   run, has an idea when a long one finishes, goes for a coffee or juggles when you are away, and swats the cursor if
   you poke him while he waits.
 - **Updates in the app.** Celer checks GitHub for new releases, shows what's new and installs them in one click,
@@ -218,6 +227,7 @@ to Celer Setup, uninstall the MSI copy (your data is kept) and install `Celer-Se
 | `Ctrl+Alt+E` | History |
 | `Ctrl+Alt+B` | Save the console in the script library |
 | `Alt+8` | Script library |
+| `Alt+9` | Variables (`${name}` values per console, connection or global) |
 | `Ctrl+Alt+S` | Settings |
 | `Ctrl+Alt+Shift+C` / `Ctrl+Alt+Shift+R` | Commit / rollback |
 
@@ -226,11 +236,17 @@ Every shortcut can be changed in *Ajustes › Atajos de teclado*. On macOS, `Ctr
 ## Privacy and security
 
 - No accounts, no telemetry. Your data never leaves the computer unless you ask for it.
-- Passwords and the AI key live in the operating system's credential store, never in files.
+- Passwords, the AI key and the optional GitHub token for reports live in the operating system's credential store,
+  never in files.
 - Network access beyond your databases is limited to: the update check against the GitHub Releases API (it sends
-  nothing about you and can be turned off), the IBM driver download when you ask for it, and the AI assistant if you
-  configure your own key (it receives the schema, never row data).
+  nothing about you and can be turned off), the Informix driver downloads when you ask for them (IBM CLI, the JDBC
+  driver from Maven Central and, only if there is no Java, a JRE from Adoptium), the AI assistant if you configure
+  your own key (it receives the schema, never row data), and a bug report or suggestion you send with «Enviar a GitHub»
+  using your own GitHub token (one request to the GitHub API that creates the issue, with exactly the text you saw in
+  the preview; without a token, «Abrir en GitHub» only opens the page in your browser).
 - The MCP server runs locally over stdio, is off by default and only sees what each connection's permission allows.
+  Letting it act in the app is a separate switch, off by default; it talks to the running Celer over loopback with a
+  random token.
 - Read-only connections refuse writes, even hidden in a batch; production connections ask before risky statements.
 
 Details and how to report a vulnerability: [SECURITY.md](SECURITY.md).

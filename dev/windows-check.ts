@@ -11,6 +11,7 @@ import {
   placeOnScreen,
   primaryMonitor,
   readLayout,
+  riskPronoun,
   riskSummary,
   riskyTabs,
   sortWindows,
@@ -163,6 +164,11 @@ assert.equal(riskSummary(tabs), "1 consola con una transacción abierta, 1 tabla
 assert.equal(riskSummary([risk("x", { transaction: true }), risk("y", { transaction: true })]), "2 consolas con transacciones abiertas");
 assert.equal(riskSummary([risk("x", { text: true }), risk("y", { kind: "table", edits: true })]), "1 tabla con cambios sin guardar y 1 consola sin guardar");
 assert.equal(riskSummary([risk("x")]), "");
+// «Moverla» for one tab at risk, «moverlas» for several (#157); a tab with a transaction and text is one tab.
+assert.equal(riskPronoun([risk("x", { transaction: true })]), "la");
+assert.equal(riskPronoun([risk("x", { transaction: true, text: true })]), "la");
+assert.equal(riskPronoun([risk("x", { transaction: true }), risk("y", { text: true })]), "las");
+assert.equal(riskPronoun(riskyTabs([risk("x", { edits: true }), risk("y")])), "la");
 
 // Gib lives in one window: the focused full window, else the main one, else the first full window.
 assert.equal(gibHost("win-2", ["main", "win-2"]), "win-2");

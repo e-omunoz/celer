@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, 
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
 import {
+  gibShows,
   collapseAll,
   connColor,
   connect,
@@ -34,6 +35,7 @@ import { emptyConn, ENGINES, type ConnSummary, type DbKind, type MetaNode } from
 import { startImport } from "../importer";
 import { openMigration } from "../migrate";
 import { withShortcut } from "../commands";
+import { unsupportedReason, type Feature } from "../engineCompat";
 import { compareWithMarked, isMarked, markForCompare, schemaCompare, schemaTitle } from "../schemaCompareRun";
 import { compareDataWithMarked, dataCompare, isTableMarked, markTableForCompare, tableTitle } from "../dataCompareRun";
 import { engineOf } from "../types";
@@ -63,6 +65,7 @@ import {
   toggleFavorite,
   toggleFolder,
 } from "../connManage";
+import { EnvChip } from "./ConsoleSafety";
 
 const ROW = 24;
 
@@ -128,6 +131,12 @@ type NodeRow = Extract<Row, { type: "node" }>;
  * Rows that can be selected together: favourite shortcuts; connections and folders; database objects. Section, status
  * and drop rows are only ever selected alone.
  */
+/** A menu entry for a feature: greyed out with «No disponible en <motor>» where the engine does not have it. */
+function feature(label: string, what: Feature, connId: string, item: Omit<MenuItem, "label">): MenuItem {
+  const reason = unsupportedReason(what, kindOf(connId), serverOf(connId));
+  return reason ? { ...item, label, disabled: true, hint: reason, title: reason, run: undefined } : { ...item, label };
+}
+
 function familyOf(row: Row | undefined): string | null {
   if (row?.type === "fav") return "fav";
   if (row?.type === "conn" || row?.type === "folder") return "conn";
@@ -231,7 +240,7 @@ export function Sidebar() {
     const root = state.tree[rootKey];
     const children: Row[] = [];
     if (state.sessions[conn.id] && root?.open) {
-      walk(conn.id, root.nodes, depth + 1, filter, children);
+      walk(conn.id, root.nodes, depth + 1, filter, children, new Set([rootKey]));
       if (root.status === "loading" && !root.nodes.length) children.push({ type: "status", key: `${rootKey}:s`, text: "Cargando…", depth: depth + 1 });
       if (root.status === "error") children.push({ type: "status", key: `${rootKey}:e`, text: root.error ?? "Error", depth: depth + 1, error: true });
     }
@@ -241,13 +250,21 @@ export function Sidebar() {
     out.push(...children);
   }
 
-  function walk(connId: string, nodes: MetaNode[], depth: number, filter: string, out: Row[]) {
+  /**
+   * The rows below an open node. `open` holds the tree entries being walked: a node whose entry is one of them (an
+   * empty or garbled name from a driver makes its path an ancestor's) is not expanded again, so the explorer never
+   * loops forever on it.
+   */
+  function walk(connId: string, nodes: MetaNode[], depth: number, filter: string, out: Row[], open: Set<string>) {
     for (const node of nodes) {
       const key = pathKey(connId, node.path.length ? node.path : [...node.path, node.name]);
-      const entry = node.leaf ? undefined : state.tree[pathKey(connId, node.path)];
+      const entryKey = pathKey(connId, node.path);
+      const entry = node.leaf || open.has(entryKey) ? undefined : state.tree[entryKey];
       const sub: Row[] = [];
       if (entry?.open) {
-        walk(connId, entry.nodes, depth + 1, filter, sub);
+        open.add(entryKey);
+        walk(connId, entry.nodes, depth + 1, filter, sub, open);
+        open.delete(entryKey);
         if (entry.status === "loading" && !entry.nodes.length) sub.push({ type: "status", key: `${key}:s`, text: "Cargando…", depth: depth + 1 });
         if (entry.status === "error") sub.push({ type: "status", key: `${key}:e`, text: entry.error ?? "Error", depth: depth + 1, error: true });
         if (entry.status === "ready" && !entry.nodes.length && !filter) sub.push({ type: "status", key: `${key}:v`, text: "Vacío", depth: depth + 1 });
@@ -499,7 +516,7 @@ export function Sidebar() {
     items.push(
       { separator: true },
       { label: "Copiar nombres", hint: "Ctrl+C", icon: "copy", run: () => void copyText(list.map(rowName).join("\n")) },
-      { label: `Exportar ${conns(all.length)} (sin contraseñas)…`, disabled: !all.length, run: () => void exportConnections(all, `${all.length} conexiones`) },
+      { label: `Exportar ${conns(all.length)}…`, disabled: !all.length, run: () => void exportConnections(all, `${all.length} conexiones`) },
     );
     if (!favs) {
       items.push({ separator: true }, { label: `Eliminar ${selectionLabel(ids.length, folders.length)}`, hint: "Supr", icon: "trash", danger: true, run: () => void deleteItems(ids, folders) });
@@ -738,8 +755,8 @@ export function Sidebar() {
       { separator: true },
       { label: "Copiar nombre", hint: "Ctrl+C", run: () => void copyText(conn.name) },
       { label: "Copiar esquema para IA", disabled: !connected, run: () => void copySchemaForAi(conn.id) },
-      ...(conn.kind === "sqlite" || conn.kind === "odbc" ? [] : [{ label: "Actividad del servidor…", icon: "activity", run: () => void openActivity(conn.id) }]),
-      { label: "Exportar conexión (sin contraseña)…", run: () => void exportConnections([conn.id], conn.name) },
+      feature("Actividad del servidor…", "activity", conn.id, { icon: "activity", run: () => void openActivity(conn.id) }),
+      { label: "Exportar conexión…", run: () => void exportConnections([conn.id], conn.name) },
       { separator: true },
       { label: "Eliminar conexión", hint: "Supr", icon: "trash", danger: true, run: () => void deleteConnectionUndoable(conn.id) },
     ]);
@@ -757,7 +774,7 @@ export function Sidebar() {
       ...(parentFolder(path) ? [{ label: "Mover a la carpeta de arriba", run: () => void moveFolder(path, parentFolder(parentFolder(path))) }] : []),
       { label: "Conectar todas", disabled: !ids.length, run: () => ids.forEach((id) => void connect(id)) },
       { label: "Copiar nombre", hint: "Ctrl+C", run: () => void copyText(folderName(path)) },
-      { label: "Exportar la carpeta (sin contraseñas)…", disabled: !ids.length, run: () => void exportConnections(ids, folderName(path)) },
+      { label: "Exportar la carpeta…", disabled: !ids.length, run: () => void exportConnections(ids, folderName(path)) },
       { separator: true },
       { label: "Eliminar carpeta", hint: "Supr", icon: "trash", danger: true, run: () => void deleteFolder(path) },
     ]);
@@ -769,7 +786,7 @@ export function Sidebar() {
       { label: alpha ? "Orden: alfabético" : "Ordenar alfabéticamente", hint: alpha ? "actual" : undefined, run: () => setConnSort("alpha") },
       { label: alpha ? "Ordenar a mano (arrastrando)" : "Orden: manual", hint: alpha ? undefined : "actual", run: () => setConnSort("manual") },
       { separator: true },
-      { label: "Exportar todas las conexiones (sin contraseñas)…", disabled: !state.connections.length, run: () => void exportConnections() },
+      { label: "Exportar todas las conexiones…", disabled: !state.connections.length, run: () => void exportConnections() },
       { label: "Importar conexiones de un fichero de Celer…", run: () => void importConnections() },
       { label: "Importar de DBeaver o DbVisualizer…", run: () => void openMigration() },
     ];
@@ -810,7 +827,7 @@ export function Sidebar() {
         { label: "Abrir estructura", run: () => void openTable(connId, obj, "columns") },
         { label: "Ver DDL", icon: "code", run: () => void openTable(connId, obj, "ddl") },
         // The table and the tables its foreign keys link it with, both ways.
-        ...(obj.kind === "table" ? [{ label: "Diagrama de relaciones", icon: "diagram", run: () => void openErDiagram(connId, erSchemaPath(connId, obj, node.path[0]), obj) }] : []),
+        ...(obj.kind === "table" ? [feature("Diagrama de relaciones", "er", connId, { icon: "diagram", run: () => void openErDiagram(connId, erSchemaPath(connId, obj, node.path[0]), obj) })] : []),
         { separator: true },
         { label: "Generar SELECT", run: () => void generateSql(connId, obj, "select") },
         { label: "Generar SELECT con JOIN de sus claves foráneas", run: () => void generateSql(connId, obj, "select-join") },
@@ -846,9 +863,9 @@ export function Sidebar() {
     if (schemaLevel) {
       const ref = { connId, path: node.path };
       const mark = schemaCompare.mark;
-      items.push({ label: "Diagrama entidad-relación", icon: "diagram", run: () => void openErDiagram(connId, node.path) });
-      if (mark && !isMarked(ref)) items.push({ label: `Comparar con «${schemaTitle(mark)}»`, icon: "compare", run: () => void compareWithMarked(ref) });
-      items.push({ label: isMarked(ref) ? "Marcado para comparar" : "Marcar para comparar", icon: "compare", run: () => markForCompare(ref) }, { separator: true });
+      items.push(feature("Diagrama entidad-relación", "er", connId, { icon: "diagram", run: () => void openErDiagram(connId, node.path) }));
+      if (mark && !isMarked(ref)) items.push(feature(`Comparar con «${schemaTitle(mark)}»`, "schemaCompare", connId, { icon: "compare", run: () => void compareWithMarked(ref) }));
+      items.push(feature(isMarked(ref) ? "Marcado para comparar" : "Marcar para comparar", "schemaCompare", connId, { icon: "compare", run: () => markForCompare(ref) }), { separator: true });
     }
     items.push(
       { label: "Nueva consola aquí", icon: "console", run: () => openQuery(connId) },
@@ -961,13 +978,14 @@ export function Sidebar() {
         </div>
         <Show when={state.connections.length && !rows().length}>
           <div class="tree-empty small">
+            <Show when={gibShows("empty")}><Gib size={46} mood="think" /></Show>
             <p>Ninguna conexión coincide.</p>
             <button type="button" class="btn" onClick={closeFilter}>Quitar la búsqueda</button>
           </div>
         </Show>
         <Show when={!state.connections.length && state.ready}>
           <div class="tree-empty">
-            <Gib size={84} mood="wave" />
+            <Show when={gibShows("empty")}><Gib size={84} mood="wave" /></Show>
             <p>Aún no hay conexiones.</p>
             <button type="button" class="btn primary" onClick={() => openConnDialog()}>Añadir conexión</button>
             <small>Ctrl+Alt+N</small>
@@ -1185,7 +1203,7 @@ function TreeRow(props: {
         <Show when={editing() === key} fallback={<span class="tree-name">{highlight(conn.name, props.filter)}</span>}>
           <RenameInput value={conn.name} onDone={(value) => finishRename(key, () => value !== null && void renameConnection(conn.id, value))} />
         </Show>
-        <Show when={conn.production}><span class="tag prod">PROD</span></Show>
+        <EnvChip conn={conn} short tiny />
         <Show when={conn.readOnly}><span class="tag">RO</span></Show>
         <small class="tree-detail">{busy() ? "conectando…" : conn.host || (conn.filePath ? conn.filePath.split(/[\\/]/).pop() : "")}</small>
         <button

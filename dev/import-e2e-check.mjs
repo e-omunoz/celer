@@ -65,8 +65,8 @@ async function openWizard(file) {
 
 // ---------------------------------------------------------------- Excel: the data is on the second sheet
 const xlsx = await openWizard(resolve(fixtures, "clientes.xlsx"));
-check("workbook opens on its first sheet (a single header-like row)", /clientes\.xlsx/.test(xlsx.file) && /0 filas · 1 columna(?!s)/.test(xlsx.file), JSON.stringify(xlsx));
-check("nothing to import from it", /^Importar\s+filas$/.test(xlsx.button.trim()), JSON.stringify(xlsx));
+check("workbook opens on its first sheet (a single note: data, not a header)", /clientes\.xlsx/.test(xlsx.file) && /1 fila · 1 columna(?!s)/.test(xlsx.file), JSON.stringify(xlsx));
+check("nothing mapped from it", xlsx.mapped.every((m) => m === "-1"), JSON.stringify(xlsx));
 check("sheet chooser lists both sheets", JSON.stringify(xlsx.sheets) === JSON.stringify(["Notas", "Clientes"]), JSON.stringify(xlsx));
 check("no separator option for a workbook", !xlsx.separator, JSON.stringify(xlsx));
 const second = await js(`

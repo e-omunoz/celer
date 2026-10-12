@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use parking_lot::Mutex;
 
 use crate::model::*;
@@ -25,6 +25,12 @@ pub trait Driver: Send {
     /// Hijos de un nodo del árbol de objetos (ruta vacía = raíz).
     fn children(&mut self, path: &[String]) -> Result<Vec<MetaNode>>;
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>>;
+    /// Every foreign key of a schema: `path` is the schema's node in the explorer ([database, schema], or [database]
+    /// on engines without schemas), the keys of the tables in its tables folder. Drivers read them in one catalog
+    /// query; by default (and as the reference the engine tests compare with) the keys of each table in turn.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        per_table_foreign_keys(self, path)
+    }
     fn ddl(&mut self, obj: &ObjectRef) -> Result<String>;
     fn completion(&mut self, database: &str) -> Result<CompletionSchema>;
     fn databases(&mut self) -> Result<Vec<String>>;
@@ -56,6 +62,11 @@ pub trait Driver: Send {
     fn session_state(&self) -> String {
         String::new()
     }
+    /// Mantener viva (#97): si la sesión lleva `idle` parada y no tiene un resultado abierto, la comprueba como
+    /// `health(true)` (y la reconecta si se había cortado); si no, nada (`None`). Solo las sesiones vigiladas.
+    fn keep_alive(&mut self, _idle: std::time::Duration) -> Option<Health> {
+        None
+    }
     /// Comprueba la sesión para la interfaz (siempre con `force`; si no, solo si lleva un rato parada). Las sesiones
     /// vigiladas (`guard.rs`) además reconectan si se cortó.
     fn health(&mut self, _force: bool) -> Health {
@@ -64,6 +75,71 @@ pub trait Driver: Send {
             Err(e) => Health { error: e.to_string(), ..Health::default() },
         }
     }
+}
+
+/// The foreign keys of a schema read table by table, through the explorer's "fks" folder of each table of its
+/// tables folder (one query per table): the default of `Driver::schema_foreign_keys`.
+pub fn per_table_foreign_keys<D: Driver + ?Sized>(d: &mut D, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+    let folders = d.children(path)?;
+    let Some(folder) = folders.iter().find(|n| n.kind == "folder" && (n.path.last().map(String::as_str) == Some("tables") || n.name.eq_ignore_ascii_case("tablas") || n.name.eq_ignore_ascii_case("tables"))) else {
+        return Ok(vec![]);
+    };
+    let mut out = Vec::new();
+    for node in d.children(&folder.path.clone())? {
+        let Some(table) = node.obj.clone().filter(|o| o.kind == "table") else { continue };
+        if node.path.is_empty() {
+            continue;
+        }
+        let fks = d.children(&[node.path.clone(), vec!["fks".to_string()]].concat())?;
+        for fk in fks {
+            let Some(target) = fk.obj.as_ref().filter(|_| fk.kind == "key") else { continue };
+            let (columns, target_columns) = parse_fk_detail(fk.detail.as_deref().unwrap_or(""));
+            let target = ObjectRef { database: if target.database.is_empty() { table.database.clone() } else { target.database.clone() }, ..target.clone() };
+            out.push(SchemaForeignKey { name: fk.name, table: table.clone(), columns, target, target_columns });
+        }
+    }
+    Ok(out)
+}
+
+/// One column pair of a foreign key, as a catalog query lists them (one row per column, in key order): the key's
+/// identity (unique in the query), its name, the two tables and the column of each.
+pub struct FkColumn {
+    pub key: String,
+    pub name: String,
+    pub table: ObjectRef,
+    pub column: String,
+    pub target: ObjectRef,
+    pub target_column: String,
+}
+
+/// Joins the rows of a schema's foreign keys (`FkColumn`, each key's columns in order) into keys, in the order the
+/// keys first appear.
+pub fn group_foreign_keys(rows: impl IntoIterator<Item = FkColumn>) -> Vec<SchemaForeignKey> {
+    let mut out: Vec<SchemaForeignKey> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for r in rows {
+        let i = *at.entry(r.key).or_insert_with(|| {
+            out.push(SchemaForeignKey { name: r.name, table: r.table, columns: vec![], target: r.target, target_columns: vec![] });
+            out.len() - 1
+        });
+        out[i].columns.push(r.column);
+        out[i].target_columns.push(r.target_column);
+    }
+    out
+}
+
+/// The column lists of an explorer FK node's detail, "a, b → schema.table(x, y)", unquoted (as the interface reads it).
+pub fn parse_fk_detail(detail: &str) -> (Vec<String>, Vec<String>) {
+    let unquote = |s: &str| {
+        let s = s.trim();
+        let s = s.strip_prefix(['"', '`', '[']).unwrap_or(s);
+        s.strip_suffix(['"', '`', ']']).unwrap_or(s).to_string()
+    };
+    let list = |s: &str| s.split(',').map(unquote).filter(|c| !c.is_empty()).collect::<Vec<_>>();
+    let Some((left, right)) = detail.split_once('→') else { return (vec![], vec![]) };
+    let right = right.trim_end();
+    let inner = right.strip_suffix(')').and_then(|r| r.rfind('(').map(|i| &r[i + 1..])).unwrap_or("");
+    (list(left), list(inner))
 }
 
 pub type Canceller = Arc<dyn Fn() + Send + Sync>;
@@ -75,6 +151,8 @@ pub struct SessionHandle {
     tx: mpsc::Sender<Job>,
     canceller: Canceller,
     progress: Progress,
+    /// Jobs sent and not answered yet (the session is at work, or has work waiting).
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
     pub conn_id: String,
 }
 
@@ -117,6 +195,7 @@ impl SessionHandle {
             tx,
             canceller,
             progress,
+            in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             conn_id,
         })
     }
@@ -128,12 +207,23 @@ impl SessionHandle {
         F: FnOnce(&mut dyn Driver) -> Result<T> + Send + 'static,
     {
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<T>>();
+        // Counted until the job is done or dropped (a panic in the driver, a closed session).
+        struct Pending(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        self.in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pending = Pending(self.in_flight.clone());
         let job: Job = Box::new(move |d| {
-            let _ = tx.send(f(d));
+            let r = f(d);
+            drop(pending);
+            let _ = tx.send(r);
         });
-        self.tx
-            .send(job)
-            .map_err(|_| anyhow!("La sesión está cerrada"))?;
+        if self.tx.send(job).is_err() {
+            bail!("La sesión está cerrada");
+        }
         match rx.await {
             Ok(r) => r,
             Err(_) => Err(anyhow!(
@@ -146,8 +236,74 @@ impl SessionHandle {
         (self.canceller)();
     }
 
+    /// The session has work running or waiting.
+    pub fn busy(&self) -> bool {
+        self.in_flight.load(std::sync::atomic::Ordering::SeqCst) > 0
+    }
+
+    pub fn canceller(&self) -> Canceller {
+        self.canceller.clone()
+    }
+
     pub fn progress(&self) -> Option<String> {
         (self.progress)()
+    }
+}
+
+/// Ajustes › Ejecución › tiempo máximo: cancels the running statement through the driver's own canceller (the same
+/// path as the «Detener» button, so it works alike on every engine) once `secs` have passed, unless `stop` comes first.
+pub struct Deadline {
+    stop: mpsc::Sender<()>,
+    fired: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Deadline {
+    pub fn start(cancel: Canceller, secs: u64) -> Deadline {
+        let (stop, rx) = mpsc::channel::<()>();
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = fired.clone();
+        let _ = std::thread::Builder::new().name("celer-deadline".into()).spawn(move || {
+            if let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                cancel();
+            }
+        });
+        Deadline { stop, fired }
+    }
+
+    /// The statement ended: no cancel from now on. True when the deadline had already cancelled it.
+    pub fn stop(self) -> bool {
+        let _ = self.stop.send(());
+        self.fired.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The error of a statement stopped by the deadline (the driver's own "cancelled" text says less).
+pub fn timeout_error(secs: u64) -> String {
+    format!("La consulta superó el tiempo máximo de {secs} s y se ha cancelado (Ajustes › Ejecución › Tiempo máximo de una consulta).")
+}
+
+/// A statement that ended anyway once the deadline asked to cancel it (MySQL's SLEEP returns 1 when interrupted).
+pub fn timeout_note(secs: u64) -> String {
+    format!("Se alcanzó el tiempo máximo de {secs} s: se pidió cancelar la consulta y el servidor la dio por terminada.")
+}
+
+/// Runs `f` (a statement) under a deadline of `secs` seconds (0: none) and words the outcome of a cancelled one.
+pub fn with_deadline(cancel: Canceller, secs: u64, f: impl FnOnce() -> Result<crate::model::ExecOutput>) -> std::result::Result<crate::model::ExecOutput, String> {
+    if secs == 0 {
+        return f().map_err(|e| e.to_string());
+    }
+    let deadline = Deadline::start(cancel, secs);
+    let r = f();
+    match (deadline.stop(), r) {
+        // A lost session (the bridge reopened the connection) keeps its own note: it says what was rolled back.
+        (true, Err(e)) if e.to_string().starts_with("SESSION_LOST:") => Err(format!("{e}\n\n{}", timeout_error(secs))),
+        (true, Err(_)) => Err(timeout_error(secs)),
+        (true, Ok(mut out)) => {
+            out.messages.push(timeout_note(secs));
+            Ok(out)
+        }
+        (false, r) => r.map_err(|e| e.to_string()),
     }
 }
 
@@ -190,6 +346,17 @@ pub fn tcp_keepalive() -> socket2::TcpKeepalive {
 
 /// Primera palabra clave de una sentencia, ignorando comentarios y espacios.
 pub fn first_keyword(sql: &str) -> String {
+    let rest = skip_leading_comments(sql);
+    let b = rest.as_bytes();
+    let mut end = 0;
+    while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_') {
+        end += 1;
+    }
+    rest[..end].to_ascii_uppercase()
+}
+
+/// The statement from its first keyword on: leading spaces, comments and `(` / `;` skipped.
+pub fn skip_leading_comments(sql: &str) -> &str {
     let b = sql.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -216,12 +383,7 @@ pub fn first_keyword(sql: &str) -> String {
             break;
         }
     }
-    let start = i.min(b.len());
-    let mut end = start;
-    while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_') {
-        end += 1;
-    }
-    sql[start..end].to_ascii_uppercase()
+    &sql[i.min(b.len())..]
 }
 
 /// A fetch with no open result: something else used the session and closed it (a fetch never ends one in silence).
@@ -276,11 +438,55 @@ pub fn is_mutating(sql: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn deadline_cancels_only_after_its_time() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let cancel: Canceller = Arc::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        // Ends in time: never cancelled.
+        let r = with_deadline(cancel.clone(), 5, || Ok(crate::model::ExecOutput::default()));
+        assert!(r.is_ok());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        // Runs past it: cancelled once, and the error says why.
+        let r = with_deadline(cancel.clone(), 1, || {
+            std::thread::sleep(std::time::Duration::from_millis(1300));
+            Err(anyhow!("Consulta cancelada"))
+        });
+        assert_eq!(r.unwrap_err(), timeout_error(1));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // A lost transaction keeps its SESSION_LOST note next to the timeout text (JDBC/ODBC reset on cancel).
+        let r = with_deadline(cancel.clone(), 1, || {
+            std::thread::sleep(std::time::Duration::from_millis(1300));
+            Err(anyhow!("SESSION_LOST: Consulta cancelada\nLa transacción que estaba abierta se ha perdido"))
+        });
+        let e = r.unwrap_err();
+        assert!(e.starts_with("SESSION_LOST:") && e.contains(&timeout_error(1)), "{e}");
+        // Ended anyway after the cancel: the output stays, with a note.
+        let r = with_deadline(cancel, 1, || {
+            std::thread::sleep(std::time::Duration::from_millis(1300));
+            Ok(crate::model::ExecOutput::default())
+        });
+        assert_eq!(r.unwrap().messages, vec![timeout_note(1)]);
+    }
+
+    #[test]
     fn keywords() {
         assert_eq!(first_keyword("  -- hola\n /* x */ select 1"), "SELECT");
         assert_eq!(first_keyword("{ comentario } update t set a=1"), "UPDATE");
         assert_eq!(first_keyword("(select 1)"), "SELECT");
         assert!(is_mutating("delete from t"));
         assert!(!is_mutating("with x as (select 1) select * from x"));
+    }
+
+    #[test]
+    fn fk_details_as_the_interface_reads_them() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_fk_detail("parent_id → dbo.celer_p(id)"), (v(&["parent_id"]), v(&["id"])));
+        assert_eq!(parse_fk_detail("\"A b\", c → sales.\"T(1)\"(x, \"y\")"), (v(&["A b", "c"]), v(&["x", "y"])));
+        assert_eq!(parse_fk_detail("[a], [b] → [s].[t]([k1], [k2])"), (v(&["a", "b"]), v(&["k1", "k2"])));
+        assert_eq!(parse_fk_detail("sin flecha"), (vec![], vec![]));
     }
 }

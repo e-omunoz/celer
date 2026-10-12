@@ -1,5 +1,6 @@
 import { KeyRound } from "lucide-solid";
 import { createMemo, For, Show } from "solid-js";
+import { gibShows } from "../state";
 import { Gib } from "../gib/Gib";
 import { EngineIcon } from "../icons";
 import { migration, runMigration, setMigration, toolLabel, type Candidate } from "../migrate";
@@ -35,7 +36,7 @@ export function MigrateDialog() {
         when={!migration.loading && migration.candidates.length}
         fallback={
           <div class="mig-empty">
-            <Gib size={84} pose="poker" mood={migration.loading ? "think" : "idle"} />
+            <Show when={gibShows("overlays")}><Gib size={84} pose={migration.loading ? "laptop" : "poker"} mood={migration.loading ? "busy" : "think"} /></Show>
             <div>
               <h3>{migration.loading ? "Buscando DBeaver y DbVisualizer…" : "No hay nada que importar"}</h3>
               <p class="muted">
@@ -70,9 +71,10 @@ export function MigrateDialog() {
                         onChange={(event) => setMigration("selected", c.key, event.currentTarget.checked)}
                       />
                       <EngineIcon kind={c.cfg.kind} size={16} />
-                      <span class="mig-name">
+                      <span class="mig-name" title={c.notes.join("\n") || undefined}>
                         <b>{c.cfg.name}</b>
                         <small>{c.status === "unsupported" ? c.driver : where(c)}</small>
+                        <Show when={c.status !== "unsupported" && c.notes.length}><small class="muted">{c.notes.join(" ")}</small></Show>
                       </span>
                       <span class="spacer" />
                       <Show when={c.savedPassword && c.status !== "unsupported"}><span class="mig-key" title="DBeaver guarda su contraseña"><KeyRound size={12} /></span></Show>

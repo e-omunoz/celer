@@ -11,7 +11,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::model::*;
-use crate::session::{Canceller, Driver};
+use crate::session::{Canceller, Driver, FkColumn};
 
 const BINARY_PREVIEW: usize = 4096;
 
@@ -328,6 +328,7 @@ impl SqliteDriver {
                     rows,
                     has_more: true,
                     extra: vec![],
+                    messages: vec![],
                 });
             } else if rc == rusqlite::ffi::SQLITE_DONE {
                 done = true;
@@ -346,6 +347,7 @@ impl SqliteDriver {
                 rows,
                 has_more,
                 extra: vec![],
+                messages: vec![],
             });
         }
         let rest = self
@@ -363,6 +365,7 @@ impl SqliteDriver {
             rows,
             has_more: self.cursor.is_some(),
             extra,
+            messages: vec![],
         })
     }
 
@@ -379,6 +382,18 @@ impl SqliteDriver {
     fn catalog(&self, schema: &str) -> String {
         format!("{}.sqlite_schema", qi(schema))
     }
+}
+
+/// The referenced table of a row `f` of pragma_foreign_key_list by its name in the catalog `cat`: REFERENCES takes the
+/// name in any case (`customers` for `Customers`), and the E-R diagram and the explorer link to the table's own name.
+fn fk_table(cat: &str) -> String {
+    format!("COALESCE((SELECT t.name FROM {cat} t WHERE t.type = 'table' AND t.name = f.\"table\" COLLATE NOCASE), f.\"table\")")
+}
+
+/// The referenced column of a row `f` of pragma_foreign_key_list (`schema`: the query parameter with the schema):
+/// `REFERENCES t` without columns points to t's primary key, whose column in the same position is looked up.
+fn fk_to(schema: &str) -> String {
+    format!("COALESCE(f.\"to\", (SELECT p.name FROM pragma_table_info(f.\"table\", {schema}) p WHERE p.pk = f.seq + 1))")
 }
 
 impl Driver for SqliteDriver {
@@ -586,7 +601,14 @@ impl Driver for SqliteDriver {
                         Ok(nodes)
                     }
                     "fks" => {
-                        let rows = self.query("SELECT id, \"table\", \"from\", \"to\" FROM pragma_foreign_key_list(?1, ?2) ORDER BY id, seq", rusqlite::params![name, sch])?;
+                        let rows = self.query(
+                            &format!(
+                                "SELECT f.id, {}, f.\"from\", {} FROM pragma_foreign_key_list(?1, ?2) f ORDER BY f.id, f.seq",
+                                fk_table(&self.catalog(sch)),
+                                fk_to("?2")
+                            ),
+                            rusqlite::params![name, sch],
+                        )?;
                         let mut grouped: Vec<(i64, String, Vec<String>, Vec<String>)> = Vec::new();
                         for r in rows {
                             let id = cell_i64(&r[0]);
@@ -609,7 +631,7 @@ impl Driver for SqliteDriver {
                                     "key",
                                     Some(format!("{} → {}({})", from.join(", "), table, to.join(", "))),
                                 )
-                                .with_obj(ObjectRef::new(db, sch, &table, "table"))
+                                .with_obj(ObjectRef::new(db, schema, &table, "table"))
                             })
                             .collect())
                     }
@@ -618,6 +640,35 @@ impl Driver for SqliteDriver {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// One query: pragma_foreign_key_list joined to every table of the schema's catalog (the explorer's tables), one
+    /// row per column pair in key order.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        self.close_cursor()?;
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        let sch = self.schema_of(db, schema).to_string();
+        let rows = self.query(
+            &format!(
+                "SELECT m.name, f.id, {}, f.\"from\", {} FROM {} m, pragma_foreign_key_list(m.name, ?1) f \
+                 WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, f.id, f.seq",
+                fk_table(&self.catalog(&sch)),
+                fk_to("?1"),
+                self.catalog(&sch)
+            ),
+            rusqlite::params![sch],
+        )?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| {
+            let table = cell_string(&r[0]);
+            FkColumn {
+                key: format!("{table}\u{0}{}", cell_i64(&r[1])),
+                name: format!("fk{}", cell_i64(&r[1])),
+                table: ObjectRef::new(db, schema, &table, "table"),
+                column: cell_string(&r[3]),
+                target: ObjectRef::new(db, schema, &cell_string(&r[2]), "table"),
+                target_column: cell_string(&r[4]),
+            }
+        })))
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {
@@ -720,14 +771,8 @@ impl Driver for SqliteDriver {
     }
 
     fn qualified_name(&self, o: &ObjectRef) -> String {
-        let sch = if !o.schema.is_empty() {
-            o.schema.as_str()
-        } else if !o.database.is_empty() {
-            o.database.as_str()
-        } else {
-            "main"
-        };
-        format!("{}.{}", qi(sch), qi(&o.name))
+        // As the explorer's paths: an attached database's tables are (aux, main, name), like its columns and DDL.
+        format!("{}.{}", qi(self.schema_of(&o.database, &o.schema)), qi(&o.name))
     }
 
     fn quote_ident(&self, s: &str) -> String {
@@ -930,6 +975,30 @@ mod tests {
         SqliteDriver::connect(cfg).unwrap()
     }
 
+    /// Ajustes › Ejecución › tiempo máximo: the core's deadline interrupts SQLite and the connection answers again.
+    #[test]
+    fn query_timeout_interrupts() {
+        let mut d = mem();
+        let t0 = std::time::Instant::now();
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || {
+            d.execute("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 2000000000) SELECT COUNT(*) FROM c", 10)
+        });
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10), "{:?}", t0.elapsed());
+        assert_eq!(d.execute("SELECT 3", 10).unwrap().results[0].rows.len(), 1);
+    }
+
+    /// Ayuda › Registro de errores: SQLite quotes a CHECK constraint (with its literal) in the error; the entry does not.
+    #[test]
+    fn error_log_entry_is_scrubbed() {
+        let mut d = mem();
+        d.execute("CREATE TABLE c (x TEXT CHECK (x <> 'celer-secret-42'))", 10).unwrap();
+        let e = d.execute("INSERT INTO c VALUES ('celer-secret-42')", 10).expect_err("CHECK").to_string();
+        crate::errlog::assert_scrubbed("SQLite", &e, "celer-secret-42");
+        crate::assert_report_banner("SQLite", &d.server_info().unwrap(), &[":memory:", "memory"]);
+    }
+
     #[test]
     fn runs_the_startup_script() {
         let mut cfg = ConnConfig::default();
@@ -1083,5 +1152,26 @@ mod tests {
         // Back to autocommit: nothing waits for a commit.
         assert!(!d.set_autocommit(true).unwrap());
         assert!(!d.execute("INSERT INTO t(name) VALUES ('e')", 10).unwrap().in_transaction);
+    }
+
+    /// A console closed (or Celer quitting) with its manual transaction open never commits it.
+    #[test]
+    fn close_never_commits() {
+        let dir = std::env::temp_dir().join(format!("celer-tx-close-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tx.db");
+        let _ = std::fs::remove_file(&file);
+        let open = || {
+            let mut cfg = ConnConfig::default();
+            cfg.kind = DbKind::Sqlite;
+            cfg.file_path = file.to_string_lossy().into_owned();
+            SqliteDriver::connect(cfg).unwrap()
+        };
+        let mut d = open();
+        d.execute("CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1), (2), (3)", 10).unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(open()), "DELETE FROM t WHERE id > 1", "SELECT COUNT(*) FROM t");
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(open()), "INSERT INTO t VALUES (4)", "SELECT COUNT(*) FROM t");
+        drop(d);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

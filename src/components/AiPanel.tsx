@@ -1,7 +1,8 @@
 import { ArrowUp, Bug, Copy, Gauge, KeyRound, Lightbulb, Play, Replace, Shield, Square, Trash2, TextCursorInput } from "lucide-solid";
 import { createSignal, For, onMount, Show } from "solid-js";
 import { AI_MODELS, aiContextSummary, askAi, clearAi, refreshAiKeyStatus, saveAiKey, stopAi } from "../ai";
-import { activeSql, copyText, insertIntoActive, kindOf, replaceActiveSql, runText, saveSettings, setState, state } from "../state";
+import { activeSql, copyText, gibShows, insertIntoActive, kindOf, replaceActiveSql, runText, saveSettings, setState, state } from "../state";
+import { Gib } from "../gib/Gib";
 import { CodeView } from "./Editor";
 import { Markdown } from "./Markdown";
 
@@ -54,6 +55,7 @@ export function AiPanel() {
         <div class="ai-messages" ref={list}>
           <Show when={!state.ai.messages.length}>
             <div class="ai-empty">
+              <Show when={gibShows("empty")}><Gib size={72} mood="idea" /></Show>
               <p class="ai-empty-title">¿Qué necesitas consultar?</p>
               <p>Describe lo que buscas en lenguaje natural y te propongo el SQL para {ctx().engine || "tu base de datos"}, usando las tablas reales de tu esquema.</p>
               <For each={["Clientes con más pedidos el último mes", "¿Qué tablas guardan direcciones de email?", "Ventas por mes y país en 2025"]}>
@@ -65,7 +67,13 @@ export function AiPanel() {
             {(message) => (
               <div class={`ai-msg ${message.role}`} classList={{ error: message.error, streaming: message.streaming }}>
                 <Show when={message.role === "user"} fallback={
-                  <Show when={message.text} fallback={<span class="ai-thinking"><i /><i /><i /></span>}>
+                  <Show when={message.text} fallback={
+                    // Gib thinks along until the first words arrive.
+                    <span class="ai-wait">
+                      <Show when={gibShows("empty")}><Gib size={34} mood="think" plain still /></Show>
+                      <span class="ai-thinking"><i /><i /><i /></span>
+                    </span>
+                  }>
                     <Markdown text={message.text} code={(block) => <AiCode lang={block.lang} text={block.text} done={!message.streaming} />} />
                   </Show>
                 }>
@@ -130,6 +138,7 @@ function KeySetup() {
       <ul class="ai-privacy">
         <li>La clave se guarda en el almacén de credenciales del sistema, no en ficheros.</li>
         <li>Se envía el <b>esquema</b> (nombres de tablas y columnas), el SQL del editor y el último error. <b>Nunca filas de datos.</b></li>
+        <li>De las variables <code>{"${nombre}"}</code> se envía el nombre; su valor, solo si la conexión permite a la IA leer datos («Lectura» o «Lectura y escritura» en Ajustes › IA › Servidor MCP).</li>
         <li>Para que una IA externa lea datos, usa el servidor MCP en Ajustes › IA, con permisos por conexión.</li>
       </ul>
       <Show when={state.ai.hasKey}>

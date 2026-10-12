@@ -1,6 +1,6 @@
 // Quick checks for src/snippets.ts: node --experimental-strip-types dev/snippets-check.ts
 import assert from "node:assert/strict";
-import { allSnippets, bindParams, builtinSnippets, findParams, hasUnfilteredWrite, paramLiteral, paramNames, unfilteredWrites } from "../src/snippets.ts";
+import { allSnippets, bindParams, builtinSnippets, findParams, hasUnfilteredWrite, literalDialect, paramLiteral, paramNames, unfilteredWrites } from "../src/snippets.ts";
 import { firstKeyword, needsProductionConfirm } from "../src/sql.ts";
 
 const names = (sql: string, dialect?: string) => findParams(sql, dialect).map((p) => p.name);
@@ -37,6 +37,33 @@ assert.equal(paramLiteral("now() - interval '1 day'", true), "now() - interval '
 assert.equal(paramLiteral("007", false), "'007'", "leading zeros are text (postcodes, codes)");
 assert.equal(paramLiteral("0", false), "0");
 assert.equal(paramLiteral("0.5", false), "0.5");
+
+// TRUE/FALSE as each engine takes them (#138): SQL Server has no boolean literals, Informix's are 't' / 'f'.
+for (const dialect of ["postgres", "mysql", "sqlite", "odbc", undefined]) {
+  assert.equal(paramLiteral("true", false, dialect), "true", `${dialect}: TRUE stays a keyword`);
+  assert.equal(paramLiteral("FALSE", false, dialect), "FALSE", `${dialect}: FALSE stays a keyword`);
+}
+assert.equal(paramLiteral("true", false, "mssql"), "1");
+assert.equal(paramLiteral(" False ", false, "mssql"), "0");
+assert.equal(paramLiteral("TRUE", false, "informix"), "'t'");
+assert.equal(paramLiteral("false", false, "informix"), "'f'");
+assert.equal(paramLiteral("true", true, "mssql"), "true", "raw SQL is never rewritten");
+assert.equal(paramLiteral("truely", false, "mssql"), "'truely'", "only the whole word is a boolean");
+assert.equal(paramLiteral("null", false, "mssql"), "null");
+// ODBC: the server behind it, from its banner (SQL_DBMS_NAME + version).
+assert.equal(literalDialect("odbc", "Microsoft SQL Server 16.00.4135"), "mssql");
+assert.equal(literalDialect("odbc", "Informix 14.10.0000 FC10"), "informix");
+assert.equal(literalDialect("odbc", "IDS/UNIX64 14.10.0000"), "informix");
+assert.equal(literalDialect("odbc", "PostgreSQL 17.2"), "postgres");
+assert.equal(literalDialect("odbc", "MySQL 8.4.3"), "mysql");
+assert.equal(literalDialect("odbc", "MariaDB 11.4.4"), "mysql");
+assert.equal(literalDialect("odbc", "SQLite 3.46.0"), "sqlite");
+assert.equal(literalDialect("odbc", ""), "odbc", "not connected yet and never seen: generic");
+assert.equal(literalDialect("odbc", "Oracle 19c"), "odbc");
+assert.equal(literalDialect("mssql", "PostgreSQL"), "mssql", "a native connection keeps its own kind");
+assert.equal(literalDialect(undefined), undefined);
+const bq = "INSERT INTO t (b) VALUES (:b)";
+assert.equal(bindParams(bq, findParams(bq, "odbc"), { b: "true" }, {}, literalDialect("odbc", "Microsoft SQL Server 16.00")), "INSERT INTO t (b) VALUES (1)");
 
 // Binding keeps everything else intact, every occurrence is replaced.
 const sql = "SELECT * FROM t WHERE a = :a AND b = :b OR a2 = :a -- :a";

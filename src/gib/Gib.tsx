@@ -4,6 +4,9 @@ import icon from "../../docs/brand/mascot/gib-icon.svg?raw";
 import laptop from "../../docs/brand/mascot/gib-laptop.svg?raw";
 import monday from "../../docs/brand/mascot/gib-monday.svg?raw";
 import poker from "../../docs/brand/mascot/gib-poker.svg?raw";
+import type { GibAccessory, GibPose } from "./prefs";
+
+export { GIB_ACCESSORIES, type GibAccessory, type GibPose } from "./prefs";
 
 export type GibMood = "idle" | "wave" | "busy" | "think" | "idea" | "ok" | "happy" | "love" | "error" | "offline" | "sleep" | "sad" | "annoyed" | "grumpy";
 /**
@@ -24,9 +27,41 @@ export type GibActivity =
   | "dance"
   | "scratch"
   | "bug";
-export type GibPose = "poker" | "laptop" | "monday" | "icon";
+/**
+ * Accessories (Settings › Apariencia › Gib): SVG layers every pose carries, hidden until chosen (App.css shows the ones
+ * named in the root's data-gib-acc, or a Gib's own `accessories`). Head ones go at the end of the head group, so they
+ * move with it and sit over the eyes and lids without touching them; the scarf goes under the head, over the body.
+ * Every pose shares the head's geometry, so one drawing fits all. Colour: .acc-fill and .acc-frame (App.css).
+ */
+const ACC_HEAD = `
+  <g class="acc acc-cap" display="none">
+    <path class="acc-fill" d="M52 50C52 22 74 10 100 10s48 12 48 40z"/>
+    <path d="M100 11v39M78 16q-9 14-9 34M122 16q9 14 9 34" stroke="#000" stroke-opacity=".16" stroke-width="1.6"/>
+    <path class="acc-fill" d="M44 50q56-10 112 0q4 6-2 9q-54-9-108 0q-6-3-2-9z"/>
+    <path d="M44 50q56-10 112 0q4 6-2 9q-54-9-108 0q-6-3-2-9z" fill="#000" fill-opacity=".22"/>
+    <circle class="acc-fill" cx="100" cy="11" r="4.2"/>
+  </g>
+  <g class="acc acc-glasses" display="none">
+    <circle class="acc-frame" cx="79" cy="85" r="16.5" fill="#BFE0FF" fill-opacity=".12" stroke-width="2.8"/>
+    <circle class="acc-frame" cx="121" cy="85" r="16.5" fill="#BFE0FF" fill-opacity=".12" stroke-width="2.8"/>
+    <path class="acc-frame" d="M95.5 84q4.5-3 9 0M62.5 82l-8-3M137.5 82l8-3" stroke-width="2.6" stroke-linecap="round"/>
+  </g>
+  <g class="acc acc-headphones" display="none">
+    <path d="M27 96C25 44 58 17 100 17s75 27 73 79" stroke="#2E3138" stroke-width="7" stroke-linecap="round"/>
+    <rect class="acc-fill" x="15" y="76" width="25" height="40" rx="11"/>
+    <rect class="acc-fill" x="160" y="76" width="25" height="40" rx="11"/>
+    <path d="M24 84v24M176 84v24" stroke="#000" stroke-opacity=".2" stroke-width="5" stroke-linecap="round"/>
+  </g>`;
+const ACC_NECK = `
+  <g class="acc acc-scarf" display="none">
+    <path class="acc-fill" d="M110 150l13 42-13 3-9-40z"/>
+    <path d="M112 182l11-3M114 188l10-3" stroke="#fff" stroke-opacity=".45" stroke-width="2"/>
+    <path class="acc-fill" d="M64 141q36 17 72 0l3 13q-39 19-78 0z"/>
+    <path d="M66 147q34 15 68 0" stroke="#fff" stroke-opacity=".4" stroke-width="2"/>
+  </g>`;
 
-const ART: Record<GibPose, string> = { poker, laptop, monday, icon };
+const dress = (svg: string) => svg.replace("<!-- acc:head -->", ACC_HEAD).replace(/<!-- acc:neck[^>]*-->/, ACC_NECK);
+const ART: Record<GibPose, string> = { poker: dress(poker), laptop: dress(laptop), monday: dress(monday), icon: dress(icon) };
 
 let instances = 0;
 /**
@@ -51,15 +86,34 @@ export function Gib(props: {
   onDblClick?: () => void;
   onHover?: (inside: boolean) => void;
   ref?: (el: HTMLSpanElement) => void;
+  /** His own accessories and colour (the settings preview, the lab); otherwise those of the settings, from the root. */
+  accessories?: GibAccessory[];
+  tint?: string | null;
+  /** No petting or poking (a Gib that is only a picture). */
+  still?: boolean;
+  /** GibLab only: lids shut (to check that a blink closes them fully), and a fixed gaze in SVG units. */
+  blink?: boolean;
+  look?: [number, number];
 }) {
   let root: HTMLSpanElement | undefined;
   const idPrefix = `gib${++instances}`;
   const [blink, setBlink] = createSignal(false);
   const [side, setSide] = createSignal<"left" | "right">("right");
-  const mood = () => props.mood ?? "idle";
+  /**
+   * Every Gib without a click of its own can be touched: the cursor resting on him is a pet (eyes half closed, a
+   * blush, head tilted), a click is a poke (a jump, eyes wide) and three quick pokes make him grumpy for a moment.
+   */
+  const [touch, setTouch] = createSignal<"pet" | "poke" | "grumpy" | null>(null);
+  const touchable = () => !props.onClick && !props.onHover && !props.still;
+  let touchTimer = 0;
+  let pokes: number[] = [];
+  const mood = () => (touch() === "grumpy" ? "grumpy" : props.mood ?? "idle");
   const activity = () => (mood() === "idle" ? props.activity ?? null : null);
   const pose = (): GibPose => {
-    if (activity() === "laptop") return "laptop";
+    const act = activity();
+    if (act === "laptop") return "laptop";
+    // The other activities need the poker rig (arms, the mug, the book): a Gib in another pose plays them standing.
+    if (act) return "poker";
     if (props.pose) return props.pose;
     if (mood() === "busy") return "laptop";
     if (mood() === "sleep") return "monday";
@@ -79,13 +133,14 @@ export function Gib(props: {
       timer = window.setTimeout(() => {
         // Nobody is looking (another window has the focus, or it is minimised): no blinks either.
         if (!reduce() && !document.hidden && document.hasFocus() && mood() !== "sleep" && mood() !== "think") {
+          // 150 ms shut: the lids close in 60 ms (App.css), so they always meet before opening again.
           setBlink(true);
-          window.setTimeout(() => setBlink(false), 120);
+          window.setTimeout(() => setBlink(false), 150);
           if (Math.random() < 0.25) {
             window.setTimeout(() => {
               setBlink(true);
-              window.setTimeout(() => setBlink(false), 120);
-            }, 180);
+              window.setTimeout(() => setBlink(false), 150);
+            }, 260);
           }
         }
         schedule();
@@ -103,23 +158,42 @@ export function Gib(props: {
     const follow = () => {
       frame = 0;
       const event = pointer;
-      if (!event || !root || reduce() || mood() === "busy" || mood() === "sleep" || mood() === "think") return;
+      if (!event || !root || props.look || reduce() || mood() === "busy" || mood() === "sleep" || mood() === "think") return;
+      // Settings › Apariencia › Gib: eyes that do not follow the cursor look ahead.
+      if (document.documentElement.dataset.gibEyes === "off") {
+        root.style.removeProperty("--look-x");
+        root.style.removeProperty("--look-y");
+        return;
+      }
       const box = root.getBoundingClientRect();
       if (!box.width) return;
       // The side the cursor is on: an annoyed Gib swats with the arm on that side.
       setSide(event.clientX < box.left + box.width / 2 ? "left" : "right");
-      const dx = (event.clientX - (box.left + box.width / 2)) / 80;
-      const dy = (event.clientY - (box.top + box.height / 2)) / 80;
-      root.style.setProperty("--look-x", `${Math.max(-2.5, Math.min(2.5, dx))}px`);
-      root.style.setProperty("--look-y", `${Math.max(-2.5, Math.min(2.5, dy))}px`);
+      // In SVG units; App.css clamps the sum with the mood's own gaze to the room each pose's eyes have.
+      const dx = (event.clientX - (box.left + box.width / 2)) / 60;
+      const dy = (event.clientY - (box.top + box.height / 2)) / 60;
+      root.style.setProperty("--look-x", `${Math.max(-6, Math.min(6, dx)).toFixed(2)}px`);
+      root.style.setProperty("--look-y", `${Math.max(-6, Math.min(6, dy)).toFixed(2)}px`);
     };
     window.addEventListener("pointermove", look);
     onCleanup(() => {
       window.clearTimeout(timer);
+      window.clearTimeout(touchTimer);
       window.cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", look);
     });
   });
+
+  /** A poke: a jump; the third within a couple of seconds makes him grumpy. */
+  function poke() {
+    const at = Date.now();
+    pokes = [...pokes.filter((t) => at - t < 2500), at];
+    window.clearTimeout(touchTimer);
+    const grumpy = pokes.length >= 3;
+    if (grumpy) pokes = [];
+    setTouch(grumpy ? "grumpy" : "poke");
+    touchTimer = window.setTimeout(() => setTouch(null), grumpy ? 1300 : 520);
+  }
 
   return (
     <span
@@ -128,15 +202,33 @@ export function Gib(props: {
         props.ref?.(el);
       }}
       class="gib"
-      classList={{ [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink(), clickable: Boolean(props.onClick) }}
-      style={{ width: `${props.size ?? 96}px`, "--gib-size": `${props.size ?? 96}px` }}
+      classList={{ ...accessoryClasses(props.accessories), tinted: Boolean(props.tint), [`mood-${mood()}`]: true, [`pose-${pose()}`]: true, [`act-${activity()}`]: Boolean(activity()), [`side-${side()}`]: true, "is-blink": blink() || Boolean(props.blink), clickable: Boolean(props.onClick), "is-pet": touch() === "pet", "is-poke": touch() === "poke" }}
+      style={{
+        width: `${props.size ?? 96}px`,
+        "--gib-size": `${props.size ?? 96}px`,
+        ...(props.tint ? { "--gib-tint": props.tint } : {}),
+        ...(props.look ? { "--look-x": `${props.look[0]}px`, "--look-y": `${props.look[1]}px` } : {}),
+      }}
       role={props.onClick ? "button" : "img"}
       tabindex={props.onClick ? 0 : undefined}
       aria-label={props.label ?? "Gib"}
-      onClick={() => props.onClick?.()}
+      onClick={() => {
+        if (props.onClick) props.onClick();
+        else if (touchable()) poke();
+      }}
       onDblClick={() => props.onDblClick?.()}
-      onPointerEnter={() => props.onHover?.(true)}
-      onPointerLeave={() => props.onHover?.(false)}
+      onPointerEnter={() => {
+        props.onHover?.(true);
+        if (!touchable()) return;
+        window.clearTimeout(touchTimer);
+        // A moment on him before it counts as petting (passing over does not).
+        touchTimer = window.setTimeout(() => !touch() && setTouch("pet"), 600);
+      }}
+      onPointerLeave={() => {
+        props.onHover?.(false);
+        if (touch() === "pet") setTouch(null);
+        if (!touch()) window.clearTimeout(touchTimer);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") props.onClick?.();
       }}
@@ -240,4 +332,9 @@ function ActivityFx(props: { activity: GibActivity | null }) {
       </Show>
     </>
   );
+}
+/** "acc-own" plus one class per accessory when a Gib has its own set (App.css then ignores the root's). */
+function accessoryClasses(list: GibAccessory[] | undefined): Record<string, boolean> {
+  if (!list) return {};
+  return { "acc-own": true, ...Object.fromEntries(list.map((name) => [`acc-${name}`, true])) };
 }

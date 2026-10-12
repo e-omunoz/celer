@@ -67,14 +67,18 @@ for (let i = 0; i < 6; i++) {
 // The cursor over him: annoyed, swatting with the arm on the cursor's side.
 const g = await js(`const r = gib().getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width };`);
 await app.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: g.x + g.w * 0.3, y: g.y });
-await sleep(350);
-const annoyed = await js(`return { mood: [...gib().classList].find((c) => c.startsWith('mood-')), side: [...gib().classList].find((c) => c.startsWith('side-')), act: [...gib().classList].find((c) => c.startsWith('act-')) ?? '' };`);
+// Waits for his reaction instead of a fixed pause: on a busy machine the mood and the side class can land a few
+// frames apart, and reading them in between made this check fail now and then.
+const annoyed = await js(`
+  const read = () => ({ mood: [...gib().classList].find((c) => c.startsWith('mood-')), side: [...gib().classList].find((c) => c.startsWith('side-')), act: [...gib().classList].find((c) => c.startsWith('act-')) ?? '' });
+  // side-right exactly: a side-left left over from the previous pointer position must not end the wait.
+  await until(() => { const r = read(); return r.mood === 'mood-annoyed' && r.side === 'side-right' && !r.act; }, 2000);
+  return read();`);
 check("hovering makes him annoyed and stops the activity", annoyed.mood === "mood-annoyed" && !annoyed.act, JSON.stringify(annoyed));
 check("he swats on the cursor's side", annoyed.side === "side-right", JSON.stringify(annoyed));
 await crop("annoyed-right");
 await app.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: g.x - g.w * 0.3, y: g.y });
-await sleep(300);
-check("cursor on his left: he swats with the left arm", (await js(`return gib().classList.contains('side-left');`)) === true);
+check("cursor on his left: he swats with the left arm", (await js(`return !!(await until(() => gib().classList.contains('side-left'), 2000));`)) === true);
 await crop("annoyed-left");
 
 // A click: a tip (he stops swatting while he talks); a second click closes it; clicking on and on: a grumble.

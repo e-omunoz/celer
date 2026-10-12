@@ -8,8 +8,10 @@
 //!   con progreso (`progress`) y Detener como única forma de cortarlo.
 //!
 //! tiberius 0.13 manda ATTENTION (`cancel_query`), pero en las pruebas con SQL Server 2022 la conexión no quedó
-//! utilizable después: por eso no se usa para conservar la sesión, solo para que el servidor deje de trabajar en la
-//! conexión que se deja. Cómo fue (y su error) sale en los tiempos de la sentencia siguiente.
+//! utilizable después de cortar un resultado a medias: por eso no se usa para conservar la sesión al dejar un
+//! resultado, solo para que el servidor deje de trabajar en la conexión que se deja. Cómo fue (y su error) sale en los
+//! tiempos de la sentencia siguiente. Detener y el tiempo máximo sí conservan la conexión (y su transacción) cuando
+//! el servidor acusa el ATTENTION y la conexión responde después; si no, se cierra.
 //!
 //! Las conexiones de las sesiones que se cierran sin estado propio quedan libres un rato (`pool`) para la siguiente
 //! sesión de la misma configuración, que se ahorra el login (con su TLS). Con `CELER_MSSQL_TRACE` en el entorno, los
@@ -34,7 +36,7 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::*;
-use crate::session::{first_keyword, Canceller, Driver, Progress};
+use crate::session::{first_keyword, Canceller, Driver, FkColumn, Progress};
 
 type Cli = Client<Compat<TcpStream>>;
 
@@ -44,6 +46,8 @@ const BINARY_PREVIEW: usize = 4096;
 const PACKET_SIZE: u32 = 8000;
 /// Lo que se espera el acuse del ATTENTION al cortar en segundo plano la conexión que se deja.
 const ATTENTION_CAP: Duration = Duration::from_secs(10);
+/// Detener: lo que se espera el acuse del ATTENTION, y después la respuesta de la conexión, antes de cerrarla.
+const CANCEL_CAP: Duration = Duration::from_secs(5);
 /// Conexiones libres: cuánto se guardan, a partir de cuándo se comprueban antes de usarlas y cuántas por configuración.
 const IDLE_TTL: Duration = Duration::from_secs(300);
 const IDLE_PING: Duration = Duration::from_secs(20);
@@ -54,6 +58,19 @@ enum Item {
     Row(Vec<Cell>),
     Count(i64),
     Error(String),
+    /// A message of the server that is not an error: PRINT, RAISERROR with severity 10 or less, warnings.
+    Info(String),
+}
+
+/// The server's informational message as the Output area shows it: PRINT as it is, the others with their number
+/// (like SSMS). "Changed database context / language setting" (5701, 5703) are left out: they only echo a USE or a
+/// SET LANGUAGE.
+fn info_text(m: &tiberius::ServerMessage) -> Option<String> {
+    match m.number {
+        5701 | 5703 => None,
+        0 => Some(m.message.clone()),
+        n => Some(format!("Msg {n}, nivel {}: {}", m.class, m.message)),
+    }
 }
 
 struct Cursor {
@@ -423,6 +440,17 @@ fn batches_note(one: &str, many: &str, n: usize, rest: &str) -> Option<String> {
     }
 }
 
+/// What a failed batch had returned before its error, for the error text (its rows are not shown as a result).
+fn partial_note(results: &[ResultSet]) -> Option<String> {
+    let rows: usize = results.iter().filter(|r| !r.columns.is_empty()).map(|r| r.rows.len()).sum();
+    let grids = results.iter().filter(|r| !r.columns.is_empty()).count();
+    match grids {
+        0 => None,
+        1 => Some(format!("El resultado se descarta: el error llegó tras leer {}.", fmt_rows(rows as i64))),
+        n => Some(format!("Se descartan los {n} resultados del lote: el error llegó tras leer {}.", fmt_rows(rows as i64))),
+    }
+}
+
 /// Si la línea es un separador de lotes: `GO` o `GO n`, con un comentario `--` detrás si acaso. Las veces del lote.
 fn go_line(line: &str) -> Option<usize> {
     let code = line.split("--").next().unwrap_or("");
@@ -557,6 +585,8 @@ pub struct MssqlDriver {
     notes: Vec<String>,
     /// Lo que se supo después en segundo plano (cómo se cortó la conexión que se dejó): sale en la sentencia siguiente.
     late: Arc<Mutex<Vec<String>>>,
+    /// The batch being read sent an error (its messages may be PRINT output only).
+    errored: bool,
     /// La conexión de reserva de la sesión, abriéndose o abierta, para seguir al momento si se deja un resultado.
     reserve: Option<oneshot::Receiver<Option<Idle>>>,
     /// Mientras se lee el resto de un resultado para conservar la sesión, para `progress`.
@@ -591,6 +621,7 @@ impl MssqlDriver {
             info: String::new(),
             notes: Vec::new(),
             late: Arc::new(Mutex::new(Vec::new())),
+            errored: false,
             reserve: None,
             drain: Arc::new(Mutex::new(None)),
             batches: VecDeque::new(),
@@ -860,7 +891,11 @@ impl MssqlDriver {
                     }
                     results.push(ResultSet::count(n));
                 }
-                Some(Item::Error(m)) => messages.push(m),
+                Some(Item::Error(m)) => {
+                    self.errored = true;
+                    messages.push(m);
+                }
+                Some(Item::Info(m)) => messages.push(m),
                 None => {
                     if let Some(rs) = current.take() {
                         results.push(rs);
@@ -1237,6 +1272,23 @@ impl MssqlDriver {
     }
 }
 
+/// Every foreign key of the tables of schema `schema` (a literal) in database `db` (bracketed), one row per column
+/// pair in key order: key id, name, table, column, referenced schema, table and column.
+fn schema_fks_sql(db: &str, schema: &str) -> String {
+    format!(
+        "SELECT fk.object_id, fk.name, t.name, pc.name, rs.name, rt.name, rc.name \
+         FROM {db}.sys.foreign_keys fk \
+         JOIN {db}.sys.tables t ON t.object_id = fk.parent_object_id \
+         JOIN {db}.sys.schemas s ON s.schema_id = t.schema_id \
+         JOIN {db}.sys.foreign_key_columns k ON k.constraint_object_id = fk.object_id \
+         JOIN {db}.sys.columns pc ON pc.object_id = k.parent_object_id AND pc.column_id = k.parent_column_id \
+         JOIN {db}.sys.objects rt ON rt.object_id = fk.referenced_object_id \
+         JOIN {db}.sys.schemas rs ON rs.schema_id = rt.schema_id \
+         JOIN {db}.sys.columns rc ON rc.object_id = k.referenced_object_id AND rc.column_id = k.referenced_column_id \
+         WHERE s.name = {schema} ORDER BY t.name, fk.name, fk.object_id, k.constraint_column_id"
+    )
+}
+
 /// Junta en listas "a, b, c" las columnas que llegan como filas (grupo, columna) ya ordenadas. Sustituye a
 /// `FOR XML PATH` y `STRING_AGG`: el primero no existe en Azure Synapse, PDW ni Fabric, y el segundo tampoco
 /// antes de SQL Server 2017.
@@ -1513,6 +1565,9 @@ async fn connect_client(cfg: &ConnConfig, database: Option<String>) -> Result<Cl
     });
     if cfg.trust_cert {
         config.trust_cert();
+    } else if !cfg.ssh.tls_host.is_empty() {
+        // Through an SSH tunnel (host 127.0.0.1): the certificate is checked against the server's name.
+        config.hostname_in_certificate(&cfg.ssh.tls_host);
     }
     let fut = async {
         let mut config = config;
@@ -1590,17 +1645,39 @@ async fn run_query(
     let outcome = {
         let work = stream_query(&mut client, sql, dml, &tx, &abandon, &drained);
         tokio::select! {
-            o = work => o,
-            _ = token.cancelled() => {
-                let _ = tx.try_send(Item::Error("Consulta cancelada por el usuario (la conexión se ha reiniciado)".into()));
-                Outcome::Broken(None)
-            }
+            biased;
+            o = work => Some(o),
+            _ = token.cancelled() => None,
+        }
+    };
+    // Detener (or the time limit): an ATTENTION stops the statement and, once the server acknowledges it and the
+    // connection answers again, the session keeps its connection, with its open transaction, as in SSMS. Without
+    // an acknowledgement (or cut while a request was being written) the connection is dropped.
+    let outcome = match outcome {
+        Some(o) => o,
+        None if attention(&mut client).await => {
+            let _ = tx.try_send(Item::Error("Consulta cancelada por el usuario".into()));
+            Outcome::Ok(None)
+        }
+        None => {
+            let _ = tx.try_send(Item::Error("Consulta cancelada por el usuario (la conexión se ha reiniciado)".into()));
+            Outcome::Broken(None)
         }
     };
     match outcome {
         Outcome::Ok(cut) => Finished { client: Some(client), cut },
         Outcome::Broken(cut) => Finished { client: None, cut },
     }
+}
+
+/// Cuts the statement in flight with ATTENTION and checks that the connection answers again: true when it can be
+/// kept. A desynchronised stream (cut in the middle of a value) fails the check and the connection is dropped.
+async fn attention(client: &mut Cli) -> bool {
+    if !matches!(tokio::time::timeout(CANCEL_CAP, client.cancel_query()).await, Ok(Ok(()))) {
+        return false;
+    }
+    let check = async { client.simple_query("SELECT 1").await?.into_results().await };
+    matches!(tokio::time::timeout(CANCEL_CAP, check).await, Ok(Ok(r)) if r.len() == 1 && r[0].len() == 1)
 }
 
 async fn stream_query(
@@ -1614,11 +1691,18 @@ async fn stream_query(
     if dml {
         return match client.execute(sql, &[]).await {
             Ok(r) => {
+                for m in r.messages().iter().filter_map(info_text) {
+                    let _ = tx.send(Item::Info(m)).await;
+                }
                 let _ = tx.send(Item::Count(r.total() as i64)).await;
                 Outcome::Ok(None)
             }
             Err(e) => {
                 let fatal = is_fatal(&e);
+                // What the statement printed before failing (a trigger's PRINT, then its RAISERROR), as SSMS shows it.
+                for m in client.take_messages_before_error().iter().filter_map(info_text) {
+                    let _ = tx.send(Item::Info(m)).await;
+                }
                 let _ = tx.send(Item::Error(friendly_error(&e))).await;
                 if fatal {
                     Outcome::Broken(None)
@@ -1650,6 +1734,10 @@ async fn stream_query(
                 tx.send(Item::Meta(cols)).await.is_ok()
             }
             Ok(Some(QueryItem::Row(r))) => tx.send(Item::Row(row_to_cells(r))).await.is_ok(),
+            Ok(Some(QueryItem::Info(m))) => match info_text(&m) {
+                Some(text) => tx.send(Item::Info(text)).await.is_ok(),
+                None => true,
+            },
             Ok(None) => return Outcome::Ok(None),
             Err(e) => {
                 let fatal = is_fatal(&e);
@@ -1979,9 +2067,18 @@ impl MssqlDriver {
         }
         let first_ms = sent.elapsed().as_millis();
         let mut out = ExecOutput::default();
+        self.errored = false;
         out.results = self.pump(fetch.max(1), &mut out.messages);
-        if out.results.is_empty() && !out.messages.is_empty() && self.cursor.is_none() {
-            let msg = out.messages.join("\n");
+        // Only errors make the batch fail: PRINT and other messages alone are its output. An error that arrives after
+        // a result's columns (divide by zero, a failed conversion on row n) fails it too, as on every other engine:
+        // the rows read before it are only a part of the answer, so they are not shown as one.
+        if self.errored {
+            self.close_cursor()?;
+            let mut msg = out.messages.join("\n");
+            if let Some(note) = partial_note(&out.results) {
+                msg.push('\n');
+                msg.push_str(&note);
+            }
             self.refresh_tx_state();
             bail!(msg);
         }
@@ -2043,14 +2140,32 @@ impl MssqlDriver {
                     out.rows.push(r);
                 }
                 Some(Item::Error(m)) => {
+                    // The script stops at the failing batch: the ones after it are not sent (nor told as dropped).
+                    let left = std::mem::take(&mut self.batches).len();
                     self.close_cursor()?;
-                    bail!(m);
+                    self.refresh_tx_state();
+                    let mut msg = out.messages;
+                    msg.push(m);
+                    msg.extend(batches_note("No se ejecutó", "No se ejecutaron", left, "del script por este error."));
+                    bail!(msg.join("\n"));
                 }
+                // PRINT while the rows are read (between two results, or from a procedure): told with this page.
+                Some(Item::Info(m)) => out.messages.push(m),
                 Some(other) => {
                     // Empieza otro resultado del mismo lote.
                     self.peek_back(other);
-                    let mut msgs = Vec::new();
-                    out.extra = self.pump(n, &mut msgs);
+                    self.errored = false;
+                    out.extra = self.pump(n, &mut out.messages);
+                    // A later statement of the batch failed: the batch fails, like one that fails before its first page.
+                    if self.errored {
+                        let left = std::mem::take(&mut self.batches).len();
+                        self.close_cursor()?;
+                        self.refresh_tx_state();
+                        let mut msg = out.messages;
+                        msg.extend(partial_note(&out.extra));
+                        msg.extend(batches_note("No se ejecutó", "No se ejecutaron", left, "del script por este error."));
+                        bail!(msg.join("\n"));
+                    }
                     return Ok(out);
                 }
                 None => {
@@ -2093,6 +2208,10 @@ impl Driver for MssqlDriver {
     }
 
     fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
+        // Nada abierto ni pendiente: otra operación cerró el resultado, que no debe parecer completo.
+        if self.cursor.is_none() && self.batches.is_empty() {
+            bail!(crate::session::CURSOR_CLOSED);
+        }
         let mut out = self.fetch_rows(n)?;
         // El resultado acabó: siguen los lotes que quedaban del script.
         if self.cursor.is_none() && !self.batches.is_empty() {
@@ -2461,6 +2580,26 @@ impl Driver for MssqlDriver {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// One catalog query: sys.foreign_keys with their columns (sys.foreign_key_columns) of the schema's tables, one
+    /// row per column pair in key order. Synapse dedicated has no foreign keys (nor the folder for them); Fabric
+    /// Warehouse's (NOT ENFORCED) are in the same views.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        self.synapse_enter(db)?;
+        if !self.has_table_folder("fks") {
+            return Ok(vec![]);
+        }
+        let rows = self.query_rows(&schema_fks_sql(&qi(db), &ql(schema)))?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| FkColumn {
+            key: cell_i64(&r[0]).to_string(),
+            name: cell_str(&r[1]),
+            table: ObjectRef::new(db, schema, &cell_str(&r[2]), "table"),
+            column: cell_str(&r[3]),
+            target: ObjectRef::new(db, &cell_str(&r[4]), &cell_str(&r[5]), "table"),
+            target_column: cell_str(&r[6]),
+        })))
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {

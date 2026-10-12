@@ -3,6 +3,8 @@ import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import type { Backend } from "./api";
 import { quoteIdent, resultToText } from "./sql";
 import { inOrder, isPermutation } from "./columnOrder";
+import { scrubStack, scrubText } from "./scrub";
+import type { ErrorEntry } from "./errorLogText";
 import type {
   Cell,
   ColKind,
@@ -13,9 +15,11 @@ import type {
   ExecOutput,
   FetchOutput,
   HistoryEntry,
+  McpAuditEntry,
   MetaNode,
   ObjectRef,
   ResultSet,
+  SchemaForeignKey,
   SessionInfo,
   TableColumn,
 } from "./types";
@@ -121,6 +125,63 @@ function demoConnection(): ConnConfig {
     readOnly: false,
     folder: "Ejemplos",
     filePath: ":memory:",
+  };
+}
+
+/** The browser preview's first library: a favourite check with a declared parameter, a report and a multi-statement script. */
+function demoLibrary() {
+  const at = Date.UTC(2026, 0, 1);
+  return {
+    version: 3,
+    folders: ["Comprobaciones", "Informes"],
+    scripts: [
+      {
+        id: "demo-check",
+        name: "Clientes con pedidos desde",
+        sql: "SELECT c.name, count(o.id) AS pedidos, sum(o.total) AS total\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.created >= :desde\nGROUP BY c.name\nORDER BY total DESC;",
+        connId: null,
+        folder: "Comprobaciones",
+        tags: ["clientes"],
+        createdAt: at,
+        updatedAt: at,
+        description: "Pedidos e importe por cliente desde una fecha. Sirve en cualquier motor.",
+        engine: "generic",
+        favorite: true,
+        params: [{ name: "desde", default: "2026-01-01", description: "Fecha inicial (AAAA-MM-DD)" }],
+      },
+      {
+        id: "demo-report",
+        name: "Ventas por producto",
+        sql: "SELECT sku, count(*) AS pedidos, round(sum(total), 2) AS total\nFROM orders\nGROUP BY sku\nORDER BY total DESC\nLIMIT 10;",
+        connId: "demo",
+        folder: "Informes",
+        tags: ["ventas"],
+        createdAt: at,
+        updatedAt: at,
+      },
+      {
+        id: "demo-vars",
+        name: "Clientes de una ciudad",
+        sql: "SELECT name, city\nFROM customers\nWHERE city = ${ciudad}\nLIMIT ${limite};",
+        connId: null,
+        folder: "Informes",
+        tags: ["clientes"],
+        createdAt: at,
+        updatedAt: at,
+        description: "Usa las variables ${ciudad} (de la conexión) y ${limite} (global): cámbialas en el panel Variables.",
+      },
+      {
+        id: "demo-script",
+        name: "Resumen en dos pasos",
+        sql: "-- Primero los clientes activos, después sus pedidos.\nSELECT count(*) AS activos FROM customers WHERE active = 1;\nSELECT count(*) AS pedidos FROM orders;",
+        connId: null,
+        folder: "",
+        tags: [],
+        createdAt: at,
+        updatedAt: at,
+        description: "Dos sentencias: «Ejecutar todo» o abrirlo y elegir una.",
+      },
+    ],
   };
 }
 
@@ -290,7 +351,7 @@ function meta(db: Database, path: string[]): MetaNode[] {
     });
   }
   if (sub === "fks") {
-    const rows = query(db, `SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(${sqlString(name)})`);
+    const rows = query(db, `SELECT id, ${fkTable("main")}, "from", "to" FROM pragma_foreign_key_list(${sqlString(name)}) f`);
     // Same shape as the core: "cols → table(cols)" and the referenced table in obj (one node per key).
     const keys = new Map<string, { table: string; from: string[]; to: string[] }>();
     for (const row of rows) {
@@ -312,6 +373,35 @@ function meta(db: Database, path: string[]): MetaNode[] {
   return [];
 }
 
+/** The referenced table of a row `f` of pragma_foreign_key_list by its catalog name, as the core's fk_table. */
+function fkTable(sch: string): string {
+  return `COALESCE((SELECT t.name FROM ${quoteIdent(sch)}.sqlite_schema t WHERE t.type = 'table' AND t.name = f."table" COLLATE NOCASE), f."table")`;
+}
+
+/** Every foreign key of a schema ([database, schema]) in one query, as the core's schema_foreign_keys answers. */
+function schemaForeignKeys(db: Database, path: string[]): SchemaForeignKey[] {
+  const [dbName = "main", schema = "main"] = path;
+  const sch = schemaName(dbName, schema);
+  const rows = query(
+    db,
+    `SELECT m.name, f.id, ${fkTable(sch)}, f."from", f."to" FROM ${quoteIdent(sch)}.sqlite_schema m, pragma_foreign_key_list(m.name) f ` +
+      `WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, f.id, f.seq`,
+  );
+  const keys = new Map<string, SchemaForeignKey>();
+  for (const row of rows) {
+    const [table, id, target] = [text(row[0]), text(row[1]), text(row[2])];
+    const mapKey = `${table}\u0000${id}`;
+    let key = keys.get(mapKey);
+    if (!key) {
+      key = { name: `fk_${table}_${target}_${id}`, table: { database: dbName, schema, name: table, kind: "table" }, columns: [], target: { database: dbName, schema: "main", name: target, kind: "table" }, targetColumns: [] };
+      keys.set(mapKey, key);
+    }
+    key.columns.push(text(row[3]));
+    key.targetColumns.push(text(row[4]));
+  }
+  return [...keys.values()];
+}
+
 function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
@@ -331,6 +421,17 @@ function tableColumns(db: Database, obj: ObjectRef): TableColumn[] {
       kind,
     };
   });
+}
+
+/** What the MCP audit log would show after an assistant worked a while (the browser demo has no MCP server). */
+function demoAudit(): McpAuditEntry[] {
+  const at = Date.now();
+  return [
+    { at: at - 60_000, tool: "open_console", connId: "demo", connName: "Demo SQLite", detail: "[ejecutar] SELECT city, count(*) FROM customers GROUP BY city", ok: true, ms: 41, client: "WSL (Ubuntu)", clientApp: "claude-code" },
+    { at: at - 2 * 60_000, tool: "run_query", connId: "demo", connName: "Demo SQLite", detail: "SELECT count(*) FROM customers", ok: true, rows: 1, ms: 3, client: "WSL (Ubuntu)", clientApp: "claude-code" },
+    { at: at - 3 * 60_000, tool: "describe_table", connId: "demo", connName: "Demo SQLite", detail: "main.customers", ok: true, rows: 6, ms: 4, client: "WSL (Ubuntu)", clientApp: "claude-code" },
+    { at: at - 9 * 60_000, tool: "execute_statement", connId: "demo", connName: "Demo SQLite", detail: "DELETE FROM customers", ok: false, ms: 1, error: "La conexión «Demo SQLite» tiene nivel «read» para asistentes y execute_statement requiere «write».", client: "Windows", clientApp: "claude-code" },
+  ];
 }
 
 function download(filename: string, body: string, type: string) {
@@ -427,6 +528,31 @@ export function createDemoBackend(): Backend {
       const secrets = readJson<Record<string, string>>("celer.secrets", {});
       return self.saveConnection({ ...source, id: "", name, password: secrets[id] ?? "" });
     },
+    // No SSH in the browser (only SQLite): nothing is ever pending.
+    async sshHostKey() {
+      return null;
+    },
+    async setSessionSshPassword() {},
+    async sshTrustHostKey() {
+      throw new Error("En el navegador no hay túneles SSH.");
+    },
+    // Passwords in an export: in the browser only in clear (there is no Argon2id here); the desktop app encrypts them.
+    async exportSecrets(items, passphrase) {
+      if (passphrase !== null) throw new Error("En el navegador las contraseñas solo se exportan sin cifrar; la aplicación de escritorio las cifra.");
+      const secrets = readJson<Record<string, string>>("celer.secrets", {});
+      const data: Record<string, unknown> = {};
+      items.forEach((item, index) => {
+        const set: Record<string, unknown> = {};
+        if (secrets[item.id]) set.password = secrets[item.id];
+        if (item.inline) set.inline = item.inline;
+        if (Object.keys(set).length) data[String(index)] = set;
+      });
+      return { encrypted: false, warning: "Contraseñas SIN CIFRAR: cualquiera que lea este fichero puede usarlas.", data };
+    },
+    async openSecrets(block) {
+      if (block.encrypted === true) throw new Error("En el navegador no se pueden abrir contraseñas cifradas: importa el fichero en la aplicación de escritorio.");
+      return (block.data ?? {}) as Record<string, never>;
+    },
     async testConnection(cfg) {
       const t0 = performance.now();
       if (cfg.kind !== "sqlite") {
@@ -465,6 +591,10 @@ export function createDemoBackend(): Backend {
       requireSession(sessionId);
       return { ok: true, reconnected: false, lost: "", ms: 0, error: "" };
     },
+    async keepAliveSession(sessionId) {
+      requireSession(sessionId);
+      return null;
+    },
     async openSession(connId, password, options) {
       const cfg = loadConns().find((item) => item.id === connId);
       if (!cfg) throw new Error("Conexión no encontrada");
@@ -493,6 +623,7 @@ export function createDemoBackend(): Backend {
         serverInfo: `SQLite ${version} — ${cfg.filePath || "memoria"} (demo navegador)`,
         connectMs: 0,
         reused: false,
+        driver: "sql.js (demo navegador)",
       };
       if (options?.autocommit === false) await self.setAutocommit(sessionId, false);
       return info;
@@ -527,6 +658,21 @@ export function createDemoBackend(): Backend {
       if (keyword === "BEGIN") session.inTx = true;
       if (keyword === "COMMIT" || keyword === "ROLLBACK" || keyword === "END") session.inTx = false;
       const elapsedMs = Math.max(1, Math.round(performance.now() - started));
+      // sql.js leaves out a query without rows: a SELECT that found nothing still has its columns (an empty grid, as
+      // every real engine returns), not "0 filas afectadas".
+      if (!sets.length && /^(SELECT|WITH|VALUES|PRAGMA)\b/.test(keyword ?? "")) {
+        try {
+          const statement = session.db.prepare(sql);
+          const names = statement.getColumnNames();
+          statement.free();
+          if (names.length) {
+            const columns: ColumnInfo[] = names.map((name) => ({ name, typeName: "text", kind: "text" }));
+            return { results: [{ columns, rows: [], hasMore: false, rowsAffected: null }], messages: [], elapsedMs, inTransaction: session.inTx } satisfies ExecOutput;
+          }
+        } catch {
+          // Not a single statement: as before.
+        }
+      }
       if (!sets.length) {
         const changed = session.db.getRowsModified();
         const output: ExecOutput = {
@@ -597,6 +743,9 @@ export function createDemoBackend(): Backend {
     },
     async metaChildren(sessionId, path) {
       return meta(requireSession(sessionId).db, path);
+    },
+    async schemaForeignKeys(sessionId, path) {
+      return schemaForeignKeys(requireSession(sessionId).db, path);
     },
     async tableColumns(sessionId, obj) {
       return tableColumns(requireSession(sessionId).db, obj);
@@ -670,8 +819,49 @@ export function createDemoBackend(): Backend {
     async clearHistory() {
       localStorage.removeItem("celer.history");
     },
+    async setHistoryRetention(max, days) {
+      const all = readJson<HistoryEntry[]>("celer.history", []);
+      const cutoff = days > 0 ? Date.now() - days * 86_400_000 : 0;
+      const kept = all.filter((entry) => entry.at >= cutoff).slice(-Math.max(1, max));
+      if (kept.length !== all.length) writeJson("celer.history", kept);
+      return all.length - kept.length;
+    },
+    // The browser demo keeps its error log in localStorage, scrubbed like the core's.
+    async errorLogAdd(area, message, stack) {
+      const all = readJson<ErrorEntry[]>("celer.errors", []);
+      all.push({ at: Date.now(), version: "dev", area: area.replace(/[^\w:-]/g, "").slice(0, 48) || "?", message: scrubText(message).slice(0, 2000), stack: scrubStack(stack ?? "").slice(0, 8000) });
+      writeJson("celer.errors", all.slice(-200));
+    },
+    async errorLogList(limit) {
+      return readJson<ErrorEntry[]>("celer.errors", []).reverse().slice(0, limit);
+    },
+    async errorLogClear() {
+      localStorage.removeItem("celer.errors");
+    },
+    // The browser cannot write to a folder: each image is downloaded instead.
+    async reportSaveImages(_id, images) {
+      for (const [name, dataUrl] of images) {
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = `${name || "imagen"}.png`;
+        link.click();
+      }
+      return images.map(([name]) => `${name || "imagen"}.png`);
+    },
+    async errorLogPath() {
+      throw new Error("En el navegador el registro está en el almacenamiento de la página");
+    },
+    async desktopNotify(title, body) {
+      // The browser's own notifications, when the page is allowed to show them.
+      if (typeof Notification === "undefined") return;
+      if (Notification.permission === "default") await Notification.requestPermission().catch(() => "denied");
+      if (Notification.permission === "granted") new Notification(title, { body });
+    },
     async loadJson(name) {
       const value = localStorage.getItem(`celer.${name}`);
+      if (!value && name === "library") return demoLibrary();
+      // A first variable of each scope that the demo library uses.
+      if (!value && name === "variables") return { version: 1, global: [{ name: "limite", value: "5" }], connections: { demo: [{ name: "ciudad", value: "Madrid" }] } };
       return value ? JSON.parse(value) : null;
     },
     async saveJson(name, value, merge) {
@@ -683,9 +873,14 @@ export function createDemoBackend(): Backend {
       if (hit !== undefined) return { text: hit, encoding: "utf-8" };
       throw new Error("En el navegador abre el script con el botón Abrir");
     },
-    async readSpreadsheet() {
-      throw new Error("Las hojas de cálculo se importan en la aplicación de escritorio; en el navegador, guárdala como CSV");
+    async sheetOpen() {
+      throw new Error("Las hojas de cálculo se importan en la aplicación de escritorio; en el navegador, guárdala como CSV o pega las celdas (Ctrl+V)");
     },
+    async sheetCancel() {},
+    async sheetRows() {
+      throw new Error("Las hojas de cálculo se importan en la aplicación de escritorio");
+    },
+    async sheetClose() {},
     async writeTextFile(path, content) {
       textFiles.set(path, content);
       download(path.split(/[\\/]/).pop() || "script.sql", content, "text/plain");
@@ -715,20 +910,72 @@ export function createDemoBackend(): Backend {
     async jdbcPrewarm() {},
     async driverDownloadCancel() {},
     async mcpConfigGet() {
-      return { enabled: false, maxRows: 200, timeoutSecs: 30, redactPattern: "", connections: {} };
+      return { enabled: false, maxRows: 200, timeoutSecs: 30, redactPattern: "", connections: {}, appControl: { enabled: false, openTabs: true, writeLibrary: true, runOpened: false } };
     },
     async mcpConfigSet() {
       throw new Error("El servidor MCP solo está disponible en la aplicación de escritorio");
     },
-    async mcpAudit() {
-      return [];
+    async mcpAudit(limit) {
+      return demoAudit().slice(0, limit);
     },
     async mcpClearAudit() {},
     async mcpClientInfo() {
-      return { exePath: "celer.exe", args: ["--mcp"], claudeDesktopConfigPath: "", claudeDesktopConfigured: false, claudeCodeCommand: "claude mcp add celer -- celer.exe --mcp" };
+      return {
+        exePath: "C:\\Users\\demo\\AppData\\Local\\Celer\\celer.exe",
+        args: ["--mcp"],
+        claudeDesktopConfigPath: "",
+        claudeDesktopConfigured: false,
+        claudeCodeCommand: 'claude mcp add --scope user celer -- "C:\\Users\\demo\\AppData\\Local\\Celer\\celer.exe" --mcp',
+        claudeCodeRegistered: "yes",
+        wslSupported: true,
+      };
     },
     async mcpInstallClaudeDesktop() {
       throw new Error("Solo en la aplicación de escritorio");
+    },
+    // The browser demo shows the indicator as a Windows machine with Claude Code in Windows and in WSL would.
+    async mcpStatus() {
+      return {
+        enabled: true,
+        appControl: true,
+        clients: [
+          { name: "Claude Code", place: "Windows", state: "yes" },
+          { name: "Claude Code", place: "WSL (Ubuntu)", state: "yes" },
+        ],
+        wslChecked: true,
+        lastCall: demoAudit()[0] ?? null,
+      };
+    },
+    async mcpWslInfo() {
+      const exePath = "/mnt/c/Users/demo/AppData/Local/Celer/celer.exe";
+      const command = (claude: string, distro: string) => `${claude} mcp add --scope user celer -- '${exePath}' --mcp --client=wsl:${distro}`;
+      return {
+        available: true,
+        error: "",
+        checkedAt: Date.now(),
+        distros: [
+          { name: "Ubuntu", default: true, running: true, checked: true, interop: true, home: "/home/demo", claude: "/home/demo/.local/bin/claude", automountRoot: "/mnt/", exePath, command: command("/home/demo/.local/bin/claude", "Ubuntu"), registered: "yes", registeredCommand: `${exePath} --mcp --client=wsl:Ubuntu`, error: "" },
+          { name: "Debian", default: false, running: false, checked: false, interop: null, home: "", claude: "", automountRoot: "/mnt/", exePath, command: command("claude", "Debian"), registered: "unknown", registeredCommand: "", error: "" },
+        ],
+      };
+    },
+    async mcpWslRegister() {
+      throw new Error("Registrar en WSL solo es posible en la aplicación de escritorio");
+    },
+    async reportTokenStatus() {
+      return Boolean(sessionStorage.getItem("celer.report-token"));
+    },
+    async reportTokenSet(token) {
+      // Browser demo only: kept for this tab session, never persisted.
+      if (token.trim()) sessionStorage.setItem("celer.report-token", token.trim());
+      else sessionStorage.removeItem("celer.report-token");
+    },
+    // The preview never creates issues: it answers like a failed send, so the draft stays and «Abrir en GitHub» is offered.
+    async reportCreateIssue() {
+      throw new Error("En la vista previa del navegador no se crean issues: usa «Abrir en GitHub».");
+    },
+    async mcpAppReply() {
+      return false;
     },
     async mcpTestTool() {
       throw new Error("Solo en la aplicación de escritorio");
@@ -745,7 +992,7 @@ export function createDemoBackend(): Backend {
       return sessionStorage.getItem("celer.ai-key");
     },
     async appInfo() {
-      return { version: "dev", dataDir: "navegador (localStorage)" };
+      return { version: "dev", dataDir: "navegador (localStorage)", os: "" };
     },
     async migrationSources() {
       return [];
@@ -792,6 +1039,9 @@ export function createDemoBackend(): Backend {
       return picked ? [picked.name] : [];
     },
     async onExportProgress() {
+      return () => {};
+    },
+    async onSheetProgress() {
       return () => {};
     },
     async onDriverDownload() {

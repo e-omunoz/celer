@@ -9,6 +9,7 @@ import { dataSyncScript } from "../src/dataCompareSql.ts";
 import { lookupSql } from "../src/fkLookupSql.ts";
 import { compareSchemas, syncScript, type SchemaTable } from "../src/schemaCompare.ts";
 import { changesSql, filterSql, selectLimit, upsertSql } from "../src/sqlgen.ts";
+import { importStatements, type SheetCell } from "../src/importFormats.ts";
 import type { Cell, DbKind, ResultSet, TableColumn } from "../src/types.ts";
 
 interface Table {
@@ -18,10 +19,23 @@ interface Table {
   rows: Cell[][];
 }
 
+/** A foreign key as the driver's schema_foreign_keys reads it (#98), its names quoted for the dialect. */
+interface ForeignKeyShape {
+  name: string;
+  qualified: string;
+  columns: string[];
+  targetQualified: string;
+  targetColumns: string[];
+  /** Rows of its table with every key column set: each must find its referenced row. */
+  rows: number;
+}
+
 interface Shape {
   kind: DbKind;
-  /** Seed table (see engine_tests.rs): id, nombre, activo, alta, importe, notas, parent_id. */
-  t: Table;
+  /** Seed table (see engine_tests.rs): id, nombre, activo, alta, importe, notas, parent_id. Absent: only `fks`. */
+  t?: Table;
+  /** The schema's foreign keys read in one catalog query: the E-R diagram draws one edge per key and column pair. */
+  fks?: ForeignKeyShape[];
   /** A table of date and time columns (first row: the values to find and write back). */
   dt?: Table;
   /** Schema comparison: source tables, target tables, the source's DDL, the target schema. */
@@ -38,8 +52,22 @@ interface Statement {
 }
 
 const shape = JSON.parse(readFileSync(0, "utf8").replace(/^﻿/, "")) as Shape;
-const { kind, t } = shape;
+const { kind } = shape;
 const out: Statement[] = [];
+
+// ---------------------------------------------------------------- the schema's foreign keys (E-R diagram, #98)
+// Each key joins its table to the referenced one column pair by column pair, in the order the catalog query gave:
+// a column out of order or of another table fails the join or finds fewer rows.
+for (const fk of shape.fks ?? []) {
+  if (!fk.columns.length || fk.columns.length !== fk.targetColumns.length) throw new Error(`foreign key ${fk.name}: ${JSON.stringify(fk)}`);
+  const on = fk.columns.map((c, i) => `c.${c} = p.${fk.targetColumns[i]}`).join(" AND ");
+  out.push({ name: `fk ${fk.name} joins its tables`, sql: `SELECT c.* FROM ${fk.qualified} c JOIN ${fk.targetQualified} p ON ${on}`, rows: fk.rows });
+}
+if (!shape.t) {
+  process.stdout.write(JSON.stringify(out, null, 1));
+  process.exit(0);
+}
+const t: Table = shape.t;
 // The table as the builders take it (a table tab's fields).
 const tab = { columnsMeta: t.columns, quoted: t.quoted, qualified: t.qualified };
 const col = (name: string) => t.columns.findIndex((c) => c.name.toLowerCase() === name);
@@ -176,6 +204,22 @@ if (shape.data) {
   const d = shape.data;
   const script = dataSyncScript(compareResults(d.target, d.source, d.key), { dialect: kind, table: d.table, targetColumns: d.targetColumns });
   out.push({ name: "data sync script", sql: script });
+}
+
+// ---------------------------------------------------------------- import of typed cells (a sheet, a pasted block)
+// What the import wizard writes for an Excel sheet (#120): a date-time into the DATE column keeps the date, a serial
+// number into it is a date, a decimal, booleans as true / 0, empty text as NULL. Checked, then taken out again.
+{
+  const sheetRow = (id: number, nombre: string, activo: SheetCell, alta: SheetCell, importe: SheetCell, notas: SheetCell): SheetCell[] => [id, nombre, activo, alta, importe, notas];
+  const names = ["id", "nombre", "activo", "alta", "importe", "notas"];
+  const mapping = t.columns.map((c) => names.indexOf(c.name.toLowerCase()));
+  const rows = [sheetRow(907, "Importado «907»", true, { d: "2024-03-15 10:20:00" }, 12.5, ""), sheetRow(908, "O'Neil 908", 0, 45366, -3, "nota")];
+  for (const sql of importStatements(rows, { qualified: t.qualified, columns: t.columns, quoted: t.quoted, mapping, emptyAsNull: true }, kind)) out.push({ name: "import typed rows", sql });
+  const cond = (name: string, op: string, value = "") => filterSql(tab, { id: "f", col: t.columns[col(name)].name, op: op as never, value, value2: "", values: [], enabled: true }, kind)!;
+  out.push({ name: "import: date-time into DATE, decimal, true, empty as NULL", sql: select([cond("id", "eq", "907"), cond("alta", "eq", "2024-03-15"), cond("importe", "eq", "12.5"), cond("activo", "eq", "true"), cond("notas", "null")].join(" AND ")), rows: 1 });
+  out.push({ name: "import: serial date, negative, 0 as false, text", sql: select([cond("id", "eq", "908"), cond("alta", "eq", "2024-03-15"), cond("importe", "eq", "-3"), cond("activo", "eq", "false"), cond("nombre", "eq", "O'Neil 908")].join(" AND ")), rows: 1 });
+  out.push({ name: "import: rows taken out", sql: `DELETE FROM ${t.qualified} WHERE ${q("id")} IN (907, 908)` });
+  out.push({ name: "import: none left", sql: select(`${q("id")} IN (907, 908)`), rows: 0 });
 }
 
 process.stdout.write(JSON.stringify(out, null, 1));

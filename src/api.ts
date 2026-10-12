@@ -1,3 +1,4 @@
+import type { SheetCell } from "./importFormats";
 import type {
   CompletionSchema,
   ConnConfig,
@@ -10,12 +11,16 @@ import type {
   MetaNode,
   ObjectRef,
   OpenSessionOptions,
+  SchemaForeignKey,
   SessionHealth,
   SessionInfo,
+  SshHostKeyInfo,
   TableColumn,
 } from "./types";
-import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, UpdateInfo } from "./types";
+import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, McpStatus, UpdateInfo, WslInfo } from "./types";
 import type { MigrationSource } from "./migrate";
+import type { ImportedSecrets, SecretRequest } from "./connTree";
+import type { ErrorEntry } from "./errorLogText";
 import { createDemoBackend } from "./demo";
 
 export interface Backend {
@@ -32,13 +37,29 @@ export interface Backend {
   duplicateConnection(id: string, name: string): Promise<ConnConfig>;
   /** "Probar conexión": every step timed. Rejects only when the connection cannot even be attempted (driver missing…). */
   testConnection(cfg: ConnConfig): Promise<ConnTestReport>;
+  /** The SSH host key behind an SSH_HOST_UNKNOWN:<token>: error (null once it is no longer pending). */
+  sshHostKey(token: string): Promise<SshHostKeyInfo | null>;
+  /** «Confiar en esta clave»: the key goes to Celer's known_hosts. */
+  sshTrustHostKey(token: string): Promise<SshHostKeyInfo>;
+  /** An SSH password typed at connect time: kept in the core's memory only, never saved. */
+  setSessionSshPassword(connId: string, password: string): Promise<void>;
+  /**
+   * The `secrets` block of an export with passwords: the core reads each connection's secrets from the credential
+   * store and seals them with `passphrase` (Argon2id + AES-256-GCM), or leaves them in clear when it is null.
+   */
+  exportSecrets(items: SecretRequest[], passphrase: string | null): Promise<{ encrypted: boolean } & Record<string, unknown>>;
+  /** The secrets of a v2 file, by connection position. A wrong passphrase rejects with SECRETS_PASSPHRASE:. */
+  openSecrets(block: Record<string, unknown>, passphrase: string | null): Promise<Record<string, ImportedSecrets>>;
   openSession(connId: string, password?: string, options?: OpenSessionOptions): Promise<SessionInfo>;
   /** Checks a session (a cheap round trip if it has been idle, or always with `force`) and reconnects it if it dropped. */
   checkSession(sessionId: string, force: boolean): Promise<SessionHealth>;
+  /** Keepalive: checks the session if it has been idle `idleSecs` (null when it was not, or is at work). */
+  keepAliveSession(sessionId: string, idleSecs: number): Promise<SessionHealth | null>;
   closeSession(sessionId: string): Promise<void>;
   /** Closes every session of a connection (disconnect); returns how many were open. */
   closeConnectionSessions(connId: string): Promise<number>;
-  execute(sessionId: string, sql: string, fetch: number): Promise<ExecOutput>;
+  /** `timeoutSecs` (Ajustes › Ejecución): the core cancels the statement after that many seconds (0 or none: no limit). */
+  execute(sessionId: string, sql: string, fetch: number, timeoutSecs?: number): Promise<ExecOutput>;
   fetch(sessionId: string, n: number): Promise<FetchOutput>;
   closeCursor(sessionId: string): Promise<void>;
   cancel(sessionId: string): Promise<void>;
@@ -48,6 +69,8 @@ export interface Backend {
   commit(sessionId: string): Promise<boolean>;
   rollback(sessionId: string): Promise<boolean>;
   metaChildren(sessionId: string, path: string[]): Promise<MetaNode[]>;
+  /** Every foreign key of a schema (its explorer path: [database, schema], or [database] on Informix). */
+  schemaForeignKeys(sessionId: string, path: string[]): Promise<SchemaForeignKey[]>;
   tableColumns(sessionId: string, obj: ObjectRef): Promise<TableColumn[]>;
   objectDdl(sessionId: string, obj: ObjectRef): Promise<string>;
   completion(sessionId: string, database: string): Promise<CompletionSchema>;
@@ -59,16 +82,42 @@ export interface Backend {
   addHistory(entry: HistoryEntry): Promise<void>;
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
-  loadJson(name: "settings" | "workspace" | "library"): Promise<unknown>;
+  /** Ajustes › Historial: queries kept and days kept (0: any age); returns how many entries were dropped. */
+  setHistoryRetention(max: number, days: number): Promise<number>;
+  /** A desktop notification (and the taskbar button asks for attention). */
+  desktopNotify(title: string, body: string): Promise<void>;
+  /** Local error log (Ayuda › Registro de errores): the core scrubs every entry before writing it. */
+  errorLogAdd(area: string, message: string, stack?: string): Promise<void>;
+  errorLogList(limit: number): Promise<ErrorEntry[]>;
+  errorLogClear(): Promise<void>;
+  /** The log file, to show it in its folder. */
+  errorLogPath(): Promise<string>;
+  loadJson(name: "settings" | "workspace" | "library" | "variables" | "reports"): Promise<unknown>;
   /**
    * Writes a shared file through the core, which tells the other windows. `merge`: `value` holds only some top-level
    * keys, merged into what the file has. In the desktop app the workspace is written by windows.ts instead.
    */
-  saveJson(name: "settings" | "workspace" | "library", value: unknown, merge?: boolean): Promise<void>;
+  saveJson(name: "settings" | "workspace" | "library" | "variables" | "reports", value: unknown, merge?: boolean): Promise<void>;
+  /** A report's images (data URLs) as PNG files in the data folder, to attach by hand; returns their paths. */
+  reportSaveImages(id: string, images: [name: string, dataUrl: string][]): Promise<string[]>;
+  /** Whether a GitHub token for sending reports is saved in the credential store (the token never comes back). */
+  reportTokenStatus(): Promise<boolean>;
+  /** Keeps the GitHub token in the credential store; "" removes it. */
+  reportTokenSet(token: string): Promise<void>;
+  /** Creates the report's issue on GitHub with the saved token. */
+  reportCreateIssue(title: string, body: string, labels: string[]): Promise<{ number: number; html_url: string }>;
   /** The text and the encoding it was in (utf-8, utf-8-bom, utf-16le, utf-16be, windows-1252). */
   readTextFile(path: string): Promise<{ text: string; encoding: string }>;
   /** A sheet of an Excel / OpenDocument workbook as text cells (the first sheet when `sheet` is not given). */
-  readSpreadsheet(path: string, sheet?: string): Promise<{ sheets: string[]; sheet: string; rows: string[][] }>;
+  /**
+   * Opens a sheet of a workbook for the import (`openId` cancels it with sheetCancel while it reads; progress comes
+   * through onSheetProgress): the core keeps it and sends its first rows, typed; sheetRows reads more.
+   */
+  sheetOpen(path: string, sheet: string | null, openId: string): Promise<SheetInfo>;
+  sheetCancel(openId: string): Promise<void>;
+  /** Rows row0..=row1 and columns col0..=col1 (sheet positions, 0 = row 1 / column A) of an open sheet. */
+  sheetRows(handle: number, row0: number, row1: number, col0: number, col1: number): Promise<SheetCell[][]>;
+  sheetClose(handle: number): Promise<void>;
   /** Writes in `encoding` (UTF-8 by default); returns the encoding used (UTF-8 when Windows-1252 cannot hold the text). */
   writeTextFile(path: string, content: string, encoding?: string): Promise<string>;
   odbcDrivers(): Promise<string[]>;
@@ -84,7 +133,8 @@ export interface Backend {
   /** Starts Java ahead of an Informix JDBC connection (while the password is asked). */
   jdbcPrewarm(connId: string): Promise<void>;
   driverDownloadCancel(): Promise<void>;
-  appInfo(): Promise<{ version: string; dataDir: string }>;
+  /** `os`: the system and architecture ("windows x86_64"). */
+  appInfo(): Promise<{ version: string; dataDir: string; os?: string }>;
   migrationSources(): Promise<MigrationSource[]>;
   /** DBeaver's encrypted credentials next to a listed data-sources.json (hex), only when the user asks for passwords. */
   migrationDbeaverCredentials(path: string): Promise<string | null>;
@@ -101,6 +151,14 @@ export interface Backend {
   mcpClearAudit(): Promise<void>;
   mcpClientInfo(): Promise<McpClientInfo>;
   mcpInstallClaudeDesktop(): Promise<string>;
+  /** MCP on or off, the clients registered (Windows and WSL) and the last call: the status bar's indicator. */
+  mcpStatus(): Promise<McpStatus>;
+  /** The WSL distros and Celer's registration in each; `check` also looks into that stopped distro (starting it). */
+  mcpWslInfo(check?: string): Promise<WslInfo>;
+  /** Runs `claude mcp add` inside a WSL distro; returns what it said. */
+  mcpWslRegister(distro: string): Promise<string>;
+  /** This window's answer to an assistant's request (MCP «Controlar la aplicación», see mcpApp.ts). */
+  mcpAppReply(id: string, ok: boolean, result: unknown, error?: string): Promise<boolean>;
   mcpTestTool(name: string, args: Record<string, unknown>): Promise<unknown>;
   /** `defaultName`: the file name the dialog proposes. */
   pickSavePath(filters: { name: string; extensions: string[] }[], defaultName?: string): Promise<string | null>;
@@ -109,15 +167,65 @@ export interface Backend {
   pickOpenPaths(filters: { name: string; extensions: string[] }[]): Promise<string[]>;
   onExportProgress(cb: (progress: { exportId: string; rows: number }) => void): Promise<() => void>;
   onDriverDownload(cb: (progress: { done: number; total: number; what?: string }) => void): Promise<() => void>;
+  onSheetProgress(cb: (progress: { openId: string; rows: number; total: number }) => void): Promise<() => void>;
+}
+
+/** A sheet opened for the import (sheets.rs): where its data is and its first rows. */
+export interface SheetInfo {
+  handle: number;
+  sheets: string[];
+  sheet: string;
+  firstRow: number;
+  firstCol: number;
+  lastRow: number;
+  lastCol: number;
+  rows: number;
+  preview: SheetCell[][];
+  /** For each preview row, the first and last column with data from it down to the last row (null: all blank). */
+  spans: ([number, number] | null)[];
 }
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * Commands whose failures the core already writes to the error log (driver errors, with the engine), and the log's
+ * own commands: the rest are logged by the window when they fail (src/errorLog.ts).
+ */
+const LOGGED_BY_CORE = new Set([
+  "open_session",
+  "execute",
+  "fetch",
+  "set_autocommit",
+  "commit",
+  "rollback",
+  "meta_children",
+  "table_columns",
+  "object_ddl",
+  "list_databases",
+  "test_connection",
+  "error_log_add",
+  "error_log_list",
+  "error_log_clear",
+  "error_log_path",
+]);
+
+let failedCall: ((cmd: string, err: unknown) => void) | null = null;
+
+/** Called with every call to the core that fails and the core did not log itself. */
+export function onFailedCall(cb: (cmd: string, err: unknown) => void) {
+  failedCall = cb;
+}
+
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const mod = await import("@tauri-apps/api/core");
-  return mod.invoke<T>(cmd, args);
+  try {
+    return await mod.invoke<T>(cmd, args);
+  } catch (err) {
+    if (!LOGGED_BY_CORE.has(cmd)) failedCall?.(cmd, err);
+    throw err;
+  }
 }
 
 function tauriBackend(): Backend {
@@ -130,12 +238,18 @@ function tauriBackend(): Backend {
     restoreConnection: (cfg) => invoke("restore_connection", { cfg: { ...cfg, password: cfg.password || null } }),
     duplicateConnection: (id, name) => invoke("duplicate_connection", { id, name }),
     testConnection: (cfg) => invoke("test_connection", { cfg }),
+    sshHostKey: (token) => invoke("ssh_host_key", { token }),
+    sshTrustHostKey: (token) => invoke("ssh_trust_host_key", { token }),
+    setSessionSshPassword: (connId, password) => invoke("set_session_ssh_password", { connId, password }),
+    exportSecrets: (items, passphrase) => invoke("export_secrets", { items, passphrase }),
+    openSecrets: (block, passphrase) => invoke("open_secrets", { block, passphrase }),
     openSession: (connId, password, options) =>
       invoke("open_session", { connId: connId, password: password ?? null, database: options?.database || null, autocommit: options?.autocommit ?? null }),
     checkSession: (sessionId, force) => invoke("check_session", { sessionId: sessionId, force }),
+    keepAliveSession: (sessionId, idleSecs) => invoke("keep_alive_session", { sessionId: sessionId, idleSecs }),
     closeSession: (sessionId) => invoke("close_session", { sessionId: sessionId }),
     closeConnectionSessions: (connId) => invoke("close_connection_sessions", { connId }),
-    execute: (sessionId, sql, fetch) => invoke("execute", { sessionId: sessionId, sql, fetch }),
+    execute: (sessionId, sql, fetch, timeoutSecs) => invoke("execute", { sessionId: sessionId, sql, fetch, timeoutSecs: timeoutSecs || null }),
     fetch: (sessionId, n) => invoke("fetch", { sessionId: sessionId, n }),
     closeCursor: (sessionId) => invoke("close_cursor", { sessionId: sessionId }),
     cancel: (sessionId) => invoke("cancel", { sessionId: sessionId }),
@@ -144,6 +258,7 @@ function tauriBackend(): Backend {
     commit: (sessionId) => invoke("commit", { sessionId: sessionId }),
     rollback: (sessionId) => invoke("rollback", { sessionId: sessionId }),
     metaChildren: (sessionId, path) => invoke("meta_children", { sessionId: sessionId, path }),
+    schemaForeignKeys: (sessionId, path) => invoke("schema_foreign_keys", { sessionId: sessionId, path }),
     tableColumns: (sessionId, obj) => invoke("table_columns", { sessionId: sessionId, obj }),
     objectDdl: (sessionId, obj) => invoke("object_ddl", { sessionId: sessionId, obj }),
     completion: (sessionId, database) => invoke("completion", { sessionId: sessionId, database }),
@@ -156,10 +271,23 @@ function tauriBackend(): Backend {
     addHistory: (entry) => invoke("add_history", { entry }),
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
     clearHistory: () => invoke("clear_history"),
+    setHistoryRetention: (max, days) => invoke("set_history_retention", { max, days }),
+    desktopNotify: (title, body) => invoke("desktop_notify", { title, body }),
+    errorLogAdd: (area, message, stack) => invoke("error_log_add", { area, message, stack: stack ?? null }),
+    errorLogList: (limit) => invoke("error_log_list", { limit }),
+    errorLogClear: () => invoke("error_log_clear"),
+    errorLogPath: () => invoke("error_log_path"),
+    reportSaveImages: (id, images) => invoke("report_save_images", { id, images }),
+    reportTokenStatus: () => invoke("report_token_status"),
+    reportTokenSet: (token) => invoke("report_token_set", { token }),
+    reportCreateIssue: (title, body, labels) => invoke("report_create_issue", { title, body, labels }),
     loadJson: (name) => invoke("load_json", { name }),
     saveJson: (name, value, merge) => invoke("save_json", { name, value, merge: merge ?? false }),
     readTextFile: (path) => invoke("read_text_file", { path }),
-    readSpreadsheet: (path, sheet) => invoke("read_spreadsheet", { path, sheet: sheet ?? null }),
+    sheetOpen: (path, sheet, openId) => invoke("sheet_open", { path, sheet, openId }),
+    sheetCancel: (openId) => invoke("sheet_cancel", { openId }),
+    sheetRows: (handle, row0, row1, col0, col1) => invoke("sheet_rows", { handle, row0, row1, col0, col1 }),
+    sheetClose: (handle) => invoke("sheet_close", { handle }),
     writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),
     odbcDrivers: () => invoke("odbc_drivers"),
     odbcDsns: () => invoke("odbc_dsns"),
@@ -189,8 +317,18 @@ function tauriBackend(): Backend {
     mcpClearAudit: () => invoke("mcp_clear_audit"),
     mcpClientInfo: () => invoke("mcp_client_info"),
     mcpInstallClaudeDesktop: () => invoke("mcp_install_claude_desktop"),
+    mcpStatus: () => invoke("mcp_status"),
+    mcpWslInfo: (check) => invoke("mcp_wsl_info", { check: check ?? null }),
+    mcpWslRegister: (distro) => invoke("mcp_wsl_register", { distro }),
+    mcpAppReply: (id, ok, result, error) => invoke("mcp_app_reply", { id, ok, result: result ?? null, error: error ?? null }),
     mcpTestTool: (name, args) => invoke("mcp_test_tool", { name, args }),
     pickSavePath: async (filters, defaultName) => {
+      // As with pickOpenPath: end-to-end checks hand over the path the native dialog would have given.
+      const scripted = (window as { __celerNextSavePath?: string }).__celerNextSavePath;
+      if (scripted) {
+        delete (window as { __celerNextSavePath?: string }).__celerNextSavePath;
+        return scripted;
+      }
       const { save } = await import("@tauri-apps/plugin-dialog");
       const picked = await save({ filters, defaultPath: defaultName });
       return picked ?? null;
@@ -215,6 +353,10 @@ function tauriBackend(): Backend {
     onExportProgress: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");
       return listen<{ exportId: string; rows: number }>("export-progress", (e) => cb(e.payload));
+    },
+    onSheetProgress: async (cb) => {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<{ openId: string; rows: number; total: number }>("sheet-progress", (e) => cb(e.payload));
     },
     onDriverDownload: async (cb) => {
       const { listen } = await import("@tauri-apps/api/event");

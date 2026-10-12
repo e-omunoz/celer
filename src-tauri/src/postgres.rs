@@ -33,10 +33,13 @@ use parking_lot::Mutex;
 use postgres_native_tls::MakeTlsConnector;
 
 use crate::model::*;
-use crate::session::{Canceller, Driver};
+use crate::session::{Canceller, Driver, FkColumn};
 
 const BINARY_PREVIEW: usize = 4096;
 const DEFAULT_PORT: u16 = 5432;
+/// Commit of a transaction an error (or a stopped statement) aborted: PostgreSQL would roll it back.
+const TX_ABORTED: &str =
+    "La transacción quedó anulada por un error o una sentencia detenida: PostgreSQL no puede confirmarla y nada se guardó. Haz Rollback.";
 
 // ───────────────────────────── estructuras ─────────────────────────────
 
@@ -414,6 +417,7 @@ impl PostgresDriver {
                 rows,
                 has_more: true,
                 extra: vec![],
+                messages: vec![],
             });
         }
         // Agotado: cerrar y continuar con el resto del lote.
@@ -433,6 +437,7 @@ impl PostgresDriver {
             rows,
             has_more: self.cursor.is_some(),
             extra,
+            messages: vec![],
         })
     }
 
@@ -552,11 +557,12 @@ impl PostgresDriver {
             ),
             &[],
         )?;
+        let own = own_keys(&self.version);
         let cons = self.meta(
             &db,
             &format!(
-                "SELECT conname::text, pg_catalog.pg_get_constraintdef(oid, true) FROM pg_catalog.pg_constraint \
-                 WHERE conrelid = {oid} AND contype IN ('p','u','c','f','x') \
+                "SELECT conname::text, pg_catalog.pg_get_constraintdef(oid, true) FROM pg_catalog.pg_constraint co \
+                 WHERE conrelid = {oid} AND contype IN ('p','u','c','f','x'){own} \
                  ORDER BY CASE contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'c' THEN 2 WHEN 'x' THEN 3 ELSE 4 END, conname"
             ),
             &[],
@@ -792,6 +798,13 @@ impl Driver for PostgresDriver {
     fn commit(&mut self) -> Result<bool> {
         self.close_cursor()?;
         if self.in_tx {
+            // An error or a stopped statement aborted the transaction: the server would take COMMIT as a ROLLBACK,
+            // in silence. It stays open (aborted) for the user to roll back, knowing nothing was saved.
+            if let Err(e) = self.client.simple_query("SELECT 1") {
+                if e.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) {
+                    bail!(TX_ABORTED);
+                }
+            }
             self.control("COMMIT")?;
         }
         self.refresh_tx_state();
@@ -1036,7 +1049,7 @@ impl Driver for PostgresDriver {
                     "fks" => {
                         let rows = self.meta(
                             db,
-                            "SELECT co.conname::text, \
+                            &format!("SELECT co.conname::text, \
                                (SELECT string_agg(pg_catalog.quote_ident(a.attname), ', ' ORDER BY k.ord) \
                                   FROM unnest(co.conkey) WITH ORDINALITY k(attnum, ord) \
                                   JOIN pg_catalog.pg_attribute a ON a.attrelid = co.conrelid AND a.attnum = k.attnum), \
@@ -1050,8 +1063,8 @@ impl Driver for PostgresDriver {
                              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
                              JOIN pg_catalog.pg_class rc ON rc.oid = co.confrelid \
                              JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace \
-                             WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relname = $2::text \
-                             ORDER BY co.conname",
+                             WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relname = $2::text{} \
+                             ORDER BY co.conname", own_keys(&self.version)),
                             &args,
                         )?;
                         // `obj` is the referenced table, so the UI can jump to it.
@@ -1096,6 +1109,21 @@ impl Driver for PostgresDriver {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// One catalog query: pg_constraint's keys (contype 'f') of the schema's tables (the explorer's: no partitions),
+    /// one row per column pair in key order.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        let [db, schema] = path else { return crate::session::per_table_foreign_keys(self, path) };
+        let rows = self.meta(db, &schema_fks_sql(&self.version), &[schema])?;
+        Ok(crate::session::group_foreign_keys(rows.iter().map(|r| FkColumn {
+            key: s(r, 0),
+            name: s(r, 1),
+            table: ObjectRef::new(db, schema, &s(r, 2), "table"),
+            column: s(r, 3),
+            target: ObjectRef::new(db, &s(r, 4), &s(r, 5), "table"),
+            target_column: s(r, 6),
+        })))
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {
@@ -1261,6 +1289,10 @@ impl Driver for PostgresDriver {
             self.version.clone()
         };
         let ver = ver.split_whitespace().next().unwrap_or("?").to_string();
+        // Through an SSH tunnel, the server behind it (not the tunnel's local port).
+        if !self.cfg.ssh.forwarded_to.is_empty() {
+            return Ok(format!("PostgreSQL {ver} — {}/{} (túnel SSH)", self.cfg.ssh.forwarded_to, self.database));
+        }
         let host = if self.cfg.host.trim().is_empty() {
             "localhost"
         } else {
@@ -1339,7 +1371,14 @@ fn conn_string(cfg: &ConnConfig, database: &str) -> Result<String> {
     }
     let mut out = String::new();
     let host = cfg.host.trim();
-    push(&mut out, "host", if host.is_empty() { "localhost" } else { host });
+    let host = if host.is_empty() { "localhost" } else { host };
+    if cfg.ssh.tls_host.is_empty() {
+        push(&mut out, "host", host);
+    } else {
+        // Through an SSH tunnel: connect to the local port, but check the certificate against the server's name.
+        push(&mut out, "host", &cfg.ssh.tls_host);
+        push(&mut out, "hostaddr", host);
+    }
     push(&mut out, "port", &cfg.port.unwrap_or(DEFAULT_PORT).to_string());
     if !cfg.user.trim().is_empty() {
         push(&mut out, "user", cfg.user.trim());
@@ -1451,6 +1490,37 @@ fn any_text(row: &::postgres::Row, i: usize) -> Option<String> {
     }
     None
 }
+
+/// Leaves out the copies of a foreign key PostgreSQL 11+ keeps on the referencing table for each partition of a
+/// partitioned referenced table (`conparentid` is a key of the same table): neither pg_dump nor `\d` shows them, and
+/// a script with them fails. A partition's key inherited from its parent table stays. `co` is the pg_constraint row.
+fn own_keys(version: &str) -> &'static str {
+    let major: u32 = version.split(|c: char| !c.is_ascii_digit()).next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    if major >= 11 {
+        " AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint pc WHERE pc.oid = co.conparentid AND pc.conrelid = co.conrelid)"
+    } else {
+        ""
+    }
+}
+
+/// Every foreign key of a schema ($1), one row per column pair: constraint oid, name, table, column, referenced schema,
+/// table and column.
+fn schema_fks_sql(version: &str) -> String {
+    format!("{SCHEMA_FKS_SQL}{}{SCHEMA_FKS_ORDER}", own_keys(version))
+}
+
+const SCHEMA_FKS_ORDER: &str = " ORDER BY c.relname, co.conname, co.oid, k.ord";
+
+const SCHEMA_FKS_SQL: &str = "SELECT co.oid::text, co.conname::text, c.relname::text, a.attname::text, rn.nspname::text, rc.relname::text, ra.attname::text \
+     FROM pg_catalog.pg_constraint co \
+     JOIN pg_catalog.pg_class c ON c.oid = co.conrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     JOIN pg_catalog.pg_class rc ON rc.oid = co.confrelid \
+     JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace \
+     CROSS JOIN LATERAL unnest(co.conkey, co.confkey) WITH ORDINALITY k(attnum, refnum, ord) \
+     JOIN pg_catalog.pg_attribute a ON a.attrelid = co.conrelid AND a.attnum = k.attnum \
+     JOIN pg_catalog.pg_attribute ra ON ra.attrelid = co.confrelid AND ra.attnum = k.refnum \
+     WHERE co.contype = 'f' AND n.nspname = $1::text AND c.relkind IN ('r','p','f') AND NOT c.relispartition";
 
 fn s(r: &[Option<String>], i: usize) -> String {
     r.get(i).cloned().flatten().unwrap_or_default()
@@ -2060,6 +2130,13 @@ mod tests {
         assert_eq!(sslmode("required"), "require");
         cfg.extra = "nonsense".into();
         assert!(conn_string(&cfg, "").is_err());
+        // Through an SSH tunnel: the local port by address, the certificate checked against the server's name (#141).
+        cfg.extra.clear();
+        cfg.host = "127.0.0.1".into();
+        cfg.ssh.tls_host = "db.example.com".into();
+        let s = conn_string(&cfg, "").unwrap();
+        assert!(s.starts_with("host='db.example.com' hostaddr='127.0.0.1' "), "{s}");
+        assert!(s.parse::<Config>().is_ok());
     }
 
     #[test]
@@ -2119,6 +2196,28 @@ mod tests {
             .simple_query("SELECT now() <> statement_timestamp()")
             .unwrap();
         rows.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t")))
+    }
+
+    /// Ajustes › Ejecución › tiempo máximo: the core's deadline cancels through the driver and the session answers again.
+    #[test]
+    fn pg_query_timeout_cancels() {
+        let Some(mut d) = driver() else { return };
+        let t0 = std::time::Instant::now();
+        let cancel = d.canceller();
+        let r = crate::session::with_deadline(cancel, 1, || d.execute("SELECT pg_sleep(20)", 10));
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10), "{:?}", t0.elapsed());
+        assert_eq!(txt(&d.execute("SELECT 7", 10).unwrap().results[0].rows[0][0]), "7");
+    }
+
+    /// Ayuda › Registro de errores: a PostgreSQL error with a value in it is logged without the value.
+    #[test]
+    fn pg_error_log_entry_is_scrubbed() {
+        let Some(mut d) = driver() else { return };
+        let e = d.execute("SELECT 'celer-secret-42'::int", 10).expect_err("valor no numérico").to_string();
+        crate::errlog::assert_scrubbed("PostgreSQL", &e, "celer-secret-42");
+        let cfg = test_cfg().unwrap();
+        crate::assert_report_banner("PostgreSQL", &d.server_info().unwrap(), &[&cfg.host, &cfg.user, &cfg.database]);
     }
 
     #[test]
@@ -2303,6 +2402,46 @@ mod tests {
         d.execute("SELECT * FROM public.events WHERE 1/(id - 5000) > 0", 10_000)
             .unwrap_err();
         assert!(!server_in_tx(&mut d));
+    }
+
+    /// A console closed (or Celer quitting) with its manual transaction open never commits it.
+    #[test]
+    fn pg_close_never_commits() {
+        let Some(mut d) = driver() else { return };
+        d.execute("DROP TABLE IF EXISTS tx_close; CREATE TABLE tx_close (id int); INSERT INTO tx_close VALUES (1), (2), (3)", 10).unwrap();
+        let other = driver().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "DELETE FROM tx_close WHERE id > 1", "SELECT count(*) FROM tx_close");
+        let other = driver().unwrap();
+        crate::engine_tests::assert_close_never_commits(&mut d, Box::new(other), "INSERT INTO tx_close VALUES (4)", "SELECT count(*) FROM tx_close");
+        d.execute("DROP TABLE tx_close", 10).unwrap();
+    }
+
+    /// A statement stopped inside a transaction aborts it: Commit says so instead of rolling it back in silence (#147).
+    #[test]
+    fn pg_commit_of_an_aborted_transaction() {
+        let Some(mut d) = driver() else { return };
+        d.execute("DROP TABLE IF EXISTS tx_aborted; CREATE TABLE tx_aborted (id int)", 10).unwrap();
+        d.set_autocommit(false).unwrap();
+        d.execute("INSERT INTO tx_aborted VALUES (1)", 10).unwrap();
+        let cancel = d.canceller();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            cancel();
+        });
+        assert!(d.execute("SELECT pg_sleep(20)", 10).is_err());
+        t.join().unwrap();
+        let err = d.commit().unwrap_err();
+        assert_eq!(err.to_string(), TX_ABORTED);
+        assert!(!d.rollback().unwrap());
+        d.set_autocommit(true).unwrap();
+        assert_eq!(txt(&d.execute("SELECT count(*) FROM tx_aborted", 10).unwrap().results[0].rows[0][0]), "0");
+        // A healthy transaction still commits.
+        d.set_autocommit(false).unwrap();
+        d.execute("INSERT INTO tx_aborted VALUES (2)", 10).unwrap();
+        assert!(!d.commit().unwrap());
+        d.set_autocommit(true).unwrap();
+        assert_eq!(txt(&d.execute("SELECT count(*) FROM tx_aborted", 10).unwrap().results[0].rows[0][0]), "1");
+        d.execute("DROP TABLE tx_aborted", 10).unwrap();
     }
 
     #[test]

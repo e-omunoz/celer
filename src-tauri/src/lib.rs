@@ -1,11 +1,15 @@
 mod drivers;
 #[cfg(test)]
 mod engine_tests;
+mod errlog;
 mod export;
 mod guard;
 mod jdbc;
 mod mcp;
+mod mcp_app;
+mod mcp_wsl;
 mod migrate;
+mod variables;
 mod model;
 mod mssql;
 mod mysql;
@@ -13,9 +17,12 @@ mod odbc;
 mod odbc_driver;
 mod postgres;
 mod probe;
+mod report;
+mod secrets;
 mod session;
 mod sheets;
 mod sqlite;
+mod ssh;
 mod startup;
 mod store;
 mod update;
@@ -38,6 +45,23 @@ type CmdResult<T> = Result<T, String>;
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+/// The area of a connection's errors in the local error log: the engine, and for Informix the protocol it uses.
+fn driver_area(cfg: &ConnConfig) -> String {
+    match cfg.kind {
+        DbKind::Informix => format!("driver:informix-{}", informix_mode(cfg)),
+        kind => format!("driver:{}", serde_json::to_value(kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
+    }
+}
+
+/// A driver error goes to the local error log (errlog.rs, scrubbed there) and on to the window as it was.
+fn log_driver<T>(app: &AppState, conn_id: &str, r: CmdResult<T>) -> CmdResult<T> {
+    if let Err(e) = &r {
+        let area = app.conn(conn_id).map(|cfg| driver_area(&cfg)).unwrap_or_else(|_| "driver".into());
+        errlog::record(&area, e, "");
+    }
+    r
 }
 
 struct AppState {
@@ -85,6 +109,20 @@ fn setting(store: &Store, key: &str) -> Option<String> {
     // A plain read: setting a damaged file aside is for the interface's load, which tells the user.
     let settings: serde_json::Value = serde_json::from_str(&store.read("settings.json")?).ok()?;
     settings.get(key).and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.trim().is_empty())
+}
+
+/// The history retention of Ajustes › Historial, set at start before any window adds to the history.
+fn apply_history_retention(store: &Store) {
+    // A plain read, like `setting`: a damaged settings.json stays where it is for the interface's load, which sets it
+    // aside and tells the user.
+    let Some(settings) = store.read("settings.json").and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok()) else {
+        return;
+    };
+    let max = settings.get("historyMax").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let days = settings.get("historyDays").and_then(|v| v.as_u64()).unwrap_or(0);
+    if max > 0 || days > 0 {
+        let _ = store.set_history_retention(if max > 0 { max } else { 5000 }, days);
+    }
 }
 
 /// Informix: the protocol a connection really uses. "auto" takes the Client SDK when its ODBC driver is registered
@@ -166,6 +204,22 @@ struct Prepared {
     /// "" si el motor no usa el pool genérico (SQL Server lleva el suyo; SQLite abre al instante).
     key: String,
     kind: DbKind,
+    /// The SSH tunnel the connection goes through, if it uses one.
+    ssh: Option<Arc<ssh::Plan>>,
+}
+
+/// The SSH secrets the form left empty («sin cambios»): the saved ones.
+fn fill_ssh_secrets(store: &Store, cfg: &mut ConnConfig) {
+    if !cfg.ssh.active(cfg.kind) {
+        return;
+    }
+    for account in SshConfig::ACCOUNTS {
+        let id = cfg.id.clone();
+        let slot = cfg.ssh.secret_mut(account);
+        if slot.as_deref().is_none_or(str::is_empty) && !id.is_empty() {
+            *slot = store.get_password(&ssh_account(&id, account));
+        }
+    }
 }
 
 fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
@@ -173,6 +227,7 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
     if cfg.password.as_deref().is_none_or(str::is_empty) && !cfg.integrated_auth {
         cfg.password = store.get_password(&cfg.id).or(cfg.password);
     }
+    fill_ssh_secrets(store, &mut cfg);
     let kind = cfg.kind;
     let mut route = String::new();
     let mut jdbc_rt: Option<jdbc::Runtime> = None;
@@ -212,26 +267,49 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
     // The startup script runs inside each driver, on every connection it opens; a read-only connection
     // refuses one that writes before connecting at all.
     startup::check(&cfg).map_err(err)?;
+    // The tunnel's settings are checked now (the Informix protocol is already resolved: it decides the port).
+    let tunnel = if cfg.ssh.active(kind) { Some(Arc::new(ssh::Plan::new(&cfg, &store.dir).map_err(err)?)) } else { None };
+    if let Some(plan) = &tunnel {
+        route = [route.as_str(), &format!("por {}", plan.label())].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+    }
     let key = match kind {
         DbKind::Mssql | DbKind::Sqlite => String::new(),
         _ => mssql::pool_key(&cfg),
     };
+    let plan = tunnel.clone();
     let connector: guard::Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> {
-        let cfg = cfg.clone();
-        let driver: Box<dyn Driver> = match (kind, jdbc_rt.clone()) {
-            (DbKind::Sqlite, _) => Box::new(sqlite::SqliteDriver::connect(cfg)?),
-            (DbKind::Mssql, _) => Box::new(mssql::MssqlDriver::connect(cfg)?),
-            (DbKind::Postgres, _) => Box::new(postgres::PostgresDriver::connect(cfg)?),
-            (DbKind::Mysql, _) => Box::new(mysql::MysqlDriver::connect(cfg)?),
-            (DbKind::Informix, Some(rt)) => Box::new(jdbc::connect(cfg, rt)?),
-            (DbKind::Informix | DbKind::Odbc, _) => {
-                let path = odbc_lib.clone().unwrap_or_else(|| odbc::system_manager().to_string());
-                Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
+        let mut cfg = cfg.clone();
+        // Through SSH: the driver connects to the tunnel's local port (rebuilt here when its session dropped).
+        let via = match &plan {
+            Some(plan) => {
+                let t = plan.tunnel()?;
+                cfg.ssh.forwarded_to = t.target_label();
+                cfg.ssh.tls_host = t.target_host();
+                cfg.host = "127.0.0.1".into();
+                cfg.port = Some(t.local_port);
+                Some(t)
             }
+            None => None,
         };
-        Ok(driver)
+        let connected: anyhow::Result<Box<dyn Driver>> = (|| {
+            Ok(match (kind, jdbc_rt.clone()) {
+                (DbKind::Sqlite, _) => Box::new(sqlite::SqliteDriver::connect(cfg)?) as Box<dyn Driver>,
+                (DbKind::Mssql, _) => Box::new(mssql::MssqlDriver::connect(cfg)?),
+                (DbKind::Postgres, _) => Box::new(postgres::PostgresDriver::connect(cfg)?),
+                (DbKind::Mysql, _) => Box::new(mysql::MysqlDriver::connect(cfg)?),
+                (DbKind::Informix, Some(rt)) => Box::new(jdbc::connect(cfg, rt)?),
+                (DbKind::Informix | DbKind::Odbc, _) => {
+                    let path = odbc_lib.clone().unwrap_or_else(|| odbc::system_manager().to_string());
+                    Box::new(odbc_driver::OdbcDriver::connect(cfg, path)?)
+                }
+            })
+        })();
+        match (connected, via) {
+            (Err(e), Some(t)) => Err(t.explain(e)),
+            (result, _) => result,
+        }
     });
-    Ok(Prepared { connector, route, key, kind })
+    Ok(Prepared { connector, route, key, kind, ssh: tunnel })
 }
 
 /// Cierra las conexiones libres que dejaron las sesiones de una conexión guardada (al desconectarla, editarla o
@@ -239,6 +317,8 @@ fn prepare(store: &Store, mut cfg: ConnConfig) -> CmdResult<Prepared> {
 fn forget_free(conn_id: &str) {
     guard::pool_forget(conn_id);
     mssql::pool_forget(conn_id);
+    // And its SSH tunnel, once no connection goes through it.
+    ssh::forget(conn_id);
 }
 
 #[derive(Serialize)]
@@ -247,6 +327,17 @@ struct ConnSummary {
     #[serde(flatten)]
     cfg: ConnConfig,
     has_password: bool,
+    /// The SSH secrets kept in the credential store (the form shows «guardada» instead of asking again).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ssh_saved: Option<SshSaved>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshSaved {
+    password: bool,
+    passphrase: bool,
+    key: bool,
 }
 
 /// Las conexiones guardadas han cambiado: las demás ventanas las vuelven a leer (windows.ts).
@@ -256,6 +347,7 @@ fn connections_changed(window: &tauri::WebviewWindow) {
 
 #[tauri::command]
 fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
+    let saved = |c: &ConnConfig, account: &str| state.store.get_password(&ssh_account(&c.id, account)).is_some();
     state
         .conns
         .lock()
@@ -263,6 +355,7 @@ fn list_connections(state: State<'_, Arc<AppState>>) -> Vec<ConnSummary> {
         .cloned()
         .map(|c| ConnSummary {
             has_password: c.save_password && state.store.get_password(&c.id).is_some(),
+            ssh_saved: c.ssh.enabled.then(|| SshSaved { password: saved(&c, "ssh-password"), passphrase: saved(&c, "ssh-passphrase"), key: saved(&c, "ssh-key") }),
             cfg: c,
         })
         .collect()
@@ -287,6 +380,7 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     }
     // A PWD= typed into the ODBC string or "Parámetros extra" goes to the credential store like the field's.
     cfg.take_inline_password();
+    cfg.normalize_environment();
     if cfg.save_password {
         if let Some(p) = cfg.password.as_ref().filter(|p| !p.is_empty()) {
             app.store.set_password(&cfg.id, p).map_err(err)?;
@@ -295,6 +389,7 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
         app.store.delete_password(&cfg.id);
     }
     cfg.password = None;
+    save_ssh_secrets(app, &mut cfg)?;
     let mut conns = app.conns.lock();
     match conns.iter_mut().find(|c| c.id == cfg.id) {
         Some(c) => {
@@ -306,6 +401,25 @@ fn save_cfg(app: &AppState, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
     }
     app.store.save_connections(&conns).map_err(err)?;
     Ok(cfg)
+}
+
+/// The SSH password, key passphrase and pasted key go to the credential store (never to connections.json); the ones
+/// the authentication method no longer uses are deleted. An empty one is «sin cambios».
+fn save_ssh_secrets(app: &AppState, cfg: &mut ConnConfig) -> CmdResult<()> {
+    let had_ssh = app.conns.lock().iter().any(|c| c.id == cfg.id && !c.ssh.is_unset());
+    for account in SshConfig::ACCOUNTS {
+        let name = ssh_account(&cfg.id, account);
+        let value = cfg.ssh.secret_mut(account).take().filter(|v| !v.is_empty());
+        if cfg.ssh.uses(account) {
+            if let Some(value) = value {
+                app.store.set_password(&name, &value).map_err(err)?;
+            }
+        } else if had_ssh || !cfg.ssh.is_unset() {
+            app.store.delete_password(&name);
+        }
+    }
+    cfg.ssh = cfg.ssh.without_secrets();
+    Ok(())
 }
 
 /// Connections saved by earlier versions with a `PWD=` in the ODBC string or "Parámetros extra": the password goes to
@@ -328,23 +442,34 @@ fn move_inline_passwords(store: &Store, conns: &mut [ConnConfig]) {
     }
 }
 
-/// «Deshacer» un borrado: la conexión vuelve con su id y con la contraseña que tenía guardada.
+/// «Deshacer» un borrado: la conexión vuelve con su id y con la contraseña (y los secretos SSH) que tenía guardados.
 #[tauri::command]
 fn restore_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, mut cfg: ConnConfig) -> CmdResult<ConnConfig> {
-    let kept = state.trash.lock().remove(&cfg.id);
-    if cfg.password.as_deref().is_none_or(str::is_empty) {
-        cfg.password = kept;
+    {
+        let mut trash = state.trash.lock();
+        let kept = trash.remove(&cfg.id);
+        if cfg.password.as_deref().is_none_or(str::is_empty) {
+            cfg.password = kept;
+        }
+        for account in SshConfig::ACCOUNTS {
+            let kept = trash.remove(&ssh_account(&cfg.id, account));
+            let slot = cfg.ssh.secret_mut(account);
+            if slot.as_deref().is_none_or(str::is_empty) {
+                *slot = kept;
+            }
+        }
     }
     let saved = save_cfg(&state, cfg)?;
     connections_changed(&window);
     Ok(saved)
 }
 
-/// Una copia de una conexión guardada, con otro id y otro nombre y con su contraseña guardada.
+/// Una copia de una conexión guardada, con otro id y otro nombre y con su contraseña y sus secretos SSH guardados.
 #[tauri::command]
 fn duplicate_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, id: String, name: String) -> CmdResult<ConnConfig> {
     let mut cfg = state.conn(&id)?;
     cfg.password = if cfg.save_password { state.store.get_password(&id) } else { None };
+    fill_ssh_secrets(&state.store, &mut cfg);
     cfg.id = String::new();
     cfg.name = name;
     let saved = save_cfg(&state, cfg)?;
@@ -370,10 +495,13 @@ fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState
     }
     forget_free(&id);
     // Hasta cerrar Celer, en memoria: «Deshacer» la devuelve con la conexión.
-    if let Some(p) = state.store.get_password(&id) {
-        state.trash.lock().insert(id.clone(), p);
+    let accounts = std::iter::once(id.clone()).chain(SshConfig::ACCOUNTS.iter().map(|a| ssh_account(&id, a)));
+    for account in accounts {
+        if let Some(p) = state.store.get_password(&account) {
+            state.trash.lock().insert(account.clone(), p);
+        }
+        state.store.delete_password(&account);
     }
-    state.store.delete_password(&id);
     {
         let mut conns = state.conns.lock();
         conns.retain(|c| c.id != id);
@@ -383,21 +511,83 @@ fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState
     Ok(())
 }
 
-/// «Probar conexión»: cada paso con su tiempo (resolver el nombre, abrir el puerto, TLS, iniciar sesión, la base) y,
-/// si falla, qué hacer. Solo falla del todo si ni siquiera se puede intentar (falta un driver).
+/// «Probar conexión»: cada paso con su tiempo (resolver el nombre, abrir el puerto, TLS, iniciar sesión, la base; o el
+/// túnel SSH y el reenvío) y, si falla, qué hacer. Solo falla del todo si ni siquiera se puede intentar (falta un
+/// driver, el túnel SSH está a medio configurar).
 #[tauri::command]
 async fn test_connection(state: State<'_, Arc<AppState>>, cfg: ConnConfig) -> CmdResult<probe::Report> {
     let app = state.inner().clone();
+    let area = driver_area(&cfg);
     let (tx, rx) = tokio::sync::oneshot::channel();
     // En un hilo propio: resolver nombres, abrir sockets y los drivers bloquean (y algunos llevan su propio runtime).
     std::thread::Builder::new()
         .name("celer-test-connection".into())
         .spawn(move || {
-            let report = prepare(&app.store, cfg.clone()).map(|p| probe::run(&cfg, p.connector, &p.route));
+            let report = prepare(&app.store, cfg.clone()).map(|p| probe::run(&cfg, p.connector, &p.route, p.ssh.as_deref()));
             let _ = tx.send(report);
         })
         .map_err(err)?;
-    rx.await.map_err(|_| "La prueba de conexión terminó inesperadamente".to_string())?
+    let r: CmdResult<probe::Report> = rx.await.map_err(|_| "La prueba de conexión terminó inesperadamente".to_string())?;
+    // A failed test goes to the local error log too (what the driver said, scrubbed).
+    match &r {
+        Ok(report) if !report.ok && !report.error.is_empty() => errlog::record(&area, &report.error, ""),
+        Err(e) => errlog::record(&area, e, ""),
+        _ => {}
+    }
+    r
+}
+
+/// A host key shown to the user (`SSH_HOST_UNKNOWN:<token>:`): server, type and fingerprint.
+#[tauri::command]
+fn ssh_host_key(token: String) -> Option<ssh::HostKeyInfo> {
+    ssh::pending_info(&token)
+}
+
+/// «Confiar en esta clave»: the key goes to Celer's known_hosts and the next connection goes on.
+#[tauri::command]
+fn ssh_trust_host_key(state: State<'_, Arc<AppState>>, token: String) -> CmdResult<ssh::HostKeyInfo> {
+    ssh::trust(&state.store.dir, &token).map_err(err)
+}
+
+/// The SSH password typed in the connect prompt: kept in memory for this run, for the next sessions of the connection.
+/// An empty one forgets it (it was refused), so the next connect asks again.
+#[tauri::command]
+fn set_session_ssh_password(state: State<'_, Arc<AppState>>, conn_id: String, password: String) {
+    state.store.set_session_secret(&ssh_account(&conn_id, "ssh-password"), &password);
+}
+
+/// One connection of an export «con contraseñas»: its id and the secret entries the interface took out of its
+/// "Parámetros extra" / ODBC string.
+#[derive(serde::Deserialize)]
+struct SecretRequest {
+    id: String,
+    #[serde(default)]
+    inline: Option<serde_json::Value>,
+}
+
+/// The `secrets` block of an export with passwords (format v2), keyed by the connection's position in the file:
+/// sealed with `passphrase` (Argon2id + AES-256-GCM), or in clear without one. The secrets are read here from the
+/// credential store and never cross to the interface.
+#[tauri::command]
+async fn export_secrets(state: State<'_, Arc<AppState>>, items: Vec<SecretRequest>, passphrase: Option<String>) -> CmdResult<serde_json::Value> {
+    let app = state.inner().clone();
+    // Argon2id takes a moment: off the main thread.
+    tokio::task::spawn_blocking(move || {
+        let conns = app.conns.lock().clone();
+        let requests = items.into_iter().map(|i| (i.id, i.inline)).collect();
+        let sets = secrets::collect(&conns, requests, |account| app.store.get_password(account));
+        secrets::seal(&sets, passphrase.as_deref()).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// The secrets of an imported v2 file, for the connections it creates (saved straight to the credential store). A
+/// wrong passphrase fails with `SECRETS_PASSPHRASE:` and returns none.
+#[tauri::command]
+async fn open_secrets(block: serde_json::Value, passphrase: Option<String>) -> CmdResult<std::collections::BTreeMap<String, secrets::SecretSet>> {
+    // Argon2id takes a moment: off the main thread.
+    tokio::task::spawn_blocking(move || secrets::open(&block, passphrase.as_deref()).map_err(err)).await.map_err(err)?
 }
 
 /// An Informix connection over JDBC is about to open: Java starts now, while the user types the password.
@@ -426,6 +616,47 @@ struct SessionInfo {
     /// Lo que tardó en estar lista (iniciar sesión, o tomar una conexión libre de la misma configuración).
     connect_ms: u64,
     reused: bool,
+    /// The driver and protocol it uses, for «Reportar un fallo» (no host, user or database).
+    driver: String,
+}
+
+/// Tests of every engine: the part of the server banner a report keeps (before " — ", src/report.ts engineLine) names
+/// the product and version, never the server, the user or the database.
+#[cfg(test)]
+pub(crate) fn assert_report_banner(engine: &str, banner: &str, secrets: &[&str]) {
+    let kept = banner.lines().next().unwrap_or("").split(" — ").next().unwrap_or("").trim();
+    println!("reporte ({engine}): «{kept}»");
+    assert!(kept.chars().any(|c| c.is_ascii_digit()), "{engine}: sin versión en «{kept}»");
+    for s in secrets.iter().filter(|s| s.len() >= 3) {
+        assert!(!kept.to_lowercase().contains(&s.to_lowercase()), "{engine}: «{s}» está en lo que se reportaría: {kept}");
+    }
+}
+
+/// The driver a connection uses, in a few words: what a bug report says about it (nothing that names the server).
+fn driver_label(cfg: &ConnConfig) -> String {
+    match cfg.kind {
+        DbKind::Postgres | DbKind::Mysql => "nativo".into(),
+        DbKind::Mssql => "TDS nativo".into(),
+        DbKind::Sqlite => "embebido".into(),
+        DbKind::Informix => match informix_mode(cfg) {
+            "jdbc" => "JDBC (puente de Celer)".into(),
+            "sqli" => "Client SDK (ODBC, SQLI)".into(),
+            _ => "IBM CLI (DRDA)".into(),
+        },
+        DbKind::Odbc => odbc_driver_name(&cfg.odbc_conn_str),
+    }
+}
+
+/// "ODBC · <driver>" from a connection string's Driver={…}, or "ODBC · DSN" (a DSN's name may say whose it is).
+fn odbc_driver_name(conn_str: &str) -> String {
+    let driver = conn_str.split(';').find_map(|part| {
+        let (k, v) = part.split_once('=')?;
+        k.trim().eq_ignore_ascii_case("driver").then(|| v.trim().trim_start_matches('{').trim_end_matches('}').trim().to_string())
+    });
+    match driver.filter(|d| !d.is_empty()) {
+        Some(d) => format!("ODBC · {}", d.chars().take(60).collect::<String>()),
+        None => "ODBC · DSN".into(),
+    }
 }
 
 /// Abre una sesión vigilada (guard.rs): ya en la base y con el modo de transacción que pide la pestaña, sin idas y
@@ -459,13 +690,18 @@ async fn open_session(
     let connector = prepared.connector;
     let timing = Arc::new(Mutex::new((0u64, false)));
     let seen = timing.clone();
+    let area = driver_area(&state.conn(&conn_id)?);
+    let driver = driver_label(&state.conn(&conn_id)?);
     let h = SessionHandle::open(conn_id, move || {
         let g = guard::Guarded::open(connector, opts)?;
         *seen.lock() = (g.connect_ms, g.reused);
         Ok(Box::new(g) as Box<dyn Driver>)
     })
     .await
-    .map_err(err)?;
+    .map_err(|e| {
+        errlog::record(&area, &e.to_string(), "");
+        err(e)
+    })?;
     let (database, server_info) = h
         .run(|d| {
             Ok((
@@ -484,6 +720,7 @@ async fn open_session(
         server_info,
         connect_ms,
         reused,
+        driver,
     })
 }
 
@@ -528,10 +765,15 @@ async fn execute(
     session_id: String,
     sql: String,
     fetch: usize,
+    timeout_secs: Option<u64>,
 ) -> CmdResult<ExecOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
     check_read_only(&state.conn(&h.conn_id)?, &sql)?;
-    h.run(move |d| d.execute(&sql, fetch)).await.map_err(err)
+    // Ajustes › Ejecución: the deadline counts from when the statement starts on the session's thread.
+    let cancel = h.canceller();
+    let secs = timeout_secs.unwrap_or(0);
+    let r = h.run(move |d| Ok(session::with_deadline(cancel, secs, || d.execute(&sql, fetch)))).await.map_err(err)?;
+    log_driver(&state, &h.conn_id, r)
 }
 
 /// A read-only connection refuses user SQL that modifies data. Every command that runs user SQL calls this.
@@ -552,7 +794,7 @@ async fn fetch(
     n: usize,
 ) -> CmdResult<FetchOutput> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.fetch(n)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.fetch(n)).await.map_err(err))
 }
 
 #[tauri::command]
@@ -576,6 +818,18 @@ fn cancel(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<()> 
     Ok(())
 }
 
+/// Keepalive of a session (#97): checked (and reconnected if it was cut) when it has been idle for `idle_secs`;
+/// `None` when it was not idle that long, has a result open, or is busy (the check waits for nothing: a session at
+/// work answers when its statement ends).
+#[tauri::command]
+async fn keep_alive_session(state: State<'_, Arc<AppState>>, session_id: String, idle_secs: u64) -> CmdResult<Option<Health>> {
+    let h = state.sessions.get(&session_id).map_err(err)?;
+    if h.busy() {
+        return Ok(None);
+    }
+    h.run(move |d| Ok(d.keep_alive(std::time::Duration::from_secs(idle_secs)))).await.map_err(err)
+}
+
 /// What a session is doing besides the statement itself (reading the rest of a result to keep the session), while
 /// it runs.
 #[tauri::command]
@@ -590,19 +844,19 @@ async fn set_autocommit(
     on: bool,
 ) -> CmdResult<bool> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.set_autocommit(on)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.set_autocommit(on)).await.map_err(err))
 }
 
 #[tauri::command]
 async fn commit(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<bool> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(|d| d.commit()).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(|d| d.commit()).await.map_err(err))
 }
 
 #[tauri::command]
 async fn rollback(state: State<'_, Arc<AppState>>, session_id: String) -> CmdResult<bool> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(|d| d.rollback()).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(|d| d.rollback()).await.map_err(err))
 }
 
 #[tauri::command]
@@ -612,7 +866,18 @@ async fn meta_children(
     path: Vec<String>,
 ) -> CmdResult<Vec<MetaNode>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.children(&path)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.children(&path)).await.map_err(err))
+}
+
+/// Every foreign key of a schema (its explorer path) in one go, for the E-R diagram.
+#[tauri::command]
+async fn schema_foreign_keys(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    path: Vec<String>,
+) -> CmdResult<Vec<SchemaForeignKey>> {
+    let h = state.sessions.get(&session_id).map_err(err)?;
+    h.run(move |d| d.schema_foreign_keys(&path)).await.map_err(err)
 }
 
 #[tauri::command]
@@ -622,7 +887,7 @@ async fn table_columns(
     obj: ObjectRef,
 ) -> CmdResult<Vec<TableColumn>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.table_columns(&obj)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.table_columns(&obj)).await.map_err(err))
 }
 
 #[tauri::command]
@@ -632,7 +897,7 @@ async fn object_ddl(
     obj: ObjectRef,
 ) -> CmdResult<String> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(move |d| d.ddl(&obj)).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(move |d| d.ddl(&obj)).await.map_err(err))
 }
 
 #[tauri::command]
@@ -651,7 +916,7 @@ async fn list_databases(
     session_id: String,
 ) -> CmdResult<Vec<String>> {
     let h = state.sessions.get(&session_id).map_err(err)?;
-    h.run(|d| d.databases()).await.map_err(err)
+    log_driver(&state, &h.conn_id, h.run(|d| d.databases()).await.map_err(err))
 }
 
 #[tauri::command]
@@ -799,16 +1064,22 @@ fn clear_history(state: State<'_, Arc<AppState>>) -> CmdResult<()> {
     state.store.clear_history().map_err(err)
 }
 
+/// Ajustes › Historial: how many queries and how many days are kept. Returns how many entries were dropped.
+#[tauri::command(async)]
+fn set_history_retention(state: State<'_, Arc<AppState>>, max: usize, days: u64) -> CmdResult<usize> {
+    state.store.set_history_retention(max, days).map_err(err)
+}
+
 // Off the main thread: a locked file is retried for a moment.
 #[tauri::command(async)]
 fn load_json(state: State<'_, Arc<AppState>>, name: String) -> CmdResult<serde_json::Value> {
-    if !matches!(name.as_str(), "settings" | "workspace" | "library") {
+    if !matches!(name.as_str(), "settings" | "workspace" | "library" | "variables" | "reports") {
         return Err("Nombre no permitido".into());
     }
     state.store.load_json(&format!("{name}.json")).map_err(err)
 }
 
-/// Ajustes y biblioteca, que comparten todas las ventanas. `merge`: `value` trae solo unas claves, que se
+/// Ajustes, biblioteca y variables, que comparten todas las ventanas. `merge`: `value` trae solo unas claves, que se
 /// ponen sobre lo que tiene el fichero (dos ventanas que cambian ajustes distintos a la vez no se deshacen nada).
 /// La disposición de las ventanas (`workspace.json`) la escribe windows.rs con la parte de cada una.
 #[tauri::command]
@@ -819,7 +1090,7 @@ fn save_json(
     value: serde_json::Value,
     merge: Option<bool>,
 ) -> CmdResult<()> {
-    if !matches!(name.as_str(), "settings" | "library") {
+    if !matches!(name.as_str(), "settings" | "library" | "variables" | "reports") {
         return Err("Nombre no permitido".into());
     }
     let file = format!("{name}.json");
@@ -965,6 +1236,29 @@ fn windows_1252(b: u8) -> char {
 }
 
 #[cfg(test)]
+mod data_dir_tests {
+    use super::data_dir_from;
+    use std::path::PathBuf;
+
+    fn args(a: &[&str]) -> impl Iterator<Item = String> {
+        a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn the_command_line_wins_over_the_environment() {
+        let env = Some("D:\\env".into());
+        assert_eq!(data_dir_from(args(&["--data-dir", "D:\\a b"]), env.clone()), Some(PathBuf::from("D:\\a b")));
+        assert_eq!(data_dir_from(args(&["--data-dir=E:\\celer"]), env.clone()), Some(PathBuf::from("E:\\celer")));
+        assert_eq!(data_dir_from(args(&["--mcp"]), env.clone()), Some(PathBuf::from("D:\\env")));
+        // An empty value is no override; nor is a flag that only starts like it.
+        assert_eq!(data_dir_from(args(&["--data-dir="]), None), None);
+        assert_eq!(data_dir_from(args(&["--data-dir"]), None), None);
+        assert_eq!(data_dir_from(args(&["--data-directory", "x"]), None), None);
+        assert_eq!(data_dir_from(args(&[]), Some("".into())), None);
+    }
+}
+
+#[cfg(test)]
 mod read_only_tests {
     use super::check_read_only;
     use crate::model::{ConnConfig, DbKind};
@@ -1001,8 +1295,50 @@ mod read_only_tests {
 }
 
 #[cfg(test)]
+mod startup_tests {
+    use super::{apply_history_retention, Store};
+
+    #[test]
+    fn a_damaged_settings_file_is_left_for_the_interface_to_report() {
+        let dir = std::env::temp_dir().join(format!("celer-startup-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        std::fs::write(dir.join("settings.json"), "{\"theme\": \"dark\",").unwrap();
+        apply_history_retention(&store);
+        assert!(dir.join("settings.json").exists(), "start-up does not set it aside");
+        // The interface's load then sets it aside and says where it was kept.
+        let err = store.load_json("settings.json").unwrap_err().to_string();
+        assert!(err.contains("settings.json.unreadable-"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
 mod text_tests {
-    use super::decode_text;
+    use super::{decode_base64, decode_text, driver_label, ConnConfig, DbKind};
+
+    #[test]
+    fn decodes_base64_images() {
+        assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(decode_base64("aGVsbG8").unwrap(), b"hello");
+        assert_eq!(decode_base64("AAEC/w==").unwrap(), vec![0, 1, 2, 255]);
+        assert!(decode_base64("a$==").is_none());
+        assert!(decode_base64("a").is_none());
+    }
+
+    #[test]
+    fn report_driver_labels_name_no_server() {
+        let cfg = |kind: DbKind, mode: &str, odbc: &str| ConnConfig { kind, informix_mode: mode.into(), odbc_conn_str: odbc.into(), host: "db.example".into(), ..Default::default() };
+        assert_eq!(driver_label(&cfg(DbKind::Postgres, "", "")), "nativo");
+        assert_eq!(driver_label(&cfg(DbKind::Mysql, "", "")), "nativo");
+        assert_eq!(driver_label(&cfg(DbKind::Mssql, "", "")), "TDS nativo");
+        assert_eq!(driver_label(&cfg(DbKind::Sqlite, "", "")), "embebido");
+        assert_eq!(driver_label(&cfg(DbKind::Informix, "drda", "")), "IBM CLI (DRDA)");
+        assert_eq!(driver_label(&cfg(DbKind::Informix, "jdbc", "")), "JDBC (puente de Celer)");
+        assert_eq!(driver_label(&cfg(DbKind::Informix, "sqli", "")), "Client SDK (ODBC, SQLI)");
+        assert_eq!(driver_label(&cfg(DbKind::Odbc, "", "Driver={PostgreSQL Unicode};Server=db.example;Uid=ana;Pwd=x;")), "ODBC · PostgreSQL Unicode");
+        assert_eq!(driver_label(&cfg(DbKind::Odbc, "", "DSN=Ventas-Ana;Uid=ana")), "ODBC · DSN");
+    }
 
     #[test]
     fn decodes_common_encodings() {
@@ -1039,13 +1375,47 @@ fn write_text_file(path: String, content: String, encoding: Option<String>) -> C
     Ok(used.to_string())
 }
 
-/// Una hoja de un libro Excel u OpenDocument, para importarla.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SheetProgress {
+    open_id: String,
+    rows: u32,
+    total: u32,
+}
+
+/// Abre una hoja de un libro Excel u OpenDocument para importarla: la deja en memoria y devuelve sus primeras filas
+/// con su tipo. Mientras lee un .xlsx avisa del progreso («sheet-progress») y `sheet_cancel(open_id)` la detiene.
 #[tauri::command]
-async fn read_spreadsheet(path: String, sheet: Option<String>) -> CmdResult<sheets::Sheet> {
-    tauri::async_runtime::spawn_blocking(move || sheets::read(&path, sheet.as_deref()))
-        .await
-        .map_err(err)?
-        .map_err(err)
+async fn sheet_open(app: tauri::AppHandle, path: String, sheet: Option<String>, open_id: String) -> CmdResult<sheets::SheetInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let last = std::cell::Cell::new(std::time::Instant::now());
+        let progress = |rows, total| {
+            if rows == total || last.get().elapsed().as_millis() > 150 {
+                last.set(std::time::Instant::now());
+                let _ = app.emit("sheet-progress", SheetProgress { open_id: open_id.clone(), rows, total });
+            }
+        };
+        sheets::open(&path, sheet.as_deref(), &open_id, &progress)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+fn sheet_cancel(open_id: String) {
+    sheets::cancel(&open_id);
+}
+
+/// Filas de una hoja abierta (posiciones de la hoja, 0 = fila 1 / columna A), con su tipo.
+#[tauri::command(async)]
+fn sheet_rows(handle: u64, row0: u32, row1: u32, col0: u32, col1: u32) -> CmdResult<Vec<Vec<sheets::SheetCell>>> {
+    sheets::rows(handle, row0, row1, col0, col1).map_err(err)
+}
+
+#[tauri::command]
+fn sheet_close(handle: u64) {
+    sheets::close(handle);
 }
 
 #[tauri::command]
@@ -1177,11 +1547,123 @@ async fn jdbc_check(state: State<'_, Arc<AppState>>) -> CmdResult<String> {
     .map_err(err)?
 }
 
+/// Ajustes › Avisos: a desktop notification (a long query ended while Celer was in the background), and the taskbar
+/// button asks for attention in case notifications are off for Celer.
+#[tauri::command]
+fn desktop_notify(window: tauri::WebviewWindow, title: String, body: String) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = window.app_handle().notification().builder().title(title).body(body).show();
+    let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+}
+
+// ───────────── Reportar / Sugerir ─────────────
+
+/// The images of a report (PNG, base64) as files in `<data>/reports/<id>/`, to attach them on GitHub by hand. Returns
+/// the paths written; the folder holds only this report's images.
+#[tauri::command(async)]
+fn report_save_images(state: State<'_, Arc<AppState>>, id: String, images: Vec<(String, String)>) -> CmdResult<Vec<String>> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("Identificador de reporte no válido".into());
+    }
+    let dir = state.store.dir.join("reports").join(&id);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let mut paths = Vec::new();
+    for (i, (name, data)) in images.iter().enumerate() {
+        let stem: String = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_')).take(40).collect();
+        let file = dir.join(format!("{:02}-{}.png", i + 1, if stem.is_empty() { "imagen".into() } else { stem }));
+        let b64 = data.split_once(',').map(|(_, b)| b).unwrap_or(data);
+        std::fs::write(&file, decode_base64(b64).ok_or("Imagen no válida")?).map_err(err)?;
+        paths.push(file.to_string_lossy().into_owned());
+    }
+    Ok(paths)
+}
+
+/// Whether a GitHub token for sending reports is saved (the token itself never goes back to the interface).
+#[tauri::command]
+fn report_token_status() -> bool {
+    report::token_get().is_some()
+}
+
+/// Keeps the GitHub token in the system's credential store; an empty one removes it.
+#[tauri::command]
+fn report_token_set(token: String) -> CmdResult<()> {
+    report::token_set(&token)
+}
+
+/// Creates the report's issue on GitHub with the saved token: its number and address.
+#[tauri::command(async)]
+fn report_create_issue(title: String, body: String, labels: Vec<String>) -> CmdResult<report::CreatedIssue> {
+    report::create_issue(&title, &body, &labels)
+}
+
+/// Standard base64 (with or without padding); None if it is not.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let bytes: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= value(c)? << (18 - 6 * i);
+        }
+        let len = match chunk.len() {
+            4 => 3,
+            3 => 2,
+            2 => 1,
+            _ => return None,
+        };
+        out.extend_from_slice(&n.to_be_bytes()[1..1 + len]);
+    }
+    Some(out)
+}
+
+// ───────────── Registro de errores (errlog.rs) ─────────────
+
+/// An unhandled error of the interface, or a call to the core that failed, for the local error log.
+#[tauri::command]
+fn error_log_add(area: String, message: String, stack: Option<String>) {
+    errlog::record(&area, &message, stack.as_deref().unwrap_or(""));
+}
+
+/// Ayuda › Registro de errores: the newest entries first.
+#[tauri::command(async)]
+fn error_log_list(limit: usize) -> Vec<errlog::Entry> {
+    errlog::entries(limit)
+}
+
+#[tauri::command(async)]
+fn error_log_clear() -> CmdResult<()> {
+    errlog::clear().map_err(err)
+}
+
+/// The log file (for «Abrir carpeta», which shows it selected in its folder).
+#[tauri::command]
+fn error_log_path() -> CmdResult<String> {
+    let dir = errlog::folder().ok_or("El registro de errores no está disponible")?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let file = dir.join("errors.log");
+    if !file.exists() {
+        std::fs::write(&file, "").map_err(err)?;
+    }
+    Ok(file.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn app_info(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "dataDir": state.store.dir.to_string_lossy(),
+        "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
     })
 }
 
@@ -1208,9 +1690,9 @@ async fn update_check() -> CmdResult<update::UpdateInfo> {
 }
 
 /// Where updates are downloaded: `updates` in Celer's local data folder (%LOCALAPPDATA%\es.celer.app on Windows: not
-/// the roaming profile, and not the system's temp folder). Debug builds with `CELER_DATA_DIR` use that folder.
+/// the roaming profile, and not the system's temp folder). With --data-dir / `CELER_DATA_DIR`, that folder.
 fn updates_dir(app: &tauri::AppHandle) -> PathBuf {
-    let base = dev_data_dir()
+    let base = data_dir_override()
         .or_else(|| app.path().app_local_data_dir().ok())
         .unwrap_or_else(|| app.state::<Arc<AppState>>().store.dir.clone());
     base.join(update::DOWNLOAD_SUBDIR)
@@ -1283,6 +1765,27 @@ fn mcp_install_claude_desktop() -> CmdResult<String> {
     mcp::install_claude_desktop()
 }
 
+/// The status bar's MCP indicator: on or off, the clients registered (Windows and WSL) and the last call.
+#[tauri::command(async)]
+fn mcp_status(state: State<'_, Arc<AppState>>) -> mcp::McpStatus {
+    mcp::status(&state.store)
+}
+
+/// The WSL distros, whether interop is on, the command for each and whether Celer is registered there. `check`:
+/// also look into this stopped distro (which starts it).
+#[tauri::command]
+async fn mcp_wsl_info(check: Option<String>) -> CmdResult<mcp_wsl::WslInfo> {
+    let exe = mcp::exe_path_pub();
+    tauri::async_runtime::spawn_blocking(move || mcp_wsl::info(&exe, check.as_deref())).await.map_err(err)
+}
+
+/// Runs `claude mcp add` inside a distro (the interface showed the command and the user confirmed it).
+#[tauri::command]
+async fn mcp_wsl_register(distro: String) -> CmdResult<String> {
+    let exe = mcp::exe_path_pub();
+    tauri::async_runtime::spawn_blocking(move || mcp_wsl::register(&exe, &distro)).await.map_err(err)?
+}
+
 /// Ejecuta una herramienta MCP con los permisos actuales (sin exigir `enabled` y sin auditar).
 /// Devuelve `{ isError, text, json }`: `text` es exactamente lo que recibiría el asistente.
 #[tauri::command]
@@ -1337,38 +1840,66 @@ pub fn run_mcp() -> i32 {
     mcp::serve_stdio()
 }
 
-/// Debug builds only: `CELER_DATA_DIR` points the app at a separate data folder, so automated tests never touch
-/// the configuration of an installed copy.
-pub(crate) fn dev_data_dir() -> Option<std::path::PathBuf> {
-    if !cfg!(debug_assertions) {
-        return None;
+/// A data folder of its own instead of the usual one: `--data-dir <folder>` (or `--data-dir=<folder>`) on the command
+/// line, else `CELER_DATA_DIR`, in any build. Tests and a portable copy on a USB stick run this way without touching
+/// an installed Celer: with it the app also uses its own credential store service ("Celer-dev"), its own WebView2
+/// profile (`<folder>\webview`) and no single-instance guard.
+pub(crate) fn data_dir_override() -> Option<std::path::PathBuf> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| data_dir_from(std::env::args().skip(1), std::env::var_os("CELER_DATA_DIR"))).clone()
+}
+
+fn data_dir_from(args: impl Iterator<Item = String>, env: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    let mut args = args;
+    while let Some(a) = args.next() {
+        let value = match a.strip_prefix("--data-dir") {
+            Some("") => args.next(),
+            Some(v) => match v.strip_prefix('=') {
+                Some(v) => Some(v.to_string()),
+                None => continue,
+            },
+            None => continue,
+        };
+        if let Some(v) = value.filter(|v| !v.trim().is_empty()) {
+            return Some(std::path::PathBuf::from(v.trim()));
+        }
     }
-    std::env::var_os("CELER_DATA_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
+    env.filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Its own WebView2 profile next to its data, unless the caller chose one (dev/run-desktop.ps1 does).
+    if let Some(dir) = data_dir_override() {
+        if std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_none() {
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", dir.join("webview"));
+        }
+    }
     let mut builder = tauri::Builder::default();
     // One Celer per data folder: a second launch raises the running one and exits, since it would write
     // connections.json and workspace.json over the first one's changes. The guard is keyed on the app identifier,
-    // so a debug build on its own data folder (CELER_DATA_DIR) skips it to run next to an installed Celer, unless
+    // so a copy on its own data folder (--data-dir / CELER_DATA_DIR) skips it to run next to an installed Celer, unless
     // CELER_SINGLE_INSTANCE asks for it (to test the guard).
-    if dev_data_dir().is_none() || std::env::var_os("CELER_SINGLE_INSTANCE").is_some() {
+    if data_dir_override().is_none() || std::env::var_os("CELER_SINGLE_INSTANCE").is_some() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| windows::raise_last(app)));
     }
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let dir = dev_data_dir().unwrap_or_else(|| {
+            let dir = data_dir_override().unwrap_or_else(|| {
                 app.path()
                     .app_data_dir()
                     .unwrap_or_else(|_| std::env::temp_dir().join("celer"))
             });
+            // Panics and errors from here on go to <data>/logs (Ayuda › Registro de errores).
+            errlog::init(&dir);
             let store = Store::new(dir.clone());
+            apply_history_retention(&store);
             let mut conns = store.load_connections();
             move_inline_passwords(&store, &mut conns);
-            let mcp = mcp::McpServer::new(dir, true);
+            let mcp = mcp::McpServer::new(dir.clone(), true);
             // The window starts hidden and the UI shows it after its first paint (no white flash).
             // Safety net: show it anyway if the UI has not done so shortly after start.
             if let Some(window) = app.get_webview_window("main") {
@@ -1389,6 +1920,13 @@ pub fn run() {
                 exports: Mutex::new(HashMap::new()),
             }));
             app.manage(windows::Windows::default());
+            // The channel `celer --mcp` uses for the tools that act in the app (they check the permissions first).
+            let pending = Arc::new(mcp_app::Pending::default());
+            app.manage(pending.clone());
+            let handler = Arc::new(windows::McpAppHandler { app: app.handle().clone(), pending });
+            if let Err(e) = mcp_app::start(&dir, handler) {
+                eprintln!("celer: no se pudo abrir el canal local para MCP: {e}");
+            }
             Ok(())
         })
         .on_window_event(windows::on_event)
@@ -1401,11 +1939,20 @@ pub fn run() {
             restore_connection,
             duplicate_connection,
             test_connection,
+            ssh_host_key,
+            ssh_trust_host_key,
+            set_session_ssh_password,
+            export_secrets,
+            open_secrets,
             open_session,
             check_session,
+            keep_alive_session,
             close_session,
             close_connection_sessions,
-            read_spreadsheet,
+            sheet_open,
+            sheet_cancel,
+            sheet_rows,
+            sheet_close,
             execute,
             fetch,
             close_cursor,
@@ -1415,6 +1962,7 @@ pub fn run() {
             commit,
             rollback,
             meta_children,
+            schema_foreign_keys,
             table_columns,
             object_ddl,
             completion,
@@ -1426,6 +1974,7 @@ pub fn run() {
             add_history,
             get_history,
             clear_history,
+            set_history_retention,
             load_json,
             save_json,
             read_text_file,
@@ -1440,6 +1989,15 @@ pub fn run() {
             jdbc_prewarm,
             driver_download_cancel,
             app_info,
+            desktop_notify,
+            error_log_add,
+            error_log_list,
+            error_log_clear,
+            error_log_path,
+            report_save_images,
+            report_token_status,
+            report_token_set,
+            report_create_issue,
             migration_sources,
             migration_dbeaver_credentials,
             update_check,
@@ -1451,6 +2009,9 @@ pub fn run() {
             mcp_clear_audit,
             mcp_client_info,
             mcp_install_claude_desktop,
+            mcp_status,
+            mcp_wsl_info,
+            mcp_wsl_register,
             mcp_test_tool,
             ai_key_status,
             ai_key_set,
@@ -1469,7 +2030,15 @@ pub fn run() {
             windows::tab_drag_start,
             windows::tab_drag_claim,
             windows::tab_drag_end,
+            windows::mcp_app_reply,
         ])
-        .run(tauri::generate_context!())
-        .expect("error al iniciar Celer");
+        .build(tauri::generate_context!())
+        .expect("error al iniciar Celer")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    mcp_app::stop(&state.store.dir);
+                }
+            }
+        });
 }

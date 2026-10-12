@@ -1,6 +1,7 @@
 import { allSnippets } from "../snippets";
 import { PlanView } from "./PlanView";
-import { CompareView } from "./CompareView";
+import { ResultCompare } from "./ResultCompare";
+import { pickComparison } from "../resultCompare";
 import {
   AlignLeft,
   ArrowDownToLine,
@@ -27,6 +28,7 @@ import {
   RefreshCw,
   Rows3,
   Save,
+  Sparkles,
   Square,
   Undo2,
   Upload,
@@ -35,8 +37,10 @@ import {
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
+import { isLate } from "../gib/reactions";
 import { cellText, isNullCell, rowsLabel, whereHints } from "../sql";
 import {
+  gibShows,
   activeSql,
   canEdit,
   cancelActive,
@@ -57,6 +61,7 @@ import {
   formatMs,
   gib,
   insertTableRow,
+  pasteTableCells,
   kindOf,
   moveTab,
   notify,
@@ -116,15 +121,21 @@ import { engineOf, type Cell } from "../types";
 import { api, isTauri } from "../api";
 import { CodeView, SqlEditor } from "./Editor";
 import { TabLink } from "./LinkDot";
+import { RECONNECTING_TEXT, markTab, tabLink } from "../connStatus";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
 import { withShortcut } from "../commands";
+import { unsupportedReason } from "../engineCompat";
+import { resolvedFor, scopeText } from "../variableStore";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
+import { aiBadgeTitle } from "../mcpApp";
 import { windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
+import { EnvChip, EnvStrip, TxIndicator, TxTabBadge } from "./ConsoleSafety";
+import { envOf } from "../environment";
 
 export function Workspace() {
   return (
@@ -192,14 +203,16 @@ function TabBar() {
       <For each={state.tabs}>
         {(tab, index) => {
           const conn = () => connectionById(tab.connId);
-          const dirty = () => (tab.kind === "table" ? tableDirty(tab) : tab.inTransaction);
+          const dirty = () => tab.kind === "table" && tableDirty(tab);
+          const tx = () => tab.kind === "sql" && tab.inTransaction;
           const busy = () => (tab.kind === "sql" ? tab.running : tab.loading);
           return (
             <div
               class="tab"
               role="tab"
+              data-id={tab.id}
               aria-selected={tab.id === state.activeTabId}
-              classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index() }}
+              classList={{ on: tab.id === state.activeTabId, dragging: dragFrom() === index(), "ai-opened": Boolean(tab.aiOpenedAt), env: Boolean(tab.connId && envOf(conn())) }}
               draggable={renaming() !== tab.id}
               onDragStart={(event) => {
                 setDragFrom(index());
@@ -230,7 +243,7 @@ function TabBar() {
               }}
               onDblClick={() => tab.kind === "sql" && setRenaming(tab.id)}
               onContextMenu={(event) => menu(event, tab)}
-              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${tab.database ? ` · ${tab.database}` : ""}`}
+              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${envOf(conn()) ? ` · ${envOf(conn())!.label}` : ""}${tab.database ? ` · ${tab.database}` : ""}`}
             >
               <span class="tab-strip" style={{ background: tab.connId ? connColor(conn()) : "transparent" }} />
               <ObjIcon kind={tab.kind === "table" ? (tab.obj.kind === "view" ? "view" : "table") : tab.title.endsWith(".sql") ? "file" : "console"} size={14} />
@@ -254,8 +267,10 @@ function TabBar() {
                   }}
                 />
               </Show>
+              <Show when={tab.aiOpenedAt}><span class="ai-badge" title={aiBadgeTitle(tab)}><Sparkles size={10} /></span></Show>
               <Show when={busy()}><span class="tab-spinner" /></Show>
-              <Show when={dirty() && !busy()}><span class="tab-dirty" title={tab.kind === "table" ? "Cambios sin guardar" : "Transacción abierta"} /></Show>
+              <Show when={dirty() && !busy()}><span class="tab-dirty" title="Cambios sin guardar" /></Show>
+              <Show when={tx()}><TxTabBadge tab={tab as SqlTab} /></Show>
               <button
                 type="button"
                 class="tab-close"
@@ -330,7 +345,7 @@ function ConnectionPicker(props: { tab: SqlTab }) {
           <ChevronDown size={12} />
         </button>
       </Show>
-      <Show when={conn()?.production}><span class="tag prod">PROD</span></Show>
+      <EnvChip conn={conn()} />
       <Show when={conn()?.readOnly}><span class="tag">Solo lectura</span></Show>
       <Show when={conn() && !session() && !state.connecting[conn()!.id]}>
         <button type="button" class="btn tiny" onClick={() => void connect(conn()!.id)}>Conectar</button>
@@ -345,6 +360,8 @@ function SqlPane(props: { tab: SqlTab }) {
   const current = () => (props.tab.activeResult >= 0 ? props.tab.results[props.tab.activeResult] : undefined);
   /** What the grid shows: a pinned result, or the current one. */
   const result = () => pinned()?.result ?? current();
+  /** The engine has no plan Celer reads (Informix, generic ODBC): the button says so instead of failing. */
+  const planMissing = () => (props.tab.connId ? unsupportedReason("plan", kindOf(props.tab.connId)) : null);
   // Quick filter over the rows already loaded (any column contains the text, case-insensitive).
   const [filterOpen, setFilterOpen] = createSignal(false);
   const [filterText, setFilterText] = createSignal("");
@@ -384,6 +401,12 @@ function SqlPane(props: { tab: SqlTab }) {
     void startExport(pinned()?.sql);
   };
   const gridResults = createMemo(() => props.tab.results.map((item, index) => ({ item, index })));
+  /** This pinned result is one of the two being compared. */
+  const comparing = (pinId: string) => {
+    const c = props.tab.compare;
+    return Boolean(c && [c.base, c.other].some((ref) => ref.kind === "pin" && ref.tabId === props.tab.id && ref.pinId === pinId));
+  };
+
   const elapsedLive = () => (props.tab.running && props.tab.startedAt ? now() - props.tab.startedAt : null);
   // Ln/Col in the status bar follow the editor only while this console is active: on activation, from its saved cursor.
   createEffect(() => {
@@ -397,19 +420,30 @@ function SqlPane(props: { tab: SqlTab }) {
     });
   });
   // What the session does besides the statement (SQL Server reading the rest of the previous result to keep a
-  // transaction or #temp tables): asked every half second while it runs.
+  // transaction or #temp tables; any engine opening a new connection after a cut): asked every half second while it
+  // runs. While it reconnects the tab's dot says so too; the run's answer then says how it went.
   const [progress, setProgress] = createSignal<string | null>(null);
   createEffect(() => {
     const sessionId = props.tab.running ? props.tab.sessionId : null;
+    const tabId = props.tab.id;
     setProgress(null);
     if (!sessionId) return;
     const timer = window.setInterval(() => {
       void api()
         .sessionProgress(sessionId)
-        .then((text) => setProgress(props.tab.running ? text : null))
+        .then((text) => {
+          const running = props.tab.running;
+          setProgress(running ? text : null);
+          if (running && text === RECONNECTING_TEXT && tabLink(props.tab).link !== "reconnecting") markTab(tabId, "reconnecting", { note: "" });
+        })
         .catch(() => setProgress(null));
     }, 500);
-    onCleanup(() => window.clearInterval(timer));
+    onCleanup(() => {
+      window.clearInterval(timer);
+      // Ended without a word on the connection (an error of the statement itself): it is up again.
+      const tab = state.tabs.find((t) => t.id === tabId);
+      if (tab && tabLink(tab).link === "reconnecting") markTab(tabId, "on");
+    });
   });
 
   function resize(event: MouseEvent) {
@@ -427,6 +461,7 @@ function SqlPane(props: { tab: SqlTab }) {
 
   return (
     <div class="pane" ref={paneRef}>
+      <EnvStrip conn={connectionById(props.tab.connId)} />
       <div class="pane-toolbar">
         <Show
           when={!props.tab.running}
@@ -443,7 +478,13 @@ function SqlPane(props: { tab: SqlTab }) {
         <button type="button" class="tb-icon" title={withShortcut("Ejecutar script completo", "run-script")} disabled={props.tab.running} onClick={() => void runActive("script")}>
           <PlayCircle size={16} />
         </button>
-        <button type="button" class="tb-icon" title={withShortcut("Plan de ejecución", "explain")} disabled={props.tab.running} onClick={() => void runActive("explain")}>
+        <button
+          type="button"
+          class="tb-icon"
+          title={planMissing() ?? withShortcut("Plan de ejecución", "explain")}
+          disabled={props.tab.running || Boolean(planMissing())}
+          onClick={() => void runActive("explain")}
+        >
           <Gauge size={16} />
         </button>
         <span class="tb-sep" />
@@ -457,7 +498,7 @@ function SqlPane(props: { tab: SqlTab }) {
         <button type="button" class="tb-icon rollback" title={withShortcut("Rollback", "rollback")} disabled={!props.tab.inTransaction} onClick={() => void commitActive(true)}>
           <Undo2 size={16} />
         </button>
-        <Show when={props.tab.inTransaction}><span class="tag warn">Transacción abierta</span></Show>
+        <TxIndicator tab={props.tab} />
         <span class="tb-sep" />
         <button type="button" class="tb-icon secondary" title={withShortcut("Formatear SQL", "format")} onClick={formatActive}>
           <AlignLeft size={16} />
@@ -488,7 +529,19 @@ function SqlPane(props: { tab: SqlTab }) {
           kind={kindOf(props.tab.connId)}
           tables={completionTables(props.tab)}
           snippets={allSnippets(kindOf(props.tab.connId), state.settings.snippets)}
+          variables={resolvedFor(props.tab)}
+          variableScope={(variable) => scopeText(variable, props.tab.connId)}
           keymap={state.settings.keymap}
+          prefs={{
+            font: state.settings.editorFont,
+            tabSize: state.settings.tabSize,
+            indentSpaces: state.settings.indentSpaces,
+            wordWrap: state.settings.wordWrap,
+            lineNumbers: state.settings.lineNumbers,
+            autocomplete: state.settings.autocomplete,
+            autocompleteDelay: state.settings.autocompleteDelay,
+            keywordCase: state.settings.keywordCase,
+          }}
           defaultSchema={kindOf(props.tab.connId) === "postgres" ? "public" : kindOf(props.tab.connId) === "mssql" ? "dbo" : undefined}
           onOpenTable={(table) => openTableFromSql(props.tab, table)}
           fontSize={state.settings.editorFontSize}
@@ -533,13 +586,13 @@ function SqlPane(props: { tab: SqlTab }) {
           </Show>
           <For each={props.tab.pinned}>
             {(pin) => (
-              <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned || pin.id === props.tab.compare?.pinId }} title={pin.sql}>
+              <span class="rtab pinned" classList={{ on: pin.id === props.tab.activePinned || comparing(pin.id) }} title={`Resultado fijado: se conserva al volver a ejecutar\n${pin.sql}`}>
                 <button type="button" class="rtab-main" onClick={() => showPinned(props.tab.id, pin.id)}>
                   <Pin size={12} />
                   {pin.title}
-                  <small>{pin.result.rows.length.toLocaleString()}</small>
+                  <small>{pin.result.rows.length.toLocaleString()}{pin.partial ? "+" : ""}</small>
                 </button>
-                <button type="button" class="rtab-close" classList={{ on: props.tab.compare?.pinId === pin.id }} title="Comparar con el resultado actual" onClick={() => (props.tab.compare?.pinId === pin.id ? closeCompare(props.tab.id) : compareWithCurrent(props.tab.id, pin.id))}><GitCompare size={11} /></button>
+                <button type="button" class="rtab-close" classList={{ on: comparing(pin.id) }} title="Comparar con el resultado actual" onClick={() => (comparing(pin.id) ? closeCompare(props.tab.id) : compareWithCurrent(props.tab.id, pin.id))}><GitCompare size={11} /></button>
                 <button type="button" class="rtab-close" title="Quitar este resultado fijado" onClick={() => unpinResult(props.tab.id, pin.id)}><X size={11} /></button>
               </span>
             )}
@@ -572,8 +625,9 @@ function SqlPane(props: { tab: SqlTab }) {
               <button type="button" class="tb-icon" title="Filtrar las filas cargadas" onClick={() => setFilterOpen(true)}><ListFilter size={15} /></button>
             </Show>
             <Show when={!pinned()}>
-              <button type="button" class="tb-icon" title="Fijar este resultado (se conserva al volver a ejecutar)" onClick={() => pinResult(props.tab.id)}><Pin size={14} /></button>
+              <button type="button" class="tb-icon" title="Fijar resultado (se conserva al volver a ejecutar)" onClick={() => pinResult(props.tab.id)}><Pin size={14} /></button>
             </Show>
+            <button type="button" class="tb-icon" title="Comparar con… (otro resultado de esta consola, de otra o de una tabla abierta)" onClick={(event) => pickComparison(props.tab.id, event)}><GitCompare size={14} /></button>
             <Show when={result()?.hasMore && !pinned() && !filtering()}>
               <button type="button" class="tb-icon" title="Cargar la siguiente página" onClick={() => void fetchMore(props.tab.id)}><ArrowDownToLine size={15} /></button>
               <button type="button" class="btn tiny" title="Cargar todas las filas" onClick={() => void fetchAll(props.tab.id)}>Cargar todo</button>
@@ -588,7 +642,7 @@ function SqlPane(props: { tab: SqlTab }) {
         </Show>
         <Switch>
           <Match when={props.tab.compare}>
-            <CompareView tab={props.tab} />
+            <ResultCompare tab={props.tab} />
           </Match>
           <Match when={props.tab.activePlan && props.tab.plan}>
             {(view) => <PlanView tab={props.tab} plan={view().plan} sql={view().sql} />}
@@ -634,7 +688,8 @@ function OutputLog(props: { tab: SqlTab }) {
     <div class="output" ref={host}>
       <Show when={!props.tab.output.length}>
         <div class="output-empty">
-          <Gib size={72} mood="idle" />
+          {/* Waiting for you to run something: at his laptop. */}
+          <Show when={gibShows("empty")}><Gib size={72} pose="laptop" mood="idle" /></Show>
           <p>
             <kbd>Ctrl</kbd>+<kbd>Intro</kbd> ejecuta la sentencia bajo el cursor o la selección.
             <br />
@@ -711,6 +766,7 @@ function TablePane(props: { tab: TableTab }) {
 
   return (
     <div class="pane">
+      <EnvStrip conn={conn()} />
       <div class="pane-toolbar">
         <ObjIcon kind={props.tab.obj.kind === "view" ? "view" : "table"} size={16} />
         <strong class="obj-title">{props.tab.qualified}</strong>
@@ -719,6 +775,7 @@ function TablePane(props: { tab: TableTab }) {
           <span class="muted small">
             <span class="picker-dot" style={{ background: connColor(conn()) }} /> {conn()!.name}
           </span>
+          <EnvChip conn={conn()} tiny />
         </Show>
         <span class="spacer" />
         <div class="seg">
@@ -861,6 +918,7 @@ function TablePane(props: { tab: TableTab }) {
             onDelete={(list) => deleteTableRows(props.tab.id, list)}
             onClone={(row) => insertTableRow(props.tab.id, row)}
             onInsert={() => insertTableRow(props.tab.id)}
+            onPaste={(cells) => pasteTableCells(props.tab.id, cells)}
             onRevert={(row, col) => revertTableChange(props.tab.id, row, col)}
             sortState={props.tab.sort}
             onSortChange={(sort) => setTableSort(props.tab.id, sort)}
@@ -974,11 +1032,13 @@ function Welcome() {
     return () => window.clearTimeout(timer);
   });
   const recent = () => state.connections.slice(0, 6);
+  // Late at night he greets you just out of bed (the Monday pose).
+  const lateNight = () => isLate(new Date());
   return (
     <div class="welcome">
       <div class="welcome-inner">
         <div class="welcome-hero">
-          <Gib size={112} mood={mood()} onClick={() => { setMood("love"); window.setTimeout(() => setMood("idle"), 1400); }} />
+          <Show when={gibShows("empty")}><Gib size={112} pose={lateNight() ? "monday" : "poker"} mood={mood()} onClick={() => { setMood("love"); window.setTimeout(() => setMood("idle"), 1400); }} /></Show>
           <div>
             <h1>{greeting()}</h1>
             <p>SQL rápido para cualquier base de datos.</p>

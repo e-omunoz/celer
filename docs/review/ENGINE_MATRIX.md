@@ -14,7 +14,12 @@ lists each engine with ✅ / ❌ / ⚠️ not applicable (and why). "Not tested 
 | Informix over DRDA (IBM CLI) | WSL `celer-ifx` | `localhost:9089` informix/in4mix db `celerdemo` | `CELER_INFORMIX_TEST` |
 | Informix over JDBC (bridge) | WSL `celer-ifx` | `localhost:9088` server `informix` | `CELER_INFORMIX_JDBC_TEST` |
 | SQLite | embedded | any `.db` file; browser preview uses it (`src/demo.ts`) | unit tests |
-| Generic ODBC | Windows ODBC DSN to any engine above | e.g. a PostgreSQL/MySQL ODBC DSN | — (manual in the app) |
+| Generic ODBC | Windows ODBC DSN to any engine above; in WSL, psqlODBC to `celer-pg` | e.g. a PostgreSQL/MySQL ODBC DSN | `CELER_ODBC_TEST` (connection string) + `CELER_ODBC_LIB` (driver manager), set by `engines.sh` |
+
+SSH tunnels: the WSL bastion `celer-sshd` (`localhost:2222`, celer/celer or the key `~/celer-drivers/ssh/id_ed25519`)
+reaches every server engine by its container name (`celer-pg:5432`, `celer-mysql:3306`, `celer-mariadb:3306`,
+`celer-mssql:1433`, `celer-ifx:9088/9089`), which only resolves inside Docker: through the tunnel is the only way.
+`CELER_SSH_TEST` (engines.sh) runs the tunnel tests; `docker restart celer-sshd` drops every tunnel.
 
 Seeds (`dev\wsl.ps1 db seed`): `dev/seed-postgres.sql`, `seed-mysql.sql` (MySQL and MariaDB), `seed-mssql.sql`,
 `seed-informix.sql`. Azure SQL / Synapse cannot be run locally: check the dialect branches in code and say so.
@@ -22,7 +27,16 @@ Seeds (`dev\wsl.ps1 db seed`): `dev/seed-postgres.sql`, `seed-mysql.sql` (MySQL 
 ## How to run it
 - Cargo tests on every engine: `powershell -ExecutionPolicy Bypass -File dev\wsl.ps1 test -Ref <branch>`
   (starts the containers if needed). On GitHub: `gh workflow run engines.yml --ref <branch>` for SQL Server + Informix.
-- In the app: `dev\wsl.ps1 db up`, then `dev\run-desktop.ps1`, create one connection per row of the table (keep them
-  in `D:\celer-devdata`), and walk the feature on each, taking a screenshot per engine into `review-out/<topic>/`.
+- In the app: `dev\wsl.ps1 db up`, then `dev\run-desktop.ps1 -Slot <n> -Ref origin/<branch>`: a build of that branch
+  in its own worktree (`D:\celer-slots\<n>`), target, data folder (`D:\celer-devdata-slot<n>`) and DevTools port
+  (9333+n), with one connection per row of the table already in it (`dev/devdata-connections.mjs`; `-Engines` resets
+  them). Several slots run side by side; the Windows checkout is never switched. Walk the feature on each engine,
+  taking a screenshot per engine into `review-out/<topic>/`.
+- Driving it: `node dev/cdp.mjs --slot <n> windows | eval -h "<js>" | shot | click | drag | key …`, with
+  `--window <label|title>` for a torn-off window; in-page helpers in `dev/cdp-helpers.js`; `connect`, `connectAll`
+  and `watchErrors` in `dev/cdp-lib.mjs` for scripted checks across windows.
+- Shared engines: tables a check creates carry its slot or topic in the name, and seeded data is read-only (re-seed
+  with `dev\wsl.ps1 db seed` if a check had to change it). `engines.sh test` runs every engine to the end and prints
+  a per-engine summary; a failure there is reported with its module, never as "the same as main" without checking.
 - Engine-specific SQL the UI writes is checked per dialect in `dev/engine-sql.ts` and `src-tauri/src/engine_tests.rs`:
   a change to generated SQL extends both.

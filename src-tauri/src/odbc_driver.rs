@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, Result};
 use crate::model::*;
 use crate::mssql::{cell_i64, cell_str, fmt_rows, kind_from_type};
 use crate::odbc::*;
-use crate::session::{first_keyword, Canceller, Driver};
+use crate::session::{first_keyword, Canceller, Driver, FkColumn};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
@@ -144,8 +144,9 @@ impl LinkStmt for Stmt {
 pub struct LinkDriver<L: Link> {
     cfg: ConnConfig,
     dialect: Dialect,
-    conn: L,
+    /// Before `conn`: fields drop in order, and a statement must be freed while its connection is still open.
     stmt: Option<L::Stmt>,
+    conn: L,
     /// Statements of a batch still to run (Informix runs one statement per call: the batch is split).
     pending: VecDeque<String>,
     /// Statements of a script dropped with its open result, told in the next execute's messages.
@@ -157,6 +158,14 @@ pub struct LinkDriver<L: Link> {
     /// usuario la cambia).
     db_known: bool,
     quote: String,
+}
+
+impl<L: Link> Drop for LinkDriver<L> {
+    /// A console closed with a result still open: its statement goes first. Freed after the connection, the handle
+    /// was one the driver had already released with it (a crash when tabs were closed after a large query).
+    fn drop(&mut self) {
+        self.stmt = None;
+    }
 }
 
 pub type OdbcDriver = LinkDriver<OdbcConn>;
@@ -227,7 +236,7 @@ impl<L: Link> LinkDriver<L> {
         let lost = self.in_tx;
         self.recover();
         if lost {
-            anyhow!("{e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
+            anyhow!("SESSION_LOST: {e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
         } else {
             e
         }
@@ -328,6 +337,74 @@ impl<L: Link> LinkDriver<L> {
 
     fn q(&self, rows: &str) -> Result<Vec<Vec<Cell>>> {
         self.conn.query_all(rows)
+    }
+
+    /// Generic ODBC: the foreign keys SQLForeignKeys lists for a table (`table` None: for every table of the source,
+    /// which only some drivers accept), joined per key in KEY_SEQ order.
+    fn generic_foreign_keys(&self, cat: &str, sch: &str, table: Option<&str>) -> Result<Vec<SchemaForeignKey>> {
+        let rows = self.odbc()?.catalog_fks([Some(cat), Some(sch), table])?;
+        let mut rows: Vec<&Vec<Cell>> = rows.iter().filter(|r| r.len() >= 12).collect();
+        // Per key, its columns in KEY_SEQ order (drivers sort by table and KEY_SEQ, not always by key first).
+        rows.sort_by_key(|r| (cell_str(&r[4]), cell_str(&r[5]), cell_str(&r[6]), cell_str(&r[11]), cell_str(&r[0]), cell_str(&r[1]), cell_str(&r[2]), cell_i64(&r[8])));
+        Ok(crate::session::group_foreign_keys(rows.into_iter().map(|r| {
+            let (fk_cat, fk_sch, fk_table) = (cell_str(&r[4]), cell_str(&r[5]), cell_str(&r[6]));
+            let name = match cell_str(&r[11]) {
+                n if n.is_empty() => format!("fk_{fk_table}_{}", cell_str(&r[2])),
+                n => n,
+            };
+            FkColumn {
+                key: [fk_cat.as_str(), &fk_sch, &fk_table, &name, &cell_str(&r[0]), &cell_str(&r[1]), &cell_str(&r[2])].join("\u{0}"),
+                name,
+                table: ObjectRef::new(&fk_cat, &fk_sch, &fk_table, "table"),
+                column: cell_str(&r[7]),
+                target: ObjectRef::new(&cell_str(&r[0]), &cell_str(&r[1]), &cell_str(&r[2]), "table"),
+                target_column: cell_str(&r[3]),
+            }
+        })))
+    }
+
+    /// Informix: every foreign key of a database in one catalog query. A key's columns are the parts of its index (and
+    /// of the referenced constraint's index): the query gives one row per key, side and column, with the index's parts,
+    /// whose order puts the columns in key order. Only the tables of the explorer's Tablas folder.
+    fn ifx_schema_foreign_keys(&self, db: &str) -> Result<Vec<SchemaForeignKey>> {
+        let rows = self.q(&ifx_schema_fks_sql(&self.ifx_db(db)))?;
+        // Per constrid: name, owner, table, referenced owner and table, and each side's (position, column).
+        struct Key {
+            id: i64,
+            fk: SchemaForeignKey,
+            sides: [Vec<(usize, String)>; 2],
+        }
+        let mut keys: Vec<Key> = Vec::new();
+        for r in &rows {
+            let (side, id, colno) = (cell_i64(&r[0]).clamp(0, 1) as usize, cell_i64(&r[1]), cell_i64(&r[23]));
+            let Some(pos) = r[7..23].iter().position(|p| colno != 0 && cell_i64(p).abs() == colno) else { continue };
+            let at = match keys.iter().position(|k| k.id == id) {
+                Some(at) => at,
+                None => {
+                    let fk = SchemaForeignKey {
+                        name: cell_str(&r[2]),
+                        table: ObjectRef::new(db, &cell_str(&r[3]), &cell_str(&r[4]), "table"),
+                        columns: vec![],
+                        target: ObjectRef::new(db, &cell_str(&r[5]), &cell_str(&r[6]), "table"),
+                        target_columns: vec![],
+                    };
+                    keys.push(Key { id, fk, sides: [vec![], vec![]] });
+                    keys.len() - 1
+                }
+            };
+            keys[at].sides[side].push((pos, cell_str(&r[24])));
+        }
+        Ok(keys
+            .into_iter()
+            .map(|mut k| {
+                for side in k.sides.iter_mut() {
+                    side.sort();
+                }
+                k.fk.columns = k.sides[0].iter().map(|(_, c)| c.clone()).collect();
+                k.fk.target_columns = k.sides[1].iter().map(|(_, c)| c.clone()).collect();
+                k.fk
+            })
+            .collect())
     }
 
     /// Prefijo "base:" de Informix para consultar catálogos de otra base de datos.
@@ -888,6 +965,32 @@ pub fn ifx_type(coltype: i64, len: i64, extended_id: i64) -> String {
     }
 }
 
+/// Every foreign key of an Informix database (`db`: its "base:" prefix, or ""): one row per key, side (0: the
+/// referencing table, 1: the referenced one) and column of that side's index, with the index's 16 parts to put the
+/// columns in key order. Columns: side, constrid, constraint, owner, table, referenced owner, referenced table,
+/// part1…part16, colno, colname. Only the tables the explorer lists (tabtype 'T', tabid >= 100).
+pub fn ifx_schema_fks_sql(db: &str) -> String {
+    let parts = |alias: &str| (1..=16).map(|i| format!("{alias}.part{i}")).collect::<Vec<_>>().join(", ");
+    let abs_parts = |alias: &str| (1..=16).map(|i| format!("ABS({alias}.part{i})")).collect::<Vec<_>>().join(", ");
+    let head = "TRIM(c.constrname), TRIM(ct.owner), TRIM(ct.tabname), TRIM(pt.owner), TRIM(pt.tabname)";
+    let from = format!("{db}sysconstraints c, {db}systables ct, {db}sysreferences r, {db}systables pt");
+    let keys = "c.constrtype = 'R' AND ct.tabid = c.tabid AND ct.tabtype = 'T' AND ct.tabid >= 100 AND r.constrid = c.constrid AND pt.tabid = r.ptabid";
+    format!(
+        "SELECT 0, c.constrid, {head}, {}, col.colno, TRIM(col.colname) \
+         FROM {from}, {db}sysindexes ci, {db}syscolumns col \
+         WHERE {keys} AND ci.tabid = c.tabid AND ci.idxname = c.idxname AND col.tabid = c.tabid AND col.colno IN ({}) \
+         UNION ALL \
+         SELECT 1, c.constrid, {head}, {}, col.colno, TRIM(col.colname) \
+         FROM {from}, {db}sysconstraints pc, {db}sysindexes pi, {db}syscolumns col \
+         WHERE {keys} AND pc.constrid = r.primary AND pi.tabid = r.ptabid AND pi.idxname = pc.idxname \
+           AND col.tabid = r.ptabid AND col.colno IN ({})",
+        parts("ci"),
+        abs_parts("ci"),
+        parts("pi"),
+        abs_parts("pi")
+    )
+}
+
 const IFX_SYSTEM_DBS: [&str; 6] = [
     "sysmaster",
     "sysutils",
@@ -977,9 +1080,9 @@ impl<L: Link> Driver for LinkDriver<L> {
                         })
                         .collect())
                 }
-                [_, cat, sch, name] => {
+                [ty, cat, sch, name] => {
                     let cols = self.generic_columns(&ObjectRef::new(cat, sch, name, "table"))?;
-                    Ok(cols
+                    let mut nodes: Vec<MetaNode> = cols
                         .into_iter()
                         .map(|c| {
                             let mut d = c.type_name.clone();
@@ -995,8 +1098,21 @@ impl<L: Link> Driver for LinkDriver<L> {
                                 Some(d),
                             )
                         })
-                        .collect())
+                        .collect();
+                    if *ty == "TABLE" && self.odbc()?.has_foreign_keys() {
+                        nodes.push(MetaNode::branch("Claves foráneas", "folder", [path.to_vec(), vec!["fks".into()]].concat()));
+                    }
+                    Ok(nodes)
                 }
+                // SQLForeignKeys of the table: "cols → schema.table(cols)" and `obj` the referenced table, as elsewhere.
+                ["TABLE", cat, sch, name, "fks"] => Ok(self
+                    .generic_foreign_keys(cat, sch, Some(name))?
+                    .into_iter()
+                    .map(|fk| {
+                        let target = if fk.target.schema.is_empty() { fk.target.name.clone() } else { format!("{}.{}", fk.target.schema, fk.target.name) };
+                        MetaNode::leaf(fk.name, "key", Some(format!("{} → {target}({})", fk.columns.join(", "), fk.target_columns.join(", ")))).with_obj(fk.target)
+                    })
+                    .collect()),
                 _ => Ok(vec![]),
             };
         }
@@ -1125,6 +1241,32 @@ impl<L: Link> Driver for LinkDriver<L> {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// Informix: one catalog query (sysconstraints, sysreferences, sysindexes, syscolumns) for the database. Generic
+    /// ODBC: SQLForeignKeys with no table, which some drivers answer with every key of the source; if the driver
+    /// refuses (the standard says it may) or answers nothing, SQLForeignKeys table by table.
+    fn schema_foreign_keys(&mut self, path: &[String]) -> Result<Vec<SchemaForeignKey>> {
+        self.recover();
+        if self.dialect == Dialect::Informix {
+            let [db] = path else { return crate::session::per_table_foreign_keys(self, path) };
+            return self.ifx_schema_foreign_keys(db);
+        }
+        if !self.odbc()?.has_foreign_keys() {
+            return Ok(vec![]);
+        }
+        let tables = self.odbc()?.catalog_tables(None, None, Some("%"), Some("TABLE"))?;
+        let listed = |fk: &SchemaForeignKey| tables.iter().any(|r| cell_str(&r[0]) == fk.table.database && cell_str(&r[1]) == fk.table.schema && cell_str(&r[2]) == fk.table.name);
+        if let Ok(all) = self.generic_foreign_keys("", "", None) {
+            if !all.is_empty() {
+                return Ok(all.into_iter().filter(listed).collect());
+            }
+        }
+        let mut out = Vec::new();
+        for r in tables.iter().take(20000) {
+            out.extend(self.generic_foreign_keys(&cell_str(&r[0]), &cell_str(&r[1]), Some(&cell_str(&r[2])))?);
+        }
+        Ok(out)
     }
 
     fn table_columns(&mut self, obj: &ObjectRef) -> Result<Vec<TableColumn>> {
@@ -1317,6 +1459,15 @@ impl<L: Link> Driver for LinkDriver<L> {
                     columns: vec![],
                 });
             }
+            // Column names too: masking of protected columns relies on them (a generic source has no other catalog).
+            if let Ok(cols) = self.odbc()?.catalog_columns("", "", "%") {
+                for r in cols.iter().take(100_000) {
+                    let (s, t, c) = (cell_str(&r[1]), cell_str(&r[2]), cell_str(&r[3]));
+                    if let Some(tb) = out.tables.iter_mut().find(|x| x.schema == s && x.name == t) {
+                        tb.columns.push(c);
+                    }
+                }
+            }
             return Ok(out);
         }
         let d = self.ifx_db(database);
@@ -1431,11 +1582,15 @@ impl<L: Link> Driver for LinkDriver<L> {
         self.conn.canceller()
     }
 
-    /// Informix: la consulta más barata del catálogo. Otros orígenes ODBC: no hay una consulta que valga para todos;
-    /// sus cortes se reconocen por el SQLSTATE (08S01…).
+    /// Informix: la consulta más barata del catálogo. Otros orígenes ODBC: no hay una consulta que valga para todos,
+    /// pero sí una función de catálogo (SQLTables de una tabla que no existe), que los drivers de servidor resuelven con
+    /// una ida y vuelta; sus cortes se reconocen además por el SQLSTATE (08S01…).
     fn ping(&mut self) -> Result<()> {
-        if self.dialect != Dialect::Informix || self.stmt.is_some() {
+        if self.stmt.is_some() {
             return Ok(());
+        }
+        if self.dialect != Dialect::Informix {
+            return self.odbc()?.catalog_tables(None, None, Some("celer_ping_no_table"), Some("TABLE")).map(|_| ());
         }
         self.q("SELECT 1 FROM systables WHERE tabid = 1").map(|_| ())
     }
@@ -1469,6 +1624,40 @@ mod tests {
     }
 
     use super::*;
+
+    /// A generic ODBC connection through the system's driver manager, from CELER_ODBC_TEST (a connection string, e.g.
+    /// "Driver={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer;").
+    pub(crate) fn odbc_test_driver() -> Option<OdbcDriver> {
+        let conn_str = std::env::var("CELER_ODBC_TEST").ok().filter(|s| !s.trim().is_empty())?;
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: conn_str, ..Default::default() };
+        Some(OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC de prueba"))
+    }
+
+    /// Ajustes › Ejecución › tiempo máximo over ODBC: the core's deadline cancels through SQLCancel, and the session
+    /// answers again.
+    #[test]
+    fn odbc_query_timeout_cancels() {
+        let Some(mut d) = odbc_test_driver() else { return };
+        let t0 = std::time::Instant::now();
+        let cancel = d.canceller();
+        // A statement every ODBC source behind the test DSN understands as slow (PostgreSQL here).
+        let slow = std::env::var("CELER_ODBC_SLOW").unwrap_or_else(|_| "SELECT pg_sleep(20)".into());
+        let r = crate::session::with_deadline(cancel, 1, || d.execute(&slow, 10));
+        assert_eq!(r.err(), Some(crate::session::timeout_error(1)));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(15), "{:?}", t0.elapsed());
+        let out = d.execute("SELECT 1", 10).unwrap();
+        assert_eq!(out.results[0].rows.len(), 1);
+    }
+
+    /// Ayuda › Registro de errores over ODBC: the driver's error with a value in it is logged without the value.
+    #[test]
+    fn odbc_error_log_entry_is_scrubbed() {
+        let Some(mut d) = odbc_test_driver() else { return };
+        let bad = std::env::var("CELER_ODBC_BAD").unwrap_or_else(|_| "SELECT 'celer-secret-42'::int".into());
+        let e = d.execute(&bad, 10).expect_err("valor no numérico").to_string();
+        crate::errlog::assert_scrubbed("ODBC", &e, "celer-secret-42");
+        crate::assert_report_banner("ODBC", &d.server_info().unwrap(), &["localhost", "15432", "Uid", "Pwd"]);
+    }
 
     #[test]
     fn empty_database_is_left_out() {

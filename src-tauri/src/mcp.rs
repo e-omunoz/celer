@@ -65,11 +65,27 @@ pub const TOOL_NAMES: &[&str] = &[
     "execute_statement",
 ];
 
+/// Tools that act in the running Celer (#100). They are listed only with "Controlar la aplicación" on, and each
+/// sub-switch adds its own: see `tool_allowed`.
+pub const APP_TOOL_NAMES: &[&str] = &[
+    "get_app_state",
+    "list_library",
+    "get_library_script",
+    "add_library_script",
+    "open_console",
+    "open_table",
+    "open_er_diagram",
+    "open_object",
+];
+const MAX_APP_SQL: usize = 500_000;
+const MAX_STATE_SQL: usize = 4000;
+const MAX_LIBRARY_LIST: usize = 500;
+
 /// Directorio de datos de la aplicación: el mismo que usa la interfaz
 /// (`app_data_dir` de Tauri para el identificador `es.celer.app`).
-/// En depuración, `CELER_DATA_DIR` lo sustituye (como en la interfaz).
+/// `--data-dir` / `CELER_DATA_DIR` lo sustituye (como en la interfaz).
 pub fn default_data_dir() -> PathBuf {
-    crate::dev_data_dir().unwrap_or_else(|| {
+    crate::data_dir_override().unwrap_or_else(|| {
         dirs::data_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("es.celer.app")
@@ -107,6 +123,26 @@ pub struct ConnPermission {
     pub max_rows: Option<u32>,
 }
 
+/// "Controlar la aplicación" (#100): what an assistant may do in the running Celer. Off by default; the sub-switches
+/// only count with it on.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppControl {
+    pub enabled: bool,
+    /// Open consoles, tables, E-R diagrams and object definitions.
+    pub open_tabs: bool,
+    /// Add scripts to the library.
+    pub write_library: bool,
+    /// Run the SQL of a console it opens, within the connection's level.
+    pub run_opened: bool,
+}
+
+impl Default for AppControl {
+    fn default() -> Self {
+        AppControl { enabled: false, open_tabs: true, write_library: true, run_opened: false }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct McpConfig {
@@ -115,6 +151,7 @@ pub struct McpConfig {
     pub timeout_secs: u32,
     pub redact_pattern: String,
     pub connections: BTreeMap<String, ConnPermission>,
+    pub app_control: AppControl,
 }
 
 impl Default for McpConfig {
@@ -125,8 +162,36 @@ impl Default for McpConfig {
             timeout_secs: 30,
             redact_pattern: DEFAULT_REDACT.into(),
             connections: BTreeMap::new(),
+            app_control: AppControl::default(),
         }
     }
+}
+
+/// Whether a tool is offered (and may be called) with this configuration: the database tools always, the app
+/// tools only with "Controlar la aplicación" on and their sub-switch.
+pub fn tool_allowed(cfg: &McpConfig, name: &str) -> bool {
+    if TOOL_NAMES.contains(&name) {
+        return true;
+    }
+    let a = &cfg.app_control;
+    a.enabled
+        && match name {
+            "get_app_state" | "list_library" | "get_library_script" => true,
+            "add_library_script" => a.write_library,
+            "open_console" | "open_table" | "open_er_diagram" | "open_object" => a.open_tabs,
+            _ => false,
+        }
+}
+
+fn app_tool_refused(cfg: &McpConfig, name: &str) -> String {
+    let what = if !cfg.app_control.enabled {
+        "que la IA controle la aplicación"
+    } else if name == "add_library_script" {
+        "que la IA escriba en la biblioteca de scripts"
+    } else {
+        "que la IA abra pestañas"
+    };
+    format!("El usuario no permite {what}. Puede cambiarlo en Celer › Ajustes › IA y MCP › Controlar la aplicación.")
 }
 
 impl McpConfig {
@@ -1134,6 +1199,12 @@ pub struct AuditEntry {
     pub ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Where the assistant runs: "Windows", "WSL (Ubuntu)", "Linux"… (entries written before it was kept: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
+    /// The MCP client program, as it introduced itself (`clientInfo.name` of initialize: "claude-code"…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_app: Option<String>,
 }
 
 fn audit_path(store: &Store) -> PathBuf {
@@ -1187,6 +1258,22 @@ pub fn clear_audit(store: &Store) -> anyhow::Result<()> {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
     }
+}
+
+/// The last entry, read from the end of the file (the status bar asks often; the file can be large).
+pub fn last_audit(store: &Store) -> Option<AuditEntry> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(audit_path(store)).ok()?;
+    let len = f.metadata().ok()?.len();
+    let start = len.saturating_sub(64 * 1024);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    String::from_utf8_lossy(&buf).lines().rev().find_map(|l| serde_json::from_str(l).ok())
+}
+
+pub(crate) fn now_ms_pub() -> i64 {
+    now_ms()
 }
 
 fn now_ms() -> i64 {
@@ -1408,15 +1495,35 @@ pub struct McpServer {
     sensitive: Mutex<HashMap<String, (Instant, String, Arc<Sensitive>)>>,
     /// Vista previa desde la interfaz: ignora `enabled` y no se audita.
     preview: bool,
+    /// Where the assistant runs ("Windows", "WSL (Ubuntu)"…), for the audit log.
+    origin: String,
+    /// The client program, from `initialize`.
+    client_app: Mutex<String>,
 }
 
 impl McpServer {
     pub fn new(dir: PathBuf, preview: bool) -> McpServer {
+        McpServer::with_origin(dir, preview, default_origin())
+    }
+
+    pub fn with_origin(dir: PathBuf, preview: bool, origin: String) -> McpServer {
         McpServer {
             store: Store::new(dir),
             sessions: Mutex::new(HashMap::new()),
             sensitive: Mutex::new(HashMap::new()),
             preview,
+            origin,
+            client_app: Mutex::new(String::new()),
+        }
+    }
+
+    /// "claude-code · WSL (Ubuntu)": who is calling, for the app's notices.
+    fn client_label(&self) -> String {
+        let app = self.client_app.lock().clone();
+        if app.is_empty() {
+            self.origin.clone()
+        } else {
+            format!("{app} · {}", self.origin)
         }
     }
 
@@ -1542,10 +1649,26 @@ impl McpServer {
         let conns = self.store.load_connections();
         let conn_id = arg_str(args, "connId");
         let conn = conns.iter().find(|c| c.id == conn_id).cloned();
-        let res = if !TOOL_NAMES.contains(&name) {
+        // The user's ${variables} (the connection's, then the global ones) become their values before anything else:
+        // the statement filter, the run and the audit see the SQL that is actually sent.
+        let substituted;
+        let args = match (name, conn.as_ref(), args.get("sql").and_then(|s| s.as_str())) {
+            ("run_query" | "execute_statement", Some(c), Some(sql)) if sql.contains("${") => {
+                let mut with = args.clone();
+                with["sql"] = Value::String(crate::variables::substitute(sql, c.kind, &crate::variables::for_connection(&self.store, &c.id)));
+                substituted = with;
+                &substituted
+            }
+            _ => args,
+        };
+        let res = if !TOOL_NAMES.contains(&name) && !APP_TOOL_NAMES.contains(&name) {
             Err(format!("Herramienta desconocida: {name}"))
         } else if !self.preview && !cfg.enabled {
             Err(DISABLED_MSG.to_string())
+        } else if !tool_allowed(&cfg, name) {
+            Err(app_tool_refused(&cfg, name))
+        } else if APP_TOOL_NAMES.contains(&name) {
+            self.dispatch_app(name, args, &cfg, &conns, conn.as_ref()).await
         } else {
             self.dispatch(name, args, &cfg, &conns, conn.as_ref()).await
         };
@@ -1567,7 +1690,38 @@ impl McpServer {
                         format!("{s}.{t}")
                     }
                 }
-                "search_objects" => arg_str(args, "query"),
+                "search_objects" | "list_library" => arg_str(args, "query"),
+                "open_console" => {
+                    let sql = audit_sql(args.get("sql").and_then(Value::as_str).unwrap_or(""), conn.as_ref().map_or(DbKind::Odbc, |c| c.kind));
+                    if args.get("run").and_then(Value::as_bool) == Some(true) {
+                        format!("[ejecutar] {sql}")
+                    } else {
+                        sql
+                    }
+                }
+                "open_table" | "open_object" | "open_er_diagram" => {
+                    let s = arg_str(args, "schema");
+                    let t = arg_str(args, "table");
+                    let mut d = [s, t].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(".");
+                    let filter = arg_str(args, "filter");
+                    if !filter.is_empty() {
+                        d.push_str(&format!(" WHERE {filter}"));
+                    }
+                    let order = arg_str(args, "orderBy");
+                    if !order.is_empty() {
+                        d.push_str(&format!(" ORDER BY {order}"));
+                    }
+                    d
+                }
+                "add_library_script" => arg_str(args, "name"),
+                "get_library_script" => {
+                    let id = arg_str(args, "id");
+                    if id.is_empty() {
+                        arg_str(args, "name")
+                    } else {
+                        id
+                    }
+                }
                 _ => arg_str(args, "database"),
             };
             let entry = AuditEntry {
@@ -1580,6 +1734,8 @@ impl McpServer {
                 rows: res.as_ref().ok().and_then(|r| r.1),
                 ms: t0.elapsed().as_millis() as u64,
                 error: res.as_ref().err().map(|e| truncate_chars(e, 500)),
+                client: Some(self.origin.clone()),
+                client_app: Some(self.client_app.lock().clone()).filter(|a| !a.is_empty()),
             };
             if let Err(e) = append_audit(&self.store, &entry) {
                 eprintln!("celer mcp: no se pudo escribir la auditoría: {e}");
@@ -1628,6 +1784,8 @@ impl McpServer {
                             "level": lvl.as_str(),
                             "database": database,
                             "production": c.production,
+                            // dev | test | staging | prod | custom ("" when none): an old production flag is "prod".
+                            "environment": if c.environment.is_empty() && c.production { "prod" } else { c.environment.as_str() },
                             "readOnly": c.read_only,
                         })
                     })
@@ -1637,39 +1795,12 @@ impl McpServer {
             return Ok((json!({ "connections": list }), Some(n)));
         }
 
-        let id = arg_str(args, "connId");
-        let conn = conn
-            .filter(|c| effective_level(cfg, c) != Level::None)
-            .ok_or_else(|| {
-                if id.is_empty() {
-                    "Falta «connId». Usa list_connections para ver las conexiones disponibles."
-                        .to_string()
-                } else {
-                    format!("No hay ninguna conexión accesible con id «{id}». Usa list_connections.")
-                }
-            })?
-            .clone();
-        let level = effective_level(cfg, &conn);
         let need = match name {
             "sample_rows" | "run_query" => Level::Read,
             "execute_statement" => Level::Write,
             _ => Level::Schema,
         };
-        if level < need {
-            if need == Level::Write && (conn.production || conn.read_only) {
-                return Err(format!(
-                    "«{}» está marcada como {} en Celer: los asistentes nunca pueden modificar datos en ella.",
-                    conn.name,
-                    if conn.production { "producción" } else { "solo lectura" }
-                ));
-            }
-            return Err(format!(
-                "La conexión «{}» tiene nivel «{}» para asistentes y {name} requiere «{}». El usuario puede cambiarlo en Celer › Ajustes › IA.",
-                conn.name,
-                level.as_str(),
-                need.as_str()
-            ));
-        }
+        let conn = accessible(cfg, conn, &arg_str(args, "connId"), name, need)?;
         let db = arg_str(args, "database");
         let timeout = cfg.timeout_secs;
         let kind = conn.kind;
@@ -1826,38 +1957,7 @@ impl McpServer {
             }
             "run_query" => {
                 let sql = arg_str(args, "sql");
-                check_read_query(&sql, kind)?;
-                let mut sens = (*self.sensitive_columns(&conn, cfg, &db, None).await?).clone();
-                // MySQL and SQL Server read other databases by name (`otherdb.users`): their protected columns count.
-                if red.active() && matches!(kind, DbKind::Mysql | DbKind::Mssql) {
-                    let quals = qualifiers(&sql, kind);
-                    if !quals.is_empty() {
-                        let dbs = self
-                            .run(&conn, timeout, db.clone(), |d, _| d.databases())
-                            .await
-                            .unwrap_or_default();
-                        for other in dbs.into_iter().filter(|n| quals.contains(&n.to_lowercase())) {
-                            let more = self.sensitive_columns(&conn, cfg, &db, Some(other)).await?;
-                            sens.columns.extend(more.columns.iter().cloned());
-                            sens.tables.extend(more.tables.iter().cloned());
-                        }
-                    }
-                }
-                if !sens.columns.is_empty() {
-                    for t in single_statement(&sql, kind)? {
-                        if let Some(e) = masking_bypass(&t, &sens) {
-                            return Err(e);
-                        }
-                    }
-                    let ids = query_identifiers(&sql, kind);
-                    let mut hit: Vec<&String> = ids.iter().filter(|i| sens.columns.contains(*i)).collect();
-                    hit.sort();
-                    if let Some(h) = hit.first() {
-                        return Err(format!(
-                            "La consulta menciona la columna protegida «{h}». Sus valores están ocultos para los asistentes: no la uses en expresiones, filtros ni alias. Con SELECT * o sample_rows aparecerá como \"{REDACTED}\"."
-                        ));
-                    }
-                }
+                self.check_read_access(&conn, cfg, &db, &sql).await?;
                 let cap = row_cap(cfg, &conn.id, arg_u64(args, "maxRows"), 100);
                 let t0 = Instant::now();
                 let out = self
@@ -1890,6 +1990,251 @@ impl McpServer {
         }
     }
 
+    /// What run_query checks before it runs a statement: one read-only statement, and no protected column named or
+    /// reached another way (a whole row, a column alias list, a set operation; on MySQL and SQL Server also the
+    /// protected columns of another database it names).
+    async fn check_read_access(&self, conn: &ConnConfig, cfg: &McpConfig, db: &str, sql: &str) -> Result<(), String> {
+        let kind = conn.kind;
+        check_read_query(sql, kind)?;
+        let red = Redactor::new(&cfg.redact_pattern);
+        let mut sens = (*self.sensitive_columns(conn, cfg, db, None).await?).clone();
+        // MySQL and SQL Server read other databases by name (`otherdb.users`): their protected columns count.
+        if red.active() && matches!(kind, DbKind::Mysql | DbKind::Mssql) {
+            let quals = qualifiers(sql, kind);
+            if !quals.is_empty() {
+                let dbs = self.run(conn, cfg.timeout_secs, db.to_string(), |d, _| d.databases()).await.unwrap_or_default();
+                for other in dbs.into_iter().filter(|n| quals.contains(&n.to_lowercase())) {
+                    let more = self.sensitive_columns(conn, cfg, db, Some(other)).await?;
+                    sens.columns.extend(more.columns.iter().cloned());
+                    sens.tables.extend(more.tables.iter().cloned());
+                }
+            }
+        }
+        if !sens.columns.is_empty() {
+            for t in single_statement(sql, kind)? {
+                if let Some(e) = masking_bypass(&t, &sens) {
+                    return Err(e);
+                }
+            }
+            let ids = query_identifiers(sql, kind);
+            let mut hit: Vec<&String> = ids.iter().filter(|i| sens.columns.contains(*i)).collect();
+            hit.sort();
+            if let Some(h) = hit.first() {
+                return Err(format!(
+                    "La consulta menciona la columna protegida «{h}». Sus valores están ocultos para los asistentes: no la uses en expresiones, filtros ni alias. Con SELECT * o sample_rows aparecerá como \"{REDACTED}\"."
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    // ───────────── Control de la aplicación (#100) ─────────────
+
+    /// Asks the running Celer to do something (after every check here). Blocking socket work, off the runtime.
+    async fn app(&self, action: &str, args: Value) -> Result<Value, String> {
+        let dir = self.store.dir.clone();
+        let client = self.client_label();
+        let action = action.to_string();
+        tokio::task::spawn_blocking(move || crate::mcp_app::request(&dir, &action, args, &client, crate::mcp_app::REQUEST_TIMEOUT))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The library's scripts (library.json), as the file has them.
+    fn library_scripts(&self) -> Vec<Value> {
+        self.store
+            .read("library.json")
+            .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
+            .and_then(|v| v.get("scripts").and_then(Value::as_array).cloned())
+            .unwrap_or_default()
+    }
+
+    async fn dispatch_app(&self, name: &str, args: &Value, cfg: &McpConfig, conns: &[ConnConfig], conn: Option<&ConnConfig>) -> ToolResult {
+        let id = arg_str(args, "connId");
+        match name {
+            "get_app_state" => {
+                let raw = self.app("state", json!({})).await?;
+                let v = app_state_for_ai(&raw, cfg, conns);
+                let n = v["windows"].as_array().map(|w| w.len() as u64);
+                Ok((v, n))
+            }
+            "list_library" => {
+                let q = arg_str(args, "query").to_lowercase();
+                let folder = arg_str(args, "folder");
+                let mut out = Vec::new();
+                let mut total = 0usize;
+                for s in self.library_scripts().iter().filter(|s| script_visible(cfg, conns, s)) {
+                    let f = s["folder"].as_str().unwrap_or("");
+                    if !folder.is_empty() && f != folder && !f.starts_with(&format!("{folder}/")) {
+                        continue;
+                    }
+                    let tags: Vec<&str> = s["tags"].as_array().map(|t| t.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                    let hit = q.is_empty()
+                        || s["name"].as_str().unwrap_or("").to_lowercase().contains(&q)
+                        || f.to_lowercase().contains(&q)
+                        || tags.iter().any(|t| t.to_lowercase().contains(&q));
+                    if !hit {
+                        continue;
+                    }
+                    total += 1;
+                    if out.len() < MAX_LIBRARY_LIST {
+                        out.push(script_json(s, conns, false));
+                    }
+                }
+                let n = out.len() as u64;
+                Ok((json!({"scripts": out, "total": total, "truncated": total > n as usize}), Some(n)))
+            }
+            "get_library_script" => {
+                let want_id = arg_str(args, "id");
+                let want_name = arg_str(args, "name");
+                if want_id.is_empty() && want_name.is_empty() {
+                    return Err("Indica «id» (de list_library) o «name»".into());
+                }
+                let scripts = self.library_scripts();
+                let found = scripts.iter().filter(|s| script_visible(cfg, conns, s)).find(|s| {
+                    if want_id.is_empty() {
+                        s["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&want_name))
+                    } else {
+                        s["id"].as_str() == Some(want_id.as_str())
+                    }
+                });
+                match found {
+                    Some(s) => Ok((script_json(s, conns, true), Some(1))),
+                    None => Err("No hay ningún script accesible con ese id o nombre. Usa list_library.".into()),
+                }
+            }
+            "add_library_script" => {
+                let script_name = arg_str(args, "name");
+                let sql = args.get("sql").and_then(Value::as_str).unwrap_or("").to_string();
+                if script_name.is_empty() || sql.trim().is_empty() {
+                    return Err("Faltan «name» y «sql»".into());
+                }
+                if sql.chars().count() > MAX_APP_SQL {
+                    return Err("El SQL es demasiado largo para la biblioteca".into());
+                }
+                let target = if id.is_empty() { None } else { Some(accessible(cfg, conn, &id, name, Level::Schema)?) };
+                let tags: Vec<String> = match args.get("tags") {
+                    Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+                    Some(Value::String(s)) => vec![s.clone()],
+                    _ => vec![],
+                };
+                let r = self
+                    .app(
+                        "add_library_script",
+                        json!({
+                            "name": truncate_chars(&script_name, 200),
+                            "sql": sql,
+                            "folder": arg_str(args, "folder"),
+                            "tags": tags,
+                            "notes": truncate_chars(&arg_str(args, "notes"), 4000),
+                            "connId": target.map(|c| c.id),
+                        }),
+                    )
+                    .await?;
+                Ok((r, Some(1)))
+            }
+            "open_console" => {
+                let run = args.get("run").and_then(Value::as_bool).unwrap_or(false);
+                let sql = args.get("sql").and_then(Value::as_str).unwrap_or("").to_string();
+                if sql.chars().count() > MAX_APP_SQL {
+                    return Err("El SQL es demasiado largo para una consola".into());
+                }
+                let target = if id.is_empty() { None } else { Some(accessible(cfg, conn, &id, name, Level::Schema)?) };
+                let db = arg_str(args, "database");
+                if run {
+                    if !cfg.app_control.run_opened {
+                        return Err("El usuario no permite que la IA ejecute lo que abre (Ajustes › IA y MCP › Controlar la aplicación › Ejecutar lo que abre). Abre la consola sin «run» y que el usuario la ejecute.".into());
+                    }
+                    let Some(c) = target.as_ref() else {
+                        return Err("Para ejecutar hace falta «connId»".into());
+                    };
+                    let level = effective_level(cfg, c);
+                    if check_read_query(&sql, c.kind).is_ok() {
+                        if level < Level::Read {
+                            return Err(level_refused(c, level, Level::Read, "ejecutar una consulta"));
+                        }
+                        self.check_read_access(c, cfg, &db, &sql).await?;
+                    } else {
+                        check_write_statement(&sql, c.kind).map_err(|e| format!("No se ejecuta: {e}"))?;
+                        if level < Level::Write {
+                            return Err(level_refused(c, level, Level::Write, "ejecutar una sentencia que modifica"));
+                        }
+                    }
+                }
+                let r = self
+                    .app(
+                        "open_console",
+                        json!({
+                            "connId": target.as_ref().map(|c| c.id.clone()),
+                            "database": db,
+                            "sql": sql,
+                            "title": truncate_chars(&arg_str(args, "title"), 80),
+                            "run": run,
+                        }),
+                    )
+                    .await?;
+                Ok((r, None))
+            }
+            "open_table" | "open_object" | "open_er_diagram" => {
+                let need = if name == "open_table" { Level::Read } else { Level::Schema };
+                let target = accessible(cfg, conn, &id, name, need)?;
+                let table = arg_str(args, "table");
+                let schema = arg_str(args, "schema");
+                if table.is_empty() && (name != "open_er_diagram" || schema.is_empty()) {
+                    return Err(if name == "open_er_diagram" { "Indica «table» (su diagrama de relaciones) o «schema» (todo el esquema)" } else { "Falta «table»" }.into());
+                }
+                let section = match arg_str(args, "section").as_str() {
+                    "" => if name == "open_object" { "ddl" } else { "data" }.to_string(),
+                    s @ ("data" | "columns" | "indexes" | "keys" | "ddl") => s.to_string(),
+                    other => return Err(format!("«section» no válida: {other} (data, columns, indexes, keys o ddl)")),
+                };
+                let filter = arg_str(args, "filter");
+                let order = arg_str(args, "orderBy");
+                let (obj, qualified, db) = if table.is_empty() {
+                    let db = self.run(&target, cfg.timeout_secs, arg_str(args, "database"), |_, db| Ok(db)).await?;
+                    (None, String::new(), db)
+                } else {
+                    let (o, q, db) = self
+                        .run(&target, cfg.timeout_secs, arg_str(args, "database"), move |d, db| {
+                            let obj = resolve_table(d, &db, &schema, &table)?;
+                            let q = d.qualified_name(&obj);
+                            Ok((obj, q, db))
+                        })
+                        .await?;
+                    (Some(o), q, db)
+                };
+                if name == "open_table" && (!filter.is_empty() || !order.is_empty()) {
+                    // The filter and the order run as the table's query: the read filter and the masking apply to it.
+                    let mut sql = format!("SELECT * FROM {qualified}");
+                    if !filter.is_empty() {
+                        sql.push_str(&format!(" WHERE {filter}"));
+                    }
+                    if !order.is_empty() {
+                        sql.push_str(&format!(" ORDER BY {order}"));
+                    }
+                    self.check_read_access(&target, cfg, &db, &sql).await.map_err(|e| format!("Filtro u orden no válido: {e}"))?;
+                }
+                let action = if name == "open_er_diagram" { "open_er_diagram" } else { "open_table" };
+                let r = self
+                    .app(
+                        action,
+                        json!({
+                            "connId": target.id,
+                            "database": db,
+                            "schema": obj.as_ref().map(|o| o.schema.clone()).unwrap_or_else(|| arg_str(args, "schema")),
+                            "obj": obj,
+                            "section": section,
+                            "where": if name == "open_table" { filter } else { String::new() },
+                            "orderBy": if name == "open_table" { order } else { String::new() },
+                        }),
+                    )
+                    .await?;
+                Ok((r, None))
+            }
+            _ => Err(format!("Herramienta desconocida: {name}")),
+        }
+    }
+
     // ───────────── JSON-RPC ─────────────
 
     /// Procesa un mensaje JSON-RPC. Devuelve la respuesta, o `None` para notificaciones.
@@ -1912,12 +2257,17 @@ impl McpServer {
         };
         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
         let res: Result<Value, (i64, String)> = match method {
-            "initialize" => Ok(initialize_result(&params)),
+            "initialize" => {
+                if let Some(name) = params.pointer("/clientInfo/name").and_then(Value::as_str) {
+                    *self.client_app.lock() = truncate_chars(name.trim(), 60);
+                }
+                Ok(initialize_result(&params))
+            }
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tool_defs() })),
+            "tools/list" => Ok(json!({ "tools": tool_defs(&load_config(&self.store)) })),
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-                if !TOOL_NAMES.contains(&name) {
+                if !TOOL_NAMES.contains(&name) && !APP_TOOL_NAMES.contains(&name) {
                     Err((-32602, format!("Herramienta desconocida: {name}")))
                 } else {
                     let args = params
@@ -1940,6 +2290,143 @@ impl McpServer {
             Err((code, m)) => rpc_error(id, code, &m),
         })
     }
+}
+
+/// The connection a tool works on, when the assistant may reach it at the level `need`.
+fn accessible(cfg: &McpConfig, conn: Option<&ConnConfig>, id: &str, tool: &str, need: Level) -> Result<ConnConfig, String> {
+    let conn = conn.filter(|c| effective_level(cfg, c) != Level::None).ok_or_else(|| {
+        if id.is_empty() {
+            "Falta «connId». Usa list_connections para ver las conexiones disponibles.".to_string()
+        } else {
+            format!("No hay ninguna conexión accesible con id «{id}». Usa list_connections.")
+        }
+    })?;
+    let level = effective_level(cfg, conn);
+    if level < need {
+        return Err(level_refused(conn, level, need, tool));
+    }
+    Ok(conn.clone())
+}
+
+fn level_refused(conn: &ConnConfig, level: Level, need: Level, what: &str) -> String {
+    if need == Level::Write && (conn.production || conn.read_only) {
+        return format!(
+            "«{}» está marcada como {} en Celer: los asistentes nunca pueden modificar datos en ella.",
+            conn.name,
+            if conn.production { "producción" } else { "solo lectura" }
+        );
+    }
+    format!(
+        "La conexión «{}» tiene nivel «{}» para asistentes y {what} requiere «{}». El usuario puede cambiarlo en Celer › Ajustes › IA.",
+        conn.name,
+        level.as_str(),
+        need.as_str()
+    )
+}
+
+/// A library script the assistant may see: one of no connection, or of a connection it can reach.
+fn script_visible(cfg: &McpConfig, conns: &[ConnConfig], script: &Value) -> bool {
+    match script.get("connId").and_then(Value::as_str).filter(|c| !c.is_empty()) {
+        None => true,
+        Some(id) => conns.iter().find(|c| c.id == id).is_none_or(|c| effective_level(cfg, c) != Level::None),
+    }
+}
+
+fn script_json(s: &Value, conns: &[ConnConfig], with_sql: bool) -> Value {
+    let conn_id = s.get("connId").and_then(Value::as_str).filter(|c| !c.is_empty());
+    let sql = s.get("sql").and_then(Value::as_str).unwrap_or("");
+    let mut v = json!({
+        "id": s.get("id"),
+        "name": s.get("name"),
+        "folder": s.get("folder").and_then(Value::as_str).unwrap_or(""),
+        "tags": s.get("tags").cloned().unwrap_or_else(|| json!([])),
+        "connId": conn_id,
+        "connection": conn_id.and_then(|id| conns.iter().find(|c| c.id == id)).map(|c| c.name.clone()),
+        "updatedAt": s.get("updatedAt"),
+    });
+    // The script's description (what add_library_script's "notes" became), or the notes of a script saved before.
+    let notes = ["description", "notes"].iter().find_map(|k| s.get(*k).and_then(Value::as_str).filter(|n| !n.is_empty()));
+    if let Some(notes) = notes {
+        v["notes"] = json!(truncate_chars(notes, if with_sql { 4000 } else { 200 }));
+    }
+    if with_sql {
+        v["sql"] = json!(truncate_chars(sql, MAX_APP_SQL));
+    } else {
+        v["lines"] = json!(sql.lines().count());
+    }
+    v
+}
+
+/// What is on screen (the windows' layout, from the app) as the assistant may see it: tabs of connections it cannot
+/// reach show only their kind; SQL, filters and orders only for connections with level 'read' or more; a console
+/// without a connection shows its title.
+fn app_state_for_ai(raw: &Value, cfg: &McpConfig, conns: &[ConnConfig]) -> Value {
+    let level_of = |id: &str| conns.iter().find(|c| c.id == id).map(|c| (effective_level(cfg, c), c.name.clone()));
+    let windows: Vec<Value> = raw
+        .get("windows")
+        .and_then(Value::as_array)
+        .map(|ws| {
+            ws.iter()
+                .map(|w| {
+                    let active = w.get("activeTabId").and_then(Value::as_str).unwrap_or("");
+                    let tabs: Vec<Value> = w
+                        .get("tabs")
+                        .and_then(Value::as_array)
+                        .map(|ts| {
+                            ts.iter()
+                                .map(|t| {
+                                    let tab_id = t.get("id").and_then(Value::as_str).unwrap_or("");
+                                    let kind = t.get("kind").and_then(Value::as_str).unwrap_or("sql");
+                                    let conn_id = t.get("connId").and_then(Value::as_str).filter(|c| !c.is_empty());
+                                    let reach = conn_id.map(level_of);
+                                    let level = match reach {
+                                        None => None,
+                                        Some(Some((l, _))) if l != Level::None => Some(l),
+                                        _ => return json!({"id": tab_id, "kind": kind, "hidden": true, "active": tab_id == active}),
+                                    };
+                                    let mut v = json!({
+                                        "id": tab_id,
+                                        "kind": kind,
+                                        "title": t.get("title"),
+                                        "active": tab_id == active,
+                                    });
+                                    if let (Some(id), Some(Some((_, name)))) = (conn_id, reach) {
+                                        v["connId"] = json!(id);
+                                        v["connection"] = json!(name);
+                                        v["database"] = t.get("database").cloned().unwrap_or(Value::Null);
+                                    }
+                                    let reads = level.is_some_and(|l| l >= Level::Read);
+                                    if kind == "table" {
+                                        if let Some(o) = t.get("obj") {
+                                            v["table"] = json!({"schema": o.get("schema"), "name": o.get("name"), "kind": o.get("kind")});
+                                        }
+                                        v["section"] = t.get("section").cloned().unwrap_or(Value::Null);
+                                        if reads {
+                                            for key in ["where", "orderBy"] {
+                                                if let Some(s) = t.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                                                    v[key] = json!(s);
+                                                }
+                                            }
+                                        }
+                                    } else if reads {
+                                        v["sql"] = json!(truncate_chars(t.get("sql").and_then(Value::as_str).unwrap_or(""), MAX_STATE_SQL));
+                                    }
+                                    v
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    json!({
+                        "window": w.get("label"),
+                        "name": w.get("name"),
+                        "focused": w.get("focused").and_then(Value::as_bool).unwrap_or(false),
+                        "tabs": tabs,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({ "windows": windows })
 }
 
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
@@ -1975,8 +2462,113 @@ fn db_prop() -> Value {
     json!({"type": "string", "description": "Database to use (see list_databases). Optional: defaults to the connection's database. For SQLite use 'main'."})
 }
 
-/// Definiciones de las herramientas que se anuncian en `tools/list`.
-pub fn tool_defs() -> Value {
+/// Definiciones de las herramientas que se anuncian en `tools/list`: las de bases de datos y, con «Controlar la
+/// aplicación», las que actúan en Celer que permitan sus interruptores.
+pub fn tool_defs(cfg: &McpConfig) -> Value {
+    let mut all = db_tool_defs();
+    if let (Some(list), Value::Array(app)) = (all.as_array_mut(), app_tool_defs()) {
+        list.extend(app.into_iter().filter(|t| t["name"].as_str().is_some_and(|n| tool_allowed(cfg, n))));
+    }
+    all
+}
+
+fn app_tool_defs() -> Value {
+    let ro = json!({"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false});
+    let ui = json!({"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false});
+    let table_props = json!({
+        "connId": conn_prop(),
+        "table": {"type": "string", "description": "Table or view name. 'schema.table' is also accepted."},
+        "schema": {"type": "string", "description": "Schema of the table. Optional when the name is unambiguous."},
+        "database": db_prop()
+    });
+    let mut open_table = table_props.clone();
+    open_table["filter"] = json!({"type": "string", "description": "Optional WHERE condition (without the word WHERE), in the connection's dialect, e.g. \"status = 'open' AND total > 100\". Checked like run_query: read-only, no protected columns."});
+    open_table["orderBy"] = json!({"type": "string", "description": "Optional ORDER BY list (without the words), e.g. \"created_at DESC\"."});
+    let mut open_object = table_props.clone();
+    open_object["section"] = json!({"type": "string", "enum": ["ddl", "columns", "indexes", "keys", "data"], "description": "What to show first (default 'ddl', the CREATE statement)."});
+    let mut er = table_props;
+    er["table"] = json!({"type": "string", "description": "Show this table and the tables its foreign keys link it with. Give this or 'schema'."});
+    er["schema"] = json!({"type": "string", "description": "Without 'table': the whole schema's diagram."});
+    json!([
+        {
+            "name": "get_app_state",
+            "title": "What the user has open in Celer",
+            "description": "Celer's windows and their tabs (consoles and tables): which window has the focus and which tab is active in each, with the connection and database of each tab. The SQL of a console and a table's filter are included only for connections the user shared at level 'read' or more; tabs of connections not shared show only their kind. Needs a running Celer.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
+            "annotations": ro
+        },
+        {
+            "name": "list_library",
+            "title": "List library scripts",
+            "description": "List the scripts of the user's script library in Celer (name, folder, tags, connection, number of lines), optionally only those whose name, folder or tags contain 'query', or those in 'folder' and its subfolders. Scripts of connections not shared with assistants are not listed. Use get_library_script for the SQL.",
+            "inputSchema": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "Text to look for in names, folders and tags."},
+                "folder": {"type": "string", "description": "Only this folder (e.g. 'Informes/Mensuales') and its subfolders."}
+            }, "additionalProperties": false},
+            "annotations": ro
+        },
+        {
+            "name": "get_library_script",
+            "title": "Get a library script",
+            "description": "The SQL and details of one script of the user's library, by 'id' (from list_library) or by exact 'name'.",
+            "inputSchema": {"type": "object", "properties": {
+                "id": {"type": "string"},
+                "name": {"type": "string"}
+            }, "additionalProperties": false},
+            "annotations": ro
+        },
+        {
+            "name": "add_library_script",
+            "title": "Add a script to the library",
+            "description": "Save a SQL script in the user's script library in Celer, so the user can find and run it later. The user sees a notice that the AI added it. Optional folder ('Informes/Mensuales'), tags, notes and the connection it belongs to (a connId from list_connections). Needs a running Celer.",
+            "inputSchema": {"type": "object", "properties": {
+                "name": {"type": "string", "minLength": 1, "description": "Script name (made unique if taken)."},
+                "sql": {"type": "string", "minLength": 1},
+                "folder": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "string", "description": "What the script does, for the user."},
+                "connId": conn_prop()
+            }, "required": ["name", "sql"], "additionalProperties": false},
+            "annotations": ui
+        },
+        {
+            "name": "open_console",
+            "title": "Open a SQL console in Celer",
+            "description": "Open a new console tab in Celer with SQL written for the user to see, edit and run, on a connection (connId) and database. With run=true Celer also runs it, only if the user allows it and the connection's level permits that statement: a single read-only statement at level 'read' (checked like run_query), a single modifying statement only at level 'write'. The results are shown to the user in Celer, not returned here (use run_query to read data). If the user is typing, the tab opens in the background and the user is told. Needs a running Celer.",
+            "inputSchema": {"type": "object", "properties": {
+                "connId": conn_prop(),
+                "database": db_prop(),
+                "sql": {"type": "string", "description": "The SQL to put in the console."},
+                "title": {"type": "string", "description": "Tab title (default: the connection's name)."},
+                "run": {"type": "boolean", "description": "Also run it (needs connId; see above)."}
+            }, "required": ["sql"], "additionalProperties": false},
+            "annotations": ui
+        },
+        {
+            "name": "open_table",
+            "title": "Open a table in Celer",
+            "description": "Open a table or view in Celer's table viewer for the user, optionally filtered and ordered. Requires level 'read'. The rows are shown to the user, not returned here. Needs a running Celer.",
+            "inputSchema": {"type": "object", "properties": open_table, "required": ["connId", "table"], "additionalProperties": false},
+            "annotations": ui
+        },
+        {
+            "name": "open_er_diagram",
+            "title": "Show an E-R diagram in Celer",
+            "description": "Show the user the entity-relationship diagram of a table and the tables its foreign keys link it with, or of a whole schema. Requires level 'schema'. Needs a running Celer.",
+            "inputSchema": {"type": "object", "properties": er, "required": ["connId"], "additionalProperties": false},
+            "annotations": ui
+        },
+        {
+            "name": "open_object",
+            "title": "Show a table's definition in Celer",
+            "description": "Open a table or view in Celer on its definition: DDL (default), columns, indexes or keys. Requires level 'schema'. Needs a running Celer.",
+            "inputSchema": {"type": "object", "properties": open_object, "required": ["connId", "table"], "additionalProperties": false},
+            "annotations": ui
+        }
+    ])
+}
+
+fn db_tool_defs() -> Value {
     let ro = json!({"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false});
     json!([
         {
@@ -2066,6 +2658,34 @@ pub fn tool_defs() -> Value {
     ])
 }
 
+/// Where this process's client runs. `--client=wsl:<distro>` is what Settings › IA y MCP adds when it registers
+/// Celer in a WSL distro (a Windows program started from WSL gets no WSL variables unless WSLENV passes them).
+pub fn origin_from_args(args: &[String]) -> String {
+    let value = args.iter().find_map(|a| a.strip_prefix("--client=")).map(str::trim).unwrap_or("");
+    let clean = |s: &str| s.chars().filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ')).take(40).collect::<String>().trim().to_string();
+    match value.split_once(':') {
+        Some((kind, distro)) if kind.eq_ignore_ascii_case("wsl") && !clean(distro).is_empty() => format!("WSL ({})", clean(distro)),
+        _ if value.eq_ignore_ascii_case("wsl") => "WSL".into(),
+        _ if !clean(value).is_empty() => clean(value),
+        _ => default_origin(),
+    }
+}
+
+fn default_origin() -> String {
+    // A Windows program started from WSL sees WSL_DISTRO_NAME only when WSLENV passes it.
+    if let Some(distro) = std::env::var("WSL_DISTRO_NAME").ok().filter(|d| !d.trim().is_empty()) {
+        if cfg!(windows) {
+            return format!("WSL ({})", distro.trim());
+        }
+    }
+    match std::env::consts::OS {
+        "windows" => "Windows".into(),
+        "macos" => "macOS".into(),
+        "linux" => "Linux".into(),
+        other => other.to_string(),
+    }
+}
+
 /// Bucle principal de `celer --mcp`: JSON-RPC por stdio, un mensaje por línea.
 pub fn serve_stdio() -> i32 {
     let rt = match tokio::runtime::Builder::new_current_thread()
@@ -2084,7 +2704,8 @@ pub fn serve_stdio() -> i32 {
         env!("CARGO_PKG_VERSION"),
         dir.display()
     );
-    let server = McpServer::new(dir, false);
+    let args: Vec<String> = std::env::args().collect();
+    let server = McpServer::with_origin(dir, false, origin_from_args(&args));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -2116,6 +2737,10 @@ pub struct ClientInfo {
     pub claude_desktop_config_path: String,
     pub claude_desktop_configured: bool,
     pub claude_code_command: String,
+    /// Claude Code on this system (`~/.claude.json`): "yes", "stale" (another path), "no".
+    pub claude_code_registered: String,
+    /// This system is Windows: the WSL section applies.
+    pub wsl_supported: bool,
 }
 
 /// Ficheros de configuración posibles de Claude Desktop. En Windows, la versión empaquetada
@@ -2178,10 +2803,77 @@ pub fn client_info() -> ClientInfo {
         .unwrap_or_default();
     ClientInfo {
         claude_desktop_configured: paths.iter().any(|p| configured_in(p, &exe)),
-        claude_code_command: format!("claude mcp add celer -- \"{exe}\" --mcp"),
+        claude_code_command: format!("claude mcp add --scope user celer -- \"{exe}\" --mcp"),
+        claude_code_registered: claude_code_registered(&exe),
         claude_desktop_config_path: primary,
         args: vec!["--mcp".into()],
         exe_path: exe,
+        wsl_supported: cfg!(windows),
+    }
+}
+
+/// Claude Code on this system: how its `~/.claude.json` has `celer` ("yes", "stale", "no").
+fn claude_code_registered(exe: &str) -> String {
+    let Some(path) = dirs::home_dir().map(|h| h.join(".claude.json")) else { return "no".into() };
+    let Ok(text) = fs::read_to_string(&path) else { return "no".into() };
+    match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
+        Ok(v) => crate::mcp_wsl::registration(&v, exe, same_path).0,
+        Err(_) => "no".into(),
+    }
+}
+
+pub fn exe_path_pub() -> String {
+    exe_path()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientStatus {
+    /// "Claude Desktop", "Claude Code".
+    pub name: String,
+    /// "Windows", "WSL (Ubuntu)"…
+    pub place: String,
+    /// "yes" or "stale" (registered with another path: register again).
+    pub state: String,
+}
+
+/// What the status bar shows: whether MCP is on, the clients registered and the last call.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatus {
+    pub enabled: bool,
+    /// "Controlar la aplicación" is on (and MCP too).
+    pub app_control: bool,
+    pub clients: Vec<ClientStatus>,
+    /// The WSL distros have been read (it takes a moment after start).
+    pub wsl_checked: bool,
+    pub last_call: Option<AuditEntry>,
+}
+
+pub fn status(store: &Store) -> McpStatus {
+    let cfg = load_config(store);
+    let exe = exe_path();
+    let local = default_origin();
+    let mut clients = Vec::new();
+    if claude_desktop_config_paths().iter().any(|p| configured_in(p, &exe)) {
+        clients.push(ClientStatus { name: "Claude Desktop".into(), place: local.clone(), state: "yes".into() });
+    }
+    let code = claude_code_registered(&exe);
+    if code != "no" {
+        clients.push(ClientStatus { name: "Claude Code".into(), place: local, state: code });
+    }
+    let wsl = if cfg.enabled { crate::mcp_wsl::cached(&exe, Duration::from_secs(120)) } else { None };
+    for d in wsl.iter().flat_map(|w| w.distros.iter()) {
+        if d.registered == "yes" || d.registered == "stale" {
+            clients.push(ClientStatus { name: "Claude Code".into(), place: format!("WSL ({})", d.name), state: d.registered.clone() });
+        }
+    }
+    McpStatus {
+        enabled: cfg.enabled,
+        app_control: cfg.enabled && cfg.app_control.enabled,
+        clients,
+        wsl_checked: wsl.is_some() || !cfg!(windows),
+        last_call: last_audit(store),
     }
 }
 
@@ -2759,6 +3451,21 @@ mod tests {
         });
         assert!(r.is_err());
 
+        // Variables ${name}: the connection's value, else the global one; the audit keeps the SQL sent.
+        std::fs::write(
+            dir.join("variables.json"),
+            r#"{"version":1,"global":[{"name":"uid","value":"3"}],"connections":{"read":[{"name":"uid","value":"2"}]}}"#,
+        )
+        .unwrap();
+        let q = c.ok("run_query", json!({"connId": "read", "sql": "SELECT id, name FROM users WHERE id = ${uid}"}));
+        assert_eq!(q["rows"], json!([[2, "luis"]]));
+        let q = c.ok("run_query", json!({"connId": "prod", "sql": "SELECT id, name FROM users WHERE id = ${uid} AND name <> '${uid}'"}));
+        assert_eq!(q["rows"], json!([[3, "eva"]]));
+        let audit = read_audit(&store, 2);
+        assert!(audit.iter().any(|a| a.detail == "SELECT id, name FROM users WHERE id = 2"), "{audit:?}");
+        assert!(audit.iter().any(|a| a.detail == "SELECT id, name FROM users WHERE id = 3 AND name <> '${uid}'"), "{audit:?}");
+        std::fs::remove_file(dir.join("variables.json")).unwrap();
+
         // Auditoría
         let audit = read_audit(&store, 1000);
         assert!(audit.len() > 15);
@@ -2783,6 +3490,324 @@ mod tests {
         drop(c);
         drop(preview);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_audit_records_the_client() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(origin_from_args(&args(&["celer.exe", "--mcp", "--client=wsl:Ubuntu-24.04"])), "WSL (Ubuntu-24.04)");
+        assert_eq!(origin_from_args(&args(&["celer", "--mcp", "--client=wsl"])), "WSL");
+        assert_eq!(origin_from_args(&args(&["celer", "--mcp", "--client=wsl:$(rm -rf);"])), "WSL (rm -rf)");
+        assert_eq!(origin_from_args(&args(&["celer", "--mcp"])), default_origin());
+
+        let dir = temp_dir();
+        let file = dir.join("c.db");
+        rusqlite::Connection::open(&file).unwrap().execute_batch("CREATE TABLE t (id INTEGER)").unwrap();
+        fs::write(dir.join("connections.json"), json!([sqlite_conn("s", &file.to_string_lossy(), false)]).to_string()).unwrap();
+        let store = Store::new(dir.clone());
+        let mut cfg = McpConfig { enabled: true, ..McpConfig::default() };
+        cfg.connections.insert("s".into(), ConnPermission { level: Level::Read, max_rows: None });
+        save_config(&store, cfg).unwrap();
+        let mut c = Client { server: McpServer::with_origin(dir.clone(), false, "WSL (Ubuntu)".into()), rt: rt(), next: 0 };
+        c.rpc("initialize", json!({"protocolVersion": PROTOCOL_VERSION, "clientInfo": {"name": "claude-code", "version": "2.1"}}));
+        c.ok("run_query", json!({"connId": "s", "sql": "SELECT count(*) FROM t"}));
+        let last = last_audit(&store).unwrap();
+        assert_eq!(last.client.as_deref(), Some("WSL (Ubuntu)"));
+        assert_eq!(last.client_app.as_deref(), Some("claude-code"));
+        assert_eq!(read_audit(&store, 1)[0], last);
+        // Entries written before the client was kept still read.
+        fs::write(dir.join(AUDIT_FILE), "{\"at\":1,\"tool\":\"run_query\",\"connId\":\"s\",\"connName\":\"S\",\"detail\":\"x\",\"ok\":true,\"ms\":1}\n").unwrap();
+        assert_eq!(last_audit(&store).unwrap().client, None);
+        drop(c);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn tool_names(c: &mut Client) -> Vec<String> {
+        let r = c.rpc("tools/list", json!({}));
+        r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+    }
+
+    fn set_app_control(store: &Store, f: impl FnOnce(&mut AppControl)) {
+        let mut cfg = load_config(store);
+        f(&mut cfg.app_control);
+        save_config(store, cfg).unwrap();
+    }
+
+    /// What the stand-in app answers: the layout of `get_app_state`, and every other request echoed back.
+    fn echo_app(dir: &Path, layout: Value) -> Arc<crate::mcp_app::tests::FakeApp> {
+        crate::mcp_app::tests::fake_app(dir, move |action, args| match action {
+            "state" => Ok(layout.clone()),
+            "fail" => Err("no".into()),
+            _ => Ok(json!({"done": action, "args": args})),
+        })
+    }
+
+    #[test]
+    fn app_tools_are_listed_only_when_allowed_and_respect_levels() {
+        let dir = temp_dir();
+        let file = dir.join("datos.db");
+        rusqlite::Connection::open(&file)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, password TEXT);
+                 INSERT INTO users(name, password) VALUES ('ana','h1'),('luis','h2');",
+            )
+            .unwrap();
+        let f = file.to_string_lossy().to_string();
+        let mut prod = sqlite_conn("prod", &f, true);
+        prod["name"] = json!("Producción");
+        fs::write(
+            dir.join("connections.json"),
+            json!([sqlite_conn("read", &f, false), sqlite_conn("schema", &f, false), sqlite_conn("hidden", &f, false), sqlite_conn("write", &f, false), prod]).to_string(),
+        )
+        .unwrap();
+        let store = Store::new(dir.clone());
+        let mut cfg = McpConfig { enabled: true, ..McpConfig::default() };
+        for (id, l) in [("read", Level::Read), ("schema", Level::Schema), ("write", Level::Write), ("prod", Level::Write)] {
+            cfg.connections.insert(id.into(), ConnPermission { level: l, max_rows: None });
+        }
+        save_config(&store, cfg).unwrap();
+        let mut c = Client { server: McpServer::with_origin(dir.clone(), false, "WSL (Ubuntu)".into()), rt: rt(), next: 0 };
+        c.rpc("initialize", json!({"clientInfo": {"name": "claude-code"}}));
+
+        // "Controlar la aplicación" off (the default): none of the new tools is listed, and calling one is refused.
+        assert_eq!(tool_names(&mut c), TOOL_NAMES.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert!(c.err("open_console", json!({"connId": "read", "sql": "SELECT 1"})).contains("controle la aplicación"));
+        assert!(c.err("get_app_state", json!({})).contains("Controlar la aplicación"));
+
+        // On, with each sub-switch adding its tools.
+        set_app_control(&store, |a| *a = AppControl { enabled: true, open_tabs: false, write_library: false, run_opened: false });
+        let names = tool_names(&mut c);
+        for t in ["get_app_state", "list_library", "get_library_script"] {
+            assert!(names.iter().any(|n| n == t), "{t}");
+        }
+        for t in ["open_console", "open_table", "open_er_diagram", "open_object", "add_library_script"] {
+            assert!(!names.iter().any(|n| n == t), "{t} listed with its switch off");
+        }
+        assert!(c.err("open_table", json!({"connId": "read", "table": "users"})).contains("abra pestañas"));
+        set_app_control(&store, |a| a.open_tabs = true);
+        let names = tool_names(&mut c);
+        assert!(names.iter().any(|n| n == "open_console") && !names.iter().any(|n| n == "add_library_script"));
+        assert!(c.err("add_library_script", json!({"name": "x", "sql": "SELECT 1"})).contains("biblioteca"));
+        set_app_control(&store, |a| a.write_library = true);
+        assert_eq!(tool_names(&mut c).len(), TOOL_NAMES.len() + APP_TOOL_NAMES.len());
+        // MCP off: nothing at all.
+        let mut off = load_config(&store);
+        off.enabled = false;
+        save_config(&store, off.clone()).unwrap();
+        assert!(c.err("open_console", json!({"sql": ""})).contains("desactivado"));
+        off.enabled = true;
+        save_config(&store, off).unwrap();
+
+        // Celer not running: a clear error (and the call is audited).
+        assert_eq!(c.err("open_console", json!({"connId": "read", "sql": "SELECT 1"})), crate::mcp_app::NOT_RUNNING);
+        let last = last_audit(&store).unwrap();
+        assert_eq!((last.tool.as_str(), last.ok, last.client.as_deref()), ("open_console", false, Some("WSL (Ubuntu)")));
+
+        let layout = json!({"windows": [{
+            "label": "main", "name": "ventana principal", "focused": true, "activeTabId": "t1",
+            "tabs": [
+                {"id": "t1", "kind": "sql", "title": "ventas", "connId": "read", "database": "main", "sql": "SELECT * FROM users"},
+                {"id": "t2", "kind": "sql", "title": "esquema", "connId": "schema", "database": "main", "sql": "SELECT 'secreto'"},
+                {"id": "t3", "kind": "table", "title": "users", "connId": "hidden", "database": "main", "obj": {"schema": "main", "name": "users", "kind": "table"}, "where": "id = 1"},
+                {"id": "t4", "kind": "sql", "title": "borrador", "connId": null, "sql": "SELECT 'sin conexión'"},
+                {"id": "t5", "kind": "table", "title": "users", "connId": "read", "database": "main", "obj": {"schema": "main", "name": "users", "kind": "table"}, "section": "data", "where": "id > 1", "orderBy": "name"}
+            ]
+        }]});
+        let app = echo_app(&dir, layout);
+
+        // What is on screen, limited by each connection's level.
+        let s = c.ok("get_app_state", json!({}));
+        let tabs = s["windows"][0]["tabs"].as_array().unwrap();
+        assert_eq!(s["windows"][0]["focused"], true);
+        assert_eq!(tabs[0]["sql"], "SELECT * FROM users");
+        assert_eq!(tabs[0]["active"], true);
+        assert_eq!(tabs[0]["connection"], "SQLite read");
+        assert!(tabs[1].get("sql").is_none(), "schema level: no SQL");
+        assert_eq!(tabs[1]["title"], "esquema");
+        assert_eq!(tabs[2], json!({"id": "t3", "kind": "table", "hidden": true, "active": false}));
+        assert!(tabs[3].get("sql").is_none() && tabs[3]["title"] == "borrador");
+        assert_eq!((tabs[4]["where"].as_str(), tabs[4]["table"]["name"].as_str()), (Some("id > 1"), Some("users")));
+        assert!(!s.to_string().contains("secreto") && !s.to_string().contains("sin conexión"));
+
+        // A console: opened at level schema, run only with its switch and within the level.
+        let r = c.ok("open_console", json!({"connId": "schema", "sql": "SELECT name FROM users", "title": "Nombres"}));
+        assert_eq!(r["done"], "open_console");
+        assert_eq!(r["args"]["sql"], "SELECT name FROM users");
+        assert_eq!(r["args"]["run"], false);
+        c.ok("open_console", json!({"sql": "-- borrador"}));
+        assert!(c.err("open_console", json!({"connId": "hidden", "sql": "SELECT 1"})).contains("hidden"));
+        assert!(c.err("open_console", json!({"connId": "read", "sql": "SELECT 1", "run": true})).contains("Ejecutar lo que abre"));
+        set_app_control(&store, |a| a.run_opened = true);
+        assert!(c.err("open_console", json!({"connId": "schema", "sql": "SELECT 1", "run": true})).contains("«read»"));
+        assert!(c.err("open_console", json!({"sql": "SELECT 1", "run": true})).contains("connId"));
+        let r = c.ok("open_console", json!({"connId": "read", "sql": "SELECT id, name FROM users", "run": true}));
+        assert_eq!(r["args"]["run"], true);
+        // Masking and the read filter, as in run_query.
+        assert!(c.err("open_console", json!({"connId": "read", "sql": "SELECT password FROM users", "run": true})).contains("password"));
+        assert!(c.err("open_console", json!({"connId": "read", "sql": "SELECT t FROM users t", "run": true})).contains("protegidas"));
+        assert!(c.err("open_console", json!({"connId": "read", "sql": "DELETE FROM users", "run": true})).contains("«write»"));
+        assert!(c.err("open_console", json!({"connId": "read", "sql": "SELECT 1; DELETE FROM users", "run": true})).contains("una sentencia"));
+        assert!(c.err("open_console", json!({"connId": "prod", "sql": "DELETE FROM users WHERE id = 1", "run": true})).contains("producción"));
+        assert!(c.err("open_console", json!({"connId": "write", "sql": "ATTACH DATABASE 'x' AS y", "run": true})).contains("No se ejecuta"));
+        let r = c.ok("open_console", json!({"connId": "write", "sql": "DELETE FROM users WHERE id = 1", "run": true}));
+        assert_eq!(r["args"]["connId"], "write");
+        // Opening without running is never a level problem, whatever the SQL.
+        c.ok("open_console", json!({"connId": "read", "sql": "DELETE FROM users"}));
+
+        // Tables, definitions, diagrams.
+        assert!(c.err("open_table", json!({"connId": "schema", "table": "users"})).contains("«read»"));
+        let r = c.ok("open_table", json!({"connId": "read", "table": "USERS", "filter": "id > 1", "orderBy": "name DESC"}));
+        assert_eq!((r["args"]["obj"]["name"].as_str(), r["args"]["where"].as_str(), r["args"]["orderBy"].as_str()), (Some("users"), Some("id > 1"), Some("name DESC")));
+        assert_eq!(r["args"]["section"], "data");
+        assert!(c.err("open_table", json!({"connId": "read", "table": "users", "filter": "password = 'h1'"})).contains("password"));
+        assert!(c.err("open_table", json!({"connId": "read", "table": "users", "filter": "1 = 1; DELETE FROM users"})).contains("Filtro"));
+        assert!(c.err("open_table", json!({"connId": "read", "table": "nope"})).contains("nope"));
+        let r = c.ok("open_object", json!({"connId": "schema", "table": "users"}));
+        assert_eq!((r["done"].as_str(), r["args"]["section"].as_str()), (Some("open_table"), Some("ddl")));
+        assert!(c.err("open_object", json!({"connId": "schema", "table": "users", "section": "x"})).contains("section"));
+        let r = c.ok("open_er_diagram", json!({"connId": "schema", "table": "users"}));
+        assert_eq!((r["done"].as_str(), r["args"]["obj"]["name"].as_str()), (Some("open_er_diagram"), Some("users")));
+        let r = c.ok("open_er_diagram", json!({"connId": "schema", "schema": "main"}));
+        assert!(r["args"]["obj"].is_null() && r["args"]["schema"] == "main" && r["args"]["database"] == "main");
+        assert!(c.err("open_er_diagram", json!({"connId": "schema"})).contains("schema"));
+
+        // The library: scripts of hidden connections stay hidden.
+        fs::write(
+            dir.join("library.json"),
+            json!({"version": 2, "folders": ["Informes"], "scripts": [
+                {"id": "s1", "name": "Ventas", "sql": "SELECT 1\nFROM users", "connId": null, "folder": "Informes/Mensuales", "tags": ["ventas"], "description": "por mes"},
+                {"id": "s2", "name": "Usuarios", "sql": "SELECT * FROM users", "connId": "read", "folder": "", "tags": []},
+                {"id": "s3", "name": "Oculto", "sql": "SELECT 'oculto'", "connId": "hidden", "folder": "", "tags": []}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let l = c.ok("list_library", json!({}));
+        assert_eq!(l["total"], 2);
+        assert!(!l.to_string().contains("Oculto"));
+        assert_eq!(l["scripts"][0]["lines"], 2);
+        assert!(l["scripts"][0].get("sql").is_none());
+        assert_eq!(c.ok("list_library", json!({"folder": "Informes"}))["total"], 1);
+        assert_eq!(c.ok("list_library", json!({"query": "VENTAS"}))["total"], 1);
+        assert_eq!(c.ok("get_library_script", json!({"id": "s2"}))["sql"], "SELECT * FROM users");
+        assert_eq!(c.ok("get_library_script", json!({"name": "ventas"}))["notes"], "por mes");
+        c.err("get_library_script", json!({"id": "s3"}));
+        let r = c.ok("add_library_script", json!({"name": "Nuevo", "sql": "SELECT 2", "folder": "IA", "tags": ["ia"], "connId": "read"}));
+        assert_eq!((r["args"]["connId"].as_str(), r["args"]["folder"].as_str()), (Some("read"), Some("IA")));
+        assert!(c.err("add_library_script", json!({"name": "x", "sql": "SELECT 1", "connId": "hidden"})).contains("hidden"));
+        assert!(c.err("add_library_script", json!({"name": "x", "sql": "  "})).contains("sql"));
+
+        // The app saw only what passed the checks, with who asked.
+        let seen = app.seen.lock();
+        assert!(seen.iter().all(|(_, args, client)| client == "claude-code · WSL (Ubuntu)" && !args.to_string().contains("password = ")));
+        assert!(!seen.iter().any(|(_, args, _)| args["connId"] == "hidden" || args["connId"] == "prod"));
+        drop(seen);
+        // Each action is in the audit log, runs marked.
+        let audit = read_audit(&store, 200);
+        assert!(audit.iter().any(|a| a.tool == "open_console" && a.ok && a.detail.starts_with("[ejecutar] SELECT id, name FROM users")));
+        assert!(audit.iter().any(|a| a.tool == "open_table" && a.detail == "USERS WHERE id > 1 ORDER BY name DESC"));
+        assert!(audit.iter().any(|a| a.tool == "add_library_script" && a.detail == "Nuevo"));
+        assert!(audit.iter().any(|a| a.tool == "open_console" && !a.ok && a.conn_id == "hidden" && a.conn_name.is_empty()));
+        drop(c);
+        crate::mcp_app::stop(&dir);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// The app tools against a server engine: the table is found as the driver sees it, the filter and the run are
+    /// checked on that engine (protected columns read from its catalog), and the levels hold.
+    fn app_tools_on_engine(conn: Value, settings: Option<Value>) {
+        let dir = temp_dir();
+        let id = conn["id"].as_str().unwrap().to_string();
+        fs::write(dir.join("connections.json"), json!([conn]).to_string()).unwrap();
+        if let Some(s) = settings {
+            fs::write(dir.join("settings.json"), s.to_string()).unwrap();
+        }
+        let store = Store::new(dir.clone());
+        let mut cfg = McpConfig { enabled: true, ..McpConfig::default() };
+        cfg.app_control = AppControl { enabled: true, open_tabs: true, write_library: true, run_opened: true };
+        cfg.connections.insert(id.clone(), ConnPermission { level: Level::Write, max_rows: None });
+        save_config(&store, cfg.clone()).unwrap();
+        let mut c = Client { server: McpServer::new(dir.clone(), false), rt: rt(), next: 0 };
+        let _app = echo_app(&dir, json!({"windows": []}));
+        c.ok("execute_statement", json!({"connId": id, "sql": "DROP TABLE IF EXISTS mcp_app_probe"}));
+        c.ok("execute_statement", json!({"connId": id, "sql": "CREATE TABLE mcp_app_probe (id INT, nombre VARCHAR(20), api_key VARCHAR(20))"}));
+        let r = c.ok("open_table", json!({"connId": id, "table": "MCP_APP_PROBE", "filter": "id > 1", "orderBy": "nombre"}));
+        assert!(r["args"]["obj"]["name"].as_str().unwrap().eq_ignore_ascii_case("mcp_app_probe"), "{r}");
+        assert!(c.err("open_table", json!({"connId": id, "table": "mcp_app_probe", "filter": "api_key = 'x'"})).contains("api_key"));
+        assert_eq!(c.ok("open_object", json!({"connId": id, "table": "mcp_app_probe"}))["args"]["section"], "ddl");
+        c.ok("open_er_diagram", json!({"connId": id, "table": "mcp_app_probe"}));
+        c.ok("open_console", json!({"connId": id, "sql": "SELECT id, nombre FROM mcp_app_probe", "run": true}));
+        assert!(c.err("open_console", json!({"connId": id, "sql": "SELECT api_key FROM mcp_app_probe", "run": true})).contains("api_key"));
+        c.ok("open_console", json!({"connId": id, "sql": "DELETE FROM mcp_app_probe WHERE id = 0", "run": true}));
+        // At level read the same DELETE is refused, and a read still goes.
+        cfg.connections.insert(id.clone(), ConnPermission { level: Level::Read, max_rows: None });
+        save_config(&store, cfg.clone()).unwrap();
+        assert!(c.err("open_console", json!({"connId": id, "sql": "DELETE FROM mcp_app_probe WHERE id = 0", "run": true})).contains("«write»"));
+        c.ok("open_console", json!({"connId": id, "sql": "SELECT count(*) FROM mcp_app_probe", "run": true}));
+        cfg.connections.insert(id.clone(), ConnPermission { level: Level::Write, max_rows: None });
+        save_config(&store, cfg).unwrap();
+        c.ok("execute_statement", json!({"connId": id, "sql": "DROP TABLE mcp_app_probe"}));
+        drop(c);
+        crate::mcp_app::stop(&dir);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn app_tools_postgres() {
+        let Ok(spec) = std::env::var("CELER_PG_TEST") else { return };
+        app_tools_on_engine(pg_conn(&spec), None);
+    }
+
+    #[test]
+    fn app_tools_mysql() {
+        let Ok(url) = std::env::var("CELER_MYSQL_TEST") else { return };
+        app_tools_on_engine(mysql_conn(&url), None);
+    }
+
+    fn spec_of(var: &str) -> Option<HashMap<String, String>> {
+        let s = std::env::var(var).ok()?;
+        Some(s.split_whitespace().filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect())
+    }
+
+    #[test]
+    fn app_tools_mssql() {
+        let Some(m) = spec_of("CELER_MSSQL_TEST") else { return };
+        let get = |k: &str| m.get(k).cloned().unwrap_or_default();
+        app_tools_on_engine(
+            json!({"id": "ms", "name": "SQL Server test", "kind": "mssql", "host": get("host"), "port": get("port").parse::<u16>().ok(),
+                   "user": get("user"), "password": get("password"), "database": m.get("database").cloned().unwrap_or("master".into()),
+                   "trustCert": true, "savePassword": false}),
+            None,
+        );
+    }
+
+    #[test]
+    fn app_tools_informix_drda() {
+        let (Some(m), Ok(lib)) = (spec_of("CELER_INFORMIX_TEST"), std::env::var("CELER_IBM_LIB")) else { return };
+        let get = |k: &str| m.get(k).cloned().unwrap_or_default();
+        app_tools_on_engine(
+            json!({"id": "ifx", "name": "Informix DRDA test", "kind": "informix", "informixMode": "drda", "host": get("host"),
+                   "port": get("port").parse::<u16>().ok(), "user": get("user"), "password": get("password"), "database": get("database"), "savePassword": false}),
+            Some(json!({"ibmDriverPath": lib})),
+        );
+    }
+
+    #[test]
+    fn app_tools_informix_jdbc() {
+        let (Some(m), Ok(java), Ok(jars)) = (spec_of("CELER_INFORMIX_JDBC_TEST"), std::env::var("CELER_JAVA"), std::env::var("CELER_JDBC_JARS")) else { return };
+        if !crate::jdbc::bridge_included() {
+            assert!(std::env::var_os("CELER_REQUIRE_BRIDGE").is_none(), "the JDBC bridge is not in this build");
+            return;
+        }
+        let get = |k: &str| m.get(k).cloned().unwrap_or_default();
+        let jar = std::env::split_paths(&jars).next().unwrap().to_string_lossy().to_string();
+        app_tools_on_engine(
+            json!({"id": "ifxj", "name": "Informix JDBC test", "kind": "informix", "informixMode": "jdbc", "host": get("host"),
+                   "port": get("port").parse::<u16>().ok(), "user": get("user"), "password": get("password"), "database": get("database"),
+                   "instance": get("server"), "savePassword": false}),
+            Some(json!({"javaPath": java, "informixJdbcPath": jar})),
+        );
     }
 
     #[test]
@@ -2862,6 +3887,8 @@ mod tests {
             rows: Some(1),
             ms: 1,
             error: Some("e".repeat(500)),
+            client: Some("WSL (Ubuntu-24.04)".into()),
+            client_app: Some("claude-code".into()),
         };
         let line = serde_json::to_string(&e).unwrap().len() as u64 + 1;
         assert!(line * (AUDIT_KEEP as u64) < AUDIT_COMPACT_BYTES * 3 / 4);

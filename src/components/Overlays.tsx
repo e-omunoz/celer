@@ -1,8 +1,9 @@
 import { CircleAlert, CircleCheck, Info, Search, TriangleAlert, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { commands } from "../commands";
-import { library, loadLibrary, openLibraryScript } from "../library";
+import { library, loadLibrary, openLibraryScript, openRunOn } from "../library";
 import { returnFocus } from "../focus";
+import { bubbleOpen } from "../gib/Companion";
 import { ObjIcon } from "../icons";
 import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty } from "../state";
 
@@ -83,6 +84,7 @@ export function ContextMenu() {
                 class="menu-item"
                 classList={{ danger: item.danger, active: active() === index() }}
                 disabled={item.disabled}
+                title={item.title}
                 onMouseEnter={() => setActive(index())}
                 onClick={() => {
                   closeMenu();
@@ -109,7 +111,7 @@ export function Toasts() {
     return tab?.kind === "table" && tab.section === "data" && tableDirty(tab);
   };
   return (
-    <div class="toasts" classList={{ raised: raised() }} aria-live="polite">
+    <div class="toasts" classList={{ raised: raised(), "beside-tip": bubbleOpen() }} aria-live="polite">
       <For each={state.toasts}>
         {(toast) => (
           <div class={`toast ${toast.kind}`} role="status">
@@ -144,6 +146,8 @@ interface PaletteItem {
   keys?: string;
   run: () => void;
   score: number;
+  /** Shown greyed, with `hint` saying why (a feature the engine does not have). */
+  disabled?: boolean;
 }
 
 function fuzzy(text: string, query: string): number {
@@ -244,6 +248,17 @@ export function Palette() {
             run: () => void openLibraryScript(script.id),
             score: score + 6,
           });
+          if (state.connections.length) {
+            out.push({
+              key: `lib-on:${script.id}`,
+              label: `Ejecutar en… «${script.name}»`,
+              detail: "Elegir conexión y base de datos (una o varias)",
+              group: "Biblioteca",
+              icon: "action",
+              run: () => openRunOn(script.id),
+              score: score + 2,
+            });
+          }
         }
       }
     }
@@ -252,7 +267,9 @@ export function Palette() {
         if (command.enabled && !command.enabled()) continue;
         const score = fuzzy(command.label, q) || fuzzy(`${command.group} ${command.label}`, q) * 0.7;
         if (!score) continue;
-        out.push({ key: `a:${command.id}`, label: command.label, detail: command.group, hint: command.hint, group: "Acciones", icon: "action", keys: command.keys, run: command.run, score });
+        // Not on this engine: listed greyed with the reason, below what can run.
+        const unsupported = command.unsupported?.() ?? null;
+        out.push({ key: `a:${command.id}`, label: command.label, detail: unsupported ?? command.group, hint: unsupported ?? command.hint, group: "Acciones", icon: "action", keys: command.keys, run: command.run, score: unsupported ? score * 0.5 : score, disabled: Boolean(unsupported) });
       }
     }
     out.sort((a, b) => b.score - a.score);
@@ -269,7 +286,7 @@ export function Palette() {
   }
 
   function choose(item: PaletteItem | undefined) {
-    if (!item) return;
+    if (!item || item.disabled) return;
     close();
     item.run();
   }
@@ -324,7 +341,7 @@ export function Palette() {
                   <Show when={index() === 0 || items()[index() - 1].group !== item.group}>
                     <div class="pal-group">{item.group}</div>
                   </Show>
-                  <button type="button" class="pal-item" classList={{ active: active() === index() }} title={item.hint} onMouseMove={() => setActive(index())} onClick={() => choose(item)}>
+                  <button type="button" class="pal-item" classList={{ active: active() === index(), disabled: item.disabled }} aria-disabled={item.disabled} title={item.hint} onMouseMove={() => setActive(index())} onClick={() => choose(item)}>
                     <Show when={item.icon !== "action"} fallback={<span class="pal-action-dot" />}>
                       <ObjIcon kind={item.icon} size={15} />
                     </Show>

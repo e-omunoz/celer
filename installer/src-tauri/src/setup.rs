@@ -121,8 +121,37 @@ pub struct Layout {
     pub sys: SysDirs,
 }
 
+/// Test mode: with `CELER_SETUP_SANDBOX=<folder>` (or `--sandbox <folder>`) everything the installer would create
+/// outside the install folder (registry key, shortcuts, file association, the app's data) goes under that folder or
+/// under names of its own, so a release can be installed, started and uninstalled on a machine with a real Celer
+/// without touching it. The sandbox's uninstall entry carries `--sandbox <folder>`, so uninstalling it from
+/// Settings › Apps (no environment variable there) stays in the sandbox too.
+pub fn sandbox() -> Option<PathBuf> {
+    sandbox_from(std::env::args().skip(1), std::env::var_os("CELER_SETUP_SANDBOX"))
+}
+
+fn sandbox_from(args: impl Iterator<Item = String>, env: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let mut args = args;
+    while let Some(a) = args.next() {
+        if a.eq_ignore_ascii_case("--sandbox") {
+            if let Some(v) = args.next().filter(|v| !v.trim().is_empty()) {
+                return Some(PathBuf::from(v.trim()));
+            }
+        }
+    }
+    env.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// ` --sandbox "<folder>"` in test mode, nothing otherwise.
+fn sandbox_arg() -> String {
+    sandbox().map(|root| format!(" --sandbox \"{}\"", root.display())).unwrap_or_default()
+}
+
 impl Layout {
     pub fn real() -> Layout {
+        if let Some(root) = sandbox() {
+            return Layout::sandboxed(&root);
+        }
         let appdata = win::known_folder(&win::FOLDERID_RoamingAppData)
             .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
             .unwrap_or_default();
@@ -151,13 +180,30 @@ impl Layout {
         }
     }
 
+    /// `real()` in test mode: its own uninstall key, a dummy extension, shortcuts and data under `root`.
+    pub fn sandboxed(root: &Path) -> Layout {
+        Layout {
+            uninstall_key: "Celer-sandbox".into(),
+            progid: "Celer.sandbox".into(),
+            ext: ".celersandbox".into(),
+            start_menu_lnk: root.join(r"StartMenu\Celer.lnk"),
+            desktop_lnk: root.join(r"Desktop\Celer.lnk"),
+            data_dirs: vec![root.join("data")],
+            leftover_dirs: vec![root.join(r"Programs\Celer")],
+            sys: SysDirs::real(),
+        }
+    }
+
     pub fn uninstall_key_path(&self) -> String {
         format!(r"{UNINSTALL_ROOT}\{}", self.uninstall_key)
     }
 }
 
-/// `%LOCALAPPDATA%\Programs\Celer`
+/// `%LOCALAPPDATA%\Programs\Celer` (`<sandbox>\Programs\Celer` in test mode)
 pub fn default_dir() -> PathBuf {
+    if let Some(root) = sandbox() {
+        return root.join(r"Programs\Celer");
+    }
     win::known_folder(&win::FOLDERID_UserProgramFiles)
         .or_else(|| std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("Programs")))
         .unwrap_or_else(|| PathBuf::from(r"C:\Celer"))
@@ -270,11 +316,11 @@ pub fn uninstaller_path(dir: &Path) -> PathBuf {
 }
 
 pub fn uninstall_string(dir: &Path) -> String {
-    format!("\"{}\" --uninstall", uninstaller_path(dir).display())
+    format!("\"{}\" --uninstall{}", uninstaller_path(dir).display(), sandbox_arg())
 }
 
 pub fn quiet_uninstall_string(dir: &Path) -> String {
-    format!("\"{}\" --uninstall --silent", uninstaller_path(dir).display())
+    format!("\"{}\" --uninstall --silent{}", uninstaller_path(dir).display(), sandbox_arg())
 }
 
 pub fn open_command(exe: &Path) -> String {
@@ -289,7 +335,8 @@ pub fn icon_ref(exe: &Path) -> String {
 pub fn uninstall_entries(dir: &Path, version: &str, size_kb: u32) -> Vec<(&'static str, RegVal)> {
     let exe = exe_path(dir);
     vec![
-        ("DisplayName", RegVal::Str("Celer".into())),
+        // Test mode shows apart from a real Celer in Settings › Apps.
+        ("DisplayName", RegVal::Str(if sandbox().is_some() { "Celer (prueba del instalador)" } else { "Celer" }.into())),
         ("DisplayVersion", RegVal::Str(version.into())),
         ("Publisher", RegVal::Str("Celer".into())),
         ("DisplayIcon", RegVal::Str(format!("{},0", exe.display()))),
@@ -804,7 +851,15 @@ pub fn launch(path: &Path) -> Result<(), String> {
         return Err(format!("No se encuentra Celer en «{}».", path.display()));
     }
     let cwd = path.parent().unwrap_or(Path::new("."));
-    let spawn = |flags: u32| std::process::Command::new(path).current_dir(cwd).creation_flags(flags).spawn();
+    // In test mode the app gets the sandbox's data folder, never the real one.
+    let data = sandbox().map(|root| root.join("data"));
+    let spawn = |flags: u32| {
+        let mut cmd = std::process::Command::new(path);
+        if let Some(d) = &data {
+            cmd.arg("--data-dir").arg(d);
+        }
+        cmd.current_dir(cwd).creation_flags(flags).spawn()
+    };
     spawn(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
         .or_else(|_| spawn(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP))
         .map(|_| ())
@@ -827,6 +882,28 @@ mod tests {
             ],
             exact: vec![PathBuf::from(r"C:\Users\ana"), PathBuf::from(r"C:\Users\ana\AppData\Local\Programs")],
         }
+    }
+
+    #[test]
+    fn the_sandbox_comes_from_the_command_line_or_the_environment() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert_eq!(sandbox_from(args(&["--uninstall", "--sandbox", r"D:\s b"]), None), Some(PathBuf::from(r"D:\s b")));
+        assert_eq!(sandbox_from(args(&["--uninstall"]), Some(r"D:\env".into())), Some(PathBuf::from(r"D:\env")));
+        assert_eq!(sandbox_from(args(&["--sandbox"]), None), None);
+        assert_eq!(sandbox_from(args(&["--uninstall"]), Some("".into())), None);
+    }
+
+    #[test]
+    fn the_sandbox_layout_never_names_the_real_install() {
+        let root = PathBuf::from(r"D:\celer-setup-sandbox");
+        let l = Layout::sandboxed(&root);
+        assert_ne!(l.uninstall_key, "Celer");
+        assert_ne!(l.ext, ".sql");
+        assert_ne!(l.progid, "Celer.sql");
+        for p in [&l.start_menu_lnk, &l.desktop_lnk].into_iter().chain(&l.data_dirs).chain(&l.leftover_dirs) {
+            assert!(p.starts_with(&root), "{} is outside the sandbox", p.display());
+        }
+        assert!(!l.data_dirs.iter().any(|d| d.ends_with(APP_IDENTIFIER)));
     }
 
     #[test]

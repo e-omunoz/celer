@@ -13,8 +13,8 @@ La ventana tiene tres zonas:
 
 - **Explorador** (izquierda, Alt+1): conexiones, bases de datos, esquemas, tablas, vistas, rutinas…
 - **Pestañas** (centro): consolas SQL y tablas abiertas. Se pueden sacar a otra ventana (ver *Varias ventanas*).
-- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial, la biblioteca de scripts
-  (Alt+8) y el asistente de IA.
+- **Panel derecho** (Alt+7): el valor de una celda, la fila como formulario, el historial (Ctrl+Alt+E), la
+  biblioteca de scripts (Alt+8), las variables (Alt+9) y el asistente de IA (Ctrl+Alt+I).
 
 ## Conexiones
 
@@ -22,10 +22,17 @@ La ventana tiene tres zonas:
 Informix conecta por JDBC, por el Client SDK o por el driver IBM CLI (ver [Drivers de Informix](#drivers-de-informix)),
 y cualquier otra base de datos entra por ODBC.
 
-- **Producción** pide confirmación antes de un UPDATE/DELETE sin WHERE, DROP, TRUNCATE o ALTER.
+- **Entorno**: *Desarrollo*, *Pruebas*, *Preproducción*, *Producción* u *Otro…* (un nombre y un color tuyos). Todas
+  las consolas y tablas de la conexión llevan una franja de ese color arriba y una etiqueta con icono y nombre en la
+  barra de la consola y en la barra de estado; sus pestañas, su nodo del explorador y sus consolas en otras ventanas
+  llevan el mismo color. Producción va en rojo y Preproducción en ámbar.
+- **Producción** pide confirmación antes de un UPDATE/DELETE sin WHERE, DROP, TRUNCATE o ALTER, y avisa antes de una
+  transacción abierta mucho rato. El formulario sugiere marcarla de solo lectura si solo vas a consultar. Un entorno
+  propio puede tratarse como producción. Las conexiones marcadas como producción en versiones anteriores aparecen como
+  Producción.
 - **Solo lectura** rechaza en el núcleo cualquier sentencia que modifique datos.
-- **Avanzado › Script de inicio**: sentencias que se ejecutan en cada conexión que abre Celer, también al reconectar
-  (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
+- **Opciones avanzadas › Script al conectar**: sentencias que se ejecutan en cada conexión que abre Celer, también al
+  reconectar (`SET search_path`, `SET LOCK MODE TO WAIT 10`, `SET NAMES`…).
 - Las contraseñas se guardan en el almacén de credenciales del sistema operativo, nunca en un fichero.
 
 ### El formulario
@@ -58,6 +65,33 @@ Si falla, dice qué significa y qué hacer (nombre que no resuelve o VPN caída,
 contraseña, base que no existe, certificado, `pg_hba.conf`, ERROR 1130 de MySQL…) y deja el error original del driver
 para copiarlo.
 
+Por un túnel SSH los dos primeros pasos son otros, y dicen cuál falló: **Túnel SSH** (entrar en el servidor SSH, y en
+los saltos, con su clave de servidor y el método de autenticación) y **Reenvío a servidor:puerto** (que el servidor SSH
+llega a la base). Después vienen el inicio de sesión y la base, como siempre.
+
+### Túnel SSH
+
+Para una base a la que solo se llega a través de un bastión, **Túnel SSH** (en PostgreSQL, MySQL/MariaDB, SQL Server e
+Informix, también por DRDA y JDBC) hace que Celer entre por SSH y reenvíe un puerto local hasta el servidor:
+
+- **Servidor SSH**, **Puerto** (22) y **Usuario SSH**. El *Servidor* y el *Puerto* de la base, arriba, son los que ve
+  el servidor SSH: `localhost` es el propio servidor SSH.
+- **Autenticación**: *Contraseña*, *Clave privada* (un fichero OpenSSH, PEM o PuTTY `.ppk`, o la clave pegada, con su
+  *Frase de paso* si la tiene) o *Agente SSH* (Pageant o el agente de OpenSSH en Windows; `ssh-agent` en Linux y macOS).
+- **Saltos previos** (opcional): otros servidores SSH que hay que cruzar antes, uno por línea y en orden
+  (`usuario@servidor:puerto`), con la misma autenticación.
+- La contraseña SSH, la frase de paso y la clave pegada se guardan en el almacén de credenciales del sistema, nunca en
+  `connections.json`; al exportar sin contraseñas solo viajan servidor, puerto, usuario, método y la ruta de la clave.
+- La primera vez que Celer ve un servidor SSH enseña su **huella** (`SHA256:…`) y no conecta hasta que pulsas
+  **Confiar en esta clave**; la guarda en `known_hosts` de la carpeta de datos de Celer (también se fía de tu
+  `~/.ssh/known_hosts`). Si un servidor conocido presenta otra clave, Celer no conecta y dice dónde está la guardada.
+- Todas las sesiones de la conexión comparten un túnel. Si el bastión se reinicia o el túnel se corta, la siguiente
+  consulta vuelve a abrir el túnel y la sesión, como con cualquier corte.
+- Una instancia con nombre de SQL Server necesita su **puerto**: SQL Server Browser no cruza el túnel. Cancelar una
+  consulta de Informix por SQLI puede no llegar al servidor por el túnel (usa datos urgentes de TCP).
+- SQLite (un fichero de este equipo) y ODBC (la conexión la abre el driver del DSN) no tienen túnel: en ODBC se
+  configura en el propio origen de datos.
+
 ### Organizar las conexiones
 
 En el explorador:
@@ -72,8 +106,16 @@ En el explorador:
   usuario, carpeta y motor (`pg`, `sqlserver`, `ifx`…). Los filtros rápidos dejan ver solo las favoritas, las
   conectadas, las de producción o las de un motor.
 - **Orden** manual (arrastrando) o alfabético, desde el botón de opciones.
-- **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON sin contraseñas, para compartirlas o
-  llevarlas a otro equipo; al importar no se repiten las que ya existen.
+- **Exportar e importar** las conexiones (todas, una carpeta o una) en un JSON, para compartirlas o llevarlas a otro
+  equipo; al importar no se repiten las que ya existen. De entrada va **sin contraseñas** (el fichero de siempre) y
+  Celer las pide al conectar. Con **Incluir contraseñas** viajan también la contraseña de la base, las del túnel SSH
+  (contraseña, frase de paso y clave pegada) y los parámetros secretos de la cadena ODBC y de *Parámetros extra*:
+  - Hay que escribir dos veces una **contraseña del fichero** (8 caracteres o más); Celer cifra con ella los secretos
+    (Argon2id + AES-256-GCM) y el fichero dice arriba que lleva contraseñas cifradas. Sin ella no se pueden recuperar.
+  - **Sin cifrar** existe, pero solo marcando que entiendes que cualquiera que lea el fichero podrá usarlas.
+  - Al importar un fichero con contraseñas cifradas, Celer pide su contraseña: si no es la correcta no importa ningún
+    secreto y deja volver a intentarlo, o **Importar sin contraseñas**. Los secretos van al almacén de credenciales
+    del sistema, nunca a `connections.json`, y las conexiones conectan sin volver a escribir nada.
 - **Varias a la vez**: Ctrl+clic (⌘+clic en macOS) añade o quita una fila, Mayús+clic selecciona un rango tal como se
   ve en el árbol y Ctrl+Mayús+clic lo añade a lo que ya había; con el teclado, Mayús+flechas (y Mayús+Inicio/Fin)
   amplían la selección y Ctrl+A selecciona todas las filas visibles del mismo tipo que la que tiene el foco (todas las
@@ -93,28 +135,37 @@ En el explorador:
 ¿Vienes de otra herramienta? **Nuevo › Importar conexiones** trae las de DBeaver y DbVisualizer, con carpetas y marcas
 de producción. Las contraseñas guardadas en DBeaver solo se traen si marcas **Importar también las contraseñas
 guardadas** (desmarcada de entrada): solo entonces, y al pulsar *Importar*, Celer lee el fichero cifrado de credenciales
-de DBeaver; al listar las conexiones no lo abre. De una conexión Informix se traen también el `informixserver` y
-el resto de propiedades de la URL (van a *Parámetros extra*).
+de DBeaver; al listar las conexiones no lo abre. La URL JDBC de cada conexión se lee entera, como en el campo **URL
+JDBC** del formulario: servidor, puerto, base, instancia de SQL Server (también `jdbc:sqlserver://;serverName=…`),
+`informixserver`, protocolo de Informix (`jdbc:ids` es DRDA), cifrado y certificado, y lo que el driver entiende como
+*Parámetros extra*. Las propiedades del driver que guarda DBeaver se suman a las de la URL en todos los motores. Un
+campo vacío en la herramienta no pisa lo que dice la URL; en una URL con varios servidores Celer usa el primero, y la
+lista avisa de lo que no se ha podido traer. El **túnel SSH** de una conexión también se trae (servidor, puerto,
+usuario y método; de DbVisualizer, también los saltos); de DBeaver, el usuario y la contraseña SSH vienen con las
+contraseñas guardadas.
 
 ### Conectar rápido
 
-- Una consola conecta **en segundo plano** en cuanto se abre o se muestra: la primera ejecución no espera al login.
-  Si su conexión no está conectada y no pide contraseña, también se conecta sola.
-- Cada sesión entra **directamente en su base de datos y con su modo de transacción**, sin `USE` ni idas y vueltas
-  después (en PostgreSQL, sin abrir una segunda conexión).
-- Las conexiones de las sesiones que se cierran sin nada propio (una tabla, un recuento) quedan **libres unos minutos**
-  para la siguiente de la misma configuración, que se ahorra el login. Nunca una con transacción, tablas temporales o
-  `SET` propios; al desconectar o editar la conexión se cierran.
-- El tiempo de conexión aparece en el tooltip de la conexión y de la pestaña, y en la salida de la primera sentencia
-  de una consola que tuvo que conectar.
+- Una consola conecta **en segundo plano** en cuanto se abre: la primera ejecución no espera al login. Si la conexión
+  no pide contraseña, también se conecta sola.
+- Cada sesión entra **directamente en su base de datos y con su modo de transacción**, sin `USE` después.
+- Las conexiones de sesiones cerradas sin nada propio (una tabla, un recuento) quedan **libres unos minutos** para la
+  siguiente con la misma configuración. Nunca una con transacción, tablas temporales o `SET` propios.
+- El tiempo de conexión sale en el tooltip de la conexión y de la pestaña.
 
 ### Reconexión
 
 Una conexión puede caerse con el equipo suspendido, un corte de VPN o un servidor que cierra las sesiones paradas.
 Celer lo detecta y vuelve a conectar solo:
 
-- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse; además, el sistema
-  mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con keepalive de TCP.
+- Una sesión que lleva más de un minuto parada hace una comprobación barata antes de usarse (y también al volver a
+  la ventana de Celer); además, el sistema mantiene vivas las conexiones de SQL Server, PostgreSQL y MySQL con
+  keepalive de TCP. Si la conexión no contesta en segundo y medio (un cortafuegos o un servidor que la cortó sin
+  avisar), Celer no espera más: abre otra y la consulta sigue, salvo que la sesión tenga algo que perder.
+- **Mantener viva la conexión** (*Opciones avanzadas* del formulario): si el servidor corta las sesiones paradas
+  (Informix con un tiempo de inactividad, un cortafuegos), pon a los cuántos minutos lo hace y Celer comprobará las
+  sesiones paradas un poco antes, para que no lleguen a cortarse. Desactivado (0) por defecto.
+- Mientras abre la conexión nueva, la pestaña lo dice («Ejecutando… · Reconectando…») y su punto late en ámbar.
 - Al volver de una suspensión o de un corte de red, Celer comprueba todas las sesiones abiertas.
 - Si se cortó y no había nada que perder, la consulta sigue en la conexión nueva y la salida lo dice («Conexión
   recuperada…»). Una sentencia que modifica datos no se repite nunca, porque no se sabe si llegó a ejecutarse: Celer
@@ -127,8 +178,8 @@ Celer lo detecta y vuelve a conectar solo:
 - El punto de la conexión en el explorador y en la pestaña dice el estado: ámbar que late mientras conecta, ámbar
   fijo si se reconectó, rojo si se perdió estado o no hay conexión; el tooltip lo explica.
 
-**Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta, cambios sin guardar
-en una tabla o una exportación en curso, lo pregunta antes.
+**Desconectar** (menú de la conexión) cierra todas sus sesiones. Si hay una transacción abierta pregunta Commit,
+Rollback o Cancelar; si hay cambios sin guardar en una tabla o una exportación en curso, lo pregunta antes.
 
 ## La consola SQL
 
@@ -146,13 +197,25 @@ en una tabla o una exportación en curso, lo pregunta antes.
 - **Autocompletado**: tablas después de `FROM`/`JOIN`, columnas de las tablas de la sentencia en el resto, y
   `alias.` o `esquema.` acotan la lista.
 - **Plantillas**: escribe `sel`, `selw`, `ins`, `upd`, `cte`… y pulsa Tab; los campos enlazados se rellenan a la vez.
-  Las tuyas se crean en *Ajustes › Plantillas*.
+  Las tuyas se crean en *Ajustes › Plantillas*, donde puedes indicar su motor (o dejar que Celer lo detecte); las de
+  otro motor salen en las sugerencias marcadas *otro motor* y al final.
 - **Parámetros**: `:nombre`, `?` o `${nombre}` en una consulta abren un diálogo para darles valor antes de ejecutar.
+- **Variables**: `${nombre}` con un valor guardado no se pregunta: se pone su valor (ver *Variables* más abajo).
+  Tras escribir `${` el editor sugiere las variables con su valor, y al pasar el ratón por encima se ve cuál se usará.
 - **UPDATE / DELETE sin WHERE** se subrayan mientras escribes y piden confirmación al ejecutarlos.
 - **Transacciones**: *Auto* confirma cada sentencia; en *Manual* aparecen Commit y Rollback
-  (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R).
+  (Ctrl+Alt+Mayús+C / Ctrl+Alt+Mayús+R). Con una transacción abierta, junto a ellos se ve «Transacción abierta · N min
+  · M sentencias» y en la pestaña «TX N min»: en ámbar pasado el primer umbral y en rojo pasado el segundo (1 y 5
+  minutos; en producción, 30 segundos y 2 minutos; se cambian en *Ajustes › Seguridad*). Pasado el rojo, Gib (o un
+  aviso si está apagado) te lo recuerda sin quitarte el foco. La barra de estado lista las transacciones abiertas de la
+  ventana; un clic lleva a su consola.
+- **Nunca se confirma sola**: al cerrar la consola o la ventana, desconectar, eliminar la conexión, cambiar la
+  conexión o la base de datos de la consola, volver a *Auto* o salir de Celer con una transacción abierta, Celer
+  pregunta **Commit**, **Rollback** o **Cancelar**.
 - **Ficheros**: Ctrl+O abre un `.sql`, Ctrl+S lo guarda en su sitio con la misma codificación y saltos de línea, y
   Ctrl+Mayús+S guarda como.
+- **Mensajes del servidor** en la pestaña *Salida*: los `NOTICE` de PostgreSQL, los avisos de MySQL y, en SQL Server,
+  `PRINT` y `RAISERROR` de gravedad 10 o menor (también `WITH NOWAIT` desde un procedimiento), en orden, como en SSMS.
 
 ### Resultados
 
@@ -160,12 +223,29 @@ Los resultados llegan por páginas desde un cursor abierto: aunque la consulta d
 las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
 
 - **Filtro rápido** sobre las filas cargadas.
-- **Fijar un resultado** lo conserva al volver a ejecutar; **Comparar** lo enfrenta al resultado actual y marca las
-  celdas cambiadas, las filas nuevas y las que desaparecen.
+- **Fijar resultado** (la chincheta) lo conserva al volver a ejecutar: queda en su propia pestaña de resultado, con
+  la chincheta, y el nuevo resultado aparece al lado. El botón de comparar de esa pestaña lo enfrenta al resultado
+  actual.
+- **Comparar con…** (en la barra de resultados o en la paleta) enfrenta el resultado que ves (B) con otro que eliges
+  (A): otro resultado o uno fijado de esta consola, de otra consola (también de otra conexión, por ejemplo producción
+  frente a preproducción) o las filas cargadas de una tabla abierta.
+  - Las filas se emparejan por la **clave primaria** cuando un lado es una tabla (una pestaña de tabla o un
+    `SELECT … FROM tabla` sencillo); si no, por una columna única. En *Clave* puedes elegir una o varias columnas, o
+    comparar filas enteras.
+  - Verás cuántas filas son iguales, cuántas cambian y cuántas están solo en A o solo en B; las celdas cambiadas se
+    marcan (al pasar el ratón, su valor en A), las filas que solo están en A aparecen tachadas y las de B al final.
+    *Solo diferencias* oculta las iguales e *Intercambiar* cambia A y B.
+  - *Exportar* guarda lo que ves en CSV o JSON, con una columna *estado* y, por cada columna con cambios, su valor en A.
+  - Los valores se comparan por lo que significan: 12.50 y 12.5, true y 1, o una fecha escrita de dos formas son
+    iguales, así que se pueden comparar resultados de dos motores distintos.
+  - Se comparan las filas cargadas (hasta 200.000 por lado). Si un lado tiene más, se avisa y se ofrece *Cargar todo*;
+    un resultado fijado antes de cargar todas sus páginas se queda con las que tenía.
 - **Copiar** como TSV, CSV, SQL, Markdown, JSON o XML; **Exportar** a disco en streaming.
-- **Mover columnas**: arrastra la cabecera de una columna y suéltala donde quieras; una línea marca dónde caerá y, cerca
-  del borde, la rejilla se desplaza sola. Esc durante el arrastre la deja donde estaba. Un clic en la cabecera sigue
-  seleccionando la columna y Mayús+clic (o Mayús y arrastrar) selecciona varias.
+- **Mover columnas**: arrastra la cabecera de una columna y la columna entera se levanta (semitransparente, con
+  sombra); las demás se apartan para abrirle hueco donde caerá y, cerca del borde, la rejilla se desplaza sola. Al
+  soltarla se acomoda en su sitio; Esc durante el arrastre la devuelve a donde estaba. Con *Animaciones: Reducidas*
+  las columnas saltan en lugar de deslizarse. Un clic en la cabecera sigue seleccionando la columna y Mayús+clic (o
+  Mayús y arrastrar) selecciona varias.
   - Todo sigue el orden de la pantalla: la selección, las flechas y Tab, **Copiar** (con cabeceras y en todos los
     formatos), la búsqueda, el panel de registro y **Exportar**, que escribe las columnas en ese orden aunque vuelva a
     leer la consulta del servidor.
@@ -190,8 +270,19 @@ Doble clic en una tabla del explorador la abre.
 - **Claves foráneas**: las columnas FK llevan ↗ en la cabecera. Ctrl+clic en un valor abre la fila referenciada.
 - **Columnas**: se mueven arrastrando la cabecera, como en los resultados; la edición, la copia y la exportación siguen
   ese orden.
-- **Importar datos** (menú de la tabla): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con mapeo de columnas y
-  todo en una transacción.
+- **Importar datos** (menú de la tabla o botón de la pestaña): CSV, TSV, JSON o una hoja de Excel / OpenDocument, con
+  mapeo de columnas y todo en una transacción.
+  - En una hoja, Celer busca la **fila de cabeceras** (salta un título o notas que haya encima); en *Cabeceras* puedes
+    elegir otra fila o ninguna. En *Rango* puedes limitar las celdas como en Excel: `B3:F200`, `B3:F` (hasta la
+    última fila), `B:F` o vacío para todo.
+  - Fechas, números y booleanos se importan **con su tipo** y se convierten al de cada columna: una fecha con hora en
+    una columna DATE se queda con la fecha y los decimales no pasan por texto.
+  - Un libro grande se lee con progreso y se puede cancelar; las filas se importan por tramos.
+  - **Pegar desde Excel**: copia las celdas en Excel y pulsa Ctrl+V en el asistente (o *Pegar celdas copiadas de
+    Excel*). Se leen como una hoja: con sus cabeceras, y `1.234,50`, `15/03/2024` o `VERDADERO` como número, fecha y
+    booleano.
+- **Pegar en la tabla**: Ctrl+V en la rejilla de una tabla pega el bloque copiado desde la celda activa como cambios
+  pendientes (las filas que sobran pasan a ser filas nuevas); se guardan con *Guardar*, como cualquier edición.
 
 Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,
 UPSERT/MERGE, DELETE, DROP y su DDL.
@@ -209,7 +300,9 @@ UPSERT/MERGE, DELETE, DROP y su DDL.
   a ella). *Ampliar un nivel* añade las relacionadas con todas las que se ven; el **+N** de una tabla añade solo las
   suyas; el botón de mira que aparece al pasar el ratón por una tabla centra el diagrama en ella (también en el de un
   esquema entero), y *Todo el esquema* vuelve a verlas todas. Para saber qué tablas apuntan a la tuya, Celer lee las
-  claves de todas las del esquema (sin sus columnas), así que en esquemas muy grandes tarda un poco.
+  claves foráneas de todo el esquema en una sola consulta al catálogo, y las columnas solo de las tablas que se ven:
+  también en esquemas de miles de tablas se abre al momento. En una conexión ODBC genérica el diagrama abarca todas
+  las tablas de la fuente (su carpeta *Tablas*), y sus claves salen de `SQLForeignKeys`.
 - **Comparar esquemas**: en el menú de un esquema, *Marcar para comparar*; después, en el de otro (de la misma
   conexión o de otra), *Comparar con…*. Verás las tablas que solo están en un lado y las columnas con otro tipo o
   nulabilidad. *Script para igualar el destino* abre en una consola del destino el SQL que lo dejaría como el origen,
@@ -228,10 +321,26 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
 - **Guardar**: **Ctrl+Alt+B** guarda la consola con un nombre y una carpeta. En una consola abierta desde la
   biblioteca, el mismo atajo (o el botón del marcador en la barra de la consola) guarda sus cambios; un punto naranja
   avisa de que hay cambios sin guardar. *Guardar la consola en la biblioteca como script nuevo* crea otro.
-- **Buscar**: el cuadro busca en el nombre, la carpeta, las etiquetas y el SQL; `#etiqueta` filtra por etiqueta (o haz
-  clic en ella). Los scripts también salen en la paleta (**Shift Shift**).
+- **Buscar**: el cuadro busca en el nombre, la descripción, la carpeta, las etiquetas y el SQL; `#etiqueta` filtra por
+  etiqueta (o haz clic en ella). Los scripts también salen en la paleta (**Shift Shift**), cada uno también con su
+  *Ejecutar en…*.
+- **Favoritos y recientes**: la estrella (o *Añadir a favoritos* en el menú) lo pone en *Favoritos*, arriba del todo;
+  debajo, *Recientes* con los cinco últimos que abriste o ejecutaste. Siguen también en su carpeta.
 - **Abrir y ejecutar**: clic o **Intro** abre el script en su consola (si ya está abierta, va a ella);
-  **Ctrl+Intro** o el botón ▶ lo abre y lo ejecuta entero. Arrastrado al editor, pega su SQL donde lo sueltes.
+  **Ctrl+Intro** o el botón ▶ lo abre y lo ejecuta entero: en un script de varias sentencias el menú lo dice
+  (*Abrir y ejecutar todo (3 sentencias)*). Para ejecutar solo una, ábrelo y pulsa **Ctrl+Intro** en ella. Arrastrado
+  al editor, pega su SQL donde lo sueltes.
+- **Ejecutar en…** (**Mayús+Intro**, el botón ⏵ en círculo, el menú o la paleta): elige dónde ejecutarlo, sin tocar la
+  conexión con la que se guardó. Cada destino es una conexión y, si el motor las tiene, una base de datos (en MySQL y
+  MariaDB, el esquema) y en PostgreSQL un esquema, que se pone primero en el `search_path` de esa consola. *Añadir
+  destino* lo ejecuta en varios a la vez: una consola por destino, cada una con sus resultados en su pestaña, una
+  después de otra. Las confirmaciones de producción y de DELETE/UPDATE sin WHERE se piden en cada destino, y los
+  parámetros una sola vez. Si la base de datos elegida no se puede abrir, en ese destino no se ejecuta nada. *Solo
+  abrir* abre las consolas sin ejecutar, para elegir la sentencia. La próxima vez se proponen los mismos destinos.
+- **Detalles** (lápiz o **Alt+Intro**): una **descripción** (sale bajo el nombre y en la ventana de *Ejecutar en…*), el
+  **motor** para el que está escrito (o *Genérico / SQL estándar*) y los **parámetros** del SQL (`:nombre`, `?`,
+  `${nombre}`) con un valor por defecto y una descripción: al ejecutar, la ventana de parámetros sale rellena con ese
+  valor (o el último que escribiste en esa consola) y explica cada uno.
 - **Organizar**: carpetas y subcarpetas (botón de carpeta nueva o clic derecho), etiquetas y una conexión asociada
   (lápiz o **Alt+Intro**). Arrastra scripts y carpetas para moverlos. El menú **⋯** ordena por nombre o por uso y
   muestra solo los de la conexión activa.
@@ -241,9 +350,68 @@ Las consultas que repites, guardadas con nombre en la carpeta de datos de Celer 
   confirmación (y también se puede deshacer).
 - **Importar y exportar**: *Importar ficheros .sql* crea un script por fichero en la carpeta seleccionada. Un script
   se exporta como SQL normal; una carpeta o la biblioteca entera, en un solo `.sql` que sigue ejecutándose como script
-  y que, al importarlo, recupera los scripts con sus carpetas y etiquetas.
+  y que, al importarlo, recupera los scripts con sus carpetas, etiquetas, descripción, motor y parámetros (los favoritos y
+  los destinos de *Ejecutar en…* son de cada equipo y no se exportan).
 
-La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas.
+La biblioteca de versiones anteriores se lee tal cual: los scripts quedan fuera de carpetas y sin etiquetas, y los
+`.sql` exportados antes se importan igual que siempre.
+
+### Variables
+
+Valores que defines una vez y escribes como `${nombre}` en consolas y scripts de la biblioteca (un cliente, un esquema,
+una fecha de corte…). Se ven y se editan en la pestaña **Variables** del panel derecho (**Alt+9**):
+
+- **Ámbitos**: de *esta consola*, de su *conexión* o *globales*. Al ejecutar vale el de la consola; si no tiene, el de la
+  conexión; si tampoco, el global. Por eso el mismo script, ejecutado en otra conexión (con *Ejecutar en…*), toma los
+  valores de esa conexión; *Ejecutar en…* los muestra en cada destino antes de ejecutar.
+- **Cómo se escriben**: números y NULL tal cual; TRUE y FALSE como los acepta el motor (TRUE / FALSE en PostgreSQL,
+  MySQL, MariaDB y SQLite; 1 / 0 en SQL Server; 't' / 'f' en Informix; por ODBC, como el servidor que hay detrás); el
+  resto como texto entre comillas. Marca **SQL** para que vaya tal cual (un nombre de tabla, una lista para `IN`…).
+  Dentro de cadenas y comentarios no se sustituye nada. Los valores de los parámetros se escriben igual.
+- **Sin valor**: una `${nombre}` que ningún ámbito define se pide al ejecutar, como un parámetro.
+- La sintaxis no choca con la de ningún motor (`:nombre`, `?`, `$1`, `@var`).
+- El **historial** y el registro del servidor MCP guardan el SQL que se envió, con los valores puestos. Las herramientas
+  MCP también sustituyen las variables de la conexión y las globales.
+- Al **asistente de IA** se le envían los nombres; los valores, solo si la conexión le permite leer datos (nivel
+  *Lectura* o *Lectura y escritura* en *Ajustes › IA*).
+- Las de conexión y las globales se guardan en `variables.json` (las comparten todas las ventanas); las de una consola,
+  con la consola.
+
+### Motor de cada script, plantilla y consulta
+
+Los scripts de la biblioteca, tus plantillas y las consultas del historial llevan los iconos de los motores para los
+que están escritos, o *SQL estándar* si no tienen nada propio de uno:
+
+- Celer lo **detecta** por el dialecto: `TOP`, `GETDATE()`, `[corchetes]` o `@@` son de SQL Server; `ILIKE`, `::tipo`
+  o `$$` de PostgreSQL; las comillas invertidas (`` `nombre` ``), `AUTO_INCREMENT` o `SHOW TABLES` de MySQL y MariaDB; `FIRST`,
+  `SKIP`, `NVL` o `TODAY` de Informix; `PRAGMA` o `sqlite_master` de SQLite; `LIMIT` vale para PostgreSQL, MySQL y
+  SQLite. Si el SQL no tiene nada propio, cuenta la conexión con la que se guardó o se ejecutó (borde discontinuo).
+  Lo que hay en comentarios y cadenas no cuenta.
+- Puedes **fijarlo** a mano en los detalles del script o de la plantilla, también como *Genérico / SQL estándar*.
+- Si no coincide con el motor de la consola activa, la etiqueta se pone en amarillo con *otro motor*. Una conexión
+  ODBC genérica puede ser cualquier motor: con ella no se avisa nunca.
+- **Filtro** *Solo los compatibles con esta conexión*: en el menú **⋯** de la biblioteca (y en la paleta), con el
+  embudo del historial y con la casilla de *Ajustes › Plantillas*.
+- **Ejecutar en…** avisa en cada destino de otro motor y, si el script está marcado o escrito para otro, pide
+  confirmación antes de ejecutar.
+
+Las funciones que un motor no tiene salen en gris con *No disponible en …* en lugar de fallar al pulsarlas: el plan
+de ejecución (no en Informix ni en ODBC genérico), el plan real (solo PostgreSQL y MariaDB), la actividad del servidor
+(no en SQLite ni en ODBC genérico) y el diagrama E-R y la comparación de esquemas (no en ODBC genérico). La comparación
+de datos y las herramientas MCP funcionan en todos.
+
+## Historial
+
+**Ctrl+Alt+E** abre en el panel derecho todo lo que has ejecutado, con su conexión, cuándo, cuánto tardó y cuántas
+filas devolvió (o si dio error). El cuadro de arriba busca en el SQL. Clic pega la consulta en la consola; doble clic
+la abre en una consola nueva. La papelera lo vacía. Para guardar SQL con nombre, usa la biblioteca.
+
+## Exportar e importar
+
+- **Exportar** (botón de la rejilla, menú de una tabla o de un objeto): CSV (con el separador que elijas), TSV,
+  Excel, JSON, XML, SQL INSERT, Markdown o HTML. Escribe en disco sobre la marcha, con progreso y *Cancelar*; desde
+  una tabla respeta sus filtros.
+- **Importar** (menú de una tabla): ver *Tablas*.
 
 ## Asistente de IA y servidor MCP
 
@@ -253,6 +421,33 @@ datos, nunca tus filas. Necesita una clave de API de Anthropic (*Ajustes › IA 
 El **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y otros clientes MCP usen tus conexiones
 con un nivel de permiso por conexión (ninguno, solo estructura, lectura o escritura), límites de filas y de tiempo,
 columnas enmascaradas y un registro de auditoría.
+
+**Claude Code dentro de WSL**: en *Ajustes › IA y MCP › Claude Code en WSL* aparecen tus distribuciones. Para cada una
+ves si la interoperabilidad con Windows está activa, si Claude Code está instalado y el comando con la ruta de
+`celer.exe` tal como la ve la distribución (`/mnt/c/…`). *Registrar en WSL* te enseña ese comando, pide confirmación y
+lo ejecuta dentro de la distribución; después Celer comprueba en su `~/.claude.json` que quedó registrado. Si Celer
+cambia de carpeta (reinstalado en otra ruta), la distribución aparece como *registrado con otra ruta* con el botón
+*Volver a registrar*. Una distribución detenida solo se mira al pulsar *Comprobar* (eso la arranca). Desde WSL se
+aplican los mismos permisos, la misma ocultación de columnas y el mismo registro que desde Windows; el registro dice
+desde dónde llegó cada llamada (Windows o WSL y la distribución).
+
+Mientras el servidor MCP está activo, la barra de estado muestra **MCP · Windows + WSL (Ubuntu)**: dónde están los
+clientes que tienen Celer registrado. Al pasar el ratón ves los clientes y la última llamada; con un clic se abre
+**Actividad de la IA** (las últimas llamadas: qué hizo, en qué conexión, cuándo y desde dónde; las rechazadas en rojo)
+con un botón a *Ajustes › IA y MCP*. Con MCP desactivado no aparece.
+
+**Controlar la aplicación** (*Ajustes › IA y MCP*, desactivado de serie): la IA puede además ver qué tienes abierto en
+Celer, abrirte consolas con SQL escrito por ella, tablas (con filtro y orden), definiciones y diagramas E-R, leer la
+biblioteca de scripts y, si lo permites, añadir scripts y ejecutar lo que abre. Cada cosa tiene su interruptor:
+*Abrir pestañas*, *Escribir en la biblioteca* y *Ejecutar lo que abre*. Nada se salta el nivel de cada conexión:
+para ejecutar una consulta hace falta *Lectura* y para una sentencia que modifica, *Lectura y escritura*; la ocultación
+de columnas y el registro se aplican igual, y Celer te sigue pidiendo confirmación en producción o sin WHERE.
+
+Lo que abre la IA se ve: la pestaña lleva la marca ✦ (*Abierto por la IA · hace N min*) y destella un momento, y un
+aviso dice *La IA ha abierto «X» en la ventana principal* con el botón **Ir**. La IA nunca te quita el foco: si estás
+escribiendo, la pestaña se abre en segundo plano (y un diagrama se te ofrece en el aviso en vez de abrirse); si Celer
+está detrás de otra ventana, parpadea su botón en la barra de tareas. Los scripts que añade la IA llevan la misma
+marca en la biblioteca. Hace falta tener Celer abierto; si no lo está, la IA recibe un aviso claro.
 
 ## Varias ventanas
 
@@ -274,7 +469,7 @@ biblioteca, los ajustes, el tema, los atajos y a Gib; cada una tiene sus pestañ
   devuelve a su sitio.
 - **Cerrar**: al cerrar una ventana que no es la última, Celer pregunta qué hacer con las pestañas que perderían
   trabajo (una transacción abierta, cambios en una tabla, una consola sin guardar): moverlas a la ventana principal o
-  descartarlas. Cerrar la ventana principal con otras abiertas pregunta si quieres salir de Celer o cerrar solo esa.
+  descartarlas; con transacciones abiertas, *Commit y cerrar* o *Rollback y cerrar*. Cerrar la ventana principal con otras abiertas pregunta si quieres salir de Celer o cerrar solo esa.
   Cerrar la última sale de Celer, como siempre.
 - **Al volver**: *Salir de Celer* (paleta) cierra todas las ventanas y la próxima vez se abren como estaban, con sus
   pestañas, en su sitio y en su monitor. Si un monitor ya no está, la ventana aparece en uno que sí. Cerrar las
@@ -284,14 +479,86 @@ Gib vive en una sola ventana: la que estás usando.
 
 ## Personalizar
 
-*Ajustes* (Ctrl+Alt+S):
+*Ajustes* (Ctrl+Alt+S). Arriba a la izquierda, **Buscar un ajuste** encuentra cualquiera por su nombre (sin importar
+tildes ni mayúsculas) y lleva hasta él. Cada sección tiene **Restablecer sección**, que deja sus ajustes como venían
+(con *Deshacer* en el aviso), y abajo están **Exportar ajustes…** e **Importar ajustes…**: un fichero JSON para llevar
+tus ajustes a otro equipo (no incluye favoritas ni recientes, que dependen de las conexiones de cada equipo). Al
+importar, lo que Celer no entiende se ignora y se dice cuál.
 
 - **Apariencia**: ocho temas, color de acento, densidad, tamaño de la interfaz, Gib y animaciones.
-- **Editor y resultados**: tamaño del editor, filas por página, filas alternas y parámetros.
+- **Editor**: tamaño y tipo de letra, tabulador (2, 4 u 8; con espacios o tabuladores), ajuste de línea, números de
+  línea, autocompletado al escribir y su retardo (Ctrl+Espacio abre la lista siempre), mayúsculas o minúsculas en las
+  palabras clave (sugerencias y *Formatear SQL*) y pedir el valor de los parámetros. Se aplica al momento a todas las
+  consolas abiertas.
+- **Resultados**: filas por página, filas alternas, el texto de NULL, fechas como llegan o día/mes/año, números con
+  separador de miles, cuántos caracteres de un valor se dibujan en la celda y qué copia Ctrl+C (texto con tabuladores,
+  con cabeceras, CSV, Markdown o JSON). Los formatos solo cambian cómo se ve: al copiar, exportar o editar se usa el
+  valor tal como lo da el servidor.
+- **Ejecución**: **tiempo máximo de una consulta** (en segundos; 0 es sin límite). Pasado ese tiempo Celer cancela la
+  sentencia de la consola igual que el botón Detener, en cualquier motor, y el error lo dice. En SQL Server la
+  sentencia se corta y la transacción abierta sigue, como en SSMS; solo si se corta mientras llega un valor muy largo
+  la conexión se reabre y la transacción se pierde (el aviso lo dice). Y el modo de transacción
+  con el que empiezan las consolas nuevas: automático o manual (Commit / Rollback).
+- **Ventana y pestañas**: restaurar o no las pestañas y ventanas de la última sesión al iniciar, y si abrir una tabla
+  que ya está abierta va a su pestaña o abre otra.
+- **Historial**: cuántas consultas y cuántos días se guardan (al bajarlo se borra en el acto lo que sobra) y *Vaciar
+  historial*. El historial ocupa como mucho unos 512 bytes por consulta que se guarda (4 MB como mínimo): si guardas
+  consultas muy largas, se conservan algo menos de las que dice el ajuste.
+- **Avisos**: cuánto duran los avisos (los de error, el doble) y una **notificación del escritorio** cuando una consulta
+  que tarda más de N segundos termina mientras estás en otra ventana.
 - **Plantillas**: las tuyas, junto a las de serie.
 - **Atajos de teclado**: pulsa **+** junto a una acción y después la combinación. Si ya la usa otra acción, Celer
   ofrece moverla. Con AltGr se siguen escribiendo €, @ o # aunque coincidan con un atajo.
-- **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción.
+- **Seguridad**: confirmaciones de UPDATE/DELETE sin WHERE y en producción, y los umbrales y el recordatorio de
+  las transacciones manuales abiertas.
+- **IA y MCP**: modelo y clave del asistente, permisos del servidor MCP por conexión y su registro.
+- **Drivers**: qué ha encontrado Celer para Informix (Java, JDBC, IBM CLI) y las descargas.
+
+## Si algo falla
+
+### Registro de errores
+
+*Ayuda › Registro de errores* (el botón **?** de la barra de la izquierda, o la paleta) muestra lo que ha fallado en
+este equipo: errores de los drivers de cada motor, errores de la interfaz, llamadas al núcleo que fallaron y cierres
+inesperados del núcleo, con la hora, la versión, dónde pasó y, si la hay, la pila. **Copiar** lo pone en el
+portapapeles, **Abrir carpeta** muestra el fichero, **Reportar…** prepara un reporte con los últimos y **Vaciar** lo
+borra.
+
+Antes de guardar cada entrada Celer le quita el texto SQL, los valores entre comillas, las contraseñas, las cadenas de
+conexión, los servidores y las IP, y las rutas con tu nombre de usuario. El registro ocupa como mucho medio megabyte
+(al llenarse, se aparta el anterior y se empieza otro) y **no se envía a ningún sitio**.
+
+### Reportar un fallo o sugerir una mejora
+
+*Ayuda › Reportar un fallo…* o *Sugerir una mejora…* (también en la paleta, en el icono de la derecha de la barra de
+estado y en el aviso que aparece tras un error inesperado) prepara un issue para el GitHub de Celer:
+
+- **Reportar un fallo**: título, qué ha pasado, qué esperabas y los pasos. Celer añade la versión, el sistema, el tema y
+  el motor y el driver de la conexión activa (por ejemplo «PostgreSQL · nativo · PostgreSQL 17.2» o «Informix · JDBC»),
+  nunca el servidor, el usuario, la base de datos ni tus datos. Puedes adjuntar los últimos errores del registro.
+- **Sugerir una mejora**: título, qué te gustaría, para qué y el área.
+- **Imágenes**: **Capturar la ventana** hace una captura de Celer en un clic; también puedes pegar (Ctrl+V), arrastrar o
+  añadir imágenes. El lápiz de cada una permite rodear con un **rectángulo**, señalar con una **flecha** u **ocultar**
+  una zona (la pixela en la propia imagen: lo de debajo no se puede recuperar).
+
+**Revisar y enviar** muestra exactamente lo que se enviará, campo por campo. Nada sale de Celer hasta que pulsas **Abrir
+en GitHub**: se abre la página de un issue nuevo con todo relleno y lo creas tú con tu cuenta de GitHub. Las imágenes no
+caben en la dirección: Celer las guarda en la carpeta de datos (`reports`), abre esa carpeta y copia la primera al
+portapapeles para que la pegues en «Capturas». Las rutas con tu nombre de usuario se quitan de lo que escribes.
+
+**Enviar con tu cuenta de GitHub.** En la revisión, *Enviar con mi cuenta de GitHub* guarda un token de GitHub para que
+el issue se cree sin salir de Celer. Crea un token clásico con solo el permiso `public_repo` (el enlace *cómo crearlo*
+abre la página de GitHub ya preparada), pégalo y pulsa **Guardar**: se guarda en el almacén de credenciales del sistema,
+nunca en un fichero, y no se vuelve a mostrar; **Quitar el token** lo borra. Con el token guardado, el botón principal
+es **Enviar a GitHub** (y **Abrir en GitHub** sigue disponible): el issue se crea con el mismo texto y queda en *Mis
+reportes* con su enlace. Las etiquetas (fallo o mejora y `status:triage`) solo se aplican si tu cuenta puede clasificar
+issues en el repositorio; si no, GitHub las omite y el issue se crea igual. GitHub no permite adjuntar imágenes por esta
+vía: Celer las guarda, copia la primera y abre el issue en el navegador para que las añadas en un comentario. Si el envío
+falla (token no válido o caducado, sin permiso, límite de GitHub, sin conexión), el mensaje dice qué hacer y el
+borrador no se pierde.
+
+Lo que no terminas queda como **borrador** en este equipo. *Mis reportes* lista los borradores y los reportes abiertos
+en GitHub; pega el enlace del issue creado para tenerlo a mano.
 
 ## Gib
 
@@ -303,16 +570,38 @@ le persigues con el ratón mientras espera, aparta el cursor como a una mosca.
   los que no has visto.
 - **Por su cuenta**: unos minutos después de empezar y como mucho uno cada 15 minutos, solo cuando haces una pausa,
   nunca con una consulta en marcha ni en una conexión de producción, y solo consejos que no has visto. Se cierra solo,
-  al escribir o con *Cerrar*; *No más consejos* lo pone en silencio.
+  al escribir o con *Cerrar*; *No más consejos* los desactiva.
 - **Sobre la consulta que acabas de lanzar**: avisa de `= NULL` (que nunca es cierto), de `NOT IN (SELECT …)` con
   nulos y de tablas separadas por comas sin `WHERE`; si la consulta tardó, de `LIKE '%…'`, de funciones sobre columnas
   en el `WHERE`, de `UNION` frente a `UNION ALL` y de `ORDER BY` sin límite. Si repites una consulta, propone guardarla
   en la biblioteca. Cada aviso sale una vez por sesión y los consejos, como mucho dos veces.
 - *Gib: volver a contar los consejos desde el principio* (paleta) hace que vuelvan a salir todos.
 
-En *Ajustes › Apariencia* se puede poner en silencio (solo avisos, sin consejos por su cuenta) o apagar. Con
-*Animaciones: reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de
-animarse.
+**Tu Gib** (*Ajustes › Apariencia › Gib*, con una vista previa que reacciona a cada cambio):
+
+- **Nombre**: el que usa en sus mensajes y en la paleta (por defecto, «Gib»).
+- **Color** de la corbata y los accesorios: el clásico (corbata negra), el color de acento (y cambia con él) u otro.
+- **Accesorios**: gorra, gafas, cascos y bufanda, en todas sus posturas y sin taparle los ojos.
+- **Postura en la barra de estado**: de pie, recién levantado, solo la cabeza o con el portátil. Para sus
+  entretenimientos se pone de pie.
+
+El aspecto se aplica a todos los Gib de Celer: la barra de estado, el arranque, los estados vacíos y los diálogos.
+
+**Reacciona a lo que pasa**: celebra una consulta que tardó mucho y salió bien, pone cara de error, se rasca la cabeza
+ante un resultado vacío, aplaude una exportación grande, se entristece si se corta la conexión y saluda cuando vuelve,
+te da los buenos días con la primera consulta del día, te sugiere un descanso tras dos horas seguidas y comenta el
+viernes por la tarde (con cuidado si es producción) y las horas tardías. Solo se entretiene cuando de verdad no haces
+nada: nunca mientras escribes, corre una consulta o hay un diálogo, la paleta o un menú abiertos.
+
+**Se deja tocar**: con el cursor encima un rato, cierra los ojos a gusto; un clic le da un toque (salta) y tres
+seguidos le enfadan. Sus ojos siguen al cursor. En la barra de estado, un clic sigue siendo un consejo.
+
+**Cuánto se hace notar** (*Ajustes › Apariencia › Gib*): mostrarlo o no (apagado no aparece en ningún sitio), poco,
+normal o a menudo (como mucho 3, 8 o 16 mensajes suyos por hora, sin sonido y sin quitarte el foco), y por separado
+si reacciona a lo que pasa, si se entretiene, si da consejos por su cuenta, si sus ojos siguen al cursor y dónde
+aparece: la barra de estado, los estados vacíos y el asistente de IA, el arranque, y las esperas, la guía y los
+diálogos. Los avisos sobre la sentencia que acabas de lanzar no cuentan para ese límite. Con *Animaciones:
+reducidas*, o si el sistema lo pide, se queda quieto. Cuando la ventana no está en primer plano deja de animarse.
 
 ## Drivers de Informix
 
@@ -371,6 +660,19 @@ Solo funciona si el servidor escucha en DRDA. Si no (error `SQL30081N`), usa «A
 DBA un alias `drsoctcp` en `sqlhosts` (por ejemplo `miservidor_dr drsoctcp host 9089`) y su nombre en
 `DBSERVERALIASES`. Por DRDA hay que indicar siempre la base de datos.
 
+**Tipos que DRDA cambia.** Por DRDA, el servidor convierte algunos tipos de Informix antes de enviarlos, y los
+valores no salen igual que por SQLI (JDBC):
+
+| Columna en Informix | Por DRDA | Por SQLI (JDBC) |
+|---|---|---|
+| `DECIMAL(p)` sin escala (decimal flotante) | `double`: unas 15 cifras significativas, el resto se redondea sin aviso | Exacto |
+| `DECIMAL(p,s)` con escala, `MONEY` | Exacto | Exacto |
+| `DATETIME … TO FRACTION(n)` | Siempre 6 decimales (`10:30:15.123000`) | Los `n` de la columna (`10:30:15.123`) |
+| `DATETIME HOUR TO MINUTE` | Con segundos (`10:30:00`) | `10:30` |
+| `BOOLEAN` | 1 / 0 | true / false |
+
+Si necesitas decimales flotantes exactos, conecta por «SQLI (JDBC)» o da escala a la columna (`DECIMAL(32,9)`).
+
 ### Errores frecuentes
 
 | Error | Qué pasa | Qué hacer |
@@ -397,6 +699,12 @@ Los ficheros de cada versión tienen siempre el mismo nombre, y
 
 `SHA256SUMS.txt` trae el SHA-256 de todos (ver [SECURITY.md](../SECURITY.md)).
 
+**Carpeta de datos propia.** `Celer-Portable-Windows.exe --data-dir E:\Celer` (o la variable de entorno
+`CELER_DATA_DIR`) guarda conexiones, ajustes, historial y biblioteca en esa carpeta en vez de la habitual, por ejemplo
+en un USB. Esa copia tiene también su propio perfil del navegador interno (`<carpeta>\webview`), guarda las contraseñas
+aparte de las de la copia instalada (si le falta una, usa la de la copia instalada sin cambiarla) y puede abrirse a
+la vez que ella.
+
 Celer comprueba al arrancar, y cada pocas horas, si hay una versión nueva (se desactiva en el diálogo de
 actualizaciones). Solo avisa: no descarga ni ejecuta nada hasta que pulsas **Actualizar**. Entonces, en una copia
 instalada con Celer Setup, descarga `Celer-Setup-Windows.exe` a su carpeta de datos local, comprueba su SHA-256 con el
@@ -414,6 +722,8 @@ mientras se ejecuta; lo quita la siguiente instalación, o puedes borrarlo a man
 | Ajustes, conexiones, historial, biblioteca | `%APPDATA%\es.celer.app` | `~/Library/Application Support/es.celer.app` | `~/.local/share/es.celer.app` (o `$XDG_DATA_HOME`) |
 | Contraseñas | Administrador de credenciales | Llavero | Secret Service (GNOME Keyring, KWallet) |
 | Drivers descargados (IBM CLI, JDBC, Java) y el puente JDBC | `…\es.celer.app\drivers` | `…/es.celer.app/drivers` | `…/es.celer.app/drivers` |
+| Registro de errores | `…\es.celer.app\logs` | `…/es.celer.app/logs` | `…/es.celer.app/logs` |
+| Reportes: borradores (`reports.json`) e imágenes (`reports`) | `…\es.celer.app` | `…/es.celer.app` | `…/es.celer.app` |
 | Actualización descargada (Celer Setup) | `%LOCALAPPDATA%\es.celer.app\updates` | — | — |
 
 Si uno de esos ficheros se daña, Celer lo aparta con el sufijo `.unreadable-…` y avisa, en lugar de sobrescribirlo.
