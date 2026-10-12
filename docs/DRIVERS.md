@@ -178,6 +178,22 @@ would bound every read of the socket and cut long queries too. «Mantener viva»
 (off by default) takes the minutes after which the server ends idle sessions, and Celer checks idle sessions at 80 %
 of that, so they are never cut.
 
+**Informix types over DRDA.** The DRDA protocol has no type for some Informix types, so the server converts them
+before IBM's CLI driver sees them, and the values differ from SQLI (JDBC), which gets Informix's own types. Measured on
+Informix 15 (`informix_types_drda_and_jdbc` in `engine_tests.rs`, which fails if a driver changes this):
+
+| Informix column | Over DRDA (column type shown) | Over SQLI (JDBC) |
+|---|---|---|
+| Floating `DECIMAL(p)` (no scale) | `double`: about 15 significant digits, the rest silently rounded (`12345678901234567890.123456789` reads `12345678901234567000`) | `decimal`, exact |
+| `DECIMAL(p,s)` (fixed scale), `MONEY` | `decimal`, exact | `decimal`, exact |
+| `DATETIME … TO FRACTION(n)` | `timestamp`, always 6 fraction digits (`10:30:15.123000`) | the column's own `n` digits (`10:30:15.123`) |
+| `DATETIME HOUR TO MINUTE` | `time`, with seconds (`10:30:00`) | `10:30` |
+| `BOOLEAN` | `smallint`, 1/0 | `boolean`, true/false |
+
+When exact floating decimals matter, connect over SQLI (JDBC), or give the column a scale (`DECIMAL(32,9)`). Celer does
+not rewrite these values: a statement reads only the result's columns, not which table column each one came from.
+SQLI through the Client SDK (ODBC) is not covered by the engine tests (no Linux build of the SDK in the environment).
+
 ### The JDBC bridge
 
 `src-tauri/bridge/CelerBridge.java` is a small program with no dependencies, compiled with `javac --release 11` by

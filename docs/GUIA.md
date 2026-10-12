@@ -644,6 +644,19 @@ Solo funciona si el servidor escucha en DRDA. Si no (error `SQL30081N`), usa «A
 DBA un alias `drsoctcp` en `sqlhosts` (por ejemplo `miservidor_dr drsoctcp host 9089`) y su nombre en
 `DBSERVERALIASES`. Por DRDA hay que indicar siempre la base de datos.
 
+**Tipos que DRDA cambia.** Por DRDA, el servidor convierte algunos tipos de Informix antes de enviarlos, y los
+valores no salen igual que por SQLI (JDBC):
+
+| Columna en Informix | Por DRDA | Por SQLI (JDBC) |
+|---|---|---|
+| `DECIMAL(p)` sin escala (decimal flotante) | `double`: unas 15 cifras significativas, el resto se redondea sin aviso | Exacto |
+| `DECIMAL(p,s)` con escala, `MONEY` | Exacto | Exacto |
+| `DATETIME … TO FRACTION(n)` | Siempre 6 decimales (`10:30:15.123000`) | Los `n` de la columna (`10:30:15.123`) |
+| `DATETIME HOUR TO MINUTE` | Con segundos (`10:30:00`) | `10:30` |
+| `BOOLEAN` | 1 / 0 | true / false |
+
+Si necesitas decimales flotantes exactos, conecta por «SQLI (JDBC)» o da escala a la columna (`DECIMAL(32,9)`).
+
 ### Errores frecuentes
 
 | Error | Qué pasa | Qué hacer |

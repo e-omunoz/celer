@@ -2689,3 +2689,36 @@ fn mid_result_error_odbc() {
     assert_mid_result_error("ODBC (first page)", DbKind::Odbc, &mut d, "SELECT 10 / (n - 3) AS q FROM generate_series(1, 8000) n", "SELECT 1");
     assert_mid_result_error("ODBC (later page)", DbKind::Odbc, &mut d, "SELECT 10 / (n - 7001) AS q FROM generate_series(1, 8000) n", "SELECT 1");
 }
+
+// ───────────────────────────────────────────────────────────────── Informix types over DRDA and JDBC (#160)
+
+/// What each Informix driver returns for the types where DRDA and JDBC differ (documented in docs/DRIVERS.md,
+/// "Informix types over DRDA"): a floating DECIMAL(p), DATETIME fractions and HOUR TO MINUTE, BOOLEAN.
+fn informix_type_row(via: &str, d: &mut dyn Driver) -> (Vec<crate::model::ColumnInfo>, Vec<String>) {
+    d.execute("DROP TABLE IF EXISTS celer_types160", 10).unwrap();
+    d.execute("CREATE TABLE celer_types160 (f DECIMAL(32), e DECIMAL(32,9), fr DATETIME YEAR TO FRACTION(3), hm DATETIME HOUR TO MINUTE, b BOOLEAN)", 10).unwrap();
+    d.execute("INSERT INTO celer_types160 VALUES (12345678901234567890.123456789, 12345678901234567890.123456789, DATETIME(2024-01-15 10:30:15.123) YEAR TO FRACTION(3), DATETIME(10:30) HOUR TO MINUTE, 't')", 10).unwrap();
+    let (cols, rows) = all_rows(d, "SELECT f, e, fr, hm, b FROM celer_types160");
+    d.execute("DROP TABLE celer_types160", 10).unwrap();
+    let got: Vec<String> = rows[0].iter().map(txt).collect();
+    eprintln!("Informix {via}: {:?} {got:?}", cols.iter().map(|c| c.type_name.as_str()).collect::<Vec<_>>());
+    (cols, got)
+}
+
+#[test]
+fn informix_types_drda_and_jdbc() {
+    let names = |cols: &[crate::model::ColumnInfo]| cols.iter().map(|c| c.type_name.clone()).collect::<Vec<_>>();
+    if let Some((cfg, lib)) = informix_cfg() {
+        let mut d = drda_connect(lib)(cfg).expect("conexión Informix DRDA");
+        let (cols, got) = informix_type_row("DRDA", d.as_mut());
+        // The floating DECIMAL(32) arrives as a DOUBLE: about 15 significant digits.
+        assert_eq!(names(&cols), ["double", "decimal", "timestamp", "time", "smallint"]);
+        assert_eq!(got, ["12345678901234567000", "12345678901234567890.123456789", "2024-01-15 10:30:15.123000", "10:30:00", "1"]);
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        let mut d = jdbc_connect(rt)(cfg).expect("conexión Informix JDBC");
+        let (cols, got) = informix_type_row("JDBC", d.as_mut());
+        assert_eq!(names(&cols), ["decimal", "decimal", "datetime year to fraction(3)", "datetime hour to minute", "boolean"]);
+        assert_eq!(got, ["12345678901234567890.123456789", "12345678901234567890.123456789", "2024-01-15 10:30:15.123", "10:30", "true"]);
+    }
+}

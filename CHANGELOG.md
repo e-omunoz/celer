@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Informix: the guide and docs/DRIVERS.md list what DRDA changes in the values (a floating `DECIMAL(p)` arrives as a
+  DOUBLE with about 15 significant digits, DATETIME fractions with 6 digits, `HOUR TO MINUTE` with seconds, BOOLEAN
+  as 1/0) and recommend SQLI (JDBC) when exact floating decimals matter (#160).
 - SQL Server: when a single INSERT, UPDATE, DELETE or MERGE fails, what it printed before the error (a trigger's
   PRINT before its RAISERROR) is shown before the error, as SSMS does; it was lost (#159).
 - **SQL Server: an error raised while a result's rows are read fails the statement** (#129): a conversion that fails
