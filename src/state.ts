@@ -1483,6 +1483,11 @@ export async function connect(connId: string, password?: string) {
         delete draft.passwords[connId];
       }));
     }
+    // The same for the SSH password typed at the prompt: the core forgets it too (it is read before the saved one).
+    if (sshAsked.has(connId) && /SSH: .*(no aceptó la autenticación por contraseña|falta la contraseña SSH)/.test(message)) {
+      sshAsked.delete(connId);
+      void api().setSessionSshPassword(connId, "").catch(() => {});
+    }
     offerDriverHelp(message, () => void connect(connId));
   } finally {
     // A disconnect in between owns the flag now (a newer connect may be running).

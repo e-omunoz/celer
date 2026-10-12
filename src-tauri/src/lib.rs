@@ -548,6 +548,7 @@ fn ssh_trust_host_key(state: State<'_, Arc<AppState>>, token: String) -> CmdResu
 }
 
 /// The SSH password typed in the connect prompt: kept in memory for this run, for the next sessions of the connection.
+/// An empty one forgets it (it was refused), so the next connect asks again.
 #[tauri::command]
 fn set_session_ssh_password(state: State<'_, Arc<AppState>>, conn_id: String, password: String) {
     state.store.set_session_secret(&ssh_account(&conn_id, "ssh-password"), &password);

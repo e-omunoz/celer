@@ -272,12 +272,19 @@ impl Store {
         self.secrets().get(id).cloned()
     }
 
-    /// Keeps a secret for this run only (never written anywhere).
+    /// Keeps a secret for this run only (never written anywhere); an empty one forgets it.
     pub fn set_session_secret(&self, id: &str, value: &str) {
-        self.session_secrets.lock().insert(id.to_string(), value.to_string());
+        let mut map = self.session_secrets.lock();
+        if value.is_empty() {
+            map.remove(id);
+        } else {
+            map.insert(id.to_string(), value.to_string());
+        }
     }
 
     pub fn set_password(&self, id: &str, pwd: &str) -> Result<()> {
+        // A saved secret replaces the one typed for this run (which would otherwise be read first).
+        self.session_secrets.lock().remove(id);
         mark_deleted(id, false);
         if keyring_set(id, pwd) {
             let mut map = self.secrets();
@@ -292,6 +299,7 @@ impl Store {
     }
 
     pub fn delete_password(&self, id: &str) {
+        self.session_secrets.lock().remove(id);
         mark_deleted(id, true);
         delete_parts(id);
         if let Ok(e) = keyring::Entry::new(keyring_service(), id) {
@@ -452,6 +460,25 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::Store;
+
+    #[test]
+    fn a_saved_or_deleted_secret_replaces_the_one_typed_for_this_run() {
+        let dir = std::env::temp_dir().join(format!("celer-store-session-{}", std::process::id()));
+        let store = Store::new(dir.clone());
+        let id = format!("celer-test-{}#ssh-password", std::process::id());
+        store.set_session_secret(&id, "mistyped");
+        assert_eq!(store.get_password(&id).as_deref(), Some("mistyped"));
+        // Refused: forgotten, so the next connect asks again.
+        store.set_session_secret(&id, "");
+        assert_eq!(store.get_password(&id), None);
+        store.set_session_secret(&id, "mistyped");
+        store.set_password(&id, "right").unwrap();
+        assert_eq!(store.get_password(&id).as_deref(), Some("right"), "the saved one wins over the typed one");
+        store.set_session_secret(&id, "mistyped");
+        store.delete_password(&id);
+        assert_eq!(store.get_password(&id), None, "deleting it forgets the typed one too");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_unreadable_json_file_is_kept_aside() {

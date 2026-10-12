@@ -1915,6 +1915,24 @@ fn ssh_tunnel_auth_jumps_and_refusals() {
     assert_eq!(report.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), [("ssh", "failed")], "{}", report.error);
     assert!(report.error.contains("no aceptó la autenticación"), "{}", report.error);
 
+    // The same typed at the connect prompt (kept for this run): once refused and forgotten, or once the right one is
+    // saved in the properties, it no longer shadows the saved one (#140).
+    let mut typed = cfg.clone();
+    typed.id = "ssh-test-typed".into();
+    typed.ssh.password = None;
+    let account = crate::model::ssh_account(&typed.id, "ssh-password");
+    store.set_session_secret(&account, "mala");
+    let e = (ssh_prepared(&store, &typed).connector)().err().expect("contraseña escrita mala").to_string();
+    assert!(e.contains("no aceptó la autenticación por contraseña"), "{e}");
+    store.set_password(&account, &get(&s, "password")).unwrap();
+    assert!((ssh_prepared(&store, &typed).connector)().is_ok(), "the saved password replaces the mistyped one");
+    crate::forget_free(&typed.id);
+    store.set_session_secret(&account, "mala");
+    store.delete_password(&account);
+    let e = (ssh_prepared(&store, &typed).connector)().err().expect("sin contraseña").to_string();
+    assert!(e.contains("falta la contraseña SSH"), "{e}");
+    crate::forget_free(&typed.id);
+
     // A port nobody listens on behind the bastion: the forward step fails, the SSH one is fine.
     let mut closed = first.cfg.clone();
     closed.id = "ssh-test-closed".into();

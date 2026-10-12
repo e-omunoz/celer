@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- SSH tunnels: an SSH password mistyped at the connect prompt is forgotten when the bastion refuses it, so the next
+  connect asks again; and saving or deleting the SSH password in the properties replaces the one typed for the run,
+  instead of the wrong one failing every connect until Celer restarted (#140).
 - Connections: «Exportar» without «Incluir contraseñas» also leaves out the other secret entries of «Parámetros
   extra» and the ODBC string (`sslpassword=`, `Token=`, `api_key=`…), as the export with passwords already did (#162).
 - Import from DBeaver/DbVisualizer: MySQL `sessionVariables` keep a quoted value with commas whole
