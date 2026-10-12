@@ -3,7 +3,7 @@
 // the differences. The comparison itself is compare.ts (the same engine as «Comparar datos» of two tables).
 import { api, errorText, isTauri } from "./api";
 import { columnIndex, comparisonTable, keyFits, singleTableOf, type Comparison } from "./compare";
-import { connectionById, kindOf, notify, openComparison, openMenu, patchCompare, shownResultRef, state, type ResultRef, type SqlTab, type TableTab } from "./state";
+import { connectionById, kindOf, notify, openComparison, openMenu, openSessionFor, patchCompare, shownResultRef, state, type ResultRef, type SqlTab, type TableTab } from "./state";
 import { exportStatement, resultToText } from "./sql";
 import { raw } from "./raw";
 import type { Cell, ResultSet } from "./types";
@@ -166,21 +166,34 @@ async function primaryKeyOf(ref: ResultRef): Promise<string[]> {
   if (tab.kind === "table") return tab.columnsMeta.filter((col) => col.primaryKey).map((col) => col.name);
   const sql = sqlOf(ref);
   const table = sql ? singleTableOf(sql) : null;
-  if (!table || !tab.sessionId || tab.running) return [];
+  if (!table || !tab.sessionId || !tab.connId || tab.running) return [];
   // The schema as the explorer knows it when the query did not name one.
   const known = tab.completion?.tables.find((t) => t.name.toLowerCase() === table.name.toLowerCase() && (!table.schema || t.schema.toLowerCase() === table.schema.toLowerCase()));
   const schema = known?.schema ?? table.schema;
   // Unknown schema: the engine's default one is tried too (SQL Server needs it named; others take "" as the current).
   const schemas = schema ? [schema] : kindOf(tab.connId) === "mssql" ? ["", "dbo"] : [""];
-  for (const candidate of schemas) {
-    try {
-      const columns = await api().tableColumns(tab.sessionId, { database: tab.database || "", schema: candidate, name: known?.name ?? table.name, kind: "table" });
-      if (columns.length) return columns.filter((col) => col.primaryKey).map((col) => col.name);
-    } catch {
-      /* not this one */
-    }
+  // A result still loading holds an open cursor on the console's session, and a metadata query there closes it
+  // (SQL Server would end the result short, the others fail «Cargar todo»): the lookup goes to a side session then.
+  let sessionId = tab.sessionId;
+  let side: string | null = null;
+  if (tab.results.some((result) => result.hasMore)) {
+    const opened = await openSessionFor(tab.connId, tab.database || undefined).catch(() => null);
+    if (!opened) return [];
+    sessionId = side = opened.sessionId;
   }
-  return [];
+  try {
+    for (const candidate of schemas) {
+      try {
+        const columns = await api().tableColumns(sessionId, { database: tab.database || "", schema: candidate, name: known?.name ?? table.name, kind: "table" });
+        if (columns.length) return columns.filter((col) => col.primaryKey).map((col) => col.name);
+      } catch {
+        /* not this one */
+      }
+    }
+    return [];
+  } finally {
+    if (side) void api().closeSession(side).catch(() => {});
+  }
 }
 
 /**

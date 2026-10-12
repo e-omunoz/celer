@@ -2205,6 +2205,10 @@ impl Driver for MssqlDriver {
     }
 
     fn fetch(&mut self, n: usize) -> Result<FetchOutput> {
+        // Nada abierto ni pendiente: otra operación cerró el resultado, que no debe parecer completo.
+        if self.cursor.is_none() && self.batches.is_empty() {
+            bail!(crate::session::CURSOR_CLOSED);
+        }
         let mut out = self.fetch_rows(n)?;
         // El resultado acabó: siguen los lotes que quedaban del script.
         if self.cursor.is_none() && !self.batches.is_empty() {

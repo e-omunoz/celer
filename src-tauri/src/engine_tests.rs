@@ -662,6 +662,11 @@ fn mssql_abandoned_cursor() {
     // "Pedir más" still works after a cut: a new cursor pages on.
     page(d);
     assert_eq!(d.fetch(500).unwrap().rows.len(), 500);
+    // Metadata on the session closes that result: the next fetch says so instead of ending it short (#131).
+    let obj = ObjectRef { database: "tempdb".into(), schema: "dbo".into(), name: "celer_big".into(), kind: "table".into() };
+    assert_eq!(d.table_columns(&obj).unwrap().len(), 2);
+    let err = d.fetch(500).expect_err("fetch tras cerrarse el resultado");
+    assert_eq!(err.to_string(), crate::session::CURSOR_CLOSED);
     // The rest of a batch cut with its result is told, before and after.
     let out = d.execute("SELECT n, relleno FROM dbo.celer_big\nSELECT 1", 500).unwrap();
     assert!(out.messages.iter().any(|m| m.starts_with("Lo que quede del lote")), "{:?}", out.messages);

@@ -210,6 +210,10 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Result comparison: looking up the primary key of a console's result no longer runs on the console's own session
+  while its result is still loading (it uses a session of its own then), so on SQL Server the result and the
+  comparison are no longer cut short at the first page and on MySQL, MariaDB and SQLite «Cargar todo» no longer fails;
+  a SQL Server result closed by another operation now says so instead of looking complete (#131).
 - History: «Consultas que se guardan» is what limits the history again: its size bound grows with the setting (about
   512 bytes per query, 4 MB at least) instead of a fixed 4 MB that kept only about 15,000 queries whatever the setting
   said; Ajustes › Historial and the guide say how very long queries count (#163).
