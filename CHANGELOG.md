@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Reports: «Capturar la ventana» shows the window as it is on screen: a scrolled explorer no longer comes out empty,
+  and a scrolled editor or result grid shows the lines and rows in view (with its header and row numbers where they
+  are), instead of their top (#135).
 - Tab bar: with many consoles in a manual transaction on a narrow window, a tab's «TX …» badge no longer sticks out
   over the next tab and the «+» button; a tab with a transaction keeps room for its badge and close button (the tab
   bar scrolls) and only its title gives way (#134).

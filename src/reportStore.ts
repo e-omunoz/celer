@@ -208,7 +208,7 @@ export async function captureWindow() {
   setReport("capturing", true);
   try {
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const { toPng } = await import("html-to-image");
+    const { captureToPng: toPng } = await import("./windowCapture");
     const bg = getComputedStyle(document.body).backgroundColor;
     // Hidden tabs (and their editors) are left out: with 20 tabs open the serialised page was 42 MB and failed to load.
     const filter = (node: Node) => !(node instanceof HTMLElement) || (node.hidden === false && getComputedStyle(node).display !== "none");
