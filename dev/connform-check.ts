@@ -97,7 +97,7 @@ assert.equal(info?.port, 3307);
 assert.equal(info?.database, "shop");
 assert.equal(info?.encryption, "required");
 assert.equal(info?.trustCert, true);
-assert.equal(info?.params, "connect_timeout=5;sql_mode='ANSI_QUOTES'");
+assert.equal(info?.params, "connect_timeout=5;sql_mode=ANSI_QUOTES", "the quotes go: Celer quotes a value that is not a number");
 assert.deepEqual(info?.ignored, ["serverTimezone"]);
 info = parseJdbc("jdbc:mariadb://maria/erp?sslMode=verify-full");
 assert.equal(info?.kind, "mysql");

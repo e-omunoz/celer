@@ -278,8 +278,9 @@ export function parseJdbc(url: string): JdbcInfo | null {
           if (!query.toLowerCase().includes("sslmode=")) info.encryption = isTrue(value) ? "required" : "off";
           break;
         case "currentschema":
-          // libpq has no currentSchema: the same through the session's search_path.
-          extra.push(param("options", `-c search_path=${value}`));
+          // libpq has no currentSchema: the same through the session's search_path. The server splits
+          // options on spaces, so "a, b" or a quoted name with a space keeps its spaces escaped.
+          extra.push(param("options", `-c search_path=${value.replace(/[\\ ]/g, "\\$&")}`));
           break;
         case "applicationname":
           extra.push(param("application_name", value));
@@ -342,8 +343,12 @@ export function parseJdbc(url: string): JdbcInfo | null {
           extra.push(param("compress", isTrue(value) ? "true" : "false"));
           break;
         case "sessionvariables":
-          // "a=1,b='x'": each one a session variable, as Celer's extra parameters do.
-          for (const pair of value.split(",")) if (pair.includes("=")) extra.push(pair.trim());
+          // "a=1,b='x,y'": each one a session variable, as Celer's extra parameters do. Commas inside
+          // quotes belong to the value, and the quotes go: Celer quotes a value that is not a number.
+          for (const pair of splitOutsideQuotes(value, ",")) {
+            const eq = pair.indexOf("=");
+            if (eq > 0) extra.push(param(pair.slice(0, eq).trim(), unquote(pair.slice(eq + 1).trim())));
+          }
           break;
         default:
           info.ignored.push(key);
@@ -353,6 +358,32 @@ export function parseJdbc(url: string): JdbcInfo | null {
     return info;
   }
   return null;
+}
+
+/** Splits on `separator` outside '…' and "…" (a doubled quote inside stays part of the value). */
+function splitOutsideQuotes(text: string, separator: string): string[] {
+  const parts: string[] = [];
+  let quote = "";
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === separator) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+/** 'x' or "x" → x, with a doubled quote inside back to one. */
+function unquote(value: string): string {
+  const q = value[0];
+  if ((q === "'" || q === '"') && value.length >= 2 && value.endsWith(q)) return value.slice(1, -1).split(q + q).join(q);
+  return value;
 }
 
 /** "informixserver=x;DB_LOCALE=es_ES.819" → [key, value] pairs (a value may hold "="). */

@@ -210,6 +210,9 @@ All notable changes to Celer are documented here. The format follows
   organisation and every download Celer can make (#111, #121).
 
 ### Fixed
+- Import from DBeaver/DbVisualizer: MySQL `sessionVariables` keep a quoted value with commas whole
+  (`sql_mode='A,B'`), and a PostgreSQL `currentSchema` with spaces (`ventas, public`) is escaped in `options`, so the
+  imported connection opens (#161).
 - Import from DBeaver/DbVisualizer: a MySQL/MariaDB URL with `connectTimeout=0` or `socketTimeout=0` (no timeout
   in Connector/J) no longer becomes a 1-second timeout; the parameter is left out (#144).
 - Windows: closing a window with a single tab at risk says «Puedes moverla…» / «Moverla a …» instead of the plural

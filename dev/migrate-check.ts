@@ -118,6 +118,9 @@ assert.ok(myMulti.notes[0].includes("my2:3307"));
 // connectTimeout=0 / socketTimeout=0 are "no timeout" in Connector/J: left out, never a 1 s limit (#144).
 assert.equal(parseJdbc("jdbc:mysql://h/x?connectTimeout=0&socketTimeout=0")?.params, undefined);
 assert.equal(parseJdbc("jdbc:mariadb://h/x?socketTimeout=1500")?.params, "read_timeout=2");
+// sessionVariables split outside quotes, the quotes dropped (Celer quotes the value); spaces in currentSchema escaped (#161).
+assert.equal(parseJdbc("jdbc:mysql://h/x?sessionVariables=sql_mode='ANSI_QUOTES,NO_ZERO_DATE',wait_timeout=60,a=\"x\"")?.params, "sql_mode=ANSI_QUOTES,NO_ZERO_DATE;wait_timeout=60;a=x");
+assert.equal(parseJdbc("jdbc:postgresql://h/x?currentSchema=ventas,%20public")?.params, "options=-c search_path=ventas,\\ public");
 const pgSsl = byName(edge, "PG SSL");
 assert.deepEqual([pgSsl.cfg.encryption, pgSsl.cfg.trustCert], ["required", false]);
 const plain = byName(edge, "Sin cifrado");
