@@ -415,12 +415,14 @@ function tableColumns(db: Database, obj: ObjectRef): TableColumn[] {
   return rows.map((row) => {
     const typeName = text(row[1]) || "any";
     const kind: ColKind = /int|real|num|dec|floa|doub/i.test(typeName) ? "number" : /date|time/i.test(typeName) ? "date" : "text";
+    const rowidAlias = pkCols === 1 && !withoutRowid && num(row[4]) > 0 && /^\s*integer\s*$/i.test(typeName);
     return {
       name: text(row[0]),
       typeName,
-      nullable: num(row[2]) === 0,
+      // The rowid alias is never NULL, whatever the pragma says (as the core's sqlite.rs).
+      nullable: num(row[2]) === 0 && !rowidAlias,
       primaryKey: num(row[4]) > 0,
-      identity: pkCols === 1 && !withoutRowid && num(row[4]) > 0 && /^\s*integer\s*$/i.test(typeName),
+      identity: rowidAlias,
       default: row[3] === null || row[3] === undefined ? null : text(row[3]),
       kind,
     };

@@ -706,12 +706,14 @@ impl Driver for SqliteDriver {
                         t
                     }
                 };
+                let rowid_alias = pk_cols == 1 && !without_rowid && cell_i64(&r[4]) > 0 && type_name.trim().eq_ignore_ascii_case("integer");
                 TableColumn {
                     name: cell_string(&r[0]),
                     kind: kind_from_decl(&type_name),
-                    nullable: cell_i64(&r[2]) == 0,
+                    // The rowid alias is never NULL (a NULL inserted there takes the next rowid), whatever the pragma says.
+                    nullable: cell_i64(&r[2]) == 0 && !rowid_alias,
                     primary_key: cell_i64(&r[4]) > 0,
-                    identity: pk_cols == 1 && !without_rowid && cell_i64(&r[4]) > 0 && type_name.trim().eq_ignore_ascii_case("integer"),
+                    identity: rowid_alias,
                     default: match &r[3] {
                         Cell::Null => None,
                         other => Some(cell_string(other)),
@@ -1084,6 +1086,7 @@ mod tests {
         let cols = d.table_columns(&obj).unwrap();
         assert!(cols[0].primary_key);
         assert!(!cols[1].nullable);
+        assert!(cols[0].identity && !cols[0].nullable, "the rowid alias is not nullable: {:?}", cols[0]);
         let ddl = d.ddl(&obj).unwrap();
         assert!(ddl.to_ascii_lowercase().contains("create table"));
         let comp = d.completion("main").unwrap();
