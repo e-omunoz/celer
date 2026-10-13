@@ -87,10 +87,15 @@ export function rangeText(range: NonNullable<RowHistory["range"]>, cutShort = fa
 }
 
 /** What the dialog says when no change of the row was read. */
-export function noEventsText(history: Pick<RowHistory, "cutShort">): string {
-  return history.cutShort
-    ? "No se leyó ningún cambio de esta fila antes de que la lectura se detuviera: eso no dice que no los tenga."
-    : "Sin cambios de esta fila en los logs leídos.";
+export function noEventsText(history: Pick<RowHistory, "cutShort" | "shownFrom">): string {
+  if (history.cutShort) {
+    return "No se leyó ningún cambio de esta fila antes de que la lectura se detuviera: eso no dice que no los tenga.";
+  }
+  // After fast recovery only the changes since the rewritten creation time are shown: none of them is not «no changes».
+  if (history.shownFrom) {
+    return `No se leyó ningún cambio de esta fila posterior al ${timeText(history.shownFrom)}; los anteriores no se muestran (ver arriba).`;
+  }
+  return "Sin cambios de esta fila en los logs leídos.";
 }
 
 /** The text of an unavailable history: the engine reasons already say «No disponible…»; the rest get the prefix. */

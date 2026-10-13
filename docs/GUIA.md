@@ -314,8 +314,10 @@ Doble clic en una tabla del explorador la abre.
     antiguo que queda en disco, su clave cambió, el servidor dio un error o se cortó la conexión, se pulsó *Detener*, el
     lector CDC del servidor se quedó parado («no entrega el log N más allá de…», «no respondió…»; un cambio de log
     lógico con `onmode -l` o reiniciar Informix lo recupera; en los minutos después de arrancar Informix, mientras sus
-    tareas de arranque escriben en el log, basta con volver a leer más tarde), o el último valor leído no es el que
-    tiene la fila hoy.
+    tareas de arranque escriben en el log, basta con volver a leer más tarde), el último valor leído no es el que
+    tiene la fila hoy, o el servidor reescribió la hora de creación de la tabla al recuperarse de una parada brusca
+    (un fallo o un proceso matado poco después de crearla): entonces los cambios anteriores a esa hora no se pueden
+    atribuir a la tabla con seguridad (podrían ser de una tabla ya borrada) y no se muestran; los posteriores, sí.
     Una lectura cortada nunca dice «sin cambios». Nunca se rellena un valor que el log no tenga.
   - En un resultado de consulta la opción remite a abrir la tabla (un resultado no dice de qué fila sale cada línea).
     En los demás motores aparece desactivada con «No disponible en …».

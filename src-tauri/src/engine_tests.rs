@@ -3393,9 +3393,11 @@ fn informix_jdbc_row_history() {
 /// «Historial de la fila» after fast recovery (#123): a table created, inserted into and updated after the last
 /// checkpoint, then the server killed (`docker kill -s KILL`) before the next one. Fast recovery replays the CREATE TABLE
 /// on start and stamps the partition's creation time with that moment (measured), so the row's real changes are older
-/// than it: the history shows them, says why it is not certain, and never calls them a dropped table's. It kills the
-/// server, so it runs only against a container it may kill: CELER_INFORMIX_KILLABLE=1 with CELER_INFORMIX_CONTAINER
-/// (never the shared WSL engines of a normal `engines.sh test`).
+/// than it and cannot be told from those of a dropped table that had the same partnum (tables created and dropped
+/// first make that likely). The history shows none of them, says it is partial for that reason, never calls them a
+/// dropped table's nor says the row had no changes, and shows a change made after the restart. It kills the server, so
+/// it runs only against a container it may kill: CELER_INFORMIX_KILLABLE=1 with CELER_INFORMIX_CONTAINER (never the
+/// shared WSL engines of a normal `engines.sh test`).
 #[test]
 fn informix_jdbc_row_history_after_fast_recovery() {
     use crate::rowhistory::{self, KeyPart, Request};
@@ -3404,7 +3406,7 @@ fn informix_jdbc_row_history_after_fast_recovery() {
         println!("Historial tras recuperación rápida: sin CELER_INFORMIX_KILLABLE=1 no se mata el servidor; no se comprueba");
         return;
     };
-    let _guard = watchdog("historial tras recuperación rápida", 540);
+    let _guard = watchdog("historial tras recuperación rápida", 600);
     informix_wait_startup_tasks(&cfg, &rt);
     let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
     let db = d.current_database().unwrap();
@@ -3415,6 +3417,19 @@ fn informix_jdbc_row_history_after_fast_recovery() {
     let full = format!("{db}:{}.rh_rec", cfg.user.trim());
     let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 0)"), 10);
     d.execute("DROP TABLE IF EXISTS rh_rec", 10).unwrap();
+    let partnum = |d: &mut dyn Driver| -> i64 {
+        let rows = try_rows(d, "SELECT partnum FROM systables WHERE tabname = 'rh_rec'").unwrap();
+        rows.first().and_then(|r| r.first()).map(txt).and_then(|v| v.trim().parse().ok()).expect("partnum de rh_rec")
+    };
+    // Dropped tables with the same name and key whose partnum the new table may take: their changes stay in the log.
+    let mut dropped = Vec::new();
+    for n in 0..3 {
+        for sql in ["CREATE TABLE rh_rec (id INT PRIMARY KEY, v VARCHAR(20))".to_string(), format!("INSERT INTO rh_rec VALUES (1, 'borrada{n}')")] {
+            d.execute(&sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+        }
+        dropped.push(partnum(&mut *d));
+        d.execute("DROP TABLE rh_rec", 10).unwrap();
+    }
     let docker = |args: &[&str]| Command::new("docker").args(args).status().is_ok_and(|s| s.success());
     // A checkpoint, then the table: its creation is after the last checkpoint when the server dies.
     assert!(docker(&["exec", &container, "bash", "-lc", "onmode -c"]), "onmode -c en {container}");
@@ -3426,6 +3441,8 @@ fn informix_jdbc_row_history_after_fast_recovery() {
         d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
     }
     let before = created(&mut *d);
+    let ours = partnum(&mut *d);
+    println!("rh_rec: partnum {ours}; las tablas borradas antes tenían {dropped:?}");
     drop(d);
     // The container's address (the JDBC test connects to it directly) may change when it starts again.
     let ip = || {
@@ -3457,42 +3474,48 @@ fn informix_jdbc_row_history_after_fast_recovery() {
     admin_cfg.database = "sysadmin".into();
     let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
     // The reader may not have the newest part of the log ready yet: a DBA's log switch, and the read asked again.
-    let mut h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
-    for _ in 0..3 {
-        if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
-            break;
+    let mut read = |what: &str| {
+        let mut h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
+        for _ in 0..3 {
+            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
+                break;
+            }
+            informix_switch_log(&mut admin);
+            h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
         }
-        informix_switch_log(&mut admin);
-        h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
-    }
-    println!(
-        "Historial tras recuperación rápida: {:?}\n  parcial {:?}\n  notas {:?}",
-        h.events.iter().map(|e| (e.op, e.time, &e.after)).collect::<Vec<_>>(),
-        h.partial,
-        h.notes
-    );
+        println!(
+            "Historial tras recuperación rápida ({what}): {:?}\n  parcial {:?}\n  notas {:?}",
+            h.events.iter().map(|e| (e.op, e.time, &e.after)).collect::<Vec<_>>(),
+            h.partial,
+            h.notes
+        );
+        h
+    };
+    let recovered = read("tras arrancar");
+    // One more change, after the recovery: it is the table's, and shown.
+    let changed = d.execute("UPDATE rh_rec SET v = 'tras' WHERE id = 1", 10);
+    let later = changed.is_ok().then(|| read("tras un cambio posterior"));
     let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 0)"), 10);
     let _ = d.execute("DROP TABLE rh_rec", 10);
-    assert_eq!(h.status, "ok", "{h:?}");
-    assert!(!h.stalled, "{:?}", h.partial);
+    changed.expect("UPDATE tras arrancar");
+    let later = later.unwrap();
     let some = |v: &[&str]| Some(v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>());
-    let ops: Vec<&str> = h.events.iter().map(|e| e.op).collect();
-    // The server's CDC API may refuse the insert's transaction after the recovery (measured: -83800 on the one that
-    // also extends the new partition): then the history says that part of the log could not be read, and claims
-    // nothing about where the row began.
-    let refused = h.partial.iter().any(|p| p.contains("El servidor no lee el log en"));
-    if refused {
-        assert!(ops == ["update"] || ops == ["insert", "update"], "{h:?}");
-        assert!(!h.partial.iter().any(|p| p.contains("ya existía")), "{:?}", h.partial);
-    } else {
-        assert_eq!(ops, ["insert", "update"], "{h:?}");
-        assert_eq!(h.events[0].after, some(&["1", "antes"]));
+    for h in [&recovered, &later] {
+        assert_eq!(h.status, "ok", "{h:?}");
+        assert!(!h.stalled, "{:?}", h.partial);
+        assert_eq!(h.shown_from, Some(after), "{h:?}");
+        // Nothing from before the recovery: neither the row's own insert and update nor any dropped table's.
+        assert!(h.events.iter().all(|e| e.time >= after), "{h:?}");
+        assert!(h.events.iter().all(|e| e.after.as_ref().and_then(|a| a.get(1).cloned().flatten()).is_none_or(|v| !v.starts_with("borrada") && v != "antes" && v != "despues")), "{h:?}");
+        assert!(!h.events.iter().any(|e| e.op == "insert"), "{h:?}");
+        // The true reason it is partial, and not a false one.
+        assert!(h.partial.iter().any(|p| p.contains("al recuperarse de una parada brusca") && p.contains("no se muestran")), "{:?}", h.partial);
+        assert!(h.partial.iter().all(|p| p.contains("parada brusca") || p.contains("El servidor no lee el log en") || p.contains("no entrega el log")), "{:?}", h.partial);
+        assert!(!h.notes.iter().chain(&h.partial).any(|n| n.contains("Se descartaron") || n.contains("tabla borrada") || n.contains("Ningún cambio") || n.contains("ya existía")), "{h:?}");
     }
-    assert_eq!(h.events.last().unwrap().after, some(&["1", "despues"]));
-    // The true reason it is not certain, and not the false one.
-    assert!(h.partial.iter().any(|p| p.contains("recuperación rápida") && p.contains(if ops.len() == 1 { "El cambio de esta fila" } else { "Los 2 cambios" })), "{:?}", h.partial);
-    assert!(h.partial.iter().all(|p| p.contains("recuperación rápida") || p.contains("no entrega el log")), "{:?}", h.partial);
-    assert!(!h.notes.iter().chain(&h.partial).any(|n| n.contains("Se descartaron") || n.contains("tabla borrada que tenía") || n.contains("Ningún cambio")), "{h:?}");
+    assert!(recovered.events.is_empty(), "{recovered:?}");
+    assert_eq!(later.events.iter().map(|e| e.op).collect::<Vec<_>>(), ["update"], "{later:?}");
+    assert_eq!(later.events[0].after, some(&["1", "tras"]));
 }
 
 // ───────────────────────────────────────────────────────────────── test data generator (#172)

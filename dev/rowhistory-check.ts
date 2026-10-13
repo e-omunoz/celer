@@ -69,9 +69,14 @@ const cut = { firstLog: 209, firstLogFilled: null, currentLog: 218, fromLsn: "20
 assert.match(rangeText(cut, true), /^La lectura se detuvo antes de leer ningún registro \(desde la posición 209:0x0\)\. En disco quedan los logs 209 a 218\.$/);
 assert.doesNotMatch(rangeText(cut, true), /Leído/);
 assert.match(rangeText({ ...cut, readUntil: "211:0x4000" }, true), /^La lectura se detuvo: se leyó de la posición 209:0x0 a la 211:0x4000\./);
-assert.match(noEventsText({ cutShort: true }), /no dice que no los tenga/);
-assert.doesNotMatch(noEventsText({ cutShort: true }), /Sin cambios/);
-assert.equal(noEventsText({ cutShort: false }), "Sin cambios de esta fila en los logs leídos.");
+assert.match(noEventsText({ cutShort: true, shownFrom: null }), /no dice que no los tenga/);
+assert.doesNotMatch(noEventsText({ cutShort: true, shownFrom: null }), /Sin cambios/);
+assert.equal(noEventsText({ cutShort: false, shownFrom: null }), "Sin cambios de esta fila en los logs leídos.");
+// After Informix's fast recovery rewrote the creation time (#123): what came before is not shown, so no change read
+// since then is never «sin cambios».
+const recovered = noEventsText({ cutShort: false, shownFrom: 1791928706 });
+assert.match(recovered, /^No se leyó ningún cambio de esta fila posterior al .+; los anteriores no se muestran/);
+assert.doesNotMatch(recovered, /Sin cambios|Ningún cambio/);
 
 // «No se puede reconstruir: …» unless the reason already says it is not available.
 assert.equal(unavailableText("la base de datos «x» no tiene log."), "No se puede reconstruir: la base de datos «x» no tiene log.");

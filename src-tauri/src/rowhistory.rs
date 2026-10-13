@@ -72,6 +72,9 @@ pub struct History {
     /// The read ended before the end of the log (stopped, time limit, stuck reader, lost connection): no change seen
     /// says nothing about the row.
     pub cut_short: bool,
+    /// Changes committed before this time are not shown, and none of them can be told apart: the table's creation time,
+    /// which Informix's fast recovery rewrote (see `creation_replayed`). None for a creation time that is the table's.
+    pub shown_from: Option<i64>,
     /// Full row logging stays on in the table, which the user did not agree to: shown as a warning, not a note.
     pub left_on: Option<LeftOn>,
     /// The server's CDC reader stopped answering (a test needs to tell it from a partial history).
@@ -816,10 +819,9 @@ pub struct Builder {
     key_idx: Vec<usize>,
     /// When the table's partition was created: older records are of a dropped table that had the same partnum.
     created: i64,
-    /// The partition's creation time when fast recovery wrote it (see `creation_replayed`): the table's real creation is
-    /// unknown, nothing is left out by time, and the changes of the row before it are counted (`before_replay`).
-    replayed: Option<i64>,
-    before_replay: usize,
+    /// The partition's creation time is the one fast recovery wrote (see `creation_replayed`): the table's real creation
+    /// is unknown and older records may be its own or a dropped table's, so they are left out without calling them either.
+    replayed: bool,
     users: HashMap<i64, String>,
     txs: HashMap<i64, Tx>,
     pub events: Vec<Event>,
@@ -848,8 +850,7 @@ impl Builder {
             key,
             key_idx: vec![],
             created,
-            replayed: None,
-            before_replay: 0,
+            replayed: false,
             users,
             txs: HashMap::new(),
             events: vec![],
@@ -864,9 +865,9 @@ impl Builder {
         }
     }
 
-    /// The partition's creation time is the one fast recovery wrote when it replayed the CREATE TABLE (`at`).
-    pub fn replayed_at(mut self, at: Option<i64>) -> Builder {
-        self.replayed = at;
+    /// The partition's creation time is the one fast recovery wrote when it replayed the CREATE TABLE.
+    pub fn replayed(mut self, replayed: bool) -> Builder {
+        self.replayed = replayed;
         self
     }
 
@@ -963,9 +964,6 @@ impl Builder {
                             self.key_moved_in = Some(old);
                         }
                         if self.events.len() < MAX_EVENTS {
-                            if self.replayed.is_some_and(|r| time < r) {
-                                self.before_replay += 1;
-                            }
                             self.events.push(Event {
                                 lsn: item.lsn.to_string(),
                                 time,
@@ -1032,6 +1030,15 @@ impl Builder {
         // Parts of the log not read may hold the row's insert: then where it began is not known either.
         let gapped = !gaps.is_empty();
         let mut h = History { status: "ok", columns: self.columns(), cut_short, ..Default::default() };
+        // After fast recovery rewrote the creation time, what came before it is not shown: the history is partial, and
+        // neither where the row began nor that it had no changes can be said.
+        if self.replayed {
+            h.shown_from = Some(self.created);
+            h.partial.push(format!(
+                "El servidor reescribió la hora de creación de esta tabla al recuperarse de una parada brusca ({}): los cambios anteriores a esa hora no se pueden atribuir a esta tabla con seguridad y no se muestran.",
+                utc_text(self.created)
+            ));
+        }
         h.partial.extend(gaps);
         if let Some(why) = stopped {
             h.partial.push(why);
@@ -1043,6 +1050,7 @@ impl Builder {
             h.partial.push(format!("Hay más de {MAX_EVENTS} cambios de la fila: se muestran los {MAX_EVENTS} primeros."));
         }
         match self.events.first().filter(|_| self.key_moved_in.is_none()) {
+            _ if self.replayed => {}
             None if self.key_moved_in.is_some() || cut_short => {}
             None => h.partial.push(format!(
                 "Ningún cambio de esta fila en los logs que quedan en disco (desde el log {first_log}): lo que pasó antes de ese log no se puede saber."
@@ -1062,18 +1070,7 @@ impl Builder {
         if open > 0 {
             h.notes.push(format!("{open} cambios de transacciones que aún no han hecho commit no se muestran."));
         }
-        if let Some(at) = self.replayed.filter(|_| self.before_replay > 0) {
-            h.partial.push(format!(
-                "El servidor da como hora de creación de esta tabla {}, cuando Informix arrancaba tras una parada brusca: es la hora a la que su recuperación rápida rehízo la tabla, no la de su creación, que no se sabe. {} como de esta tabla; si antes hubo otra tabla, ya borrada, con el mismo número de partición, sus cambios con esta clave no se distinguirían de estos.",
-                utc_text(at),
-                if self.before_replay == 1 {
-                    "El cambio de esta fila anterior a esa hora se muestra".to_string()
-                } else {
-                    format!("Los {} cambios de esta fila anteriores a esa hora se muestran", self.before_replay)
-                }
-            ));
-        }
-        if self.older_than_table > 0 {
+        if self.older_than_table > 0 && !self.replayed {
             h.notes.push(format!(
                 "Se descartaron {} cambios anteriores a la creación de esta tabla: eran de una tabla borrada que tenía el mismo número de partición.",
                 self.older_than_table
@@ -1366,11 +1363,10 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     let frl_on = !hdrs.is_empty() && hdrs.iter().all(|r| r.first().and_then(int).is_some_and(|f| f & FULL_ROW_LOGGING != 0));
     let created = hdrs.iter().filter_map(|r| r.get(1).and_then(int)).max().unwrap_or(0);
     let altered = hdrs.iter().any(|r| r.get(2).and_then(int).unwrap_or(0) > 0);
-    // A creation time fast recovery wrote is not the table's (see `creation_replayed`): then no log is skipped and no
-    // change is left out by it, since the table's own changes come before it.
+    // A creation time fast recovery wrote is not the table's (see `creation_replayed`): the read still starts from it,
+    // since what came before may be a dropped table's, and the history says that part is not shown.
     let (boot, online) = server_start(&q);
     let replayed = creation_replayed(created, boot, online);
-    let cutoff = if replayed { 0 } else { created };
 
     // The CDC API.
     let cdc = q("SELECT COUNT(*) FROM sysmaster:sysdatabases WHERE name = 'syscdcv1'")?;
@@ -1449,7 +1445,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     // The table's partition was created in the first log that filled after `created` (or in the current one): the
     // older logs hold only other tables, and a dropped one may have had the same partnum, which the CDC API cannot
     // read (-83790).
-    let older = used.iter().take_while(|(_, f, fill)| f & 2 == 0 && *fill > 0 && *fill < cutoff).count();
+    let older = used.iter().take_while(|(_, f, fill)| f & 2 == 0 && *fill > 0 && *fill < created).count();
     let start_logs: Vec<i64> = used[older..].iter().map(|l| l.0).collect();
 
     let claim = if frl_on { shared_claim } else { Some(LiveClaim::new(&ledger_key)) };
@@ -1502,7 +1498,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         let started = Instant::now();
         let asked_at = chrono::Utc::now().timestamp();
         let key: Vec<(String, String)> = req.key.iter().map(|k| (k.column.clone(), k.value.clone())).collect();
-        let mut b = Builder::new(key, cutoff, users, codeset).replayed_at(replayed.then_some(created));
+        let mut b = Builder::new(key, created, users, codeset).replayed(replayed);
         let mut buf: Vec<u8> = Vec::new();
         let mut stopped = None;
         let mut read_from = resumed.unwrap_or(Lsn(from as u32, 0));
@@ -1628,9 +1624,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
                 }
                 let failed_at = b.last.max(read_from);
                 let why = b.take_error();
-                // With a creation time fast recovery wrote, where the table begins is unknown: the read goes on past the
-                // error as before the table existed, and what it skips is said as a gap (below).
-                if (b.after_creation && !replayed) || searches >= MAX_SEARCHES {
+                if b.after_creation || searches >= MAX_SEARCHES {
                     stopped = Some(format!("El servidor dio un error al leer el log después de {failed_at} ({why}): la lectura se detuvo ahí."));
                     break;
                 }
@@ -1754,7 +1748,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         if replayed {
             for (at, resume, why) in &skipped_from {
                 gaps.push(format!(
-                    "El servidor no lee el log en {at} ({why}): la lectura siguió en {resume}, la primera posición legible, y los cambios de esta fila entre esas dos posiciones, si los hay, no se pueden ver. Como la hora de creación de la tabla es la de la recuperación rápida de Informix, no se sabe si esa parte del log es de una tabla borrada con el mismo número de partición o de esta."
+                    "El servidor no lee el log en {at} ({why}): la lectura siguió en {resume}, la primera posición legible, y lo que hay entre esas dos posiciones no se puede ver. Como la recuperación rápida reescribió la hora de creación de la tabla, no se sabe de qué tabla es esa parte del log."
                 ));
             }
         }
@@ -1788,7 +1782,11 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
                 "Antes de crearse la tabla, el log tiene registros de tablas borradas que usaban su número de partición, y el servidor no los lee ({why}, en {at}): la lectura siguió en {resume}, la primera posición legible, que queda antes de cualquier cambio de esta tabla."
             ));
         }
-        if older > 0 && from != first_log {
+        if older > 0 && from != first_log && replayed {
+            h.notes.push(format!(
+                "La lectura empieza en el log {from}: los anteriores se llenaron antes de la hora de creación que escribió la recuperación rápida."
+            ));
+        } else if older > 0 && from != first_log {
             h.notes.push(format!(
                 "La tabla se creó después de llenarse el log {}: la lectura empieza en el log {from}, porque los anteriores no tienen cambios suyos.",
                 used[older - 1].0
@@ -2232,12 +2230,12 @@ mod tests {
     }
 
     fn history(stream: &[u8], key: &str, created: i64) -> History {
-        replayed_history(stream, key, created, None)
+        replayed_history(stream, key, created, false)
     }
 
-    fn replayed_history(stream: &[u8], key: &str, created: i64, replayed: Option<i64>) -> History {
+    fn replayed_history(stream: &[u8], key: &str, created: i64, replayed: bool) -> History {
         let users = HashMap::from([(200, "informix".to_string())]);
-        let mut b = Builder::new(vec![("id".into(), key.into())], created, users, Codeset::Latin1).replayed_at(replayed);
+        let mut b = Builder::new(vec![("id".into(), key.into())], created, users, Codeset::Latin1).replayed(replayed);
         // Records arrive in pieces of any size.
         let mut buf = Vec::new();
         for piece in stream.chunks(7) {
@@ -2285,7 +2283,7 @@ mod tests {
     }
 
     #[test]
-    fn a_creation_time_written_by_fast_recovery_drops_nothing() {
+    fn a_creation_time_written_by_fast_recovery_hides_what_came_before_and_says_so() {
         // Measured (#123): created 20:54:40, killed before a checkpoint; the server started at boot, fast recovery
         // replayed the CREATE TABLE and stamped it, and the start-up checkpoint (on-line) came after.
         let (boot, replay, online) = (1_791_924_898, 1_791_924_905, Some(1_791_924_908));
@@ -2298,18 +2296,22 @@ mod tests {
         assert!(!creation_replayed(replay, boot, None));
         assert!(!creation_replayed(replay, 0, online));
 
-        // The row's changes before the replayed time are its own: shown, with the true reason the history is not
-        // certain, and none of them called a dropped table's.
-        let h = replayed_history(&spike_stream(), "1", 0, Some(1005));
-        assert_eq!(h.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update", "update", "update"]);
-        assert!(h.partial.iter().any(|p| p.contains("recuperación rápida") && p.contains("Los 2 cambios")), "{:?}", h.partial);
-        assert!(!h.notes.iter().chain(&h.partial).any(|n| n.contains("Se descartaron") || n.contains("tabla borrada que tenía")), "{:?} {:?}", h.notes, h.partial);
-        // No change of the row before it: nothing to warn about.
-        let h = replayed_history(&spike_stream(), "1", 0, Some(1000));
-        assert!(h.partial.is_empty() && h.events.len() == 4, "{:?}", h.partial);
+        // Before the rewritten time, records may be the row's own or a dropped table's with the same partnum: none is
+        // shown, the history says why it is partial, and it neither calls them a dropped table's nor says where the row
+        // began or that it had no changes. Changes after it are shown as usual.
+        let h = replayed_history(&spike_stream(), "1", 1005, true);
+        assert_eq!(h.events.iter().map(|e| (e.op, e.time)).collect::<Vec<_>>(), vec![("update", 1005), ("update", 1008)]);
+        assert_eq!(h.shown_from, Some(1005));
+        assert_eq!(h.partial.len(), 1, "{:?}", h.partial);
+        assert!(h.partial[0].contains("al recuperarse de una parada brusca (1970-01-01 00:16:45 UTC)") && h.partial[0].contains("no se muestran"), "{:?}", h.partial);
+        let said = || h.notes.iter().chain(&h.partial);
+        assert!(!said().any(|n| n.contains("Se descartaron") || n.contains("tabla borrada") || n.contains("ya existía") || n.contains("Ningún cambio")), "{h:?}");
+        // No change of the row after it: still partial for the same reason, never «no changes».
+        let h = replayed_history(&spike_stream(), "1", 1010, true);
+        assert!(h.events.is_empty() && h.shown_from == Some(1010) && h.partial.len() == 1 && h.partial[0].contains("parada brusca"), "{h:?}");
         // A creation time that is the table's still leaves out a dropped table's changes (the_history_of_one_row).
         let h = history(&spike_stream(), "1", 1005);
-        assert!(h.notes.iter().any(|n| n.contains("Se descartaron 2")) && !h.partial.iter().any(|p| p.contains("recuperación")), "{h:?}");
+        assert!(h.notes.iter().any(|n| n.contains("Se descartaron 2")) && !h.partial.iter().any(|p| p.contains("parada brusca")) && h.shown_from.is_none(), "{h:?}");
     }
 
     #[test]

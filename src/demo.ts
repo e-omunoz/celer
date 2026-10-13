@@ -797,7 +797,7 @@ export function createDemoBackend(): Backend {
       // The preview only has SQLite: no logical logs to read.
       const cfg = loadConns().find((item) => item.id === connId);
       const reason = rowHistoryBlocked(cfg?.kind ?? "sqlite") ?? "No disponible en la vista previa del navegador";
-      return { status: "unavailable", reason, columns: [], skipped: [], events: [], range: null, partial: [], notes: [], cutShort: false, leftOn: null };
+      return { status: "unavailable", reason, columns: [], skipped: [], events: [], range: null, partial: [], notes: [], cutShort: false, shownFrom: null, leftOn: null };
     },
     async exportQuery(connId, _database, sql, _exportId, options) {
       const cfg = loadConns().find((item) => item.id === connId);

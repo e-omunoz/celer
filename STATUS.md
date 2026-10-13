@@ -68,7 +68,7 @@ one has today.
   routines, reactions, tips learned from use and advice about the query just run; quiet or off in Settings.
 - **Safety**: read-only connections enforced in the Rust core, production connections confirm risky statements,
   passwords only in the OS credential store, damaged data files set aside instead of overwritten.
-- **Tests** (counts at 2.4): `cargo test --lib` has 282 tests, the live ones run against every engine when its
+- **Tests** (counts at 2.4): `cargo test --lib` has 284 tests, the live ones run against every engine when its
   `CELER_*_TEST` variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix);
   35 pure logic checks (`dev/*-check.ts`, all run by CI and by `dev/check-all.ps1`); 28 scripts that drive the
   desktop app over CDP (`dev/*-check.mjs`) plus `dev/e2e.mjs`. `dev/check-all.ps1` runs the end-to-end ones that pass
