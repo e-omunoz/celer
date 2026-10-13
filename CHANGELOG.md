@@ -107,6 +107,12 @@ All notable changes to Celer are documented here. The format follows
   pattern, a range, the NULL %) rebuilt the sets of up to 200,000 existing values per unique column through the
   dialog's reactive state, so each keystroke froze the window for a fraction of a second or more and the memory stayed
   in use after closing it. The existing values are now indexed once per table read and released with the dialog.
+- **Row history right after Informix starts** (#206): about 90 s after a start, the server's start-up tasks write to
+  the log and its CDC reader stops where it meets them, for minutes. A history read then was partial and blamed an
+  earlier read, and Celer kept skipping that point of the log for the rest of the session even once the server read
+  past it again. The reason now names both causes and says to read again later, and a stop found by one read is
+  trusted for five minutes only. The engine test waits for those tasks, reads each history on its own connection as
+  the app does, and restarts the Informix container only when its CDC reader does not read a short history whole.
 - **Two row-history reads of one table at once** (#205): when two windows read the history of rows of the same
   table, the first to end turned full row logging off while the other was still reading. It now stays on until the
   last of them ends, which turns it off once and says so.

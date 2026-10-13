@@ -3021,6 +3021,98 @@ fn informix_types_drda_and_jdbc() {
     }
 }
 
+/// `onmode -l` as a DBA does it: through sysadmin's task(), or in the container.
+fn informix_switch_log(admin: &mut dyn Driver) {
+    let switched = admin.execute("EXECUTE FUNCTION task('onmode', 'l')", 10).is_ok()
+        || std::env::var("CELER_INFORMIX_CONTAINER")
+            .is_ok_and(|c| Command::new("docker").args(["exec", c.as_str(), "bash", "-lc", "onmode -l"]).status().is_ok_and(|s| s.success()));
+    assert!(switched, "no se pudo cambiar de log lógico (sysadmin:task ni onmode en el contenedor)");
+}
+
+/// Restarts the Informix container and waits for it to answer again.
+fn informix_restart(container: &str) {
+    assert!(Command::new("docker").args(["restart", container]).status().is_ok_and(|s| s.success()), "no se pudo reiniciar el contenedor de Informix");
+    let up = (0..80).any(|_| {
+        let ok = Command::new("docker")
+            .args(["exec", container, "bash", "-lc", "echo 'SELECT COUNT(*) FROM systables' | dbaccess sysmaster -"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            std::thread::sleep(Duration::from_secs(3));
+        }
+        ok
+    });
+    assert!(up, "Informix no volvió a arrancar tras reiniciarlo");
+}
+
+/// Waits (up to three minutes) for the sysadmin scheduler's start-up sensors (mon_sysenv, mon_config_startup) to have
+/// run since the server started: about 90 s after a start they write a burst of sysadmin transactions to the log, and a
+/// CDC read that meets those records while they are being written stops there for minutes (measured on Informix 15:
+/// every read after it is partial, the CI failure of #206). A history test started right after a start (a new container,
+/// or the restart above) would race with them.
+fn informix_wait_startup_tasks(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) {
+    let Ok(mut d) = jdbc_connect(rt.clone())(cfg.clone()) else { return };
+    const DONE: &str = "SELECT (SELECT COUNT(*) FROM sysadmin:ph_run r, sysadmin:ph_task t WHERE r.run_task_id = t.tk_id \
+        AND t.tk_name = 'mon_config_startup' AND r.run_time >= DBINFO('utc_to_datetime', b.sh_boottime)), \
+        DBINFO('utc_current') - b.sh_boottime FROM sysmaster:sysshmvals b";
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(180) {
+        let Ok(rows) = try_rows(&mut *d, DONE) else { return };
+        let n = |i: usize| rows.first().and_then(|r| r.get(i)).map(txt).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0);
+        // Ran since the start, or a server up long enough that it has (a scheduler that does not run them).
+        if n(0) > 0 || n(1) > 180 {
+            if t0.elapsed() > Duration::from_secs(1) {
+                println!("Informix: tareas de arranque del servidor terminadas tras esperar {:?}", t0.elapsed());
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// Whether the server's CDC reader reads a short history whole: one row inserted into a new table, in a log of its own,
+/// read back (with full row logging on only for the read) as one insert and nothing partial. Err: what came back.
+fn informix_cdc_reader_works(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) -> Result<(), String> {
+    use crate::rowhistory::{self, KeyPart, Request};
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).map_err(|e| e.to_string())?;
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).map_err(|e| e.to_string())?;
+    let db = d.current_database().map_err(|e| e.to_string())?;
+    if !try_rows(&mut *d, "SELECT 1 FROM sysmaster:sysdatabases WHERE name = 'syscdcv1'").is_ok_and(|r| !r.is_empty()) {
+        return Ok(()); // nothing to read with: the test says so itself
+    }
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.rh_probe', 0)", cfg.user), 10);
+    d.execute("DROP TABLE IF EXISTS rh_probe", 10).map_err(|e| e.to_string())?;
+    informix_switch_log(&mut admin);
+    d.execute("CREATE TABLE rh_probe (id INT PRIMARY KEY, v VARCHAR(10))", 10).map_err(|e| e.to_string())?;
+    d.execute("INSERT INTO rh_probe VALUES (1, 'a')", 10).map_err(|e| e.to_string())?;
+    informix_switch_log(&mut admin);
+    let conn = crate::jdbc::JdbcConn::connect(cfg, rt.clone(), crate::jdbc::informix_params).map_err(|e| e.to_string())?;
+    let (fresh_cfg, fresh_rt) = (cfg.clone(), rt.clone());
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
+    let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
+    let req = Request {
+        database: db,
+        owner: String::new(),
+        table: "rh_probe".into(),
+        key: vec![KeyPart { column: "id".into(), value: "1".into() }],
+        enable_full_row_logging: true,
+    };
+    let h = rowhistory::run(&conn, &req, false, &cfg.user, &std::sync::atomic::AtomicBool::new(false), &env).map_err(|e| e.to_string())?;
+    drop(conn);
+    let _ = d.execute("DROP TABLE rh_probe", 10);
+    let ops: Vec<&str> = h.events.iter().map(|e| e.op).collect();
+    if h.status == "ok" && ops == ["insert"] && h.partial.is_empty() && !h.stalled {
+        Ok(())
+    } else {
+        Err(format!("{} {ops:?} {:?}", h.status, h.partial))
+    }
+}
+
 /// «Historial de la fila» over JDBC (rowhistory.rs): a row inserted and updated three times, another inserted and
 /// deleted, read back from the logical logs through the CDC API, with full row logging turned on only for the read.
 /// The preconditions that stop it (no log, RAW table, no key, read-only) answer with their reason.
@@ -3029,25 +3121,19 @@ fn informix_jdbc_row_history() {
     use crate::rowhistory::{self, KeyPart, Request};
     use std::sync::atomic::AtomicBool;
     let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
-    let _guard = watchdog("historial de la fila", 420);
+    let _guard = watchdog("historial de la fila", 540);
     // The server's CDC reader keeps what earlier reads left (it stops for good where a read met the tail of a log, and
     // after errors on the records of dropped tables: measured), which the app reports as partial. A test needs a
-    // reader that works, so a server that can be restarted is: the first read after a restart is reliable.
+    // reader that works, and the first read after a restart is reliable: a short history is read first, and only a
+    // reader that does not give it whole has the server restarted, since others may be using it (#206). Either way the
+    // server's own start-up tasks go first (see `informix_wait_startup_tasks`).
+    informix_wait_startup_tasks(&cfg, &rt);
     if let Ok(container) = std::env::var("CELER_INFORMIX_CONTAINER") {
-        assert!(Command::new("docker").args(["restart", container.as_str()]).status().is_ok_and(|s| s.success()), "no se pudo reiniciar el contenedor de Informix");
-        let up = (0..80).any(|_| {
-            let ok = Command::new("docker")
-                .args(["exec", container.as_str(), "bash", "-lc", "echo 'SELECT COUNT(*) FROM systables' | dbaccess sysmaster -"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success());
-            if !ok {
-                std::thread::sleep(Duration::from_secs(3));
-            }
-            ok
-        });
-        assert!(up, "Informix no volvió a arrancar tras reiniciarlo");
+        if let Err(why) = informix_cdc_reader_works(&cfg, &rt) {
+            println!("El lector CDC del servidor no lee entero un historial corto ({why}): se reinicia {container}");
+            informix_restart(&container);
+            informix_wait_startup_tasks(&cfg, &rt);
+        }
     }
     let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
     let db = d.current_database().unwrap();
@@ -3059,12 +3145,7 @@ fn informix_jdbc_row_history() {
     let mut admin_cfg = cfg.clone();
     admin_cfg.database = "sysadmin".into();
     let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
-    let mut switch_log = || {
-        let switched = admin.execute("EXECUTE FUNCTION task('onmode', 'l')", 10).is_ok()
-            || std::env::var("CELER_INFORMIX_CONTAINER")
-                .is_ok_and(|c| Command::new("docker").args(["exec", c.as_str(), "bash", "-lc", "onmode -l"]).status().is_ok_and(|s| s.success()));
-        assert!(switched, "no se pudo cambiar de log lógico (sysadmin:task ni onmode en el contenedor)");
-    };
+    let mut switch_log = || informix_switch_log(&mut admin);
     // Dropping a table and creating another reuses its partition number, and the CDC API fails on the log records of
     // the dropped one (-83800) when a read covers them, which leaves its server-side reader stuck for the next run
     // (measured). So the old table is dropped, the log switched, and only then the new one created: the read starts
@@ -3106,7 +3187,9 @@ fn informix_jdbc_row_history() {
     switch_log();
     let rt2 = rt.clone();
     let rt3 = rt.clone();
-    let conn = crate::jdbc::JdbcConn::connect(&cfg, rt, crate::jdbc::informix_params).expect("conexión para el historial");
+    // Each read opens its own connection, as the app's do (rowhistory::read): a CDC session the server never closed
+    // (a cdc_deactivatesess it did not answer) stays on its connection, and another session there is refused (-83715).
+    let open = || crate::jdbc::JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).expect("conexión para el historial");
     let stop = AtomicBool::new(false);
     let request = |database: &str, table: &str, id: Option<&str>, enable: bool| Request {
         database: database.into(),
@@ -3119,11 +3202,13 @@ fn informix_jdbc_row_history() {
     let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
     let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
     let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
-    let run = |req: &Request, read_only: bool| rowhistory::run(&conn, req, read_only, &cfg.user, &stop, &env);
+    let run = |req: &Request, read_only: bool| rowhistory::run(&open(), req, read_only, &cfg.user, &stop, &env);
     let ask = |table: &str, id: &str, enable: bool| {
         let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
         // The server's CDC reader stuck is a failure of this test only, said as such, not a hang that kills the suite.
         assert!(!h.stalled, "el lector CDC del servidor no responde (historial de {table} {id}): {:?}", h.partial);
+        // A history that cannot be read at all says why, and that is not what these reads expect.
+        assert!(h.status != "unavailable" || table == "rh_raw" || h.reason.contains("syscdcv1"), "historial de {table} {id}: {h:?}");
         h
     };
     let raw = ask("rh_raw", "1", true);
@@ -3197,54 +3282,22 @@ fn informix_jdbc_row_history() {
         // this server's: full row logging set here (as a DBA would) stays on.
         for other in [format!("other-host:9088\t{server}\t{full}\n"), format!("{server}\t{full}\n")] {
             std::fs::write(&ledger, other).unwrap();
-            let rw = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
+            let rw = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
             assert!(!rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")), "{rw:?}");
             assert_ne!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "another server's entry leaves it on");
         }
         std::fs::write(&ledger, format!("{endpoint}\t{server}\t{full}\n")).unwrap();
-        let ro = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), true, &cfg.user, &stop, &left_env).unwrap();
+        let ro = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), false), true, &cfg.user, &stop, &left_env).unwrap();
         assert_eq!(ro.status, "ok", "{ro:?}");
         let left = ro.left_on.as_ref().expect("a read-only read says full row logging stays on, as a warning");
         assert!(left.reason.contains("solo lectura") && left.command.contains("cdc_set_fullrowlogging") && left.command.contains(&full), "{left:?}");
         assert!(!ro.notes.iter().any(|n| n.contains("cdc_set_fullrowlogging")), "not also as a note: {:?}", ro.notes);
         assert_ne!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a read-only connection leaves full row logging on");
         assert!(std::fs::read_to_string(&ledger).unwrap().contains(&full), "the entry stays for a writable read");
-        let rw = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
+        let rw = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
         assert!(rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")) && rw.left_on.is_none(), "{rw:?}");
         assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a writable read turns the left-over off");
         assert!(!ledger.exists(), "and forgets it");
-    }
-
-    // Two reads of one table at once (two windows, #205): the second does not take the first's ledger entry for a
-    // left-over one, neither turns full row logging off under the other, and it is off once both have ended.
-    {
-        let ledger = std::env::temp_dir().join(format!("celer-rh-overlap-{}.txt", std::process::id()));
-        let _ = std::fs::remove_file(&ledger);
-        let (other, mine) = std::thread::scope(|sc| {
-            let other = sc.spawn(|| {
-                let c2 = crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params).expect("segunda conexión para el historial");
-                let fresh2 = || crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params);
-                let env2 = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh2, endpoint: &endpoint };
-                rowhistory::run(&c2, &request(&db, "rh_t", Some(&id3), true), false, &cfg.user, &stop, &env2)
-            });
-            // Once the other read has noted the table (just before it turns full row logging on), this one starts.
-            for _ in 0..300 {
-                if ledger.exists() || other.is_finished() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            let mine_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh, endpoint: &endpoint };
-            let mine = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), true), false, &cfg.user, &stop, &mine_env);
-            (other.join().expect("la otra lectura"), mine)
-        });
-        for h in [other.expect("historial de la otra lectura"), mine.expect("historial de esta lectura")] {
-            println!("Lecturas a la vez: {} cambios, notas {:?}", h.events.len(), h.notes);
-            assert_eq!(h.status, "ok", "{h:?}");
-            assert!(!h.notes.iter().any(|n| n.contains("se interrumpió")) && h.left_on.is_none(), "{:?} {:?}", h.notes, h.left_on);
-        }
-        assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "off once both reads have ended");
-        assert!(!ledger.exists(), "and the entry is forgotten");
     }
 
     // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
@@ -3262,7 +3315,7 @@ fn informix_jdbc_row_history() {
         h
     };
     let gone = ask_whole("rh_t", &id2);
-    assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"]);
+    assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"], "{gone:?}");
     assert_eq!(gone.events[1].before, Some(s(&[&id2, "20", "2.50", "NULL", "beta"])));
     let fix = ask_whole("rh_fix", &id1);
     // The two updates are logged as partial records the CDC API does not send: the history must not pass as complete.
@@ -3292,6 +3345,38 @@ fn informix_jdbc_row_history() {
     assert!(stopped.partial.iter().any(|p| p.contains("Lectura cancelada")), "{:?}", stopped.partial);
     assert!(!stopped.partial.iter().any(|p| p.contains("Ningún cambio")), "{:?}", stopped.partial);
     assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "full row logging is off again after a stopped read");
+
+    // Two reads of one table at once (two windows, #205): the second does not take the first's ledger entry for a
+    // left-over one, neither turns full row logging off under the other, and it is off once both have ended.
+    {
+        let ledger = std::env::temp_dir().join(format!("celer-rh-overlap-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&ledger);
+        let (other, mine) = std::thread::scope(|sc| {
+            let other = sc.spawn(|| {
+                let c2 = crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params).expect("segunda conexión para el historial");
+                let fresh2 = || crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params);
+                let env2 = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh2, endpoint: &endpoint };
+                rowhistory::run(&c2, &request(&db, "rh_t", Some(&id3), true), false, &cfg.user, &stop, &env2)
+            });
+            // Once the other read has noted the table (just before it turns full row logging on), this one starts.
+            for _ in 0..300 {
+                if ledger.exists() || other.is_finished() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let mine_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh, endpoint: &endpoint };
+            let mine = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), true), false, &cfg.user, &stop, &mine_env);
+            (other.join().expect("la otra lectura"), mine)
+        });
+        for h in [other.expect("historial de la otra lectura"), mine.expect("historial de esta lectura")] {
+            println!("Lecturas a la vez: {} cambios, notas {:?}", h.events.len(), h.notes);
+            assert_eq!(h.status, "ok", "{h:?}");
+            assert!(!h.notes.iter().any(|n| n.contains("se interrumpió")) && h.left_on.is_none(), "{:?} {:?}", h.notes, h.left_on);
+        }
+        assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "off once both reads have ended");
+        assert!(!ledger.exists(), "and the entry is forgotten");
+    }
 
     // A database without log (creating it moves the connection there: the RAW table goes first).
     d.execute("DROP TABLE rh_raw", 10).unwrap();
