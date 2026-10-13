@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Two row-history reads of one table at once** (#205): when two windows read the history of rows of the same
+  table, the first to end turned full row logging off while the other was still reading. It now stays on until the
+  last of them ends, which turns it off once and says so.
 - **Row history on servers that share a name** (#202): the note of tables Celer turned full row logging on for was
   kept by server name (DBSERVERNAME) and table only, so an entry left over from one server could make Celer turn off
   full row logging that a DBA had set on another server with the same name. The note now also carries the server's

@@ -1223,29 +1223,48 @@ fn ledger_forget(path: Option<&Path>, key: &str) {
     }
 }
 
-/// The ledger keys of the tables a read running now in this process turned full row logging on for: their ledger entry
-/// is that read's, not one left over, and only that read turns it off.
+/// The ledger keys of the tables with full row logging Celer turned on, and how many reads running now in this process
+/// read with it: their ledger entry is theirs, not one left over, and the last of them to end turns it off (#205).
 static LIVE: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, usize>>> = std::sync::LazyLock::new(Default::default);
 
 /// A read's claim on a `LIVE` key, given up when the read ends (however it ends).
-struct LiveClaim(String);
+struct LiveClaim(Option<String>);
 
 impl LiveClaim {
     fn new(key: &str) -> Self {
-        *LIVE.lock().entry(key.to_string()).or_default() += 1;
-        LiveClaim(key.to_string())
+        Self::hold(&mut LIVE.lock(), key)
+    }
+
+    fn hold(live: &mut HashMap<String, usize>, key: &str) -> Self {
+        *live.entry(key.to_string()).or_default() += 1;
+        LiveClaim(Some(key.to_string()))
+    }
+
+    /// Gives the claim up: true when it was the last one, and full row logging is this read's to turn off.
+    fn release(mut self) -> bool {
+        self.give_up()
+    }
+
+    fn give_up(&mut self) -> bool {
+        let Some(key) = self.0.take() else { return false };
+        let mut live = LIVE.lock();
+        match live.get_mut(&key) {
+            Some(n) if *n > 1 => {
+                *n -= 1;
+                false
+            }
+            Some(_) => {
+                live.remove(&key);
+                true
+            }
+            None => false,
+        }
     }
 }
 
 impl Drop for LiveClaim {
     fn drop(&mut self) {
-        let mut live = LIVE.lock();
-        if let Some(n) = live.get_mut(&self.0) {
-            *n -= 1;
-            if *n == 0 {
-                live.remove(&self.0);
-            }
-        }
+        self.give_up();
     }
 }
 
@@ -1331,8 +1350,16 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     let ledger_key = ledger_key(env.endpoint, &server, &full_name);
     // The server for `WALLS`: its address and name.
     let server_key = format!("{}\t{server}", env.endpoint);
-    // An entry of a read still running here (another window) is not left over: that read turns it off.
-    let left_over = frl_on && ledger_has(env.ledger, &ledger_key) && !LIVE.lock().contains_key(&ledger_key);
+    // Full row logging that a read still running here (another window) turned on is shared, not left over: this read
+    // joins it, and whichever of them ends last turns it off. A read-only connection never changes the server, so it
+    // takes no part in turning it off.
+    let (left_over, shared_claim) = {
+        let mut live = LIVE.lock();
+        let shared = frl_on && live.contains_key(&ledger_key);
+        let left_over = frl_on && !shared && ledger_has(env.ledger, &ledger_key);
+        let claim = (!read_only && (shared || left_over)).then(|| LiveClaim::hold(&mut live, &ledger_key));
+        (left_over, claim)
+    };
     if !frl_on && read_only {
         return Ok(History::unavailable("la conexión es de solo lectura y la tabla necesita full row logging, que es un cambio en el servidor."));
     }
@@ -1392,19 +1419,24 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     let older = used.iter().take_while(|(_, f, fill)| f & 2 == 0 && *fill > 0 && *fill < created).count();
     let start_logs: Vec<i64> = used[older..].iter().map(|l| l.0).collect();
 
-    let _claim = (!frl_on).then(|| LiveClaim::new(&ledger_key));
+    let claim = if frl_on { shared_claim } else { Some(LiveClaim::new(&ledger_key)) };
     if !frl_on {
         ledger_add(env.ledger, &ledger_key);
     }
     let session = match open_capture(conn, &server, user, &full_name, &captured, !frl_on)? {
         Ok(s) => s,
         Err(h) => {
-            ledger_forget(env.ledger, &ledger_key);
+            // The entry stays while another read still has full row logging on, or while it is a left-over one.
+            if claim.is_some_and(LiveClaim::release) && !frl_on {
+                ledger_forget(env.ledger, &ledger_key);
+            }
             return Ok(h);
         }
     };
-    // A read-only connection never changes the server: a left-over entry is reported instead (below).
-    let turned_on = !frl_on || (left_over && !read_only);
+    // Full row logging Celer turned on (for this read, another one still running, or one interrupted): it goes back off
+    // when the last read with it ends. A read-only connection never changes the server: a left-over entry is reported
+    // instead (below).
+    let turned_on = claim.is_some();
     let mut session = session;
     // Set when a read of the CDC session got no answer: the connection is stuck behind it and is left alone.
     let wedged = std::cell::Cell::new(false);
@@ -1763,6 +1795,14 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         if let Some(c) = &spare {
             let _ = call(c, &format!("EXECUTE FUNCTION syscdcv1:informix.cdc_closesess({})", session.id));
         }
+    }
+    // Another read of the table still running here keeps it on, and turns it off when it ends.
+    let last = claim.is_some_and(LiveClaim::release);
+    if turned_on && !last {
+        let mut h = result?;
+        h.notes.retain(|n| !n.contains("se ha vuelto a desactivar"));
+        h.notes.push("Full row logging sigue activado mientras termina otra lectura del historial de esta tabla, que lo desactivará al acabar.".into());
+        return Ok(h);
     }
     if turned_on {
         // The server refuses while the capture session is still winding down: a few tries.
@@ -2266,6 +2306,12 @@ mod tests {
         assert!(LIVE.lock().contains_key(&key), "one read still holds it");
         drop(second);
         assert!(!LIVE.lock().contains_key(&key), "given up when every read has ended");
+        // Whichever read ends last turns full row logging off, once (#205).
+        let a = LiveClaim::new(&key);
+        let b = LiveClaim::new(&key);
+        assert!(!a.release(), "another read still has it on");
+        assert!(b.release(), "the last one turns it off");
+        assert!(!LIVE.lock().contains_key(&key));
     }
 
     /// The ledger key carries the server's address (#202): a left-over entry of another server with the same

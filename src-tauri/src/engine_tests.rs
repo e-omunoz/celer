@@ -3097,6 +3097,7 @@ fn informix_jdbc_row_history() {
     }
     switch_log();
     let rt2 = rt.clone();
+    let rt3 = rt.clone();
     let conn = crate::jdbc::JdbcConn::connect(&cfg, rt, crate::jdbc::informix_params).expect("conexión para el historial");
     let stop = AtomicBool::new(false);
     let request = |database: &str, table: &str, id: Option<&str>, enable: bool| Request {
@@ -3204,6 +3205,38 @@ fn informix_jdbc_row_history() {
         assert!(rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")) && rw.left_on.is_none(), "{rw:?}");
         assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a writable read turns the left-over off");
         assert!(!ledger.exists(), "and forgets it");
+    }
+
+    // Two reads of one table at once (two windows, #205): the second does not take the first's ledger entry for a
+    // left-over one, neither turns full row logging off under the other, and it is off once both have ended.
+    {
+        let ledger = std::env::temp_dir().join(format!("celer-rh-overlap-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&ledger);
+        let (other, mine) = std::thread::scope(|sc| {
+            let other = sc.spawn(|| {
+                let c2 = crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params).expect("segunda conexión para el historial");
+                let fresh2 = || crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params);
+                let env2 = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh2, endpoint: &endpoint };
+                rowhistory::run(&c2, &request(&db, "rh_t", Some(&id3), true), false, &cfg.user, &stop, &env2)
+            });
+            // Once the other read has noted the table (just before it turns full row logging on), this one starts.
+            for _ in 0..300 {
+                if ledger.exists() || other.is_finished() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let mine_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh, endpoint: &endpoint };
+            let mine = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), true), false, &cfg.user, &stop, &mine_env);
+            (other.join().expect("la otra lectura"), mine)
+        });
+        for h in [other.expect("historial de la otra lectura"), mine.expect("historial de esta lectura")] {
+            println!("Lecturas a la vez: {} cambios, notas {:?}", h.events.len(), h.notes);
+            assert_eq!(h.status, "ok", "{h:?}");
+            assert!(!h.notes.iter().any(|n| n.contains("se interrumpió")) && h.left_on.is_none(), "{:?} {:?}", h.notes, h.left_on);
+        }
+        assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "off once both reads have ended");
+        assert!(!ledger.exists(), "and the entry is forgotten");
     }
 
     // The server's reader may stop at the tail of the current log after an earlier read met it there (measured; the
