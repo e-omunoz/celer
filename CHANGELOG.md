@@ -113,6 +113,14 @@ All notable changes to Celer are documented here. The format follows
   past it again. The reason now names both causes and says to read again later, and a stop found by one read is
   trusted for five minutes only. The engine test waits for those tasks, reads each history on its own connection as
   the app does, and restarts the Informix container only when its CDC reader does not read a short history whole.
+- **Row history of a table rebuilt by Informix's fast recovery** (#123): when the server stopped uncleanly (a crash, a
+  killed process) before the checkpoint that followed a table's creation, fast recovery recreates the table on start
+  and stamps that moment as its creation time. The history took it as the real one, skipped the logs before it and
+  left out the row's own insert and updates as «de una tabla borrada que tenía el mismo número de partición», then
+  said the row had no changes. A creation time that falls between the server's start and its on-line mode is now
+  recognised as the recovery's: the logs before it are read, the row's changes are shown, and the history says why it
+  is not certain (the real creation time is unknown). A part of the log the server then refuses to read is said as
+  such, without claiming where the row began.
 - **Two row-history reads of one table at once** (#205): when two windows read the history of rows of the same
   table, the first to end turned full row logging off while the other was still reading. It now stays on until the
   last of them ends, which turns it off once and says so.

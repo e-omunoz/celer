@@ -3032,6 +3032,11 @@ fn informix_switch_log(admin: &mut dyn Driver) {
 /// Restarts the Informix container and waits for it to answer again.
 fn informix_restart(container: &str) {
     assert!(Command::new("docker").args(["restart", container]).status().is_ok_and(|s| s.success()), "no se pudo reiniciar el contenedor de Informix");
+    informix_wait_up(container);
+}
+
+/// Waits for the Informix container to answer again after a (re)start.
+fn informix_wait_up(container: &str) {
     let up = (0..80).any(|_| {
         let ok = Command::new("docker")
             .args(["exec", container, "bash", "-lc", "echo 'SELECT COUNT(*) FROM systables' | dbaccess sysmaster -"])
@@ -3383,6 +3388,111 @@ fn informix_jdbc_row_history() {
     let _ = d.execute("CREATE DATABASE celer_nolog", 10);
     let nolog = run(&request("celer_nolog", "x", Some("1"), true), false).unwrap();
     assert!(nolog.status == "unavailable" && nolog.reason.contains("no tiene log"), "{nolog:?}");
+}
+
+/// «Historial de la fila» after fast recovery (#123): a table created, inserted into and updated after the last
+/// checkpoint, then the server killed (`docker kill -s KILL`) before the next one. Fast recovery replays the CREATE TABLE
+/// on start and stamps the partition's creation time with that moment (measured), so the row's real changes are older
+/// than it: the history shows them, says why it is not certain, and never calls them a dropped table's. It kills the
+/// server, so it runs only against a container it may kill: CELER_INFORMIX_KILLABLE=1 with CELER_INFORMIX_CONTAINER
+/// (never the shared WSL engines of a normal `engines.sh test`).
+#[test]
+fn informix_jdbc_row_history_after_fast_recovery() {
+    use crate::rowhistory::{self, KeyPart, Request};
+    let Some((mut cfg, rt)) = informix_jdbc_cfg() else { return };
+    let (Ok(container), Ok("1")) = (std::env::var("CELER_INFORMIX_CONTAINER"), std::env::var("CELER_INFORMIX_KILLABLE").as_deref()) else {
+        println!("Historial tras recuperación rápida: sin CELER_INFORMIX_KILLABLE=1 no se mata el servidor; no se comprueba");
+        return;
+    };
+    let _guard = watchdog("historial tras recuperación rápida", 540);
+    informix_wait_startup_tasks(&cfg, &rt);
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    let db = d.current_database().unwrap();
+    if !try_rows(&mut *d, "SELECT 1 FROM sysmaster:sysdatabases WHERE name = 'syscdcv1'").is_ok_and(|r| !r.is_empty()) {
+        println!("Historial tras recuperación rápida: el servidor no tiene syscdcv1; no se comprueba");
+        return;
+    }
+    let full = format!("{db}:{}.rh_rec", cfg.user.trim());
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 0)"), 10);
+    d.execute("DROP TABLE IF EXISTS rh_rec", 10).unwrap();
+    let docker = |args: &[&str]| Command::new("docker").args(args).status().is_ok_and(|s| s.success());
+    // A checkpoint, then the table: its creation is after the last checkpoint when the server dies.
+    assert!(docker(&["exec", &container, "bash", "-lc", "onmode -c"]), "onmode -c en {container}");
+    let created = |d: &mut dyn Driver| -> i64 {
+        let rows = try_rows(d, "SELECT p.created FROM sysmaster:sysptnhdr p, systables t WHERE t.tabname = 'rh_rec' AND p.partnum = t.partnum").unwrap();
+        rows.first().and_then(|r| r.first()).map(txt).and_then(|v| v.trim().parse().ok()).expect("sysptnhdr.created de rh_rec")
+    };
+    for sql in ["CREATE TABLE rh_rec (id INT PRIMARY KEY, v VARCHAR(20))", "INSERT INTO rh_rec VALUES (1, 'antes')", "UPDATE rh_rec SET v = 'despues' WHERE id = 1"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    let before = created(&mut *d);
+    drop(d);
+    // The container's address (the JDBC test connects to it directly) may change when it starts again.
+    let ip = || {
+        let out = Command::new("docker").args(["inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", &container]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let by_ip = cfg.host == ip();
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(docker(&["kill", "-s", "KILL", &container]), "docker kill {container}");
+    assert!(docker(&["start", &container]), "docker start {container}");
+    informix_wait_up(&container);
+    if by_ip {
+        cfg.host = ip();
+    }
+    informix_wait_startup_tasks(&cfg, &rt);
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC tras arrancar");
+    let after = created(&mut *d);
+    println!("rh_rec: sysptnhdr.created {before} antes de matar el servidor, {after} después de la recuperación rápida");
+    assert!(after > before, "la recuperación rápida no reescribió la hora de creación ({before} → {after}): el caso no se reproduce");
+    assert_eq!(try_rows(&mut *d, "SELECT v FROM rh_rec WHERE id = 1").unwrap().first().and_then(|r| r.first()).map(txt).as_deref().map(str::trim), Some("despues"));
+
+    let (fresh_cfg, fresh_rt) = (cfg.clone(), rt.clone());
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
+    let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
+    let req = Request { database: db, owner: String::new(), table: "rh_rec".into(), key: vec![KeyPart { column: "id".into(), value: "1".into() }], enable_full_row_logging: true };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
+    // The reader may not have the newest part of the log ready yet: a DBA's log switch, and the read asked again.
+    let mut h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
+    for _ in 0..3 {
+        if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
+            break;
+        }
+        informix_switch_log(&mut admin);
+        h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
+    }
+    println!(
+        "Historial tras recuperación rápida: {:?}\n  parcial {:?}\n  notas {:?}",
+        h.events.iter().map(|e| (e.op, e.time, &e.after)).collect::<Vec<_>>(),
+        h.partial,
+        h.notes
+    );
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 0)"), 10);
+    let _ = d.execute("DROP TABLE rh_rec", 10);
+    assert_eq!(h.status, "ok", "{h:?}");
+    assert!(!h.stalled, "{:?}", h.partial);
+    let some = |v: &[&str]| Some(v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>());
+    let ops: Vec<&str> = h.events.iter().map(|e| e.op).collect();
+    // The server's CDC API may refuse the insert's transaction after the recovery (measured: -83800 on the one that
+    // also extends the new partition): then the history says that part of the log could not be read, and claims
+    // nothing about where the row began.
+    let refused = h.partial.iter().any(|p| p.contains("El servidor no lee el log en"));
+    if refused {
+        assert!(ops == ["update"] || ops == ["insert", "update"], "{h:?}");
+        assert!(!h.partial.iter().any(|p| p.contains("ya existía")), "{:?}", h.partial);
+    } else {
+        assert_eq!(ops, ["insert", "update"], "{h:?}");
+        assert_eq!(h.events[0].after, some(&["1", "antes"]));
+    }
+    assert_eq!(h.events.last().unwrap().after, some(&["1", "despues"]));
+    // The true reason it is not certain, and not the false one.
+    assert!(h.partial.iter().any(|p| p.contains("recuperación rápida") && p.contains(if ops.len() == 1 { "El cambio de esta fila" } else { "Los 2 cambios" })), "{:?}", h.partial);
+    assert!(h.partial.iter().all(|p| p.contains("recuperación rápida") || p.contains("no entrega el log")), "{:?}", h.partial);
+    assert!(!h.notes.iter().chain(&h.partial).any(|n| n.contains("Se descartaron") || n.contains("tabla borrada que tenía") || n.contains("Ningún cambio")), "{h:?}");
 }
 
 // ───────────────────────────────────────────────────────────────── test data generator (#172)
@@ -4135,3 +4245,4 @@ fn testdata_odbc_mysql() {
     let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
     testdata_suite(d.as_mut(), &open, "odbc", TD_MY_DDL, &td_target(db, "", &[]), &cleanup);
 }
+

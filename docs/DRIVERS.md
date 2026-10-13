@@ -264,6 +264,15 @@ CDC API (`syscdcv1`), on a JDBC connection of its own. Measured on Informix 15 (
   test tables) Celer bisects to the first position from which it reads cleanly (to within 32 bytes) and goes on from
   there, which it notes. Across an in-place `ALTER TABLE` the server returns old rows in the new layout (added columns
   NULL), which the history notes.
+- `sysptnhdr.created` is not always the creation time: after an unclean stop before the checkpoint that followed a
+  `CREATE TABLE`, fast recovery replays it on start and stamps the time of the replay (measured: 20:54:40 became
+  20:55:05; the server started at 20:54:58, `sysmaster:sysshmvals.sh_boottime`, and went on-line at 20:55:08, its
+  `Startup` checkpoint in `sysmaster:syscheckpoint`). A clean restart does not. A creation time between the start and
+  the on-line mode (the `Startup` checkpoint while it is among the last 20, else the first internal session, pid 0 in
+  `sysmaster:syssessions`) is taken as the replay's: nothing is left out or skipped by time, the row's changes before
+  it are shown, and the history says it is not certain. After that recovery the API sometimes refuses the
+  transaction of the table's first insert (-83800, seen in one of four runs), which is said as a part of the log
+  not read. Once the server restarts again, such a creation time can no longer be told from a real one.
 - An LSN offset is the log page number shifted 12 bits plus the byte in the page. The read is complete when the
   session has nothing more to give (a timeout) at or past the page being written when the read began. The API only
   hands over what its log reader has reached: when it waits 10 s without progress, the history says the latest changes
