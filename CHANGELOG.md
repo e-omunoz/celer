@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data on Informix, every column left to the server** (#194): a table such as `(id SERIAL PRIMARY KEY)` got
+  `INSERT … DEFAULT VALUES`, a syntax error on Informix. Each row now writes 0 in the SERIAL (or NULL in a nullable
+  column without a default), in *Insertar* and in *Script SQL*; a table with neither is stopped in the dialog.
 - **Shortcuts behind a dialog** (#193): with a dialog open (test data, row history, import, export…), Ctrl+W,
   Ctrl+Tab, F5 and the other workspace shortcuts acted on the tabs behind it. They now wait until it closes; Esc and
   the dialog's own keys still work.

@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { importStatements } from "../src/importFormats.ts";
 import {
+  blankSettings,
   buildModel,
   EXISTING_SAMPLE,
   existingToRead,
@@ -563,6 +564,18 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   const auto = buildModel({ dialect: "postgres", qualified: "t", table: "t", columns: [col("id", "integer", "number", { nullable: false, identity: true })], quoted: ['"id"'], catalog: { uniques: [], checks: [], enums: {} }, fks: [] });
   const ga = createGenerator(auto, inferSettings(auto), 1);
   assert.deepEqual(insertStatements(auto, ga, [ga.next()]), ["INSERT INTO t DEFAULT VALUES"]);
+  // Informix takes no DEFAULT VALUES (nor DEFAULT in VALUES): 0 in the SERIAL, else NULL in a nullable column without a
+  // default, else the dialog stops it.
+  const ifxModel = (columns: TableColumn[]) => buildModel({ dialect: "informix", qualified: "t", table: "t", columns, quoted: columns.map((c) => c.name), catalog: { uniques: [], checks: [], enums: {} }, fks: [] });
+  const ifxSerial = ifxModel([col("n", "integer", "number", { default: "3" }), col("id", "serial", "number", { nullable: false, primaryKey: true })]);
+  const gis = createGenerator(ifxSerial, ifxSerial.columns.map(() => blankSettings("skip")), 1);
+  assert.deepEqual(insertStatements(ifxSerial, gis, [gis.next(), gis.next()]), ["INSERT INTO t (id) VALUES (0)", "INSERT INTO t (id) VALUES (0)"]);
+  const ifxNull = ifxModel([col("a", "integer", "number", { default: "5" }), col("b", "varchar(10)", "text")]);
+  const gin = createGenerator(ifxNull, ifxNull.columns.map(() => blankSettings("skip")), 1);
+  assert.deepEqual(insertStatements(ifxNull, gin, [gin.next()]), ["INSERT INTO t (b) VALUES (NULL)"]);
+  assert.ok(!problems(ifxNull, ifxNull.columns.map(() => blankSettings("skip")), 1).some((p) => p.error));
+  const ifxNone = ifxModel([col("a", "integer", "number", { default: "5" })]);
+  assert.ok(problems(ifxNone, [blankSettings("skip")], 1).some((p) => p.error && /DEFAULT VALUES/.test(p.text)));
 }
 
 // ---------------------------------------------------------------- speed: 100,000 rows in well under the time of their INSERTs

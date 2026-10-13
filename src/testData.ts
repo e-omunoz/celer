@@ -1435,6 +1435,7 @@ export function problems(model: TableModel, settings: GenSettings[], count: numb
       out.push({ column: i, text: `«${name}» es única y la tabla ya tiene ${model.existing.toLocaleString("es-ES")} filas, demasiadas para comprobar sus valores: alguno nuevo podría repetirse y se desharía toda la inserción. Usa una secuencia que empiece tras el máximo, un UUID o un patrón con mucha más variedad`, error: false });
     }
   });
+  if (model.dialect === "informix" && settings.every((s) => s.kind === "skip") && !informixDefaultsRow(model)) out.push({ column: -1, text: INFORMIX_NO_DEFAULTS, error: true });
   // Keys of several columns: existing combinations are not read; one column clear of the existing values is enough.
   if (model.existing > 0) {
     for (const set of model.uniqueSets) {
@@ -1455,12 +1456,26 @@ export function problems(model: TableModel, settings: GenSettings[], count: numb
 
 // ---------------------------------------------------------------- outputs
 
+const INFORMIX_NO_DEFAULTS = "Informix no inserta una fila solo con valores por defecto (no admite DEFAULT VALUES): genera al menos una columna";
+
+/**
+ * A row of defaults on Informix, which takes neither DEFAULT VALUES nor DEFAULT in VALUES: one column is written with
+ * what the server would put there anyway, 0 in a SERIAL (its next number) or NULL in a nullable column without a
+ * default. Null when the table has no such column.
+ */
+function informixDefaultsRow(model: TableModel): string | null {
+  const serial = model.columns.find((c) => /serial/i.test(c.col.typeName));
+  const target = serial ?? model.columns.find((c) => c.col.nullable && !c.col.primaryKey && !c.col.default && !c.auto);
+  return target ? `INSERT INTO ${model.qualified} (${target.quoted}) VALUES (${serial ? "0" : "NULL"})` : null;
+}
+
 /** The rows as the import writes them: INSERT statements, batched per dialect (importBatch). */
 export function insertStatements(model: TableModel, generator: RowGenerator, rows: SheetCell[][]): string[] {
   const mapping = model.columns.map((_, i) => (generator.written.includes(i) ? i : -1));
   if (!generator.written.length) {
     // Every column left to the server: one row of defaults each.
-    const sql = model.dialect === "mysql" ? `INSERT INTO ${model.qualified} () VALUES ()` : `INSERT INTO ${model.qualified} DEFAULT VALUES`;
+    const sql = model.dialect === "mysql" ? `INSERT INTO ${model.qualified} () VALUES ()` : model.dialect === "informix" ? informixDefaultsRow(model) : `INSERT INTO ${model.qualified} DEFAULT VALUES`;
+    if (!sql) throw new Error(INFORMIX_NO_DEFAULTS);
     return rows.map(() => sql);
   }
   return importStatements(rows, { qualified: model.qualified, columns: model.columns.map((c) => c.col), quoted: model.columns.map((c) => c.quoted), mapping, emptyAsNull: false }, model.dialect);

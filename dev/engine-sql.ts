@@ -10,7 +10,7 @@ import { lookupSql } from "../src/fkLookupSql.ts";
 import { compareSchemas, syncScript, type SchemaTable } from "../src/schemaCompare.ts";
 import { changesSql, filterSql, selectLimit, upsertSql } from "../src/sqlgen.ts";
 import { importLiteral, importStatements, type SheetCell } from "../src/importFormats.ts";
-import { buildModel, createGenerator, EXISTING_SAMPLE, existingToRead, inferSettings, insertStatements, statsColumns, type ParentKeys } from "../src/testData.ts";
+import { blankSettings, buildModel, createGenerator, EXISTING_SAMPLE, existingToRead, inferSettings, insertStatements, statsColumns, type ParentKeys } from "../src/testData.ts";
 import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, statsSql } from "../src/testDataSql.ts";
 import type { Cell, DbKind, ObjectRef, ResultSet, TableColumn } from "../src/types.ts";
 
@@ -62,6 +62,8 @@ interface TestDataShape {
   existing?: Cell[][][];
   rows?: number;
   seed?: number;
+  /** Every column left to the server (#194): the rows of defaults as the dialog writes them, and their count. */
+  allSkip?: boolean;
 }
 
 interface Statement {
@@ -123,7 +125,7 @@ if (shape.testData) {
   if (td.stage === "existing") finish(toRead.map((c) => ({ name: `existing ${c.name}`, sql: existingValuesSql(dialect, td.table.qualified, c.quoted, EXISTING_SAMPLE) })));
   const existing = td.existing ?? [];
   const model = buildModel({ ...input, existingValues: Object.fromEntries(toRead.map((c, i) => [c.name, (existing[i] ?? []).map((row) => row[0])])) });
-  const settings = inferSettings(model, "es");
+  const settings = td.allSkip ? model.columns.map(() => blankSettings("skip")) : inferSettings(model, "es");
   const gen = createGenerator(model, settings, td.seed ?? 172, "es");
   const count = td.rows ?? 10_000;
   const rows = Array.from({ length: count }, () => gen.next());
@@ -134,6 +136,7 @@ if (shape.testData) {
   const quotedOf = (name: string) => model.columns.find((m) => m.col.name === name)!.quoted;
   const key = model.columns.find((c) => c.col.primaryKey) ?? model.columns[0];
   out.push({ name: "testdata: every row is there", sql: `SELECT ${key.quoted} FROM ${model.qualified}`, rows: model.existing + count });
+  if (td.allSkip) finish(out);
   for (const fk of td.fks) {
     const on = fk.columns.map((c, i) => `p.${fk.targetQuoted[i]} = t.${quotedOf(c)}`).join(" AND ");
     const set = fk.columns.map((c) => `t.${quotedOf(c)} IS NOT NULL`).join(" AND ");
