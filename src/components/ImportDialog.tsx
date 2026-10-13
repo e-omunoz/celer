@@ -64,7 +64,7 @@ export function ImportDialog() {
   };
 
   return (
-    <Dialog title={`Importar datos en ${importer.obj?.name ?? ""}`} wide class="import-dialog" onClose={cancelImport}>
+    <Dialog title={`Importar datos en ${importer.obj?.name ?? ""}`} wide class="import-dialog" onClose={() => !importer.running && cancelImport()}>
       <div class="import-body">
         <Show when={importer.reading}>
           {(reading) => (

@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **A stray click or Esc no longer cancels a running insert** (#186): while *Generar datos de prueba…* or *Importar
+  datos* was inserting, a click outside the dialog (coming back to the window, say) or Esc cancelled the run and rolled
+  back the whole transaction. Now only the dialog's *Cancelar* / *Detener* button stops it, as in *Exportar*.
 - **Large test-data exports and scripts** (#185): a JSON (or CSV, or `.sql` script) of up to 1,000,000 rows of a wide
   table failed with «Invalid string length» once every row had been generated, because the whole file was built as
   one string. The rows now go to the file a chunk at a time, under a temporary `.celer-part` name that takes the

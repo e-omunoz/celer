@@ -131,7 +131,7 @@ export function TestDataDialog() {
   };
 
   return (
-    <Dialog title={`Generar datos de prueba en ${testData.obj?.name ?? ""}`} wide class="testdata-dialog" onClose={cancelTestData}>
+    <Dialog title={`Generar datos de prueba en ${testData.obj?.name ?? ""}`} wide class="testdata-dialog" onClose={() => !testData.running && cancelTestData()}>
       <div class="testdata-body">
         <Show when={testData.loading}>
           <div class="export-progress">
