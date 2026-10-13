@@ -91,6 +91,11 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data over generic ODBC to MySQL / MariaDB ENUM columns** (#181): the ODBC driver names an ENUM column only
+  `enum`, so it got values outside its list; MariaDB Connector/ODBC turned the refusal into a warning with no rows
+  inserted, and the dialog said the rows were in. The ENUM and SET values are now read from the catalog, and an
+  insert the server answers with fewer rows than were sent stops the dialog and undoes everything, with the server's
+  message.
 - **Test data on Informix multi-field INTERVAL columns** (#182): an `INTERVAL HOUR TO MINUTE`, `DAY TO SECOND` or
   `YEAR TO MONTH` column got the constant `'1'`, which Informix rejects, so the whole insert was undone. The proposed
   value is now written in the column's fields (`'1:00'`, `'1 00:00:00'`, `'1-00'`).

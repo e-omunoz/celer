@@ -3420,7 +3420,20 @@ fn testdata_try_insert(d: &mut dyn Driver, inserts: &[Statement], commit: bool) 
     d.close_cursor().ok();
     d.set_autocommit(false).unwrap();
     for (i, st) in inserts.iter().enumerate() {
-        if let Err(e) = d.execute(&st.sql, 1) {
+        // The server's counts must reach the statement's rows, as the dialog checks (insertShortfall): a driver that
+        // turns a refused value into a warning inserts nothing and says so only there.
+        let failure = match d.execute(&st.sql, 1) {
+            Err(e) => Some(e.to_string()),
+            Ok(out) => {
+                let counts: Vec<i64> = out.results.iter().filter_map(|r| r.rows_affected).filter(|n| *n >= 0).collect();
+                let got: i64 = counts.iter().sum();
+                match st.rows {
+                    Some(want) if !counts.is_empty() && got < want as i64 => Some(format!("el servidor insertó {got} de {want} filas: {}", out.messages.join(" · "))),
+                    _ => None,
+                }
+            }
+        };
+        if let Some(e) = failure {
             d.rollback().ok();
             d.set_autocommit(true).ok();
             return Err(format!("INSERT {} de {} falló: {e}\n{}", i + 1, inserts.len(), st.sql.chars().take(1500).collect::<String>()));
@@ -3562,39 +3575,41 @@ fn testdata_postgres_100k() {
 }
 
 /// MySQL, and MariaDB in the second run of dev/wsl/engines.sh (it runs the tests named "mysql").
+/// The MySQL / MariaDB tables of the test data suite (natively and through ODBC).
+const TD_MY_DDL: &[&str] = &[
+    "CREATE TABLE celer_td_parent (id INT PRIMARY KEY, nombre VARCHAR(60) NOT NULL) ENGINE=InnoDB",
+    "CREATE TABLE celer_td_other (id INT) ENGINE=InnoDB",
+    "CREATE TABLE celer_td_child (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        codigo VARCHAR(12) NOT NULL UNIQUE,
+        nombre VARCHAR(40) NOT NULL,
+        apellidos VARCHAR(60),
+        email VARCHAR(120) UNIQUE,
+        parent_id INT NOT NULL,
+        estado ENUM('nuevo', 'enviado', 'entregado') NOT NULL,
+        prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+        puntos INT CHECK (puntos BETWEEN 0 AND 100),
+        alta DATE NOT NULL,
+        momento DATETIME,
+        importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
+        activo BOOLEAN NOT NULL,
+        notas TEXT,
+        foto VARBINARY(32),
+        nif CHAR(9),
+        telefono VARCHAR(20),
+        ciudad VARCHAR(40),
+        cp VARCHAR(5),
+        CONSTRAINT fk_celer_td_parent FOREIGN KEY (parent_id) REFERENCES celer_td_parent(id)) ENGINE=InnoDB",
+];
+
 #[test]
 fn testdata_mysql() {
     let Some(cfg) = mysql_cfg() else { return };
     let db = cfg.database.clone();
     let mut d = crate::mysql::MysqlDriver::connect(cfg.clone()).expect("conexión MySQL / MariaDB");
     let other = || Box::new(crate::mysql::MysqlDriver::connect(cfg.clone()).unwrap()) as Box<dyn Driver>;
-    let ddl = [
-        "CREATE TABLE celer_td_parent (id INT PRIMARY KEY, nombre VARCHAR(60) NOT NULL) ENGINE=InnoDB",
-        "CREATE TABLE celer_td_other (id INT) ENGINE=InnoDB",
-        "CREATE TABLE celer_td_child (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            codigo VARCHAR(12) NOT NULL UNIQUE,
-            nombre VARCHAR(40) NOT NULL,
-            apellidos VARCHAR(60),
-            email VARCHAR(120) UNIQUE,
-            parent_id INT NOT NULL,
-            estado ENUM('nuevo', 'enviado', 'entregado') NOT NULL,
-            prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
-            puntos INT CHECK (puntos BETWEEN 0 AND 100),
-            alta DATE NOT NULL,
-            momento DATETIME,
-            importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
-            activo BOOLEAN NOT NULL,
-            notas TEXT,
-            foto VARBINARY(32),
-            nif CHAR(9),
-            telefono VARCHAR(20),
-            ciudad VARCHAR(40),
-            cp VARCHAR(5),
-            CONSTRAINT fk_celer_td_parent FOREIGN KEY (parent_id) REFERENCES celer_td_parent(id)) ENGINE=InnoDB",
-    ];
     let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
-    testdata_suite(&mut d, &other, "mysql", &ddl, &td_target(&db, &db, &[&db, &db]), &cleanup);
+    testdata_suite(&mut d, &other, "mysql", TD_MY_DDL, &td_target(&db, &db, &[&db, &db]), &cleanup);
     testdata_defaults(&mut d, "mysql", &td_obj(&db, &db, "celer_td_auto"), "CREATE TABLE celer_td_auto (id INT AUTO_INCREMENT PRIMARY KEY, n INT DEFAULT 3) ENGINE=InnoDB", "DROP TABLE IF EXISTS celer_td_auto");
     testdata_unique_null(&mut d, "mysql", &td_obj(&db, &db, "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
     d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
@@ -3899,4 +3914,21 @@ fn testdata_odbc() {
     testdata_sequence_range(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_seq"), "SMALLINT", Some(32767));
     testdata_pg_domains(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_domain"));
     testdata_negative_checks(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+}
+
+/// Generic ODBC to MariaDB (CELER_ODBC_MYSQL_TEST: MariaDB Connector/ODBC in dev/wsl/engines.sh), #181: the driver
+/// names an ENUM column only "enum", so its values come from information_schema; a value outside them would be turned
+/// by the driver into a warning with 0 rows inserted, and the suite's checks would find the rows missing.
+#[test]
+fn testdata_odbc_mysql() {
+    let Ok(conn_str) = std::env::var("CELER_ODBC_MYSQL_TEST") else { return };
+    let open = || {
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: conn_str.clone(), ..Default::default() };
+        Box::new(crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC")) as Box<dyn Driver>
+    };
+    let mut d = open();
+    let db = d.current_database().unwrap_or_default();
+    let db = db.trim();
+    let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+    testdata_suite(d.as_mut(), &open, "odbc", TD_MY_DDL, &td_target(db, "", &[]), &cleanup);
 }

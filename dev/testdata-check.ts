@@ -12,6 +12,7 @@ import {
   createGenerator,
   exportText,
   inferSettings,
+  insertShortfall,
   insertStatements,
   nif,
   normName,
@@ -22,6 +23,7 @@ import {
   problems,
   scriptText,
   slug,
+  statementRows,
   validCif,
   validIban,
   validNif,
@@ -201,6 +203,26 @@ for (const info of ["MariaDB 11.4", "8.4.0"]) {
     assert.ok(!/DROP/.test(codeOnly(part.sql, "mysql")), `${info} ${part.part}: the name stays inside the literal`);
   }
 }
+// MySQL / MariaDB ENUM and SET values from information_schema (#181: a generic ODBC driver names the type "enum").
+{
+  const q = catalogQueries("mysql", { database: "celer", schema: "", name: "t", qualified: "`t`" }, "MariaDB 11.4").find((c) => c.part === "enum");
+  assert.ok(q && /COLUMN_TYPE/.test(q.sql) && /DATA_TYPE IN \('enum', 'set'\)/.test(q.sql), "mysql: an enum query");
+  const facts = readCatalog([{ part: "enum", rows: [["", "estado", 7, "enum('nuevo','enviado','it''s')"], ["", "tags", 8, "set('a','b')"]] }], "mysql");
+  assert.deepEqual(facts.enums, { estado: ["nuevo", "enviado", "it's"], tags: ["a", "b"] });
+  const columns = [col("id", "int", "number", { primaryKey: true }), col("estado", "enum", "text", { nullable: false })];
+  const model = buildModel({ dialect: "mysql", qualified: "t", table: "t", columns, quoted: ["id", "estado"], catalog: facts, fks: [] });
+  const settings = inferSettings(model);
+  assert.equal(settings[1].kind, "list", "an ODBC enum column gets its values");
+  assert.equal(settings[1].values, "nuevo\nenviado\nit's");
+  assert.deepEqual(statementRows(model, createGenerator(model, settings, 1), 1201), [500, 500, 201]);
+}
+// The rows the server says it inserted: short is a failure; no count at all (SET NOCOUNT ON) says nothing.
+assert.equal(insertShortfall([{ rowsAffected: 500 }], [], 500), null);
+assert.equal(insertShortfall([{ rowsAffected: 1 }, { rowsAffected: 1 }], [], 2), null, "Informix: one count per INSERT");
+assert.equal(insertShortfall([{ rowsAffected: 3 }], [], 2), null, "a trigger's rows add to the count");
+assert.equal(insertShortfall([{ rowsAffected: null }], [], 2), null);
+assert.equal(insertShortfall([], [], 2), null);
+assert.match(insertShortfall([{ rowsAffected: 0 }], ["[01000] Data truncated for column 'estado' at row 1"], 2000) ?? "", /insertó 0 de 2\.?000 filas: \[01000\] Data truncated/);
 assert.match(parentKeysSql("mssql", "p", ["[id]"], 10), /^SELECT TOP 10 \[id\] FROM p WHERE \[id\] IS NOT NULL ORDER BY 1$/);
 assert.match(parentKeysSql("informix", "p", ["id", "k"], 10), /^SELECT FIRST 10 id, k FROM p WHERE id IS NOT NULL AND k IS NOT NULL ORDER BY 1, 2$/);
 assert.match(parentKeysSql("postgres", "p", ['"id"'], 10), /LIMIT 10$/);

@@ -6,7 +6,7 @@
 // others as they were.
 // The rows become the import's INSERT statements (importFormats.ts), a script, or CSV / JSON. Pure, so
 // dev/testdata-check.ts tests it and dev/engine-sql.ts inserts its rows on every engine.
-import { importStatements, type SheetCell } from "./importFormats.ts";
+import { importBatch, importStatements, type SheetCell } from "./importFormats.ts";
 import { resultToText } from "./sql.ts";
 import { LOCALES, LOREM, type Locale, type LocaleData, type Place } from "./testDataLocale.ts";
 import { enumValues, intervalLiteral, nonTransactionalNote, readChecks, typeInfo, type CatalogFacts, type ColumnRule, type TypeInfo } from "./testDataSql.ts";
@@ -1511,6 +1511,30 @@ export function insertStatements(model: TableModel, generator: RowGenerator, row
     return rows.map(() => sql);
   }
   return importStatements(rows, { qualified: model.qualified, columns: model.columns.map((c) => c.col), quoted: model.columns.map((c) => c.quoted), mapping, emptyAsNull: false }, model.dialect);
+}
+
+/** The rows each statement of insertStatements writes, in order (one per statement for rows of defaults). */
+export function statementRows(model: TableModel, generator: RowGenerator, rowCount: number): number[] {
+  if (!generator.written.length) return Array.from({ length: rowCount }, () => 1);
+  const batch = importBatch(model.dialect);
+  const out: number[] = [];
+  for (let start = 0; start < rowCount; start += batch) out.push(Math.min(batch, rowCount - start));
+  return out;
+}
+
+/**
+ * Why a statement that should have inserted `expected` rows did not, from what the server answered: the rows it says
+ * went in (the sum of its counts; Informix sends one INSERT per row) fall short. A driver that turns a refused value
+ * into a warning (MariaDB Connector/ODBC: 01000, 0 rows) would otherwise pass for a success. Null when the counts add
+ * up, or when the server gave none (SET NOCOUNT ON).
+ */
+export function insertShortfall(results: Pick<ResultSet, "rowsAffected">[], messages: string[], expected: number): string | null {
+  const counts = results.map((r) => r.rowsAffected).filter((n): n is number => n !== null && n !== undefined && n >= 0);
+  if (!counts.length) return null;
+  const got = counts.reduce((a, b) => a + b, 0);
+  if (got >= expected) return null;
+  const why = messages.map((m) => m.trim()).filter(Boolean).join(" · ");
+  return `el servidor insertó ${got.toLocaleString("es-ES")} de ${expected.toLocaleString("es-ES")} filas${why ? `: ${why}` : ""}`;
 }
 
 /** A script of INSERT statements (nothing runs): what «Insertar» would send, statement by statement. */

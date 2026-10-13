@@ -10,7 +10,7 @@ import { lookupSql } from "../src/fkLookupSql.ts";
 import { compareSchemas, syncScript, type SchemaTable } from "../src/schemaCompare.ts";
 import { changesSql, filterSql, selectLimit, upsertSql } from "../src/sqlgen.ts";
 import { importLiteral, importStatements, type SheetCell } from "../src/importFormats.ts";
-import { blankSettings, buildModel, createGenerator, EXISTING_SAMPLE, existingToRead, inferSettings, insertStatements, problems, statsColumns, type ParentKeys } from "../src/testData.ts";
+import { blankSettings, buildModel, createGenerator, EXISTING_SAMPLE, existingToRead, inferSettings, insertStatements, problems, statementRows, statsColumns, type ParentKeys } from "../src/testData.ts";
 import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, statsSql } from "../src/testDataSql.ts";
 import type { Cell, DbKind, ObjectRef, ResultSet, TableColumn } from "../src/types.ts";
 
@@ -138,7 +138,9 @@ if (shape.testData) {
   const rows = Array.from({ length: count }, () => gen.next());
   const plan = model.columns.map((c, i) => `${c.col.name}=${settings[i].kind}${c.unique ? " (única)" : ""}${c.values ? ` [${c.values.join("|")}]` : ""}${c.rule ? ` [${c.rule.min}..${c.rule.max}]` : ""}`);
   out.push({ name: `plan: ${plan.join(", ")}${model.nonTransactional ? ` ‖ sin transacciones: ${model.nonTransactional}` : ""}`, sql: "" });
-  for (const sql of insertStatements(model, gen, rows)) out.push({ name: "testdata insert", sql });
+  // `rows`: what each statement inserts, which the server's counts must reach (the dialog's insertShortfall).
+  const perStatement = statementRows(model, gen, rows.length);
+  insertStatements(model, gen, rows).forEach((sql, i) => out.push({ name: "testdata insert", sql, rows: perStatement[i] }));
   const byName = (name: string) => model.columns.find((c) => c.col.name.toLowerCase() === name);
   const quotedOf = (name: string) => model.columns.find((m) => m.col.name === name)!.quoted;
   const key = model.columns.find((c) => c.col.primaryKey) ?? model.columns[0];

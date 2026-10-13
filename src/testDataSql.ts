@@ -236,6 +236,11 @@ export function catalogQueries(dialect: DbKind, t: TableRef, serverInfo = ""): C
       sql: `SELECT '', COLUMN_NAME, ORDINAL_POSITION, '' FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%VIRTUAL GENERATED%' OR EXTRA LIKE '%STORED GENERATED%' OR EXTRA LIKE '%PERSISTENT GENERATED%')`,
     });
     out.push({ part: "engine", sql: tableEngineSql(t) });
+    // ENUM / SET values: a generic ODBC driver names the type only "enum" (the native one gives the whole COLUMN_TYPE).
+    out.push({
+      part: "enum",
+      sql: `SELECT '', COLUMN_NAME, ORDINAL_POSITION, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} AND DATA_TYPE IN ('enum', 'set') ORDER BY 3`,
+    });
     // MariaDB names a column-level CHECK after its column (names repeat across tables) and lists the table itself.
     out.push(
       /mariadb/i.test(serverInfo)
@@ -343,7 +348,7 @@ export interface CatalogFacts {
   uniques: string[][];
   /** CHECK constraint texts. */
   checks: { name: string; column: string; text: string }[];
-  /** Native enum values per column (PostgreSQL). */
+  /** Native enum values per column (PostgreSQL enum types, MySQL / MariaDB ENUM and SET). */
   enums: Record<string, string[]>;
   /** Columns the server fills (identity, computed): what a generic ODBC driver does not say. */
   auto?: string[];
@@ -410,7 +415,9 @@ export function readCatalog(parts: { part: CatalogPart; rows: Cell[][] | null }[
     } else if (part === "enum") {
       for (const row of rows) {
         const col = text(row[1]);
-        (facts.enums[col] ??= []).push(text(row[3]));
+        // MySQL / MariaDB: one row per column with its COLUMN_TYPE, enum('a','b'); PostgreSQL: one row per label.
+        const listed = dialect === "mysql" ? enumValues(text(row[3])) : [text(row[3])];
+        if (listed?.length) (facts.enums[col] ??= []).push(...listed);
       }
     }
   }

@@ -14,11 +14,13 @@ import {
   exportText,
   inferOne,
   inferSettings,
+  insertShortfall,
   insertStatements,
   PARENT_SAMPLE,
   problems,
   randomSeed,
   scriptText,
+  statementRows,
   statsColumns,
   type GenKind,
   type GenSettings,
@@ -245,11 +247,15 @@ async function insertRows(model: TableModel, obj: ObjectRef, connId: string, set
       async (exec) => {
         for await (const { generator, rows, start } of chunks(model, settings, count, seed, locale)) {
           const statements = insertStatements(model, generator, rows);
+          const expected = statementRows(model, generator, rows.length);
           const per = Math.ceil(rows.length / Math.max(1, statements.length));
           for (let i = 0; i < statements.length; i++) {
             if (cancelRequested) throw new Error("Cancelado");
             try {
-              await exec(statements[i]);
+              const out = await exec(statements[i]);
+              // Rows the server dropped with only a warning are a failure: the whole insert is undone.
+              const short = insertShortfall(out.results, out.messages, expected[i] ?? per);
+              if (short) throw new Error(short);
             } catch (err) {
               if (cancelRequested) throw new Error("Cancelado");
               throw new Error(`Filas ${(start + i * per + 1).toLocaleString("es-ES")}–${(start + Math.min(rows.length, (i + 1) * per)).toLocaleString("es-ES")}: ${errorText(err)}`);

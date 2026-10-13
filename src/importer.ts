@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store";
 import { api, errorText } from "./api";
 import { gib, kindOf, notify, reloadTable, reloadTableSafe, state as appState, tableDirty } from "./state";
-import type { DbKind, ObjectRef, TableColumn } from "./types";
+import type { DbKind, ExecOutput, ObjectRef, TableColumn } from "./types";
 import { effectiveDialect, nonTransactionalEngine, tableEngineSql } from "./testDataSql";
 import {
   blankRow,
@@ -455,7 +455,7 @@ export class SessionOpenError extends Error {}
  * Cancelar that throws from `work`, rolls everything back and is thrown again. `onSession` gets the session (to cancel
  * a statement that is running).
  */
-export async function insertInTransaction(connId: string, database: string | undefined, work: (exec: (sql: string) => Promise<void>) => Promise<void>, onSession?: (sessionId: string | null) => void): Promise<void> {
+export async function insertInTransaction(connId: string, database: string | undefined, work: (exec: (sql: string) => Promise<ExecOutput>) => Promise<void>, onSession?: (sessionId: string | null) => void): Promise<void> {
   const opened = await api()
     .openSession(connId, appState.passwords[connId])
     .catch((err) => {
@@ -466,9 +466,7 @@ export async function insertInTransaction(connId: string, database: string | und
   try {
     if (database) await api().useDatabase(session, database).catch(() => {});
     await api().setAutocommit(session, false);
-    await work(async (sql) => {
-      await api().execute(session, sql, 1);
-    });
+    await work((sql) => api().execute(session, sql, 1));
     await api().commit(session);
   } catch (err) {
     await api().rollback(session).catch(() => {});
