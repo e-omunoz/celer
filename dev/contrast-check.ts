@@ -1,7 +1,8 @@
 // Checks for src/contrast.ts and the theme colours in src/App.css: node --experimental-strip-types dev/contrast-check.ts
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { contrastRatio, labelColorOn, luminance } from "../src/contrast.ts";
+import { contrastOf, contrastRatio, labelColorOn, luminance } from "../src/contrast.ts";
+import { CONTRAST_PAIRS } from "../src/themes.ts";
 import { ACCENTS } from "../src/types.ts";
 
 assert.equal(luminance("#000"), 0);
@@ -79,6 +80,36 @@ for (const theme of Object.keys(themes)) {
       assert.ok(ratio >= 4.5, `${theme}: ${state} chip label on ${bg} is ${ratio.toFixed(2)}:1`);
     }
   }
+}
+
+// Every built-in theme passes the theme editor's own checks (#176), so an untouched copy says «Todo cumple AA».
+// Tokens here are any CSS value; var() is followed. Pairs on the user's accent are measured over ACCENTS above.
+const fullBlock = (selector: string) => {
+  const at = css.indexOf(selector);
+  const body = css.slice(css.indexOf("{", at) + 1, css.indexOf("}", at));
+  return Object.fromEntries([...body.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+};
+const accentPairs = new Set(["--accent", "--accent-fg", "--accent-text", "--grid-sel"]);
+const fullDark = fullBlock(":root,\n[data-theme-preview=\"dark\"]");
+for (const theme of Object.keys(themes)) {
+  const raw = theme === "dark" ? fullDark : { ...fullDark, ...fullBlock(`:root[data-theme="${theme}"]`) };
+  const value = (token: string) => {
+    let text = raw[token];
+    for (let hops = 0; text?.startsWith("var(") && hops < 5; hops++) text = raw[text.slice(4, -1).trim()];
+    return text;
+  };
+  for (const pair of CONTRAST_PAIRS) {
+    if (accentPairs.has(pair.fg) || accentPairs.has(pair.bg)) continue;
+    const ratio = contrastOf(value(pair.fg), value(pair.bg), value(pair.under ?? "--bg"));
+    assert.ok(ratio !== null, `${theme}: ${pair.fg} on ${pair.bg} cannot be measured`);
+    assert.ok(ratio >= pair.min, `${theme}: ${pair.label} (${pair.fg} on ${pair.bg}) is ${ratio.toFixed(2)}:1 (want ${pair.min})`);
+  }
+  // Error text in dialogs (the test data generator's blocking problem) and in the row history's .rh-box.bad.
+  const tokens = themes[theme];
+  atLeast(theme, "--danger", "--popover", 4.5);
+  const badBox = mix(tokens["--danger"], tokens["--panel"], 0.07);
+  const ratio = contrastRatio(tokens["--danger"], badBox);
+  assert.ok(ratio >= 4.5, `${theme}: --danger in .rh-box.bad is ${ratio.toFixed(2)}:1`);
 }
 
 console.log("contrast-check: ok");

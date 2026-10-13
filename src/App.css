@@ -22,7 +22,7 @@
   --accent-default: #d97757;
   --success: #6cc070;
   --warning: #e0a84a;
-  --danger: #ec6a5e;
+  --danger: #ed7166;
   /* connection environments (src/environment.ts): strip, chip and dots; -fg is the label on them */
   --env-dev: #6cc070;
   --env-dev-fg: #000;
@@ -89,7 +89,7 @@
   --active: rgb(31 30 28 / 0.08);
   --success: #2f8a3e;
   --warning: #a8670a;
-  --danger: #c8352b;
+  --danger: #c03329;
   --env-dev: #2f8a3e;
   --env-dev-fg: #000;
   --env-test: #2468b3;
@@ -107,7 +107,7 @@
   --syntax-type: #7a46b0;
   --syntax-string: #4b7d26;
   --syntax-number: #2366a8;
-  --syntax-comment: #9a968a;
+  --syntax-comment: #959286;
   --syntax-table: #7a46b0;
   --syntax-param: #b02d63;
   --syntax-punct: #6c6960;
@@ -144,7 +144,7 @@
   --active: rgb(223 225 229 / 0.1);
   --success: #5fb865;
   --warning: #e0b34a;
-  --danger: #f75464;
+  --danger: #f97380;
   --env-dev: #5fb865;
   --env-dev-fg: #000;
   --env-test: #56a8f5;
@@ -188,7 +188,7 @@
   --active: rgb(236 239 244 / 0.1);
   --success: #a3be8c;
   --warning: #ebcb8b;
-  --danger: #bf616a;
+  --danger: #f7939b;
   --env-dev: #a3be8c;
   --env-dev-fg: #000;
   --env-test: #81a1c1;
@@ -206,13 +206,13 @@
   --syntax-type: #8fbcbb;
   --syntax-string: #a3be8c;
   --syntax-number: #b48ead;
-  --syntax-comment: #6f7c95;
+  --syntax-comment: #738098;
   --syntax-table: #b48ead;
   --syntax-param: #d08770;
   --syntax-punct: #d8dee9;
   --obj-table: #88c0d0;
   --obj-view: #8fbcbb;
-  --grid-number: #b48ead;
+  --grid-number: #b793b0;
 }
 
 :root[data-theme="sand"],
@@ -232,7 +232,7 @@
   --active: rgb(88 110 117 / 0.1);
   --success: #6f8500;
   --warning: #a77b00;
-  --danger: #cf3a30;
+  --danger: #ba342b;
   --env-dev: #6f8500;
   --env-dev-fg: #000;
   --env-test: #268bd2;
@@ -248,9 +248,9 @@
   --syntax-keyword: #b5400f;
   --syntax-function: #1f78b5;
   --syntax-type: #6c71c4;
-  --syntax-string: #6f8500;
+  --syntax-string: #647800;
   --syntax-number: #a77b00;
-  --syntax-comment: #93a1a1;
+  --syntax-comment: #818e8e;
   --syntax-table: #6c71c4;
   --syntax-param: #d33682;
   --syntax-punct: #586e75;
@@ -264,7 +264,7 @@
   --obj-index: #b5400f;
   --obj-trigger: #d33682;
   --obj-sequence: #5f7200;
-  --grid-number: #1f78b5;
+  --grid-number: #1e74b0;
   --shadow-lg: 0 18px 48px rgb(88 70 30 / 0.16);
   --shadow-md: 0 8px 24px rgb(88 70 30 / 0.12);
   --scrim: rgb(60 50 30 / 0.25);
@@ -441,6 +441,8 @@
   --editor-stmt: color-mix(in srgb, var(--accent) 4%, transparent);
   --grid-alt: color-mix(in srgb, var(--text) 1.8%, var(--surface));
 }
+/* Sand's surface is darker than white: a little more black keeps the default accent's text at AA there. */
+:root[data-theme="sand"] { --accent-text: color-mix(in srgb, var(--accent) 75%, #000); }
 
 /* ============================================================================
    Base

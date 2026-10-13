@@ -91,6 +91,8 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Theme contrast** (#176): error text in Fjord was hard to read on dialogs (2.46:1); every built-in theme's red,
+  table numbers, strings and comments now reach WCAG AA where they are shown.
 - **Tear-off outline** (#108): dragged into the lower part of a large screen, the outline hung off the screen with its
   label while the window opened somewhere else; both now come from the same frame. The window opens where the
   button was let go, not where the pointer is a moment later. At 150 % and other scales the pointer stays on the
