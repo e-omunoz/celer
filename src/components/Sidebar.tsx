@@ -37,6 +37,7 @@ import { isTauri } from "../api";
 import { emptyConn, ENGINES, type ConnSummary, type DbKind, type MetaNode, type ObjectRef } from "../types";
 import { startImport } from "../importer";
 import { importConnectionsItem } from "../migrate";
+import { openTestData } from "../testDataRun";
 import { withShortcut } from "../commands";
 import { unsupportedReason, type Feature } from "../engineCompat";
 import { compareWithMarked, isMarked, markForCompare, schemaCompare, schemaTitle } from "../schemaCompareRun";
@@ -864,6 +865,8 @@ export function Sidebar() {
         { separator: true },
         { label: "Exportar datos…", icon: "download", run: () => void startObjectExport(connId, obj) },
         ...(obj.kind === "table" ? [{ label: "Importar datos (CSV, JSON, Excel)…", icon: "upload", run: () => void startImport(connId, obj) }] : []),
+        // Rows of realistic test data (#172), next to the other ways rows get into a table.
+        ...(obj.kind === "table" ? [{ label: "Generar datos de prueba…", icon: "plus", run: () => void openTestData(connId, obj) }] : []),
         { label: "Copiar estructura para IA", icon: "ai", run: () => void copySchemaForAi(connId, obj) },
         { separator: true },
       );

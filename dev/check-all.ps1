@@ -64,6 +64,7 @@ Step "disconnect" { & $node dev\disconnect-check.mjs }
 Step "generated scripts" { & $node dev\generate-check.mjs }
 Step "misc (startup script, pins, undo)" { & $node dev\misc-check.mjs }
 Step "import (Excel, JSON)" { & $node dev\import-e2e-check.mjs }
+Step "test data generator" { $env:CONN = "Postgres local"; & $node dev\testdata-e2e-check.mjs }
 Step "grid editors (bool, date, FK lookup) and explorer refresh" { & $node dev\grid-editors-check.mjs }
 Step "schema comparison" { & $node dev\schema-compare-check.mjs }
 Step "data comparison" { & $node dev\data-compare-check.mjs }

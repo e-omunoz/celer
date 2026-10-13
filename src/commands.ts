@@ -51,6 +51,7 @@ import { openMyReports, openReport } from "./reportStore";
 import { focusPanel } from "./focus";
 import { openThemeEditor } from "./themeStore";
 import { exportConnections, importConnections } from "./connManage";
+import { openTestData } from "./testDataRun";
 
 export interface Command {
   id: string;
@@ -152,6 +153,7 @@ export function commands(): Command[] {
     { id: "palette-actions", label: "Buscar una acción", group: "Navegar", run: () => openPalette("actions") },
     { id: "shortcuts", label: "Atajos de teclado…", group: "Preferencias", run: () => setState({ settingsOpen: true, settingsSection: "keys" }) },
     { id: "er-table", label: "Diagrama de relaciones de la tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void openErDiagram(tab.connId, erSchemaPath(tab.connId, tab.obj, tab.database), tab.obj); }, enabled: () => { const tab = activeTab(); return tab?.kind === "table" && tab.obj.kind === "table"; }, unsupported: missing("er") },
+    { id: "test-data", label: "Generar datos de prueba", group: "Datos", hint: "Llena la tabla abierta con datos realistas y válidos: insertados, como script o en CSV / JSON", run: () => { const tab = activeTab(); if (tab?.kind === "table") void openTestData(tab.connId, tab.obj); }, enabled: () => { const tab = activeTab(); return tab?.kind === "table" && tab.obj.kind === "table"; } },
     { id: "reload-table", label: "Recargar tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void reloadTableSafe(tab.id); }, enabled: () => activeTab()?.kind === "table" },
     { id: "settings", label: "Ajustes…", group: "Preferencias", run: () => setState("settingsOpen", true) },
     { id: "theme-editor", label: "Editor de tema…", group: "Tema", run: () => openThemeEditor("") },

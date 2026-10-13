@@ -436,6 +436,46 @@ async function* importChunks(): AsyncGenerator<{ rows: SheetCell[][]; span: numb
   yield { rows, span: rows.length };
 }
 
+/** The session could not be opened: nothing was tried (as opposed to a failure inside the transaction). */
+export class SessionOpenError extends Error {}
+
+/**
+ * Runs `work` on a session of its own, in one transaction: the import's inserts and the test data generator's. A
+ * console's open transaction is never mixed in (it is another session). Commits when `work` ends; any failure, or a
+ * Cancelar that throws from `work`, rolls everything back and is thrown again. `onSession` gets the session (to cancel
+ * a statement that is running).
+ */
+export async function insertInTransaction(connId: string, database: string | undefined, work: (exec: (sql: string) => Promise<void>) => Promise<void>, onSession?: (sessionId: string | null) => void): Promise<void> {
+  const opened = await api()
+    .openSession(connId, appState.passwords[connId])
+    .catch((err) => {
+      throw new SessionOpenError(errorText(err));
+    });
+  const session = opened.sessionId;
+  onSession?.(session);
+  try {
+    if (database) await api().useDatabase(session, database).catch(() => {});
+    await api().setAutocommit(session, false);
+    await work(async (sql) => {
+      await api().execute(session, sql, 1);
+    });
+    await api().commit(session);
+  } catch (err) {
+    await api().rollback(session).catch(() => {});
+    throw err;
+  } finally {
+    onSession?.(null);
+    void api().closeSession(session).catch(() => {});
+  }
+}
+
+/** Reloads the open tabs of a table (after rows went in). */
+export function reloadTableTabs(connId: string, name: string | undefined) {
+  for (const tab of appState.tabs) {
+    if (tab.kind === "table" && tab.connId === connId && tab.obj.name === name) void reloadTable(tab.id);
+  }
+}
+
 /** Imports every row in one transaction; any failure rolls the whole import back. */
 export async function runImport() {
   const total = importRowCount();
@@ -443,52 +483,38 @@ export async function runImport() {
   const dialect = kindOf(importer.connId);
   cancelRequested = false;
   setImporter({ running: true, done: 0, total });
-  const opened = await api().openSession(importer.connId, appState.passwords[importer.connId]).catch((err) => {
-    notify(errorText(err), "error");
-    return null;
-  });
-  if (!opened) {
-    setImporter("running", false);
-    return;
-  }
-  const session = opened.sessionId;
   const batch = importBatch(dialect);
   let imported = 0;
   let covered = 0;
   try {
-    if (importer.obj?.database) await api().useDatabase(session, importer.obj.database).catch(() => {});
-    await api().setAutocommit(session, false);
-    for await (const { rows, span } of importChunks()) {
-      if (cancelRequested) throw new Error("Importación cancelada");
-      const statements = importSql(rows, dialect);
-      for (let i = 0; i < statements.length; i++) {
+    await insertInTransaction(importer.connId, importer.obj?.database, async (exec) => {
+      for await (const { rows, span } of importChunks()) {
         if (cancelRequested) throw new Error("Importación cancelada");
-        try {
-          await api().execute(session, statements[i], 1);
-        } catch (err) {
-          throw new Error(`Filas ${imported + i * batch + 1}–${imported + Math.min(rows.length, (i + 1) * batch)}: ${errorText(err)}`);
+        const statements = importSql(rows, dialect);
+        for (let i = 0; i < statements.length; i++) {
+          if (cancelRequested) throw new Error("Importación cancelada");
+          try {
+            await exec(statements[i]);
+          } catch (err) {
+            throw new Error(`Filas ${imported + i * batch + 1}–${imported + Math.min(rows.length, (i + 1) * batch)}: ${errorText(err)}`);
+          }
+          const part = rows.length ? Math.min(rows.length, (i + 1) * batch) / rows.length : 1;
+          setImporter("done", Math.min(total, covered + Math.round(span * part)));
         }
-        const part = rows.length ? Math.min(rows.length, (i + 1) * batch) / rows.length : 1;
-        setImporter("done", Math.min(total, covered + Math.round(span * part)));
+        imported += rows.length;
+        covered += span;
+        setImporter("done", Math.min(total, covered));
       }
-      imported += rows.length;
-      covered += span;
-      setImporter("done", Math.min(total, covered));
-    }
-    await api().commit(session);
+    });
     notify(`Importadas ${imported.toLocaleString()} filas en ${importer.obj?.name}`, "success");
     gib("saved");
     releaseSheet();
     setImporter({ open: false, running: false, handle: 0 });
-    for (const tab of appState.tabs) {
-      if (tab.kind === "table" && tab.connId === importer.connId && tab.obj.name === importer.obj?.name) void reloadTable(tab.id);
-    }
+    reloadTableTabs(importer.connId, importer.obj?.name);
   } catch (err) {
-    await api().rollback(session).catch(() => {});
     setImporter("running", false);
-    notify("No se importó nada: la operación se deshizo", "error", errorText(err));
-  } finally {
-    void api().closeSession(session).catch(() => {});
+    if (err instanceof SessionOpenError) notify(err.message, "error");
+    else notify("No se importó nada: la operación se deshizo", "error", errorText(err));
   }
 }
 

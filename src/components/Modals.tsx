@@ -31,6 +31,8 @@ import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
 import { rowHistory } from "../rowHistory";
 import { RowHistoryDialog } from "./RowHistory";
+import { TestDataDialog } from "./TestDataDialog";
+import { testData } from "../testDataRun";
 import { checkForUpdates, openReleasePage } from "../update";
 import { isDetached, isPanelWindow } from "../windows";
 import { InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
@@ -45,6 +47,7 @@ export function Modals() {
       <Show when={state.exportOpen}><ExportDialog /></Show>
       <Show when={importer.open}><ImportDialog /></Show>
       <Show when={rowHistory.open}><RowHistoryDialog /></Show>
+      <Show when={testData.open}><TestDataDialog /></Show>
       <Show when={state.aboutOpen}><AboutDialog /></Show>
       <Show when={errorLog.open}><ErrorLogView /></Show>
       <Show when={report.open}><ReportDialog /></Show>

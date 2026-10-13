@@ -2,15 +2,17 @@
 // (src-tauri/src/engine_tests.rs). The test describes its tables as the driver reports them (stdin, JSON) and
 // gets back the statements to run, each with what it must return.
 //   node --experimental-strip-types dev/engine-sql.ts < shape.json > statements.json
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 import { activitySpec } from "../src/activity.ts";
 import { compareResults } from "../src/compare.ts";
 import { dataSyncScript } from "../src/dataCompareSql.ts";
 import { lookupSql } from "../src/fkLookupSql.ts";
 import { compareSchemas, syncScript, type SchemaTable } from "../src/schemaCompare.ts";
 import { changesSql, filterSql, selectLimit, upsertSql } from "../src/sqlgen.ts";
-import { importStatements, type SheetCell } from "../src/importFormats.ts";
-import type { Cell, DbKind, ResultSet, TableColumn } from "../src/types.ts";
+import { importLiteral, importStatements, type SheetCell } from "../src/importFormats.ts";
+import { buildModel, createGenerator, EXISTING_SAMPLE, existingToRead, inferSettings, insertStatements, statsColumns, type ParentKeys } from "../src/testData.ts";
+import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, statsSql } from "../src/testDataSql.ts";
+import type { Cell, DbKind, ObjectRef, ResultSet, TableColumn } from "../src/types.ts";
 
 interface Table {
   qualified: string;
@@ -42,6 +44,24 @@ interface Shape {
   schemas?: { source: SchemaTable[]; target: SchemaTable[]; sourceDdl: Record<string, string>; schema: string; sourceSchema: string };
   /** Data comparison: the source's rows, the target's rows and the target table. */
   data?: { source: ResultSet; target: ResultSet; key: string[]; table: string; targetColumns: TableColumn[] };
+  /** Test data generator (#172): the catalog queries for a table, then (with their answers) its INSERTs and checks. */
+  testData?: TestDataShape;
+}
+
+interface TestDataShape {
+  stage: "catalog" | "existing" | "insert";
+  serverInfo: string;
+  table: { database: string; schema: string; name: string; qualified: string };
+  columns: TableColumn[];
+  quoted: string[];
+  /** The table's foreign keys as the driver reads them, with the referenced table quoted for the dialect. */
+  fks: { name: string; columns: string[]; target: ObjectRef; targetColumns: string[]; targetQualified: string; targetQuoted: string[] }[];
+  /** Stage "insert": the answers to the catalog stage's statements, in order (null: the server refused it). */
+  answers?: (Cell[][] | null)[];
+  /** Stage "insert": the answers to the "existing" stage's statements. */
+  existing?: Cell[][][];
+  rows?: number;
+  seed?: number;
 }
 
 interface Statement {
@@ -49,6 +69,22 @@ interface Statement {
   sql: string;
   /** Rows the statement must return (a SELECT), or rows it must affect; absent: it must just succeed. */
   rows?: number;
+}
+
+/**
+ * Writes the statements and ends the process. Written whole before exiting: process.exit right after an
+ * asynchronous write to a pipe would cut a long answer (10,000 generated rows) at 64 KB.
+ */
+function finish(statements: Statement[]): never {
+  const buf = Buffer.from(JSON.stringify(statements, null, 1));
+  for (let off = 0; off < buf.length; ) {
+    try {
+      off += writeSync(1, buf, off);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EAGAIN") throw err;
+    }
+  }
+  process.exit(0);
 }
 
 const shape = JSON.parse(readFileSync(0, "utf8").replace(/^﻿/, "")) as Shape;
@@ -63,6 +99,68 @@ for (const fk of shape.fks ?? []) {
   const on = fk.columns.map((c, i) => `c.${c} = p.${fk.targetColumns[i]}`).join(" AND ");
   out.push({ name: `fk ${fk.name} joins its tables`, sql: `SELECT c.* FROM ${fk.qualified} c JOIN ${fk.targetQualified} p ON ${on}`, rows: fk.rows });
 }
+// ---------------------------------------------------------------- test data generator (#172)
+// Stage "catalog": what the dialog reads (unique keys, CHECKs, enums, counts and maxima, parent keys). Stage "insert":
+// the generator's rows for those answers as the import writes them, then checks that the table holds them all and that
+// every value keeps the constraints (the server enforces them too: an INSERT that broke one would have failed).
+if (shape.testData) {
+  const td = shape.testData;
+  const dialect = effectiveDialect(kind, td.serverInfo);
+  const catalog = catalogQueries(dialect, td.table, td.serverInfo);
+  const numeric = statsColumns(td.columns, dialect);
+  const asked: Statement[] = [
+    ...catalog.map((c) => ({ name: `catalog ${c.part}`, sql: c.sql })),
+    { name: "stats", sql: statsSql(td.table.qualified, numeric.map((i) => td.quoted[i])) },
+    ...td.fks.map((fk) => ({ name: `parent keys ${fk.name}`, sql: parentKeysSql(dialect, fk.targetQualified, fk.targetQuoted, 50_000) })),
+  ];
+  if (td.stage === "catalog") finish(asked);
+  const answers = td.answers ?? [];
+  const facts = readCatalog(catalog.map((c, i) => ({ part: c.part, rows: answers[i] ?? null })), dialect);
+  const fks: ParentKeys[] = td.fks.map((fk, k) => ({ name: fk.name, columns: fk.columns, target: fk.target, targetColumns: fk.targetColumns, rows: answers[catalog.length + 1 + k] ?? [] }));
+  const input = { dialect, qualified: td.table.qualified, table: td.table.name, columns: td.columns, quoted: td.quoted, catalog: facts, stats: answers[catalog.length]?.[0] ?? null, fks };
+  // Stage "existing": the values already in unique columns (a small table), as the dialog reads them next.
+  const toRead = existingToRead(buildModel(input));
+  if (td.stage === "existing") finish(toRead.map((c) => ({ name: `existing ${c.name}`, sql: existingValuesSql(dialect, td.table.qualified, c.quoted, EXISTING_SAMPLE) })));
+  const existing = td.existing ?? [];
+  const model = buildModel({ ...input, existingValues: Object.fromEntries(toRead.map((c, i) => [c.name, (existing[i] ?? []).map((row) => row[0])])) });
+  const settings = inferSettings(model, "es");
+  const gen = createGenerator(model, settings, td.seed ?? 172, "es");
+  const count = td.rows ?? 10_000;
+  const rows = Array.from({ length: count }, () => gen.next());
+  const plan = model.columns.map((c, i) => `${c.col.name}=${settings[i].kind}${c.unique ? " (única)" : ""}${c.values ? ` [${c.values.join("|")}]` : ""}${c.rule ? ` [${c.rule.min}..${c.rule.max}]` : ""}`);
+  out.push({ name: `plan: ${plan.join(", ")}`, sql: "" });
+  for (const sql of insertStatements(model, gen, rows)) out.push({ name: "testdata insert", sql });
+  const byName = (name: string) => model.columns.find((c) => c.col.name.toLowerCase() === name);
+  const quotedOf = (name: string) => model.columns.find((m) => m.col.name === name)!.quoted;
+  const key = model.columns.find((c) => c.col.primaryKey) ?? model.columns[0];
+  out.push({ name: "testdata: every row is there", sql: `SELECT ${key.quoted} FROM ${model.qualified}`, rows: model.existing + count });
+  for (const fk of td.fks) {
+    const on = fk.columns.map((c, i) => `p.${fk.targetQuoted[i]} = t.${quotedOf(c)}`).join(" AND ");
+    const set = fk.columns.map((c) => `t.${quotedOf(c)} IS NOT NULL`).join(" AND ");
+    out.push({ name: `testdata: ${fk.name} only takes existing keys`, sql: `SELECT t.${key.quoted} FROM ${model.qualified} t LEFT JOIN ${fk.targetQualified} p ON ${on} WHERE ${set} AND p.${fk.targetQuoted[0]} IS NULL`, rows: 0 });
+  }
+  for (const c of model.columns.filter((m) => m.unique)) {
+    out.push({ name: `testdata: ${c.col.name} has no repeated value`, sql: `SELECT ${c.quoted} FROM ${model.qualified} WHERE ${c.quoted} IS NOT NULL GROUP BY ${c.quoted} HAVING COUNT(*) > 1`, rows: 0 });
+  }
+  for (const c of model.columns.filter((m) => m.values)) {
+    out.push({ name: `testdata: ${c.col.name} within its values`, sql: `SELECT ${key.quoted} FROM ${model.qualified} WHERE ${c.quoted} NOT IN (${c.values!.map((v) => importLiteral(v, c.col, dialect, false)).join(", ")})`, rows: 0 });
+  }
+  for (const c of model.columns.filter((m) => m.rule)) {
+    const r = c.rule!;
+    const bounds = [r.min !== undefined ? `${c.quoted} ${r.minOpen ? "<=" : "<"} ${r.min}` : "", r.max !== undefined ? `${c.quoted} ${r.maxOpen ? ">=" : ">"} ${r.max}` : ""].filter(Boolean);
+    out.push({ name: `testdata: ${c.col.name} within its range`, sql: `SELECT ${key.quoted} FROM ${model.qualified} WHERE ${bounds.join(" OR ")}`, rows: 0 });
+  }
+  // A generated row read back by its values: text, date, date-time, decimal, boolean and bytes arrive as generated.
+  const at = (name: string) => model.columns.findIndex((c) => c.col.name.toLowerCase() === name);
+  const sample = rows.find((r) => (at("foto") < 0 || r[at("foto")] !== null) && (at("momento") < 0 || r[at("momento")] !== null)) ?? rows[0];
+  const conds = ["codigo", "alta", "importe", "activo", "foto", "momento"]
+    .map(byName)
+    .filter((c): c is NonNullable<typeof c> => Boolean(c) && !c!.type.noLiteral && sample[model.columns.indexOf(c!)] !== null)
+    .map((c) => `${c.quoted} = ${importLiteral(sample[model.columns.indexOf(c)], c.col, dialect, false)}`);
+  out.push({ name: `testdata: a generated row reads back as generated (${conds.length} columns)`, sql: `SELECT ${key.quoted} FROM ${model.qualified} WHERE ${conds.join(" AND ")}`, rows: 1 });
+  finish(out);
+}
+
 if (!shape.t) {
   process.stdout.write(JSON.stringify(out, null, 1));
   process.exit(0);

@@ -38,6 +38,19 @@ All notable changes to Celer are documented here. The format follows
   short shows how far it got and never says the row had no changes. When the table has no full row logging, which the
   CDC API requires, Celer offers to turn it on only for the read and off again, says so afterwards, and says when it
   could not (a later read puts it right). Other engines show the entry disabled with «No disponible en …».
+- **Test data generator** (#172): «Generar datos de prueba…» in a table's menu (explorer and tab) and in the palette
+  fills a table with realistic, valid rows on every engine. A generator per column is inferred from its type and its
+  name (Spanish and English: names, e-mail, phone, address, city, postal code, country, company, NIF/CIF with their
+  check letter, IBAN with its check digits, URL, user, password hash, description, price, quantity, status…) and can
+  be changed: ranges, constant, sequence, weighted value list, regex-like pattern, expression of other columns, NULL
+  ratio, or left to the server (identity, serial, computed, rowversion). NOT NULL, lengths, precision, simple CHECKs
+  (IN, BETWEEN, comparisons), MySQL ENUM/SET and PostgreSQL enums, unique keys (also against the existing values of a
+  table up to 200,000 rows; past that, or for a key of several columns, the dialog warns when a new value could
+  repeat an existing one) and foreign keys (keys read from the referenced table; an empty one is offered to be filled first) are kept.
+  Same seed and settings, same rows; Spanish data by default, English selectable; a 20-row preview. The rows go in
+  through the import's pipeline (batched per dialect, one transaction on its own session, progress, rows/s, Cancelar
+  rolls back; read-only connections refuse, production ones ask), or to a script in a new console (a .sql file past
+  10,000 rows), or to CSV / JSON. 100,000 rows into PostgreSQL take a few seconds.
 
 ### Changed
 - **Menus and panels reorganised, nothing removed** (#111, approved on 2026-10-12):
@@ -74,6 +87,8 @@ All notable changes to Celer are documented here. The format follows
   tab stays. The tab menu says «Abrir en ventana nueva», the tab's tooltip mentions dragging, the first time a window
   has two tabs Gib (or a notice) says so once, and the new window grows into place. The console keeps its session
   when it moves, as before.
+- Import: a value written as the grid shows bytes (`0x…`) goes into a binary column as those bytes (PostgreSQL,
+  MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
 - **Tear-off outline** (#108): dragged into the lower part of a large screen, the outline hung off the screen with its
@@ -81,6 +96,9 @@ All notable changes to Celer are documented here. The format follows
   button was let go, not where the pointer is a moment later. At 150 % and other scales the pointer stays on the
   outline's tab, and moved onto a monitor with another scale the outline keeps the size of the window that will open.
 - **Theme editor**: a saved theme reopens in the editor (drafts no longer throw DataCloneError on store proxies).
+- SQLite: only the rowid alias (a single `INTEGER PRIMARY KEY` on a rowid table) counts as filled by the server.
+  `INT PRIMARY KEY`, `BIGINT PRIMARY KEY`, the columns of a composite key and the key of a WITHOUT ROWID table were
+  marked «auto», so the grid's new rows, the import and the test data generator left them out (#172).
 
 ## [2.3.0] - 2026-10-12
 
