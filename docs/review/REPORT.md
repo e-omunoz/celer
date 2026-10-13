@@ -191,3 +191,100 @@ Partial: #141 on MySQL/MariaDB validates the certificate chain but not its name 
 - MCP «Controlar la aplicación» and the MCP indicator popover on the desktop app; report sending; native file dialogs; updates dialog; AI assistant panel.
 - Load-induced flakes seen during parallel audit runs, not filed: informix_silent_cut, guard::tests::progress_says_reconnecting, mcp::tests::app_tools_informix_jdbc, odbc_open_result_is_freed_before_its_connection (Informix -244 lock contention); all passed when rerun alone.
 - Leftovers: s2_* test tables may remain on MySQL, MariaDB, SQL Server and Informix; variable s2v and library script «s2 runon» in D:\celer-devdata-slot2.
+
+
+# Macro review 2.4 (2026-10-13)
+
+Mode `full`, all areas, base `origin/main`, branch `feat/integration-2.4.0`. Tracking issue #171 (Sprint 2.4). Focus: the 2.4 features (test data generator #172, theme editor #107, motion #110, tear-off outline #108, menus #111, Informix row history #123).
+
+**41 issues filed** (1 high, 13 medium, 27 low); **41 fixed**, 0 deferred, 0 open. Final verification: green, no failures, no regressions.
+
+## Counts by area and severity
+
+| Area | High | Medium | Low | Total | Fixed |
+|---|---|---|---|---|---|
+| security | 1 | 0 | 2 | 3 | 3 |
+| ui-visual | 0 | 2 | 5 | 7 | 7 |
+| ui-functional | 0 | 1 | 3 | 4 | 4 |
+| drivers-open | 0 | 2 | 6 | 8 | 8 |
+| drivers-enterprise | 0 | 4 | 2 | 6 | 6 |
+| connections | 0 | 0 | 0 | 0 | 0 |
+| core-rust | 0 | 0 | 4 | 4 | 4 |
+| frontend-state | 0 | 3 | 2 | 5 | 5 |
+| release | 0 | 1 | 3 | 4 | 4 |
+| **Total** | **1** | **13** | **27** | **41** | **41** |
+
+#180 was filed by the drivers-enterprise, connections and core-rust auditors; it is counted once, under drivers-enterprise. It was fixed in two parts: the SSH tunnel by drivers-enterprise (23699b6) and the startup script by connections (025c421); core-rust re-checked it and made no commit.
+
+## Issues
+
+| Issue | Severity | Area | Title | Status |
+|---|---|---|---|---|
+| #174 | high | security | Test data: MySQL/MariaDB catalog queries escape only quotes, so a table name with a backslash runs injected SQL when the dialog opens | fixed 48be1ed |
+| #175 | medium | ui-visual | Theme editor: Contraste panel shrinks to a sliver at 1024x640 and 1366x768 at 125 % | fixed e5bcb73 |
+| #176 | medium | ui-visual | Built-in themes fail the editor's CONTRAST_PAIRS; Fjord's --danger is 2.46:1 on dialogs | fixed 321fc4a |
+| #177 | medium | ui-functional | Test data «Insertar» (and CSV/Excel import) reloads open tabs of the table, discarding unsaved edits | fixed 73f9106 |
+| #178 | medium | drivers-open | MySQL 8: DEFAULT CURRENT_TIMESTAMP columns (DEFAULT_GENERATED) reported as identity | fixed aedb3d1 |
+| #179 | medium | drivers-open | Test data on MariaDB JSON columns: plain text rejected by the implicit json_valid CHECK | fixed 8c37328 |
+| #180 | medium | drivers-enterprise / connections / core-rust | Row history bypasses the connection's SSH tunnel and startup script | fixed 23699b6, 025c421 |
+| #181 | medium | drivers-enterprise | Test data over ODBC to MariaDB: out-of-list ENUM values, downgraded error, success reported with 0 rows | fixed d8322d9 |
+| #182 | medium | drivers-enterprise | Test data on Informix: multi-field INTERVAL columns get '1' (-1263) | fixed 3416b13 |
+| #183 | medium | drivers-enterprise | Test data on SQL Server: CHECK with N'...' literals not parsed | fixed 3f9616d |
+| #184 | medium | frontend-state | Test data dialog: Sets of up to 200,000 values rebuilt through the store proxy on each change (freezes, ~300 MB kept) | fixed 99565cd |
+| #185 | medium | frontend-state | Test data JSON export of 1M wide rows fails with «Invalid string length» | fixed 4a1b881 |
+| #186 | medium | frontend-state | Scrim mousedown or Esc during a test data insert cancels and rolls back with no confirmation (import too) | fixed 0b4b4fe |
+| #187 | medium | release | STATUS.md and docs/ROADMAP.md still describe the 2.3 sprint | fixed 60af03e |
+| #188 | low | ui-visual | Row history .rh-op chips and theme editor level chips below 4.5:1 on their tint | fixed 67fa6fe |
+| #189 | low | ui-visual | Test data: pattern option always reads «Patrón ([A-Z]{3}-\d{4})» | fixed 3ed8a89 |
+| #190 | low | ui-visual | Test data dialog: generator labels and preview cells cut off, no tooltip | fixed ba3454d |
+| #191 | low | ui-visual | Row history: failure to turn full row logging back off shown only as a muted note | fixed 9a092da |
+| #192 | low | ui-visual | SQLite: INTEGER PRIMARY KEY reported as nullable («NULL» badge on the key) | fixed 7af539f |
+| #193 | low | ui-functional | Workspace shortcuts (Ctrl+W, Ctrl+Tab, F5…) fire behind modal dialogs | fixed 740db2c |
+| #194 | low | ui-functional | Test data on Informix: all-default tables generate INSERT … DEFAULT VALUES (syntax error) | fixed 7957ce4 |
+| #195 | low | ui-functional | Test data on SQL Server/Informix: existing NULL in a nullable UNIQUE column not seeded | fixed 547e20f |
+| #196 | low | drivers-open | Test data: a sequence on a unique integer key can run past the type's range without warning | fixed 742b481 |
+| #197 | low | drivers-open | Test data and import on MyISAM/Aria: message says nothing was inserted though rows stay | fixed 670e5b2 |
+| #198 | low | drivers-open | Test data on MySQL/MariaDB BIT(n>1) and spatial columns: rejected values | fixed 639d9f5 |
+| #199 | low | drivers-open | Test data on PostgreSQL domains ignores base type modifiers, NOT NULL and CHECK | fixed 9367968 |
+| #200 | low | drivers-open | CHECK reader misses negative bounds as PostgreSQL and MySQL 8 store them | fixed 9606590 |
+| #201 | low | drivers-open | SQLite: INTEGER PRIMARY KEY DESC treated as the rowid alias | fixed e16becb |
+| #202 | low | drivers-enterprise | Row history ledger keyed by DBSERVERNAME and table only (cross-server confusion) | fixed d26d2fd |
+| #203 | low | drivers-enterprise | Test data on an unrecognised ODBC engine loads the whole referenced table | fixed bbc5f8d |
+| #204 | low | core-rust | Test data CSV export uses ',' and no BOM, unlike Celer's CSV export | fixed f0f2382 |
+| #205 | low | core-rust | Overlapping row-history reads of one table turn full row logging off under each other | fixed 7917f2f |
+| #206 | low | core-rust | Engine gate flaky: informix_jdbc_row_history CDC retry and its docker restart | fixed 81a317b |
+| #207 | low | core-rust | write_text_file is a sync command on the main thread; large exports freeze every window | fixed cbdd2f3 |
+| #208 | low | frontend-state | «Generar antes datos de …» resets the child table's settings | fixed 503d401 |
+| #209 | low | frontend-state | Tab drag sends the console's full SQL as the card preview to every window | fixed a62acca |
+| #210 | low | security | Test data script: a newline in the table name ends the «--» header comment | fixed 4f2c874 |
+| #211 | low | security | Row history on a read-only Informix connection turns full row logging off on a left-over ledger entry | fixed 3808d53 |
+| #212 | low | release | STATUS test inventory stale; check-all.ps1 skips 15 .ts checks and 11 .mjs scripts | fixed d8c9eb1 |
+| #213 | low | release | READMEs omit 2.4's features and the Alt+1 / F6 shortcuts | fixed ce8a68e |
+| #214 | low | release | docs/media screenshots show the removed explorer button and lack the Variables button | fixed f3474a5 |
+
+Not fixed, outside these issues: with the Teal or Green accent, accent-coloured text stays below 4.5:1 in the light themes.
+
+## Checks run
+
+- Full engine suite `bash dev/wsl/engines.sh test` (every dev/*-check.ts, tsc, `cargo test --lib`) after the security, ui-visual, ui-functional, drivers-open, drivers-enterprise, connections and core-rust fixes: **ALL ENGINES PASS** on PostgreSQL 17, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Informix DRDA, Informix JDBC, SQLite, ODBC (psqlODBC to PostgreSQL, and MariaDB Connector/ODBC to MariaDB in the new testdata_odbc_mysql run) and SSH tunnels. Last core-rust run: 280 passed, 0 failed, 1 ignored (sheets), MariaDB rerun 29 passed.
+- Fast checks: all 35 dev/*-check.ts, `npx tsc --noEmit -p .`, `npx tsc --noEmit -p installer`, `npm run build`: pass in every area. frontend-state also ran `cargo test --lib` without engines (281 passed, 1 ignored).
+- Before/after reproductions: #174 on MySQL 8.4 and MariaDB 11.4 (the victim table was dropped before the fix and survives after); #210 on PostgreSQL 17 via psql; #211, #205, #202 on Informix JDBC (informix_jdbc_row_history extended); #180 through the celer-sshd bastion (ssh_tunnel_row_history) and with a broken startup script (row_history_runs_startup_script); #183 on SQL Server; #182 on Informix DRDA and JDBC; #181 on MariaDB Connector/ODBC 3.2.6; #195 on SQL Server (Msg 2627); #194 confirmed with dbaccess; #179 and #199 engine tests fail before the fix.
+- New or extended engine tests: testdata_sequence_range (#196, every engine), testdata_negative_checks (#200, every engine), testdata_defaults (#194, every engine), testdata_unique_null (#195, every engine), mysql_default_generated_is_not_identity (#178), testdata_mysql_types (#179, #198), testdata_mysql_non_transactional (#197, MyISAM and Aria), testdata_pg_domains (#199, PostgreSQL and ODBC), testdata_mssql / testdata_informix / testdata_informix_jdbc (#182, #183), testdata_odbc_mysql (#181), ssh_tunnel_row_history and row_history_runs_startup_script (#180), sqlite::tests::identity_is_only_the_rowid_alias (#201), rowhistory unit tests a_running_read_holds_its_ledger_key, the_ledger_key_tells_servers_apart and the LiveClaim last-out case (#205, #211, #202), write_text_tests::writes_a_file_in_pieces (#185). informix_jdbc_row_history followed by informix_large_schema_fks now passes in sequence (#206).
+- New logic checks: testdata-check (#174, #179, #181-#185 timing, #189, #194-#200, #203, #204, #208, #210), contrast-check (every built-in theme passes CONTRAST_PAIRS and the chip/error pairs, #176, #188), motion-check previewLines (#209).
+- Browser preview (Vite on port 1420, demo SQLite, headless Chromium): before/after for #175, #176, #189, #190, #192 (demo copy), #177, #193, #184 (155 ms to 1 ms per change, heap back to ~145 MB), #185 (1,000,000-row JSON export in 18 s), #186, #208.
+- Desktop app (Windows debug build): editor-check, result-compare-check, import-typed-check and windows-check (on a fresh workspace) pass for #212; README stills and demo.gif recaptured with dev/readme-media.mjs for #214.
+
+## Not checked
+
+- Desktop app (WebView2) not driven for the fixes except the release area: security, ui-visual, ui-functional, drivers, connections, core-rust and frontend-state fixes rest on engine tests, logic checks and the browser preview. Not seen in the app: the «Historial de la fila» click-through, the new test-data and import warnings and toasts, the #204 Excel/BOM output, #207 window responsiveness, a real export to disk through the new write_text_file/finish_text_file commands (#185), and the cross-window drag preview (#209).
+- Engines per fix: frontend-state fixes were tested live on SQLite (demo backend) only; the other engines were not run for them (UI state and file writing; insert SQL unchanged). ui-visual and release changes do not reach a connection. Row history exists only on Informix JDBC; other engines return «unavailable» before connecting. #191's case where Celer cannot turn logging back off was not reproduced live. ImportDialog's #186 guard was not driven live.
+- Generic ODBC to SQL Server, Informix or an unrecognised engine not tested in WSL (no driver); MySQL Connector/ODBC not tested (only MariaDB Connector/ODBC). Windows ODBC DSNs, Windows authentication, Azure SQL / Synapse.
+- Tear-off ghost outline and window placement (#108): needs a real OS drag across native windows and monitors; code review only (Windows, WSLg/Wayland, mixed DPI, macOS).
+- Live Informix CDC row-history events (full row logging, log switches, onmode -z mid-read, LO_READ timeout path): the CDC reader returned no events while celer-ifx was restarted and put in quiescent mode by other agents. Tables without a primary key, very long logs, non-UTF-8 DB_LOCALE and a non-informix user (-674) not tested.
+- Test data: CSV/JSON output through the native save dialog not written and checked in the app; large «Script SQL» (20k, 1M rows) only on PostgreSQL; production confirm and read-only blocking checked in code only; Insertar/Cancelar UI flow driven live only on PostgreSQL in the visual pass.
+- Theme editor (leave guard, import/export, delete), menu keyboard submenus (#110/#111), OS light/dark following, comfortable density, 150 % scaling and 1920x1080 for the new dialogs, installer UI, splash/onboarding and other screens unchanged since 2.3.
+- Release gate: only CI ran on GitHub for this branch (green, run 38340769684). The Engines workflow (SQL Server, Informix) and a Release build (Windows/macOS/Linux packages, SHA256SUMS) have not run on feat/integration-2.4.0; the new windows-sys dependency is not built on macOS. Linux packages not built locally. Portable start-up, runtime-deps-check.mjs, testdata-e2e-check.mjs, layout-check.mjs and perf-probe.mjs not run. No macOS machine.
+- Security: `cargo audit` not installed (`npm audit --omit=dev`: 0 vulnerabilities). #174 proven with the mysql/mariadb CLI on the generated SQL, not through the app's IPC. PostgreSQL with standard_conforming_strings=off and the unquoted Informix `${database}:` prefix not tested live. Theme import sanitiser, drag-ghost window and installer --data-dir reviewed in code only. MCP, store, updater and guard not re-audited.
+- Unchanged since v2.3.0, not re-audited: cursors and paging at 1M rows, cancel during fetch, script splitting, DDL reconstruction, export round trips, SQL Server/Informix cancel/KILL/GO/TLS/named instances/DRDA ACR/bridge framing, connection UI (state dots, test step display, per-engine fields, import submenu), grid/explorer/editor performance, export/import flows, library, AI assistant, updates dialog, quit-and-restore.
+- Load-induced result discarded: one informix_jdbc_engine failure (-244 lock held by another auditor's concurrent run) passed when rerun alone under the flock; one core-rust run with Informix tests run in parallel was discarded and rerun clean.
+- Leftovers: s1_td_j (full row logging possibly left on) and s1_td_v in celerdemo on Informix could not be dropped (server in quiescent mode, -27002).
