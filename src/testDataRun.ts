@@ -2,7 +2,7 @@
 // CHECKs, enums, parent keys) on a side session, and the three outputs: inserting through the import's pipeline (one
 // transaction on a session of its own, with progress and Cancelar), a script in a new console (or a file when it is
 // big) and a CSV / JSON file. The generator itself is testData.ts.
-import { createStore } from "solid-js/store";
+import { createStore, unwrap } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { insertInTransaction, reloadTableTabs, SessionOpenError } from "./importer";
 import { confirmDialog, connectionById, erSchemaPath, gib, kindOf, notify, openQuery, openSessionFor, state } from "./state";
@@ -85,6 +85,15 @@ export const [testData, setTestData] = createStore<TestDataState>({
   returnTo: null,
 });
 
+/**
+ * The table model as a plain object. Read through the store it would wrap each of its (up to 200,000 per unique
+ * column) existing values in a proxy with its own signals on every settings change, and keep them on the heap (#184).
+ */
+export function currentModel(): TableModel | null {
+  const model = testData.model;
+  return model ? unwrap(model) : null;
+}
+
 let cancelRequested = false;
 let runningSession: string | null = null;
 let openSeq = 0;
@@ -165,7 +174,7 @@ export async function openTestData(connId: string, obj: ObjectRef, returnTo: Tes
 
 /** Another generator for a column: its parameters start from what Celer would propose for that generator. */
 export function setGenerator(index: number, kind: GenKind) {
-  const model = testData.model;
+  const model = currentModel();
   if (!model) return;
   const proposed = inferOne(model, index, testData.locale);
   const current = testData.settings[index];
@@ -184,12 +193,14 @@ export function setSetting<K extends keyof GenSettings>(index: number, key: K, v
 /** Another locale: the generators are proposed again (names, phones and statuses change with it). */
 export function setLocale(locale: Locale) {
   setTestData("locale", locale);
-  if (testData.model) setTestData("settings", inferSettings(testData.model, locale));
+  const model = currentModel();
+  if (model) setTestData("settings", inferSettings(model, locale));
 }
 
 /** Every generator as Celer proposes it again. */
 export function resetSettings() {
-  if (testData.model) setTestData("settings", inferSettings(testData.model, testData.locale));
+  const model = currentModel();
+  if (model) setTestData("settings", inferSettings(model, testData.locale));
 }
 
 /** The generator's rows a chunk at a time (with a pause between chunks so the window stays responsive). */
@@ -206,7 +217,8 @@ async function* chunks(model: TableModel, settings: GenSettings[], count: number
 
 /** Runs the chosen output. Nothing reaches the database except «Insertar», which is one transaction. */
 export async function runTestData() {
-  const { model, obj, connId, count, seed, locale, output } = testData;
+  const { obj, connId, count, seed, locale, output } = testData;
+  const model = currentModel();
   if (!model || !obj || testData.running) return;
   const settings = testData.settings.map((s) => ({ ...s }));
   const blocking = problems(model, settings, count, locale).filter((p) => p.error);
@@ -345,7 +357,7 @@ async function writeExport(model: TableModel, obj: ObjectRef, settings: GenSetti
 /** A run that ended well: the dialog closes; a referenced table filled first sends the user back to its child. */
 function finishRun(inserted: boolean) {
   const back = inserted ? testData.returnTo : null;
-  setTestData({ running: false, phase: "", open: false });
+  setTestData({ running: false, phase: "", open: false, model: null, settings: [] });
   if (back) void openTestData(back.connId, back.obj);
 }
 
@@ -359,7 +371,8 @@ export function cancelTestData() {
     return;
   }
   openSeq++;
-  setTestData({ open: false, loading: false });
+  // The model (and the existing values it holds) goes with the dialog.
+  setTestData({ open: false, loading: false, model: null, settings: [] });
 }
 
 /** Fills the referenced table first (it is empty), then comes back here. */
@@ -371,7 +384,8 @@ export function fillParentFirst(parent: ObjectRef) {
 
 /** The problems of the current settings (memoised by the dialog). */
 export function currentProblems() {
-  return testData.model ? problems(testData.model, testData.settings, testData.count, testData.locale) : [];
+  const model = currentModel();
+  return model ? problems(model, testData.settings, testData.count, testData.locale) : [];
 }
 
 /** Rows per second so far. */

@@ -1259,6 +1259,36 @@ export interface RowGenerator {
 
 const MAX_ATTEMPTS = 40;
 
+/** The keys of a unique column's existing values, built once per model (they can be 200,000 per column). */
+const existingCache = new WeakMap<TableModel, Map<number, Set<string>>>();
+
+function existingKeys(model: TableModel, i: number): Set<string> {
+  let byColumn = existingCache.get(model);
+  if (!byColumn) existingCache.set(model, (byColumn = new Map()));
+  let keys = byColumn.get(i);
+  if (!keys) {
+    keys = new Set((model.existingValues[i] ?? []).map((v) => uniqueKey(v, model.dialect)));
+    if (model.existingNull.includes(i)) keys.add(uniqueKey(null, model.dialect));
+    byColumn.set(i, keys);
+  }
+  return keys;
+}
+
+/** The values a unique column has taken: the table's (shared, never changed) and this run's own. */
+class Seen {
+  private readonly own = new Set<string>();
+  private readonly existing: Set<string>;
+  constructor(existing: Set<string>) {
+    this.existing = existing;
+  }
+  has(key: string): boolean {
+    return this.own.has(key) || this.existing.has(key);
+  }
+  add(key: string) {
+    this.own.add(key);
+  }
+}
+
 /**
  * The rows for a table: each column from its own stream (seed + column name), so the same seed and settings give
  * the same rows. Unique columns retry (from the third attempt with the row number in the value), keys of several
@@ -1288,7 +1318,7 @@ export function createGenerator(model: TableModel, settings: GenSettings[], seed
   const order = [...model.columns.keys()].filter((i) => settings[i].kind !== "expression").concat([...model.columns.keys()].filter((i) => settings[i].kind === "expression"));
   const written = model.columns.map((_, i) => i).filter((i) => settings[i].kind !== "skip");
   const uniqueCols = written.filter((i) => model.columns[i].unique);
-  const used: Map<number, Set<string>> = new Map(uniqueCols.map((i) => [i, new Set([...(model.existingValues[i] ?? []).map((v) => uniqueKey(v, model.dialect)), ...(model.existingNull.includes(i) ? [uniqueKey(null, model.dialect)] : [])])]));
+  const used: Map<number, Seen> = new Map(uniqueCols.map((i) => [i, new Seen(existingKeys(model, i))]));
   const sets = model.uniqueSets.filter((set) => set.every((i) => settings[i].kind !== "skip"));
   const usedSets = sets.map(() => new Set<string>());
   for (const g of fkGroups) {

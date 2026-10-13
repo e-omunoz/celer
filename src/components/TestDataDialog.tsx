@@ -2,7 +2,7 @@ import { Dices, LoaderCircle, RotateCcw } from "lucide-solid";
 import { createMemo, createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
 import { connectionById } from "../state";
 import { GENERATORS, MAX_ROWS, previewRows, randomSeed, type GenKind } from "../testData";
-import { cancelTestData, currentProblems, fillParentFirst, resetSettings, rowsPerSecond, runTestData, SCRIPT_CONSOLE_ROWS, setGenerator, setLocale, setSetting, setTestData, testData, type TestDataOutput } from "../testDataRun";
+import { cancelTestData, currentModel, currentProblems, fillParentFirst, resetSettings, rowsPerSecond, runTestData, SCRIPT_CONSOLE_ROWS, setGenerator, setLocale, setSetting, setTestData, testData, type TestDataOutput } from "../testDataRun";
 import type { SheetCell } from "../importFormats";
 import { ObjIcon } from "../icons";
 import { Dialog } from "./Modals";
@@ -92,7 +92,10 @@ function Params(props: { index: number }) {
 export function TestDataDialog() {
   const problems = createMemo(() => currentProblems());
   const errors = createMemo(() => problems().filter((p) => p.error));
-  const preview = createMemo(() => (testData.model ? previewRows(testData.model, testData.settings, testData.seed, testData.locale, 20) : null));
+  const preview = createMemo(() => {
+    const model = currentModel();
+    return model ? previewRows(model, testData.settings, testData.seed, testData.locale, 20) : null;
+  });
   const conn = () => connectionById(testData.connId);
   const readOnlyInsert = () => testData.output === "insert" && Boolean(conn()?.readOnly);
   const [tick, setTick] = createSignal(0);

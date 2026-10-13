@@ -591,6 +591,16 @@ assert.notDeepEqual(rowsOf(m, s, 42, 50), rowsOf(m, s, 43, 50), "another seed: o
     const full = buildModel({ ...base, stats: [500], existingValues: { codigo: first } } as any);
     const again = rowsOf(full, ss, 777, 500).map((r) => r[1]);
     assert.equal(new Set([...first, ...again]).size, 1000, "the second run's values are all new");
+    // The existing keys are shared between generators of one model (#184): a run's own values do not leak into the next.
+    assert.deepEqual(rowsOf(full, ss, 777, 500).map((r) => r[1]), again, "the same model again: the same rows");
+    {
+      const big = Array.from({ length: 200_000 }, (_, i) => `C${i}`);
+      const wide = buildModel({ ...base, stats: [200_000], existingValues: { codigo: big } } as any);
+      rowsOf(wide, ss, 1, 20);
+      const t0 = performance.now();
+      for (let k = 0; k < 20; k++) rowsOf(wide, ss, k, 20);
+      assert.ok(performance.now() - t0 < 200, "20 previews of a model with 200,000 existing values reuse its keys");
+    }
     // Values that really run out: the message counts the table's own values too.
     const list = buildModel({ ...base, stats: [2], existingValues: { codigo: ["a", "b"] } } as any);
     assert.throws(() => rowsOf(list, ss.map((x, i) => (i === 1 ? { ...x, kind: "list" as const, values: "a\nb" } : x)), 1, 1), /tras 0 filas nuevas y los 2 valores que ya tiene la tabla/);
