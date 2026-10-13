@@ -99,6 +99,8 @@ All notable changes to Celer are documented here. The format follows
   tunnel connected straight to the configured host, which only the bastion reaches, and failed with a misleading
   «revisa servidor, puerto» error. It now goes through the connection's tunnel, as its sessions do, and runs the
   connection's startup script on every connection it opens.
+- **Test data CSV in Excel** (#204): *Generar datos de prueba…* saved CSV with a comma and no UTF-8 BOM, so Excel
+  showed accented text garbled. It now uses the delimiter and BOM of *Exportar* (the BOM is on by default).
 - **Test data on a generic ODBC engine Celer does not recognise** (#203): opening the dialog on a child table read
   every key of the parent table into memory (the query had no row limit for that engine). At most the usual sample
   is read now, on every engine, and the rest of the result is discarded.

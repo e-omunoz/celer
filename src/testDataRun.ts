@@ -5,7 +5,7 @@
 import { createStore } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { insertInTransaction, reloadTableTabs, SessionOpenError } from "./importer";
-import { confirmDialog, connectionById, erSchemaPath, gib, kindOf, notify, openQuery, openSessionFor } from "./state";
+import { confirmDialog, connectionById, erSchemaPath, gib, kindOf, notify, openQuery, openSessionFor, state } from "./state";
 import {
   buildModel,
   createGenerator,
@@ -319,11 +319,13 @@ async function writeExport(model: TableModel, obj: ObjectRef, settings: GenSetti
   const name = `datos_${obj.name}.${format}`;
   const path = isTauri() ? ((await api().pickSavePath([{ name: format.toUpperCase(), extensions: [format] }], name)) ?? "") : name;
   if (!path) return;
+  // The CSV conventions of Exportar (its delimiter and BOM), so the file opens the same way in Excel.
+  const { delimiter, bom } = state.exportOpts;
   setTestData({ running: true, phase: "Generando", done: 0, total: count, startedAt: Date.now() });
   try {
     const parts: string[] = [];
     for await (const { generator, rows, start } of chunks(model, settings, count, seed, locale)) {
-      const text = exportText(model, generator, rows, format);
+      const text = exportText(model, generator, rows, format, delimiter);
       // One header (CSV) and one array (JSON) for every chunk together.
       if (format === "csv") parts.push(start === 0 ? text : text.slice(text.indexOf("\n") + 1));
       else parts.push(text.replace(/^\[\n?/, "").replace(/\n?\]$/, ""));
@@ -331,7 +333,7 @@ async function writeExport(model: TableModel, obj: ObjectRef, settings: GenSetti
     }
     setTestData("phase", "Guardando");
     const body = format === "csv" ? parts.join("\n") + "\n" : `[\n${parts.filter(Boolean).join(",\n")}\n]\n`;
-    await api().writeTextFile(path, body);
+    await api().writeTextFile(path, body, format === "csv" && bom ? "utf-8-bom" : "utf-8");
     notify(`Exportadas ${count.toLocaleString("es-ES")} filas de prueba a ${format.toUpperCase()}`, "success", path);
     finishRun(false);
   } catch (err) {

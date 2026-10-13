@@ -1553,8 +1553,8 @@ export function rowsResult(model: TableModel, generator: RowGenerator, rows: She
 }
 
 /** CSV or JSON text of the rows (the export's own writer). */
-export function exportText(model: TableModel, generator: RowGenerator, rows: SheetCell[][], format: "csv" | "json"): string {
-  return resultToText(rowsResult(model, generator, rows), format, model.table);
+export function exportText(model: TableModel, generator: RowGenerator, rows: SheetCell[][], format: "csv" | "json", delimiter?: string): string {
+  return resultToText(rowsResult(model, generator, rows), format, model.table, delimiter);
 }
 
 /** The first `n` rows for the preview, or the error that stops them. */

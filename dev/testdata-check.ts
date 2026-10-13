@@ -642,6 +642,10 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   const csv = exportText(m, gen, rows.slice(0, 3), "csv").split("\n");
   assert.equal(csv[0], "codigo,nombre,apellidos,email,parent_id,estado,prioridad,puntos,alta,momento,importe,activo,notas,foto,nif,telefono,ciudad,cp");
   assert.equal(csv[1].split(",")[0], rows[0][at("codigo")]);
+  // With Exportar's delimiter (#204): ';' separates the fields.
+  const semi = exportText(m, gen, rows.slice(0, 3), "csv", ";").split("\n");
+  assert.ok(semi[0].startsWith("codigo;nombre;apellidos;"));
+  assert.equal(semi[1].split(";")[0], rows[0][at("codigo")]);
   const json = JSON.parse(exportText(m, gen, rows.slice(0, 2), "json")) as Record<string, unknown>[];
   assert.equal(json[0].codigo, rows[0][at("codigo")]);
   assert.equal(json[0].alta, (rows[0][at("alta")] as { d: string }).d);
