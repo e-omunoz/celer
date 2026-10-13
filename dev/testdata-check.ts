@@ -31,7 +31,7 @@ import {
   type ModelInput,
   type TableModel,
 } from "../src/testData.ts";
-import { catalogQueries, checkClauses, effectiveDialect, enumValues, existingValuesSql, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
+import { catalogQueries, checkClauses, domainCheck, effectiveDialect, enumValues, existingValuesSql, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
 import { codeOnly, splitSql } from "../src/sql.ts";
 import type { DbKind, TableColumn } from "../src/types.ts";
 import type { SheetCell } from "../src/importFormats.ts";
@@ -622,6 +622,32 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   assert.ok(!problems(ifxNull, ifxNull.columns.map(() => blankSettings("skip")), 1).some((p) => p.error));
   const ifxNone = ifxModel([col("a", "integer", "number", { default: "5" })]);
   assert.ok(problems(ifxNone, [blankSettings("skip")], 1).some((p) => p.error && /DEFAULT VALUES/.test(p.text)));
+}
+
+// ---------------------------------------------------------------- PostgreSQL domains (#199)
+{
+  assert.equal(domainCheck("CHECK (((VALUE > 0) AND (VALUE <= 50)))", "n"), 'CHECK ((("n" > 0) AND ("n" <= 50)))');
+  assert.equal(domainCheck("CHECK ((VALUE)::text <> 'VALUE'::text)", 'a"b'), `CHECK (("a""b")::text <> 'VALUE'::text)`, "not inside a literal");
+  assert.ok(catalogQueries("postgres", { database: "db", schema: "public", name: "t", qualified: "t" }).some((q) => q.part === "domain" && /typbasetype/.test(q.sql)));
+  const facts = readCatalog(
+    [{ part: "domain", rows: [["type", "code", 0, "character varying(4)"], ["type", "n", 1, "integer"], ["check", "n", 0, "CHECK (((VALUE > 0) AND (VALUE <= 50)))"]] }],
+    "postgres",
+  );
+  assert.deepEqual(facts.domains, { code: { type: "character varying(4)", notNull: false }, n: { type: "integer", notNull: true } });
+  const columns = [col("id", "integer", "number", { nullable: false, primaryKey: true }), col("code", "fx_code", "text"), col("n", "fx_pos", "number")];
+  const model = buildModel({ dialect: "postgres", qualified: "t", table: "t", columns, quoted: columns.map((c) => c.name), catalog: facts, fks: [] });
+  assert.deepEqual([model.columns[1].type.family, model.columns[1].type.maxLength], ["text", 4], "the base type's length");
+  assert.equal(model.columns[2].type.family, "int");
+  assert.equal(model.columns[2].col.nullable, false, "the domain's NOT NULL");
+  assert.deepEqual([model.columns[2].rule?.min, model.columns[2].rule?.max], [0, 50], "the domain's CHECK");
+  const settings = inferSettings(model);
+  assert.equal(settings[2].nullPct, 0);
+  const g = createGenerator(model, settings, 3);
+  for (let k = 0; k < 200; k++) {
+    const row = g.next();
+    assert.ok(row[1] === null || String(row[1]).length <= 4, String(row[1]));
+    assert.ok(Number(row[2]) > 0 && Number(row[2]) <= 50, String(row[2]));
+  }
 }
 
 // ---------------------------------------------------------------- a table without transactions (#197)

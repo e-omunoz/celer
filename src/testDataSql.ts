@@ -146,7 +146,7 @@ export interface TableRef {
   qualified: string;
 }
 
-export type CatalogPart = "unique" | "check" | "enum" | "auto" | "engine";
+export type CatalogPart = "unique" | "check" | "enum" | "auto" | "engine" | "domain";
 
 /** One catalog query. Every one returns four columns: a constraint or index name, a column, a position, a text. */
 export interface CatalogQuery {
@@ -195,6 +195,15 @@ export function catalogQueries(dialect: DbKind, t: TableRef, serverInfo = ""): C
         `SELECT '', a.attname::text, a.attnum::int, '' FROM ${from} JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped ` +
         "LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum " +
         `WHERE (a.attidentity <> '' OR a.attgenerated <> '' OR pg_catalog.pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%') AND ${where}`,
+    });
+    // Columns of a domain: its base type with its modifiers (varchar(4)), its NOT NULL (position 1) and its CHECKs.
+    const domainCols = `${from} JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped JOIN pg_catalog.pg_type t ON t.oid = a.atttypid`;
+    out.push({
+      part: "domain",
+      sql:
+        `SELECT 'type', a.attname::text, CASE WHEN t.typnotnull THEN 1 ELSE 0 END, pg_catalog.format_type(t.typbasetype, t.typtypmod) FROM ${domainCols} WHERE t.typtype = 'd' AND ${where} ` +
+        `UNION ALL SELECT 'check', a.attname::text, 0, pg_catalog.pg_get_constraintdef(con.oid) FROM ${domainCols} JOIN pg_catalog.pg_constraint con ON con.contypid = t.oid ` +
+        `WHERE t.typtype = 'd' AND con.contype = 'c' AND ${where}`,
     });
   } else if (dialect === "mysql") {
     const db = `COALESCE(NULLIF(${lit(t.database || t.schema, dialect)}, ''), DATABASE())`;
@@ -321,6 +330,9 @@ export interface CatalogFacts {
   auto?: string[];
   /** The table's storage engine when it takes no transactions (MySQL MyISAM, MariaDB Aria…); else empty. */
   nonTransactional?: string;
+  /** Columns of a PostgreSQL domain: its base type (with modifiers) and whether the domain is NOT NULL. Its CHECKs
+   *  are in `checks`, VALUE written as the column. */
+  domains?: Record<string, { type: string; notNull: boolean }>;
 }
 
 const text = (cell: Cell | undefined) => (cell === null || cell === undefined ? "" : String(cell));
@@ -366,6 +378,12 @@ export function readCatalog(parts: { part: CatalogPart; rows: Cell[][] | null }[
         if (dialect === "mysql") joined = joined.replace(/\\'/g, "'");
         facts.checks.push({ name, column: entry.column, text: joined.trim() });
       }
+    } else if (part === "domain") {
+      for (const row of rows) {
+        const col = text(row[1]);
+        if (text(row[0]) === "type") (facts.domains ??= {})[col] = { type: text(row[3]).trim(), notNull: Number(row[2]) === 1 };
+        else facts.checks.push({ name: "", column: col, text: domainCheck(text(row[3]), col) });
+      }
     } else if (part === "engine") {
       facts.nonTransactional = nonTransactionalEngine(rows);
     } else if (part === "auto") {
@@ -378,6 +396,15 @@ export function readCatalog(parts: { part: CatalogPart; rows: Cell[][] | null }[
     }
   }
   return facts;
+}
+
+/** A domain's CHECK with VALUE written as the column (outside string literals), to read like a table's CHECK. */
+export function domainCheck(check: string, column: string): string {
+  const quoted = `"${column.replace(/"/g, '""')}"`;
+  return check
+    .split(/('(?:[^']|'')*')/)
+    .map((part, i) => (i % 2 ? part : part.replace(/\bVALUE\b/gi, quoted)))
+    .join("");
 }
 
 /** The CHECK (…) clauses of a CREATE TABLE text (SQLite keeps only that). */

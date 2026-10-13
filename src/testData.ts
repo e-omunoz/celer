@@ -194,7 +194,10 @@ export function buildModel(input: ModelInput): TableModel {
   if (pk.length && !sets.some((set) => set.length === pk.length && pk.every((i) => set.includes(i)))) sets.push(pk);
   const single = new Set(sets.filter((set) => set.length === 1).map((set) => set[0]));
   const multi = sets.filter((set) => set.length > 1);
-  const columns: TestColumn[] = input.columns.map((col, i) => {
+  const columns: TestColumn[] = input.columns.map((given, i) => {
+    // A PostgreSQL domain column: its base type and the domain's NOT NULL (its CHECKs are read with the table's).
+    const domain = catalog.domains?.[given.name];
+    const col = domain?.type ? { ...given, typeName: domain.type, nullable: given.nullable && !domain.notNull } : given;
     const rule = checks.rules[col.name];
     // A text column whose CHECK is json_valid() holds JSON (MariaDB's JSON type is LONGTEXT with that CHECK).
     const declared = typeInfo(col, dialect);
