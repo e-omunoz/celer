@@ -68,10 +68,11 @@ one has today.
   routines, reactions, tips learned from use and advice about the query just run; quiet or off in Settings.
 - **Safety**: read-only connections enforced in the Rust core, production connections confirm risky statements,
   passwords only in the OS credential store, damaged data files set aside instead of overwritten.
-- **Tests**: `cargo test --lib` has 250 tests, the live ones run against every engine when its `CELER_*_TEST`
-  variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix); 31 pure logic
-  checks (`dev/*-check.ts`); 26 end-to-end scripts that drive the desktop app over CDP (`dev/*-check.mjs`) plus
-  `dev/e2e.mjs`, all run by `dev/check-all.ps1`.
+- **Tests** (counts at 2.4): `cargo test --lib` has 282 tests, the live ones run against every engine when its
+  `CELER_*_TEST` variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix);
+  35 pure logic checks (`dev/*-check.ts`, all run by CI and by `dev/check-all.ps1`); 28 scripts that drive the
+  desktop app over CDP (`dev/*-check.mjs`) plus `dev/e2e.mjs`. `dev/check-all.ps1` runs the end-to-end ones that pass
+  or fail on their own; its header lists the few it leaves out (observation and profiling scripts, first-run ones).
 - **Performance** (debug build, PostgreSQL, 6 columns): first page of 200k rows in 3 ms; loading all 200,000 rows in
   1.3 s with a 54 MB JS heap; scrolling the grid at ~7 ms per frame.
 - Browser preview: `npm run dev` runs the same UI against an in-memory sql.js demo.
