@@ -1070,13 +1070,17 @@ async fn row_history(
     } else if !cfg.integrated_auth {
         cfg.password = state.store.get_password(&cfg.id).or(cfg.password);
     }
+    // Through the connection's SSH tunnel, as its sessions connect (the protocol is resolved: it decides the port).
+    cfg.informix_mode = mode.to_string();
+    fill_ssh_secrets(&state.store, &mut cfg);
+    let tunnel = if cfg.ssh.active(cfg.kind) { Some(ssh::Plan::new(&cfg, &state.store.dir).map_err(err)?) } else { None };
     let (rt, _) = jdbc_runtime(&state.store)?;
     let dir = state.store.dir.clone();
     let stop = Arc::new(AtomicBool::new(false));
     state.exports.lock().insert(history_id.clone(), stop.clone());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let spawned = std::thread::Builder::new().name("celer-row-history".into()).spawn(move || {
-        let _ = tx.send(rowhistory::read(cfg, rt, request, &stop, Some(&dir)));
+        let _ = tx.send(rowhistory::read_via(cfg, tunnel.as_ref(), rt, request, &stop, Some(&dir)));
     });
     let res = match spawned {
         Ok(_) => rx.await.map_err(|_| "La lectura del historial terminó inesperadamente".to_string()).and_then(|r| r.map_err(err)),

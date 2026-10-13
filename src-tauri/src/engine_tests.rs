@@ -1815,6 +1815,40 @@ fn ssh_tunnel_every_engine() {
     let _ = std::fs::remove_dir_all(&store.dir);
 }
 
+/// «Historial de la fila» on an Informix JDBC connection through SSH (#180): the read goes through the connection's
+/// tunnel, as its sessions do, instead of straight to a host only the bastion reaches. Asked without turning full row
+/// logging on, it changes nothing on the server.
+#[test]
+fn ssh_tunnel_row_history() {
+    use crate::rowhistory::{KeyPart, Request};
+    let Some(s) = ssh_spec() else { return };
+    let Some(t) = tunnelled_engines(&s).into_iter().find(|t| t.name == "Informix JDBC") else { return };
+    let Some((direct, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt.clone())(direct.clone()).expect("conexión Informix por JDBC");
+    for sql in ["DROP TABLE IF EXISTS rh_ssh", "CREATE TABLE rh_ssh (id INT PRIMARY KEY, n INT)", "INSERT INTO rh_ssh VALUES (1, 10)"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    let store = sample_store("rowhistory");
+    trust_bastion(&store, &t.cfg);
+    let request = || Request {
+        database: direct.database.clone(),
+        owner: String::new(),
+        table: "rh_ssh".into(),
+        key: vec![KeyPart { column: "id".into(), value: "1".into() }],
+        enable_full_row_logging: false,
+    };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    // Straight to the host behind the bastion: it does not resolve here.
+    let straight = crate::rowhistory::read_via(t.cfg.clone(), None, rt.clone(), request(), &stop, None);
+    assert!(straight.is_err(), "{}: sin el túnel no se llega: {:?}", t.name, straight.map(|h| h.status));
+    let plan = crate::ssh::Plan::new(&t.cfg, &store.dir).unwrap();
+    let h = crate::rowhistory::read_via(t.cfg.clone(), Some(&plan), rt, request(), &stop, None).unwrap_or_else(|e| panic!("{}: por el túnel: {e}", t.name));
+    assert!(h.status == "needsFullRowLogging" || h.reason.contains("syscdcv1"), "{h:?}");
+    println!("✓ {}: historial de la fila por el túnel SSH ({})", t.name, h.status);
+    d.execute("DROP TABLE IF EXISTS rh_ssh", 10).ok();
+    let _ = std::fs::remove_dir_all(&store.dir);
+}
+
 /// Disconnecting (or deleting) a tunnelled connection closes its tunnel once its sessions have gone: the local port
 /// stops listening and the bastion's login ends, instead of waiting for the janitor (#164).
 #[test]

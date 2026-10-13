@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Row history through an SSH tunnel** (#180): *Historial de la fila* on an Informix JDBC connection with an SSH
+  tunnel connected straight to the configured host, which only the bastion reaches, and failed with a misleading
+  «revisa servidor, puerto» error. It now goes through the connection's tunnel, as its sessions do.
 - **Test data on a generic ODBC engine Celer does not recognise** (#203): opening the dialog on a child table read
   every key of the parent table into memory (the query had no row limit for that engine). At most the usual sample
   is read now, on every engine, and the rest of the result is discarded.

@@ -1140,6 +1140,26 @@ pub fn read(mut cfg: ConnConfig, rt: crate::jdbc::Runtime, req: Request, stop: &
     run(&conn, &req, read_only, &user, stop, &Env { ledger: ledger.as_deref(), fresh: &connect })
 }
 
+/// `read`, reaching the server the way the connection's sessions do: through its SSH tunnel when it has one (lib.rs
+/// `prepare`). The tunnel is held until the read ends, and an error says which tunnel it went through.
+pub fn read_via(mut cfg: ConnConfig, tunnel: Option<&crate::ssh::Plan>, rt: crate::jdbc::Runtime, req: Request, stop: &AtomicBool, dir: Option<&Path>) -> Result<History> {
+    let via = match tunnel {
+        Some(plan) => {
+            let t = plan.tunnel()?;
+            cfg.ssh.forwarded_to = t.target_label();
+            cfg.ssh.tls_host = t.target_host();
+            cfg.host = "127.0.0.1".into();
+            cfg.port = Some(t.local_port);
+            Some(t)
+        }
+        None => None,
+    };
+    match (read(cfg, rt, req, stop, dir), via) {
+        (Err(e), Some(t)) => Err(t.explain(e)),
+        (result, _) => result,
+    }
+}
+
 /// What a read needs besides its connection.
 pub struct Env<'a> {
     /// The file noting the tables Celer turned full row logging on for.
