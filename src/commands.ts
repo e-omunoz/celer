@@ -48,6 +48,9 @@ import { windowName } from "./windowModel";
 import { pickComparison } from "./resultCompare";
 import { openErrorLog } from "./errorLog";
 import { openMyReports, openReport } from "./reportStore";
+import { focusPanel } from "./focus";
+import { openThemeEditor } from "./themeStore";
+import { exportConnections, importConnections } from "./connManage";
 
 export interface Command {
   id: string;
@@ -105,6 +108,10 @@ export function commands(): Command[] {
     { id: "activity", label: "Actividad del servidor (sesiones y consultas en curso)", group: "Conexión", run: () => { const id = contextConnId(); if (id) void openActivity(id); }, enabled: () => Boolean(state.connections.some((c) => c.id === contextConnId())), unsupported: missing("activity", contextConnId) },
     { id: "disconnect-all", label: "Desconectar todas", group: "Conexión", run: () => void disconnectAll(), enabled: () => Object.keys(state.sessions).length > 0 },
     { id: "import-conns", label: "Importar conexiones de DBeaver o DbVisualizer…", group: "Archivo", run: () => void openMigration() },
+    { id: "import-conns-file", label: "Importar conexiones de un fichero de Celer…", group: "Archivo", run: () => void importConnections() },
+    { id: "import-conns-dbeaver", label: "Importar conexiones de DBeaver…", group: "Archivo", run: () => void openMigration("dbeaver") },
+    { id: "import-conns-dbvis", label: "Importar conexiones de DbVisualizer…", group: "Archivo", run: () => void openMigration("dbvisualizer") },
+    { id: "export-conns", label: "Exportar todas las conexiones…", group: "Archivo", run: () => void exportConnections(), enabled: () => state.connections.length > 0 },
     { id: "open", label: "Abrir script…", group: "Archivo", run: () => void openScript() },
     { id: "save", label: "Guardar script", group: "Archivo", run: () => void saveScript(), enabled: sqlOnly },
     { id: "save-as", label: "Guardar script como…", group: "Archivo", run: () => void saveScript(true), enabled: sqlOnly },
@@ -113,6 +120,8 @@ export function commands(): Command[] {
     { id: "prev-tab", label: "Pestaña anterior", group: "Ventana", run: () => cycleTab(-1) },
     { id: "toggle-explorer", label: "Mostrar u ocultar el explorador", group: "Ventana", run: () => setState("explorerOpen", !state.explorerOpen) },
     { id: "toggle-inspector", label: "Mostrar u ocultar el panel de valor", group: "Ventana", run: () => toggleInspector("value") },
+    { id: "next-panel", label: "Ir al panel siguiente", hint: "Explorador, editor, resultados y panel derecho, por orden", group: "Ventana", run: () => focusPanel(1) },
+    { id: "prev-panel", label: "Ir al panel anterior", group: "Ventana", run: () => focusPanel(-1) },
     { id: "ai", label: "Asistente IA: preguntar o generar SQL", group: "IA", run: () => openInspector("ai") },
     { id: "ai-explain", label: "IA: explicar la consulta", group: "IA", run: () => void askAi("explain"), enabled: sqlOnly },
     { id: "ai-fix", label: "IA: corregir el último error", group: "IA", run: () => void askAi("fix"), enabled: () => Boolean(activeSql()?.error) },
@@ -145,6 +154,7 @@ export function commands(): Command[] {
     { id: "er-table", label: "Diagrama de relaciones de la tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void openErDiagram(tab.connId, erSchemaPath(tab.connId, tab.obj, tab.database), tab.obj); }, enabled: () => { const tab = activeTab(); return tab?.kind === "table" && tab.obj.kind === "table"; }, unsupported: missing("er") },
     { id: "reload-table", label: "Recargar tabla", group: "Datos", run: () => { const tab = activeTab(); if (tab?.kind === "table") void reloadTableSafe(tab.id); }, enabled: () => activeTab()?.kind === "table" },
     { id: "settings", label: "Ajustes…", group: "Preferencias", run: () => setState("settingsOpen", true) },
+    { id: "theme-editor", label: "Editor de tema…", group: "Tema", run: () => openThemeEditor("") },
     { id: "zebra", label: "Filas alternas en la tabla de resultados", group: "Preferencias", run: () => void saveSettings({ zebra: !state.settings.zebra }) },
     { id: "density", label: "Densidad: compacta / cómoda", group: "Preferencias", run: () => void saveSettings({ density: state.settings.density === "compact" ? "comfortable" : "compact" }) },
     { id: "font-up", label: "Aumentar tamaño del editor", group: "Preferencias", run: () => void saveSettings({ editorFontSize: Math.min(24, state.settings.editorFontSize + 1) }) },
@@ -162,6 +172,9 @@ export function commands(): Command[] {
   ];
   for (const theme of THEMES) {
     list.push({ id: `theme-${theme.id}`, label: `Tema: ${theme.label}`, group: "Tema", run: () => void saveSettings({ theme: theme.id }) });
+  }
+  for (const theme of state.settings.customThemes) {
+    list.push({ id: `theme-custom-${theme.id}`, label: `Tema: ${theme.name}`, hint: "Tema propio", group: "Tema", run: () => void saveSettings({ theme: `custom:${theme.id}` }) });
   }
   // The other windows open now ("window:" commands are not offered for shortcuts: the windows come and go).
   for (const w of otherFullWindows()) {

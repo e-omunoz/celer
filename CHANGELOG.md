@@ -6,6 +6,69 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Theme editor** (#107): *Ajustes › Editor de tema* (in the *General* group; also the *Editor de tema* button and the
+  pencil on a custom theme in *Apariencia*, and *Editor de tema…* in the palette) makes a custom theme from any
+  built-in one. Every token can be changed, grouped (surfaces, text, borders, accent, states, results grid, editor and
+  syntax, explorer, Gib), with the UI and editor fonts, corner radius, results row height, shadows and animation
+  speed; the whole interface shows it live, next to a sample of the explorer, tabs, editor, grid, a dialog and Gib. A
+  contrast checker measures each text/background pair and warns below WCAG AA. Themes are created, duplicated,
+  renamed, deleted, saved (*Guardar*, *Guardar y usar*, *Descartar cambios*), exported to and imported from a
+  `.celer-theme.json` file (it carries its accent, so it looks the same on another machine; a damaged, hostile or
+  newer file is refused with the reason), show next to the built-in ones and in the palette, and tear-off windows
+  follow them. Leaving the editor with unsaved changes asks first. *Seguir al sistema* now picks the theme for the
+  system's light mode and for its dark mode, custom themes included; exported settings carry the custom themes.
+- **F6 / Shift+F6 move the focus between panels** (#110): explorer, editor, results and right panel in screen order,
+  back to where the focus was in each, with a brief highlight; nothing happens while a dialog, the palette, a menu or
+  the guide is open. Closing a panel that has the focus hands it to the active tab's editor or results.
+- **Submenus in context menus** (#111): rows with › open a submenu on hover, → or Intro; ← or Esc go back; a submenu
+  stays inside the window near its edges.
+- Palette commands to import connections from a Celer file, from DBeaver or from DbVisualizer, and to export every
+  connection.
+
+### Changed
+- **Menus and panels reorganised, nothing removed** (#111, approved on 2026-10-12):
+  - The top bar's explorer button is gone; the stripe button and Alt+1 toggle the explorer.
+  - The right panel's header shows *Valor / Registro*, or the title of the tool that is open: *Historial*,
+    *Biblioteca*, *Variables* and the assistant open from the stripe (Variables now has its button there) and their
+    shortcuts.
+  - One *Importar conexiones ›* submenu (fichero de Celer · DBeaver · DbVisualizer) in *Nuevo* and in the explorer's
+    options menu; the explorer's background menu no longer repeats it.
+  - Tables and views: *Abrir datos*, *Abrir estructura*, *Ver DDL* and the diagram on top, then *Generar SQL ›* (the
+    eight *Generar …* entries) and *Comparar ›* (mark and compare data). *DDL en consola* is now the DDL tab's
+    *Abrir en consola*, which opens on the table's database.
+  - Result cells: *Copiar*, *Copiar con cabeceras*, *Copiar como ›* (CSV, JSON, Markdown, XML, INSERT, IN, WHERE) and
+    *Filtrar ›*, each copying or filtering exactly as before.
+  - Connection form: environment, *Solo lectura* and *Color* together in one *Entorno* row below engine, server,
+    login and database.
+  - *Ajustes* groups its sections as *General*, *Editor*, *Conexiones* and *IA y MCP*.
+- **Motion and component styles are consistent** (#110): every transition and animation uses the motion tokens
+  (`--motion-fast/normal/slow` and easings, Gib's own tempo), follows the theme's animation speed and *Animaciones* /
+  the system's reduced motion (`dev/motion-check.ts` fails on a hard-coded duration). Panels slide in and out, tabs
+  glide when one opens, closes or moves, toasts stack and leave smoothly, dialogs, menus and the palette animate on
+  the way out too, and buttons share one hover and press feel. Text fields share one focus ring, menus and popovers
+  one surface, badges and empty states one style, and the high-contrast themes get stronger focus rings and
+  scrollbars. Every corner follows the radius tokens, so a theme's radius reaches every component.
+- **Drag and drop looks the same everywhere** (#110): tabs, result columns, explorer rows and library scripts dim what
+  is dragged, light up where it can be dropped and show the same ghost card under the pointer.
+- **Context menus show shortcuts consistently** (#110): the user's own shortcut for actions that are commands (it
+  follows *Atajos de teclado*), every key in the same notation, and notes (an engine, "actual") apart from shortcuts.
+- **Tearing a tab off is obvious** (#108): dragging a tab shows a ghost card (title, connection · database and the
+  first lines of its SQL or its table) that follows the pointer over every Celer window. Outside them it becomes the
+  dashed outline of the new window, at its real size and exactly where it will open (kept inside the screen, at any
+  Windows scaling and on the monitor under the pointer), with «Soltar para abrir en una ventana nueva» at its top.
+  Over another Celer window, or within the tab bar, a line shows where the tab will land. Esc cancels the drag and the
+  tab stays. The tab menu says «Abrir en ventana nueva», the tab's tooltip mentions dragging, the first time a window
+  has two tabs Gib (or a notice) says so once, and the new window grows into place. The console keeps its session
+  when it moves, as before.
+
+### Fixed
+- **Tear-off outline** (#108): dragged into the lower part of a large screen, the outline hung off the screen with its
+  label while the window opened somewhere else; both now come from the same frame. The window opens where the
+  button was let go, not where the pointer is a moment later. At 150 % and other scales the pointer stays on the
+  outline's tab, and moved onto a monitor with another scale the outline keeps the size of the window that will open.
+- **Theme editor**: a saved theme reopens in the editor (drafts no longer throw DataCloneError on store proxies).
+
 ## [2.3.0] - 2026-10-12
 
 ### Added

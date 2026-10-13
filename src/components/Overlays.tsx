@@ -1,37 +1,31 @@
-import { CircleAlert, CircleCheck, Info, Search, TriangleAlert, X } from "lucide-solid";
+import { ChevronRight, CircleAlert, CircleCheck, Info, Search, TriangleAlert, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { commands } from "../commands";
+import { commands, shortcutLabel } from "../commands";
+import { chordLabel, normalizeChord } from "../keymap";
 import { library, loadLibrary, openLibraryScript, openRunOn } from "../library";
 import { returnFocus } from "../focus";
 import { bubbleOpen } from "../gib/Companion";
+import { flipList, leaveOnCleanup } from "../motion";
+import { nextMenuItem, placeMenu } from "../menu";
 import { ObjIcon } from "../icons";
-import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty } from "../state";
+import { allTables, closeMenu, connectionById, dismissToast, openTable, selectTab, setState, state, tableDirty, type MenuItem } from "../state";
 
 // ---------------------------------------------------------------- context menu
 
+/**
+ * The shortcut a menu row shows, always in the same notation (the keymap's: "Ctrl+Mayús+F", ⌘ on macOS): a
+ * command's as the user set it, or a key that only works where the menu was opened.
+ */
+export function menuKeys(item: MenuItem): string {
+  if (item.command) return shortcutLabel(item.command);
+  return item.keys ? chordLabel(normalizeChord(item.keys)) : "";
+}
+
 export function ContextMenu() {
-  let el: HTMLDivElement | undefined;
-  const [pos, setPos] = createSignal({ x: 0, y: 0 });
-  const [active, setActive] = createSignal(-1);
-
-  createEffect(() => {
-    const menu = state.menu;
-    if (!menu) return;
-    setActive(-1);
-    setPos({ x: menu.x, y: menu.y });
-    queueMicrotask(() => {
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const x = Math.min(menu.x, window.innerWidth - rect.width - 6);
-      const y = menu.y + rect.height > window.innerHeight - 6 ? Math.max(6, menu.y - rect.height) : menu.y;
-      setPos({ x: Math.max(6, x), y });
-      el.focus();
-    });
-  });
-
   onMount(() => {
+    // A press outside every open panel (the menu and its submenus) closes the menu.
     const close = (event: Event) => {
-      if (state.menu && el && !el.contains(event.target as Node)) closeMenu();
+      if (state.menu && !(event.target instanceof Element && event.target.closest(".menu"))) closeMenu();
     };
     window.addEventListener("mousedown", close, true);
     window.addEventListener("blur", closeMenu);
@@ -43,62 +37,150 @@ export function ContextMenu() {
     });
   });
 
-  const items = () => state.menu?.items ?? [];
+  return (
+    <Show when={state.menu} keyed>
+      {(menu) => <MenuPanel items={menu.items} anchor={{ x: menu.x, y: menu.y }} root />}
+    </Show>
+  );
+}
+
+/**
+ * One panel of the context menu: the root, or a submenu (`submenu` on an item: «Generar SQL ›», «Copiar como ›»…).
+ * Keyboard: arrows move, → or Intro open a submenu, ← or Esc close it and go back to its row, Esc on the root closes
+ * the menu. The mouse opens a submenu by resting on its row.
+ */
+function MenuPanel(props: { items: MenuItem[]; anchor: { x: number; y: number; row?: { left: number; right: number; top: number } }; root?: boolean; onBack?: () => void; onEnter?: () => void }) {
+  let el: HTMLDivElement | undefined;
+  const [pos, setPos] = createSignal({ x: props.anchor.x, y: props.anchor.y });
+  const [active, setActive] = createSignal(props.root ? -1 : nextMenuItem(props.items, -1, 1));
+  /** The open submenu: the row it hangs from (index) and where that row is. */
+  const [open, setOpen] = createSignal<{ index: number; row: { left: number; right: number; top: number } } | null>(null);
+  let hoverTimer = 0;
+  onCleanup(() => window.clearTimeout(hoverTimer));
+
+  onMount(() => {
+    queueMicrotask(() => {
+      if (!el) return;
+      // Its layout size: the bounding box is still scaled down by the pop-in animation (it overflowed the edge).
+      setPos(placeMenu(props.anchor, { width: el.offsetWidth, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }));
+      el.focus();
+    });
+  });
+
+  const rowOf = (index: number) => el?.querySelectorAll<HTMLElement>(":scope > .menu-item, :scope > .menu-sep")[index];
+
+  function openSub(index: number, focus: boolean) {
+    const item = props.items[index];
+    if (!item?.submenu || item.disabled) return;
+    const rect = rowOf(index)?.getBoundingClientRect();
+    if (!rect) return;
+    setOpen({ index, row: { left: rect.left, right: rect.right, top: rect.top } });
+    // From the keyboard the submenu takes the focus (it focuses itself when it mounts); from the mouse this panel
+    // keeps it until the pointer goes into the submenu.
+    if (!focus) queueMicrotask(() => el?.focus());
+  }
+
+  function choose(item: MenuItem, index: number) {
+    if (item.submenu) {
+      openSub(index, true);
+      return;
+    }
+    closeMenu();
+    item.run?.();
+  }
 
   function onKey(event: KeyboardEvent) {
-    const list = items();
-    const step = (dir: number) => {
+    const list = props.items;
+    const key = event.key;
+    if (key === "ArrowDown" || key === "ArrowUp") {
       event.preventDefault();
-      let next = active();
-      for (let i = 0; i < list.length; i++) {
-        next = (next + dir + list.length) % list.length;
-        if (!list[next].separator && !list[next].disabled) break;
-      }
-      setActive(next);
-    };
-    if (event.key === "Escape") {
+      setActive(nextMenuItem(list, active(), key === "ArrowDown" ? 1 : -1));
+      setOpen(null);
+    } else if (key === "Home" || key === "End") {
       event.preventDefault();
-      closeMenu();
-    }
-    if (event.key === "ArrowDown") step(1);
-    if (event.key === "ArrowUp") step(-1);
-    if (event.key === "Enter" && active() >= 0) {
+      setActive(key === "Home" ? nextMenuItem(list, -1, 1) : nextMenuItem(list, list.length, -1));
+    } else if (key === "ArrowRight" && list[active()]?.submenu) {
+      event.preventDefault();
+      openSub(active(), true);
+    } else if ((key === "ArrowLeft" && !props.root) || key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (props.root) closeMenu();
+      else props.onBack?.();
+    } else if ((key === "Enter" || key === " ") && active() >= 0) {
       event.preventDefault();
       const item = list[active()];
-      closeMenu();
-      item.run?.();
+      if (item && !item.disabled) choose(item, active());
     }
   }
 
   return (
-    <Show when={state.menu}>
-      <div class="menu" ref={el} tabIndex={-1} role="menu" style={{ left: `${pos().x}px`, top: `${pos().y}px` }} onKeyDown={onKey} onContextMenu={(event) => event.preventDefault()}>
-        <For each={items()}>
+    <>
+      <div
+        class="menu"
+        classList={{ submenu: !props.root }}
+        ref={(node) => {
+          el = node;
+          if (props.root) leaveOnCleanup("menu")(node);
+        }}
+        tabIndex={-1}
+        role="menu"
+        style={{ left: `${pos().x}px`, top: `${pos().y}px` }}
+        onKeyDown={onKey}
+        onMouseEnter={() => props.onEnter?.()}
+        onContextMenu={(event) => event.preventDefault()}
+      >
+        <For each={props.items}>
           {(item, index) =>
             item.separator ? (
-              <div class="menu-sep" />
+              <div class="menu-sep" role="separator" />
             ) : (
               <button
                 type="button"
                 role="menuitem"
                 class="menu-item"
-                classList={{ danger: item.danger, active: active() === index() }}
+                classList={{ danger: item.danger, active: active() === index(), "has-sub": Boolean(item.submenu), open: open()?.index === index() }}
                 disabled={item.disabled}
                 title={item.title}
-                onMouseEnter={() => setActive(index())}
-                onClick={() => {
-                  closeMenu();
-                  item.run?.();
+                aria-haspopup={item.submenu ? "menu" : undefined}
+                aria-expanded={item.submenu ? open()?.index === index() : undefined}
+                onMouseEnter={() => {
+                  setActive(index());
+                  window.clearTimeout(hoverTimer);
+                  // Resting on a row opens its submenu (or closes another one), after a moment so a pass on the way
+                  // to the open submenu does not close it.
+                  hoverTimer = window.setTimeout(() => {
+                    if (item.submenu) {
+                      if (open()?.index !== index()) openSub(index(), false);
+                    } else setOpen(null);
+                  }, open() ? 180 : 60);
                 }}
+                onClick={() => choose(item, index())}
               >
                 <span class="menu-label">{item.label}</span>
-                <Show when={item.hint}><kbd>{item.hint}</kbd></Show>
+                <Show when={item.hint}><small class="menu-hint">{item.hint}</small></Show>
+                <Show when={menuKeys(item)}><kbd>{menuKeys(item)}</kbd></Show>
+                <Show when={item.submenu}><ChevronRight size={13} class="menu-sub-arrow" /></Show>
               </button>
             )
           }
         </For>
       </div>
-    </Show>
+      <Show when={open()} keyed>
+        {(sub) => (
+          <MenuPanel
+            items={props.items[sub.index]?.submenu ?? []}
+            anchor={{ x: sub.row.right, y: sub.row.top, row: sub.row }}
+            onBack={() => {
+              setOpen(null);
+              setActive(sub.index);
+              el?.focus();
+            }}
+            onEnter={() => window.clearTimeout(hoverTimer)}
+          />
+        )}
+      </Show>
+    </>
   );
 }
 
@@ -110,11 +192,14 @@ export function Toasts() {
     const tab = state.tabs.find((item) => item.id === state.activeTabId);
     return tab?.kind === "table" && tab.section === "data" && tableDirty(tab);
   };
+  let box: HTMLDivElement | undefined;
+  // A toast that goes fades out where it was and the others glide into place.
+  flipList(() => (box ? [...box.querySelectorAll<HTMLElement>(":scope > .toast")] : []), () => state.toasts.map((toast) => toast.id).join());
   return (
-    <div class="toasts" classList={{ raised: raised(), "beside-tip": bubbleOpen() }} aria-live="polite">
+    <div class="toasts" ref={box} classList={{ raised: raised(), "beside-tip": bubbleOpen() }} aria-live="polite">
       <For each={state.toasts}>
         {(toast) => (
-          <div class={`toast ${toast.kind}`} role="status">
+          <div class={`toast ${toast.kind}`} role="status" data-flip={toast.id} ref={leaveOnCleanup("toast")}>
             <span class="toast-icon">
               {toast.kind === "success" ? <CircleCheck size={16} /> : toast.kind === "error" ? <CircleAlert size={16} /> : toast.kind === "warning" ? <TriangleAlert size={16} /> : <Info size={16} />}
             </span>
@@ -322,8 +407,8 @@ export function Palette() {
 
   return (
     <Show when={state.paletteOpen}>
-      <div class="scrim light" onMouseDown={close} />
-      <div class="palette" role="dialog" aria-label="Buscar en todo">
+      <div class="scrim light" ref={leaveOnCleanup("scrim")} onMouseDown={close} />
+      <div class="palette" ref={leaveOnCleanup("palette")} role="dialog" aria-label="Buscar en todo">
         <div class="pal-search">
           <Search size={16} />
           <input ref={input} placeholder={placeholder()} value={query()} onInput={(event) => setQuery(event.currentTarget.value)} onKeyDown={onKey} spellcheck={false} />

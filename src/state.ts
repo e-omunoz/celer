@@ -38,7 +38,8 @@ import { normalizeVariables, substituteVariables, type Variable } from "./variab
 import { loadVariables, resolvedFor } from "./variableStore";
 import { RECOVERED_PREFIX, connLink, connectTimeText, markConn, markTab, tabLink } from "./connStatus";
 import { startConnWatch } from "./connWatch";
-import { labelColorOn } from "./contrast";
+import { labelColorOn, parseColor, toHex } from "./contrast";
+import { readCustomThemes, resolveTheme, themeVars, type BuiltinTheme, type CustomTheme } from "./themes";
 import { envOf, normalizeEnvironment } from "./environment";
 import { NO_TX, countStatements, reminderDue, txAfterRun, txDuration, txReminderText, txThresholds } from "./txWatch";
 import { gibDisplayName, gibShownIn, gibTint, normalizeGibPrefs, type GibPlace, type GibPrefs } from "./gib/prefs";
@@ -272,9 +273,16 @@ export type SavedTab = SavedSqlTab | SavedTableTab;
 
 export interface MenuItem {
   label?: string;
+  /** A note in small muted text (an engine, "actual"…), not a shortcut. */
   hint?: string;
   /** A tooltip (why it is greyed out: «No disponible en SQLite»). */
   title?: string;
+  /** A shortcut that only works here ("Ctrl+C", "F2", "Intro"): shown in the menus' shortcut style. */
+  keys?: string;
+  /** The command it runs (commands.ts): its shortcut is shown as the user set it. */
+  command?: string;
+  /** A submenu («Generar SQL ›», «Copiar como ›»…): the row opens it instead of running something. */
+  submenu?: MenuItem[];
   icon?: string;
   danger?: boolean;
   disabled?: boolean;
@@ -407,7 +415,7 @@ export const [resolvedTheme, setResolvedTheme] = createSignal<Exclude<ThemeName,
 
 /** Things Gib reacts to. The companion decides how (mood, tip, nothing). */
 export interface GibEvent {
-  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off" | "tx-open" | "export-done" | "conn-lost" | "conn-back";
+  type: "query-ok" | "query-error" | "connected" | "connect-failed" | "commit" | "rollback" | "saved" | "mouse-run" | "running" | "tip" | "show-off" | "tx-open" | "export-done" | "conn-lost" | "conn-back" | "hint";
   at: number;
   ms?: number;
   detail?: string;
@@ -517,16 +525,54 @@ export function connColor(conn: ConnSummary | undefined) {
 
 const LIGHT_THEMES = new Set(["light", "sand", "contrast-light"]);
 
-export function applyTheme(settings: Settings = state.settings, preview?: ThemeName) {
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const chosen = preview ?? settings.theme;
-  const theme = chosen === "system" ? (dark ? "dark" : "light") : chosen;
+/**
+ * The theme open in Ajustes › Editor de tema: the whole interface shows it live until it is saved or discarded
+ * (src/components/ThemeEditor.tsx).
+ */
+export const [themeDraft, setThemeDraft] = createSignal<CustomTheme | null>(null);
+
+/** Properties the last applied custom theme set on <html> (cleared before the next one). */
+let themeProps: string[] = [];
+
+/** The theme a choice comes to now (system mode, custom themes): its built-in base and the custom theme, if any. */
+export function currentTheme(settings: Settings = state.settings, choice: string = settings.theme) {
+  return resolveTheme(choice, {
+    systemDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+    lightChoice: settings.systemLight ?? "light",
+    darkChoice: settings.systemDark ?? "dark",
+    themes: settings.customThemes ?? [],
+  });
+}
+
+/** Rows of the explorer and the grid: the theme's row height, or the density's. */
+export function rowHeight(): number {
+  const custom = themeDraft() ?? currentTheme().custom;
+  return custom?.rowHeight ?? (state.settings.density === "comfortable" ? 28 : 24);
+}
+
+/** A readable label on a fill written in any CSS colour the browser computes (white when it cannot tell). */
+function labelOn(fill: string): string {
+  const parsed = parseColor(fill);
+  return parsed ? labelColorOn(toHex(parsed)) : labelColorOn(fill);
+}
+
+export function applyTheme(settings: Settings = state.settings, preview?: string) {
+  const resolved = currentTheme(settings, preview);
+  // The theme being edited shows instead of the chosen one, except while a theme card is hovered (a preview).
+  const custom = preview === undefined ? themeDraft() ?? resolved.custom : resolved.custom;
+  const theme: BuiltinTheme = custom?.base ?? resolved.base;
   setResolvedTheme(theme);
   const root = document.documentElement;
   root.dataset.theme = theme;
   root.dataset.density = settings.density;
   root.dataset.motion = reducedMotion(settings) ? "reduce" : "full";
-  root.style.setProperty("--accent", settings.accent);
+  root.dataset.customTheme = custom ? custom.id : "";
+  for (const name of themeProps) root.style.removeProperty(name);
+  const vars = custom ? themeVars(custom) : {};
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  themeProps = Object.keys(vars);
+  const accent = vars["--accent"] ?? settings.accent;
+  root.style.setProperty("--accent", accent);
   // Gib's look, for every Gib on the page (App.css, "Gib: personalisation").
   const look = settings.gib ?? defaultSettings.gib;
   const tint = gibTint(look.color);
@@ -541,7 +587,7 @@ export function applyTheme(settings: Settings = state.settings, preview?: ThemeN
   // Read by every Gib at each pointer move (Gib.tsx): his eyes follow the cursor, or look ahead.
   root.dataset.gibEyes = look.eyes ? "on" : "off";
   // White on Clay, Ember, Teal or Green is below 4.5:1: those buttons get a black label.
-  root.style.setProperty("--accent-fg", labelColorOn(settings.accent));
+  root.style.setProperty("--accent-fg", vars["--accent-fg"] ?? labelOn(accent));
   root.style.fontSize = `${settings.fontSize}px`;
   if (isTauri()) {
     import("@tauri-apps/api/window")
@@ -790,7 +836,8 @@ export async function applyHistoryRetention(settings: Settings = state.settings)
 function withDefaults(value: Partial<Settings>): Settings {
   // "companion" is the old Compañero setting (normal / quiet / off), read once into Gib's preferences.
   const { companion, ...rest } = value as Partial<Settings> & { companion?: unknown };
-  return { ...defaultSettings, ...rest, gib: normalizeGibPrefs(value.gib, companion) };
+  // Custom themes are checked: a hand-edited or damaged entry is left out, never applied.
+  return { ...defaultSettings, ...rest, gib: normalizeGibPrefs(value.gib, companion), customThemes: readCustomThemes(rest.customThemes) };
 }
 
 /** Gib appears in that place (Settings › Apariencia › Gib: on, and the place not switched off). */
@@ -3457,6 +3504,23 @@ const gridColumnOrders = new Map<string, ColumnOrder>();
 export function setGridColumnOrder(tabId: string, order: ColumnOrder | null) {
   if (order) gridColumnOrders.set(tabId, order);
   else gridColumnOrders.delete(tabId);
+}
+
+export function gridColumnOrder(tabId: string): ColumnOrder | undefined {
+  return gridColumnOrders.get(tabId);
+}
+
+/** Column orders of tabs that came from another window: their grid takes it once, when it first shows the result. */
+const arrivingColumnOrders = new Map<string, ColumnOrder>();
+
+export function setArrivingColumnOrder(tabId: string, order: ColumnOrder) {
+  arrivingColumnOrders.set(tabId, order);
+}
+
+export function takeArrivingColumnOrder(tabId: string): ColumnOrder | undefined {
+  const order = arrivingColumnOrders.get(tabId);
+  arrivingColumnOrders.delete(tabId);
+  return order;
 }
 
 const EXT: Record<ExportFormat, string> = { csv: "csv", tsv: "tsv", json: "json", sql: "sql", markdown: "md", html: "html", xml: "xml", xlsx: "xlsx" };

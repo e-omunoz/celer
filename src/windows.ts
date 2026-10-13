@@ -1,3 +1,5 @@
+import type { GhostContent } from "./dnd";
+import type { ColumnOrder } from "./columnOrder";
 // Several windows of one Celer. Each window is its own page with its own state.ts: its tabs and their sessions,
 // its explorer, its panels and its focus. What they share (connections, settings, the library, Gib's memory) has
 // one owner: the core writes the files and tells every window (events "celer://shared"). The core also keeps the
@@ -35,6 +37,7 @@ import {
   endTransactions,
   explainStatement,
   fileDirty,
+  gridColumnOrder,
   insertIntoActive,
   notify,
   openInspector,
@@ -49,6 +52,7 @@ import {
   restoreTabs,
   runText,
   savedTabs,
+  setArrivingColumnOrder,
   setGibEvent,
   setState,
   showPlan,
@@ -153,7 +157,7 @@ const [openWindows, setOpenWindows] = createSignal<WindowInfo[]>([{ label: windo
 /** The full window that had the focus last (panels do not count). */
 const [focusedWindow, setFocusedWindow] = createSignal(isFullWindow(windowLabel) ? windowLabel : "");
 /** A tab is being dragged out of another window: this one's tab bar takes it. */
-const [incomingDrag, setIncomingDrag] = createSignal<{ source: string; title: string } | null>(null);
+const [incomingDrag, setIncomingDrag] = createSignal<{ source: string; title: string; card?: GhostContent } | null>(null);
 export { incomingDrag, openWindows };
 
 /** The other full windows, the main one first. */
@@ -215,8 +219,8 @@ export function startWindows() {
     if (!openWindows().some((w) => w.label === label)) void refreshWindows();
   });
   void listen<null>("celer://windows", () => void refreshWindows());
-  void listen<{ active: boolean; source?: string; title?: string }>("celer://drag", (drag) =>
-    setIncomingDrag(drag.active && drag.source && drag.source !== windowLabel && !panelKind ? { source: drag.source, title: drag.title ?? "" } : null),
+  void listen<{ active: boolean; source?: string; title?: string; card?: GhostContent | null }>("celer://drag", (drag) =>
+    setIncomingDrag(drag.active && drag.source && drag.source !== windowLabel && !panelKind ? { source: drag.source, title: drag.title ?? "", card: drag.card ?? undefined } : null),
   );
   void listen<{ name: string; value?: unknown; from: string }>("celer://shared", (change) => {
     if (change.from !== windowLabel) applyShared(change.name, change.value);
@@ -246,6 +250,10 @@ export async function prepareWindow(): Promise<void> {
       geometry = readLayout(layoutFile)[0]?.geometry;
     } else {
       startMessages = await invoke<Message[]>("window_inbox").catch(() => [] as Message[]);
+      if (startMessages.some((m) => m.kind === "adopt" && m.drop === true)) {
+        document.documentElement.dataset.arrival = "drop";
+        window.setTimeout(() => delete document.documentElement.dataset.arrival, 3000);
+      }
       const restore = startMessages.find((m) => m.kind === "restore");
       geometry = (restore?.entry as SavedWindow | undefined)?.geometry;
     }
@@ -397,7 +405,13 @@ function tabMessage(tabs: Tab[], index: number | null): Message {
   for (const tab of tabs) if (tab.connId && state.passwords[tab.connId]) passwords[tab.connId] = state.passwords[tab.connId];
   // The plain tabs behind the store, not a clone: the message is serialized once on its way, and a loaded result
   // can be up to a million rows.
-  return { kind: "adopt", tabs: tabs.map(raw), index, passwords };
+  // The order the grid's columns were dragged into goes along (the grid itself is not part of the tab).
+  const columnOrders: Record<string, unknown> = {};
+  for (const tab of tabs) {
+    const order = gridColumnOrder(tab.id);
+    if (order) columnOrders[tab.id] = order;
+  }
+  return { kind: "adopt", tabs: tabs.map(raw), index, passwords, columnOrders };
 }
 
 /** Rows a tab carries with it to another window (its results, pinned ones included, or a table's page). */
@@ -421,7 +435,8 @@ export async function sendTab(tabId: string, target: string | null, options: { a
   }
   const rows = loadedRows(tab);
   if (rows > 100_000) notify(`Moviendo la pestaña con ${rows.toLocaleString()} filas cargadas: puede tardar unos segundos`, "info");
-  const message = tabMessage([tab], options.index ?? null);
+  // Dropped outside the windows: the new window opens there with a short entrance (App.css, data-arrival).
+  const message = { ...tabMessage([tab], options.index ?? null), ...(options.at ? { drop: true } : {}) };
   let sent: boolean;
   if (target) {
     sent = await post(target, message);
@@ -468,11 +483,42 @@ export const focusThisWindow = focusSelf;
 
 let dragging = "";
 
-/** A tab starts to be dragged: the other windows' tab bars get ready to take it. */
-export function startTabDrag(tabId: string, title: string) {
+/** The theme's colours as the browser computed them, for the outline drawn outside the windows (drag-ghost.html). */
+function ghostColors(strip?: string): Record<string, string> {
+  const probe = document.createElement("span");
+  probe.style.cssText = "display:none";
+  document.body.appendChild(probe);
+  const colour = (value: string) => {
+    probe.style.color = "";
+    probe.style.color = value;
+    return getComputedStyle(probe).color;
+  };
+  const font = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const out = {
+    bg: colour("var(--bg)"),
+    text: colour("var(--text)"),
+    muted: colour("var(--text-muted)"),
+    border: colour("var(--border-strong)"),
+    popover: colour("var(--popover)"),
+    accent: colour("var(--accent)"),
+    "accent-fg": colour("var(--accent-fg)"),
+    strip: colour(strip || "var(--accent)"),
+    sans: font("--sans"),
+    mono: font("--mono"),
+  };
+  probe.remove();
+  return out;
+}
+
+/**
+ * A tab starts to be dragged: the other windows' tab bars get ready to take it, and outside every window the
+ * outline of the new window follows the pointer with the tab's title and a preview.
+ */
+export function startTabDrag(tabId: string, title: string, ghost: { preview?: string; color?: string } = {}, card?: GhostContent) {
   if (!isTauri() || panelKind) return;
   dragging = tabId;
-  void invoke("tab_drag_start", { tab: tabId, title }).catch(() => {});
+  const style = { title, preview: ghost.preview ?? "", label: "Soltar para abrir en una ventana nueva", colors: ghostColors(ghost.color), reduce: document.documentElement.dataset.motion === "reduce", scale: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--motion-scale")) || 1 };
+  void invoke("tab_drag_start", { tab: tabId, title, ghost: style, card }).catch(() => {});
 }
 
 /** The tab was dropped on this window's tab bar while it came from another window. */
@@ -489,8 +535,9 @@ export async function endTabDrag(tabId: string, handled: boolean) {
   dragging = "";
   // The window it was dropped on claims it meanwhile (its drop event may come after this one).
   if (!handled) await sleep(180);
-  const end = await invoke<{ claim: { label: string; index: number } | null; cursor: [number, number] | null; windows: WindowRect[] }>("tab_drag_end").catch(() => null);
-  if (!end || handled) return;
+  const end = await invoke<{ claim: { label: string; index: number } | null; cursor: [number, number] | null; windows: WindowRect[]; cancelled?: boolean }>("tab_drag_end").catch(() => null);
+  // Esc during the drag: the tab stays where it was (the core tells, the page gets no keys while the system drags).
+  if (!end || handled || end.cancelled) return;
   const where = dropTarget(windowLabel, end.cursor, end.windows, end.claim);
   if (where.kind === "window") await sendTab(tabId, where.label, { index: where.index });
   else if (where.kind === "new") await sendTab(tabId, null, { at: [where.x, where.y] });
@@ -572,7 +619,10 @@ function adopt(message: Message) {
   takePasswords(message.passwords);
   const tabs = Array.isArray(message.tabs) ? (message.tabs as Tab[]).filter((tab) => tab && typeof tab.id === "string") : [];
   let index = typeof message.index === "number" ? message.index : null;
+  const orders = message.columnOrders && typeof message.columnOrders === "object" ? (message.columnOrders as Record<string, unknown>) : {};
   for (const tab of tabs) {
+    const order = orders[tab.id] as ColumnOrder | undefined;
+    if (order && Array.isArray(order.names) && Array.isArray(order.order)) setArrivingColumnOrder(tab.id, order);
     adoptTab(tab, index);
     if (index !== null) index++;
   }

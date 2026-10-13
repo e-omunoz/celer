@@ -3,10 +3,16 @@
 // looked up by id: a new section is one entry here and one component there.
 import { defaultSettings, type Settings } from "./types.ts";
 import { normalizeGibPrefs } from "./gib/prefs.ts";
+import { BUILTIN_THEMES, CUSTOM_PREFIX, readCustomThemes } from "./themes.ts";
+
+/** The groups of the dialog's navigation, in order (#111). */
+export const SETTINGS_GROUPS = ["General", "Editor", "Conexiones", "IA y MCP"] as const;
+export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 
 export interface SettingsSectionInfo {
   id: string;
   label: string;
+  group: SettingsGroup;
   /** The labels of its settings, as the section shows them: the search box finds them. */
   items: string[];
   /** Settings «Restablecer sección» puts back to their defaults (none: the section has no such button). */
@@ -19,12 +25,35 @@ export const SETTINGS_SECTIONS: SettingsSectionInfo[] = [
   {
     id: "appearance",
     label: "Apariencia",
-    items: ["Tema", "Color de acento", "Densidad", "Tamaño de la interfaz", "Animaciones", "Gib", "Compañero (Gib)", "Nombre de Gib", "Accesorios de Gib", "Color de Gib"],
-    keys: ["theme", "accent", "density", "fontSize", "motion", "gib"],
+    group: "General",
+    items: [
+      "Tema",
+      "Con el sistema en modo claro",
+      "Con el sistema en modo oscuro",
+      "Color de acento",
+      "Densidad",
+      "Tamaño de la interfaz",
+      "Animaciones",
+      "Gib",
+      "Compañero (Gib)",
+      "Nombre de Gib",
+      "Accesorios de Gib",
+      "Color de Gib",
+    ],
+    keys: ["theme", "systemLight", "systemDark", "accent", "density", "fontSize", "motion", "gib"],
+    resetNote: "Tus temas propios no se borran.",
+  },
+  {
+    id: "theme",
+    label: "Editor de tema",
+    group: "General",
+    items: ["Editor de tema", "Temas propios", "Importar un tema", "Exportar un tema", "Contraste", "Fuente de la interfaz", "Radio de las esquinas", "Sombras", "Velocidad de las animaciones"],
+    keys: [],
   },
   {
     id: "editor",
     label: "Editor",
+    group: "Editor",
     items: [
       "Tamaño del editor",
       "Tipo de letra del editor",
@@ -42,53 +71,64 @@ export const SETTINGS_SECTIONS: SettingsSectionInfo[] = [
   {
     id: "results",
     label: "Resultados",
+    group: "Editor",
     items: ["Filas por página", "Filas alternas", "Texto de NULL", "Formato de fecha", "Formato de número", "Caracteres por celda", "Formato al copiar (Ctrl+C)"],
     keys: ["pageSize", "zebra", "nullText", "dateFormat", "numberFormat", "maxCellChars", "copyFormat"],
   },
   {
     id: "execution",
     label: "Ejecución",
+    group: "Editor",
     items: ["Tiempo máximo de una consulta", "Tiempo de espera", "Timeout", "Modo de transacción de las consolas nuevas", "Auto-commit", "Commit automático"],
     keys: ["queryTimeout", "autocommitDefault"],
   },
   {
     id: "window",
     label: "Ventana y pestañas",
+    group: "General",
     items: ["Restaurar la sesión al iniciar", "Abrir una tabla ya abierta", "Pestañas de tabla"],
     keys: ["restoreSession", "tableTabs"],
   },
   {
     id: "history",
     label: "Historial",
+    group: "Editor",
     items: ["Consultas que se guardan", "Días que se guardan", "Vaciar historial"],
     keys: ["historyMax", "historyDays"],
   },
   {
     id: "notifications",
     label: "Avisos",
+    group: "General",
     items: ["Duración de los avisos", "Notificación de escritorio", "Consultas largas"],
     keys: ["toastSeconds", "notifyAfter"],
   },
-  { id: "templates", label: "Plantillas", items: ["Plantillas de SQL", "Snippets"], keys: ["snippets"], resetNote: "Quita tus plantillas y deja las de serie." },
-  { id: "keys", label: "Atajos de teclado", items: ["Atajos de teclado", "Teclas"], keys: ["keymap"], resetNote: "Todos los atajos vuelven a los de serie." },
+  { id: "templates", label: "Plantillas", group: "Editor", items: ["Plantillas de SQL", "Snippets"], keys: ["snippets"], resetNote: "Quita tus plantillas y deja las de serie." },
+  { id: "keys", label: "Atajos de teclado", group: "Editor", items: ["Atajos de teclado", "Teclas"], keys: ["keymap"], resetNote: "Todos los atajos vuelven a los de serie." },
   {
     id: "safety",
     label: "Seguridad",
+    group: "Conexiones",
     items: ["Confirmar UPDATE y DELETE sin WHERE", "Confirmar en producción", "Solo lectura", "Transacciones manuales", "Ámbar a partir de", "Rojo a partir de", "Producción: ámbar", "Producción: rojo", "Recordármelo al pasar a rojo"],
     keys: ["confirmNoWhere", "confirmMutations", "txWarnSecs", "txAlertSecs", "txProdWarnSecs", "txProdAlertSecs", "txRemind"],
   },
-  { id: "ai", label: "IA y MCP", items: ["Clave de API", "Modelo", "Servidor MCP"], keys: ["aiModel"], resetNote: "Solo el modelo: la clave y el servidor MCP no cambian." },
+  { id: "ai", label: "IA y MCP", group: "IA y MCP", items: ["Clave de API", "Modelo", "Servidor MCP"], keys: ["aiModel"], resetNote: "Solo el modelo: la clave y el servidor MCP no cambian." },
   {
     id: "drivers",
     label: "Drivers",
+    group: "Conexiones",
     items: ["Informix", "Java", "JDBC", "IBM CLI", "ODBC"],
     keys: ["ibmDriverPath", "javaPath", "informixJdbcPath"],
     resetNote: "Las rutas vuelven a buscarse solas; no se borra nada descargado.",
   },
 ];
 
-/** Settings no section shows: layout, explorer state and bookkeeping kept by the app itself. */
+/**
+ * Settings no section resets: layout, explorer state and bookkeeping kept by the app itself, and the custom themes
+ * (the theme editor saves and deletes them one by one; «Restablecer sección» never wipes them).
+ */
 export const INTERNAL_SETTINGS: (keyof Settings)[] = [
+  "customThemes",
   "sidebarWidth",
   "inspectorWidth",
   "editorRatio",
@@ -151,7 +191,6 @@ export function exportSettings(settings: Settings, appVersion: string, now = new
 }
 
 const ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
-  theme: ["system", "light", "dark", "darcula", "contrast", "contrast-light", "fjord", "sand"],
   density: ["compact", "comfortable"],
   motion: ["system", "reduce", "full"],
   connSort: ["manual", "alpha"],
@@ -207,6 +246,19 @@ export function parseSettingsFile(text: string): { patch: Partial<Settings>; ign
   return sanitizeSettings(body as Record<string, unknown>);
 }
 
+/**
+ * A theme choice a settings file may carry: a built-in theme ("system" only for the theme itself) or one of the
+ * custom themes it brings (null: any custom theme id, checked again when applied).
+ */
+function isThemeChoice(value: unknown, themes: { id: string }[] | undefined, builtinOnly: boolean): boolean {
+  if (typeof value !== "string") return false;
+  if (value === "system") return !builtinOnly;
+  if (BUILTIN_THEMES.some((theme) => theme.id === value)) return true;
+  if (!value.startsWith(CUSTOM_PREFIX)) return false;
+  const id = value.slice(CUSTOM_PREFIX.length);
+  return /^[\w-]{1,40}$/.test(id) && (!themes || themes.some((theme) => theme.id === id));
+}
+
 /** Known keys with a value of the right shape; everything else is reported, never applied. */
 export function sanitizeSettings(body: Record<string, unknown>): { patch: Partial<Settings>; ignored: string[] } {
   const patch: Record<string, unknown> = {};
@@ -225,6 +277,17 @@ export function sanitizeSettings(body: Record<string, unknown>): { patch: Partia
       continue;
     }
     patch[key] = typeof want === "number" ? clampSetting(k, value) : value;
+  }
+  // Themes: a built-in one, "system", or a custom theme ("custom:<id>"). The custom themes are checked one by one;
+  // when the file carries them, a choice of a custom theme that is not among them is dropped (one that no longer
+  // exists falls back to Celer Oscuro / Claro when applied: themes.ts, resolveTheme).
+  if (patch.customThemes) patch.customThemes = readCustomThemes(patch.customThemes);
+  for (const key of ["theme", "systemLight", "systemDark"] as const) {
+    if (!(key in patch)) continue;
+    if (!isThemeChoice(patch[key], patch.customThemes as { id: string }[] | undefined, key !== "theme")) {
+      delete patch[key];
+      ignored.push(key);
+    }
   }
   if (Array.isArray(patch.snippets)) {
     patch.snippets = (patch.snippets as unknown[]).filter(

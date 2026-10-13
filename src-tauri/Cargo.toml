@@ -69,6 +69,8 @@ tiberius = { path = "vendor/tiberius" }
 [target.'cfg(windows)'.dependencies]
 # Proxy of the system's Internet settings for driver downloads (src/drivers.rs)
 winreg = "0.56"
+# The mouse button and Esc while a tab is dragged out of the windows (src/windows.rs, drag_keys); already in the tree through tao
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.dev]
 debug = "line-tables-only"

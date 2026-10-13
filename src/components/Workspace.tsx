@@ -34,7 +34,7 @@ import {
   Upload,
   X,
 } from "lucide-solid";
-import { createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
 import { EngineIcon, ObjIcon } from "../icons";
 import { Gib } from "../gib/Gib";
 import { isLate } from "../gib/reactions";
@@ -96,6 +96,7 @@ import {
   serverOf,
   setActiveResult,
   setGridColumnOrder,
+  takeArrivingColumnOrder,
   setState,
   setTabConnection,
   setTableFilter,
@@ -131,7 +132,10 @@ import { resolvedFor, scopeText } from "../variableStore";
 import { libraryDirty, saveToLibrary, scriptById } from "../library";
 import { claimTabDrop, endTabDrag, incomingDrag, otherFullWindows, sendTab, startTabDrag } from "../windows";
 import { aiBadgeTitle } from "../mcpApp";
-import { windowName } from "../windowModel";
+import { flipList, leaveOnCleanup } from "../motion";
+import { followDragGhost, ghostCard, previewLines } from "../dnd";
+import { hintOnce, hintReady } from "../hints";
+import { insertionGap, reorderTarget, windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 import { EnvChip, EnvStrip, TxIndicator, TxTabBadge } from "./ConsoleSafety";
@@ -166,18 +170,86 @@ function TabBar() {
   const [renaming, setRenaming] = createSignal("");
   /** The tab was dropped on this tab bar (a reorder): it does not go to another window. */
   let droppedHere = false;
+  let bar: HTMLDivElement | undefined;
+  /** While a tab is dragged over this bar (or, from another window, over this window): where it would land. */
+  const [gap, setGap] = createSignal<number | null>(null);
+  const tabEls = () => (bar ? [...bar.querySelectorAll<HTMLElement>(":scope > .tab:not([data-leave])")] : []);
+  // Tabs glide to their new place when one closes, opens or moves (motion.ts).
+  flipList(tabEls, () => state.tabs.map((tab) => tab.id).join());
+
+  /** The gap under the pointer: over the bar, between the tabs it is between; elsewhere in the window, the end. */
+  const gapAt = (event: DragEvent) => {
+    const rect = bar?.getBoundingClientRect();
+    if (!rect || event.clientY < rect.top || event.clientY > rect.bottom) return state.tabs.length;
+    return insertionGap(tabEls().map((el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; }), event.clientX);
+  };
+  /** Where the insertion line goes for a gap (in the bar's scrolled content). */
+  const lineX = (at: number) => {
+    const els = tabEls();
+    if (!els.length) return 0;
+    const el = els[Math.min(at, els.length - 1)];
+    return at < els.length ? el.offsetLeft : el.offsetLeft + el.offsetWidth;
+  };
+
+  // A tab dragged from another window: anywhere over this one it can be let go (at the end, or where the line is).
+  createEffect(() => {
+    if (!incomingDrag()) {
+      setGap(null);
+      return;
+    }
+    // The dragged tab's card follows the pointer over this window too (the source window draws it over its own).
+    const content = incomingDrag()?.card;
+    const card = content ? ghostCard(content) : undefined;
+    if (card) {
+      card.style.display = "none";
+      document.body.appendChild(card);
+    }
+    const over = (event: DragEvent) => {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      setGap(gapAt(event));
+      if (card) {
+        card.style.display = "";
+        card.style.left = `${event.clientX + 14}px`;
+        card.style.top = `${event.clientY + 14}px`;
+      }
+    };
+    const leave = (event: DragEvent) => {
+      if (event.relatedTarget) return;
+      setGap(null);
+      if (card) card.style.display = "none";
+    };
+    const drop = (event: DragEvent) => {
+      event.preventDefault();
+      claimTabDrop(gapAt(event));
+      setGap(null);
+      card?.remove();
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    onCleanup(() => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+      card?.remove();
+    });
+  });
+
+  // The first time a window has two tabs: a word on tearing them off (once, ever), said here once Gib is here.
+  createEffect(on(() => state.tabs.length >= 2 && hintReady(), (two) => two && isTauri() && hintOnce("tab-tearoff", "Arrastra una pestaña fuera de la ventana para abrirla en una ventana nueva (o clic derecho › «Abrir en ventana nueva»).")));
 
   function menu(event: MouseEvent, tab: Tab) {
     // Another window, or a new one: the tab goes on there with its session as it is.
     const windows = isTauri()
       ? [
           { separator: true },
-          { label: "Mover a una ventana nueva", run: () => void sendTab(tab.id, null) },
+          { label: "Abrir en ventana nueva", hint: "o arrástrala fuera", run: () => void sendTab(tab.id, null) },
           ...otherFullWindows().map((w) => ({ label: `Mover a ${windowName(w.label)}${w.title ? ` (${w.title})` : ""}`, run: () => void sendTab(tab.id, w.label) })),
         ]
       : [];
     openMenu(event, [
-      { label: "Cerrar", hint: "Ctrl+W", run: () => void closeTab(tab.id) },
+      { label: "Cerrar", command: "close-tab", run: () => void closeTab(tab.id) },
       { label: "Cerrar las demás", run: () => void closeOtherTabs(tab.id) },
       { separator: true },
       { label: "Renombrar", disabled: tab.kind !== "sql", run: () => setRenaming(tab.id) },
@@ -189,15 +261,27 @@ function TabBar() {
   return (
     <div
       class="tabbar"
+      ref={bar}
       role="tablist"
       classList={{ "drop-in": Boolean(incomingDrag()) }}
       onDblClick={(event) => event.target === event.currentTarget && openQuery(activeSql()?.connId ?? null)}
-      onDragOver={(event) => incomingDrag() && event.preventDefault()}
-      onDrop={(event) => {
-        // A tab from another window let go after the last tab.
-        if (event.target !== event.currentTarget || !incomingDrag()) return;
+      onDragOver={(event) => {
+        // A tab of this bar being moved (another window's is handled by the window, above).
+        if (dragFrom() < 0) return;
         event.preventDefault();
-        claimTabDrop(state.tabs.length);
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        setGap(gapAt(event));
+      }}
+      onDragLeave={(event) => dragFrom() >= 0 && !bar?.contains(event.relatedTarget as Node | null) && setGap(null)}
+      onDrop={(event) => {
+        if (dragFrom() < 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        droppedHere = true;
+        const to = reorderTarget(dragFrom(), gapAt(event));
+        if (to !== null) moveTab(dragFrom(), to);
+        setGap(null);
+        setDragFrom(-1);
       }}
     >
       <For each={state.tabs}>
@@ -209,6 +293,8 @@ function TabBar() {
           return (
             <div
               class="tab"
+              ref={leaveOnCleanup("tab")}
+              data-flip={tab.id}
               role="tab"
               data-id={tab.id}
               aria-selected={tab.id === state.activeTabId}
@@ -218,21 +304,19 @@ function TabBar() {
                 setDragFrom(index());
                 droppedHere = false;
                 event.dataTransfer?.setData("application/x-celer-tab", tab.id);
-                // Out of the window it goes to another one, or to a new one where it is let go.
-                startTabDrag(tab.id, tab.title);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (dragFrom() >= 0) {
-                  droppedHere = true;
-                  moveTab(dragFrom(), index());
-                } else claimTabDrop(index());
-                setDragFrom(-1);
+                if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+                // The ghost under the pointer (it follows it out of the window too): the title, where it is connected
+                // and a few lines of what it holds.
+                const preview = tab.kind === "sql" ? tab.sql : `${tab.qualified}\n${tab.rows.length.toLocaleString()} filas cargadas`;
+                const where = [conn()?.name, tab.database].filter(Boolean).join(" · ") || "Sin conexión";
+                const card = { title: tab.title, detail: where, preview, color: tab.connId ? connColor(conn()) : undefined };
+                followDragGhost(event, card);
+                // Out of the window it goes to another one, or to a new one where it is let go (the window it passes over draws the card).
+                startTabDrag(tab.id, tab.title, { preview: previewLines(preview), color: tab.connId ? connColor(conn()) : undefined }, card);
               }}
               onDragEnd={() => {
                 setDragFrom(-1);
+                setGap(null);
                 void endTabDrag(tab.id, droppedHere);
               }}
               onMouseDown={(event) => {
@@ -243,7 +327,7 @@ function TabBar() {
               }}
               onDblClick={() => tab.kind === "sql" && setRenaming(tab.id)}
               onContextMenu={(event) => menu(event, tab)}
-              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${envOf(conn()) ? ` · ${envOf(conn())!.label}` : ""}${tab.database ? ` · ${tab.database}` : ""}`}
+              title={`${tab.title}${conn() ? ` · ${conn()!.name}` : ""}${envOf(conn()) ? ` · ${envOf(conn())!.label}` : ""}${tab.database ? ` · ${tab.database}` : ""}${isTauri() ? "\nArrástrala fuera de la ventana para abrirla en una ventana nueva" : ""}`}
             >
               <span class="tab-strip" style={{ background: tab.connId ? connColor(conn()) : "transparent" }} />
               <ObjIcon kind={tab.kind === "table" ? (tab.obj.kind === "view" ? "view" : "table") : tab.title.endsWith(".sql") ? "file" : "console"} size={14} />
@@ -287,6 +371,9 @@ function TabBar() {
           );
         }}
       </For>
+      <Show when={gap() !== null}>
+        <span class="tab-drop-line" style={{ left: `${lineX(gap()!) - 1}px` }} aria-hidden="true" />
+      </Show>
       <button type="button" class="tab-new" title={withShortcut("Nueva consola", "new-console")} onClick={() => openQuery(activeSql()?.connId ?? null)}>
         <Plus size={14} />
       </button>
@@ -521,7 +608,7 @@ function SqlPane(props: { tab: SqlTab }) {
         <span class="spacer" />
         <ConnectionPicker tab={props.tab} />
       </div>
-      <div class="editor-wrap" style={{ height: `${state.settings.editorRatio * 100}%` }}>
+      <div class="editor-wrap" data-focus-region="editor" style={{ height: `${state.settings.editorRatio * 100}%` }}>
         <SqlEditor
           doc={props.tab.sql}
           revision={props.tab.revision}
@@ -563,7 +650,7 @@ function SqlPane(props: { tab: SqlTab }) {
         </Show>
       </div>
       <div class="hsplit" onMouseDown={resize} />
-      <div class="results">
+      <div class="results" data-focus-region="results">
         <div class="results-head">
           <button type="button" class="rtab" classList={{ on: props.tab.activeResult === -1 && !props.tab.activePinned && !props.tab.activePlan && !props.tab.compare, error: Boolean(props.tab.error) }} onClick={() => setActiveResult(props.tab.id, -1)}>
             <Show when={props.tab.error} fallback={<FileCode2 size={13} />}><CircleAlert size={13} /></Show>
@@ -673,6 +760,7 @@ function SqlPane(props: { tab: SqlTab }) {
               onExport={exportShown}
               onActivate={() => openInspector("value")}
               onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
+              initialColumnOrder={() => takeArrivingColumnOrder(props.tab.id)}
             />
           </Match>
         </Switch>
@@ -765,7 +853,7 @@ function TablePane(props: { tab: TableTab }) {
   };
 
   return (
-    <div class="pane">
+    <div class="pane" data-focus-region="results">
       <EnvStrip conn={conn()} />
       <div class="pane-toolbar">
         <ObjIcon kind={props.tab.obj.kind === "view" ? "view" : "table"} size={16} />
@@ -928,6 +1016,7 @@ function TablePane(props: { tab: TableTab }) {
             onColumnFilter={(col) => openFilter(newFilter(props.tab, props.tab.gridCols[col]?.name, "in"))}
             onActivate={() => openInspector("value")}
             onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
+            initialColumnOrder={() => takeArrivingColumnOrder(props.tab.id)}
           />
           <Show when={changes()}>
             <div class="changes-bar">
@@ -1005,7 +1094,16 @@ function TablePane(props: { tab: TableTab }) {
           <div class="ddl-view">
             <div class="ddl-actions">
               <button type="button" class="btn tiny" onClick={() => void copyText(props.tab.ddl, "DDL copiado")}>Copiar</button>
-              <button type="button" class="btn tiny" onClick={() => openQuery(props.tab.connId, props.tab.ddl, `${props.tab.obj.name}.sql`)}>Abrir en consola</button>
+              {/* A console on this connection and database with the DDL, to change or run it (#111: the old «DDL en consola»). */}
+              <button
+                type="button"
+                class="btn tiny"
+                disabled={!props.tab.ddl}
+                title="Abre el DDL en una consola nueva de esta conexión"
+                onClick={() => openQuery(props.tab.connId, props.tab.ddl, `${props.tab.obj.name}.sql`, { database: props.tab.obj.database || props.tab.database || undefined })}
+              >
+                Abrir en consola
+              </button>
             </div>
             <CodeView doc={props.tab.ddl} kind={kindOf(props.tab.connId)} />
           </div>

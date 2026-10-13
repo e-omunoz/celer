@@ -41,10 +41,10 @@ interface Spot {
 }
 
 const TOUR: Spot[] = [
-  { selector: ".explorer", title: "El explorador", body: "Tus conexiones y todo lo que contienen: bases de datos, esquemas, tablas, vistas, funciones. Doble clic en una tabla abre sus datos; clic derecho, todas las acciones (generar SQL, exportar, importar CSV, copiar estructura para IA…)." },
+  { selector: ".explorer", title: "El explorador", body: "Tus conexiones y todo lo que contienen: bases de datos, esquemas, tablas, vistas, funciones. Doble clic en una tabla abre sus datos; clic derecho, todas las acciones: ver DDL, «Generar SQL ›», «Comparar ›», exportar, importar CSV, copiar estructura para IA…" },
   { selector: ".pane-host.active .editor-wrap", title: "La consola SQL", body: "Escribe aquí. Autocompleta tablas y columnas de tu esquema real, y la sentencia bajo el cursor queda resaltada.", before: () => { if (!activeSql()) openQuery(state.connections[0]?.id ?? null, "SELECT *\nFROM customers\nLIMIT 50;"); } },
   { selector: ".pane-host.active .tb-btn.run", title: "Ejecutar", body: "Ctrl+Intro ejecuta la sentencia del cursor o la selección; Ctrl+Mayús+Intro, el script entero. El botón se convierte en «Detener» mientras corre." },
-  { selector: ".pane-host.active .results", title: "Resultados", body: "Millones de filas sin bloquear nada: se leen por páginas. Selecciona celdas para ver suma y media abajo, Ctrl+F para buscar, clic derecho para copiar como CSV, JSON, INSERT…" },
+  { selector: ".pane-host.active .results", title: "Resultados", body: "Millones de filas sin bloquear nada: se leen por páginas. Selecciona celdas para ver suma y media abajo, Ctrl+F para buscar; clic derecho, «Copiar como ›» (CSV, JSON, INSERT…) y «Filtrar ›»." },
   { selector: ".search-trigger", title: "Buscar en todo", body: "Pulsa Mayús dos veces (o Ctrl+K) para saltar a cualquier tabla, pestaña o acción. Ctrl+N va directo a una tabla." },
   { selector: ".stripe-btn[title^='Biblioteca']", title: "Biblioteca de scripts", body: "Las consultas que repites, guardadas con nombre (Ctrl+Alt+B desde la consola). Ordénalas en carpetas y etiquetas, ábrelas o ejecútalas con un clic y arrástralas al editor." },
   { selector: ".stripe-btn[title^='Asistente']", title: "Asistente de IA", body: "Genera, explica, corrige y optimiza SQL con Claude usando tu esquema real, nunca tus filas. Y desde Ajustes › IA, un servidor MCP con permisos por conexión." },

@@ -11,7 +11,17 @@ const H = `
   const rowByText = (text) => [...document.querySelectorAll('.tree-row')].find((e) => e.querySelector('.tree-name')?.textContent === text);
   const connRow = () => [...document.querySelectorAll('.tree-row.conn')].find((e) => e.textContent.includes('Postgres local'));
   const menuItem = (re) => until(() => [...document.querySelectorAll('.menu .menu-item')].find((b) => re.test(b.textContent)), 3000);
-  const menuOn = async (row, re) => { row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 200 })); const item = await menuItem(re); const label = item?.textContent ?? ''; item?.click(); return label; };
+  // A row's menu, then one item per regex: the first ones open submenus («Comparar ›»), the last one runs.
+  const menuOn = async (row, ...res) => {
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 200 }));
+    let item = null;
+    for (const [level, re] of res.entries()) {
+      item = await until(() => [...(document.querySelectorAll('.menu:not([data-leave])')[level]?.querySelectorAll(':scope > .menu-item') ?? [])].find((b) => re.test(b.textContent) && !b.disabled), 3000);
+      if (!item) break;
+      item.click();
+    }
+    return item?.textContent ?? '';
+  };
   const pane = () => document.querySelector('.pane-host.active');
   const sql = async (text) => {
     const c = (await inv('list_connections')).find((x) => x.name === 'Postgres local');
@@ -48,9 +58,9 @@ await js(`
   await menuOn(connRow(), /^Actualizar/);
   await until(() => rowByText('dc_a') && rowByText('dc_b'));
 `);
-const marked = await js(`return await menuOn(rowByText('dc_a'), /^Marca(r|da) para comparar datos/);`);
+const marked = await js(`return await menuOn(rowByText('dc_a'), /^Comparar/, /^Marca(r|da) para comparar datos/);`);
 check("a table can be marked for a data comparison", /comparar datos/.test(marked), marked);
-const offered = await js(`return await menuOn(rowByText('dc_b'), /^Comparar datos con/);`);
+const offered = await js(`return await menuOn(rowByText('dc_b'), /^Comparar/, /^Comparar datos con/);`);
 check("another table offers 'Comparar datos con' the marked one", /Comparar datos con «Postgres local · celer · public · dc_a»/.test(offered), offered);
 const first = await js(`await until(() => { const r = report(); return r && !r.loading; }, 20000); await sleep(300); return report();`);
 check("counts: equal, changed, only in source, only in target", JSON.stringify(first?.chips) === JSON.stringify(["1 iguales", "1 cambiadas", "1 solo en el origen", "1 solo en el destino"]), JSON.stringify(first));
@@ -69,7 +79,7 @@ await js(`pane().querySelector('.cm-content').focus();`);
 await press("Enter", 2 | 8);
 await js(`await sleep(300); await until(() => !pane().querySelector('.progress-bar') && !pane().querySelector('.tb-btn.stop'), 20000); await sleep(400);`);
 const second = await js(`
-  await menuOn(rowByText('dc_b'), /^Comparar datos con/);
+  await menuOn(rowByText('dc_b'), /^Comparar/, /^Comparar datos con/);
   await until(() => { const r = report(); return r && !r.loading; }, 20000); await sleep(200);
   const r = report();
   document.querySelector('.data-compare footer .btn:not(.primary)').click();

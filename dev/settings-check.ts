@@ -119,6 +119,29 @@ assert.equal(cellLabel("2026-03-15", "text", { ...prefs, dateFormat: "dmy" }), "
 assert.equal(formatSql("select a from t where x = 1", "postgres", "lower"), "select a\nfrom t\nwhere x = 1");
 assert.equal(formatSql("select a from t where x = 1", "postgres"), "SELECT a\nFROM t\nWHERE x = 1");
 
+// ---- themes in a settings file (#107): custom themes are checked one by one, a choice must be a theme that exists
+{
+  const theme = { id: "t1", name: "Mío", base: "fjord", colors: { "--bg": "#101820", "--evil": "red", "--text": "url(x)" }, radius: 6 };
+  const { patch, ignored } = parseSettingsFile(
+    JSON.stringify({ theme: "custom:t1", systemLight: "light", systemDark: "custom:t1", customThemes: [theme, { id: "bad" }, "x"] }),
+  );
+  assert.equal(patch.customThemes?.length, 1, "only the valid custom theme");
+  assert.deepEqual(patch.customThemes?.[0].colors, { "--bg": "#101820" }, "unknown tokens and unsafe colours dropped");
+  assert.equal(patch.theme, "custom:t1");
+  assert.equal(patch.systemDark, "custom:t1");
+  assert.deepEqual(ignored, []);
+  const missing = parseSettingsFile(JSON.stringify({ theme: "custom:nope", customThemes: [theme], systemLight: "system" }));
+  assert.equal(missing.patch.theme, undefined, "a custom theme the file does not carry is not chosen");
+  assert.equal(missing.patch.systemLight, undefined, "«system» cannot be the light or dark choice");
+  assert.deepEqual(missing.ignored.sort(), ["systemLight", "theme"]);
+  const bare = parseSettingsFile(JSON.stringify({ theme: "custom:t9" }));
+  assert.equal(bare.patch.theme, "custom:t9", "without custom themes in the file, a custom choice is kept (it falls back when missing)");
+  assert.equal(parseSettingsFile(JSON.stringify({ theme: "custom:<script>" })).patch.theme, undefined, "a malformed id is refused");
+  // The theme editor has its own section in the General group; every section belongs to a group.
+  assert.equal(SETTINGS_SECTIONS.find((s) => s.id === "theme")?.group, "General");
+  for (const section of SETTINGS_SECTIONS) assert.ok(["General", "Editor", "Conexiones", "IA y MCP"].includes(section.group), `${section.id} has a group`);
+}
+
 console.log("settings-check: ok");
 
 // resetPatch must not need structuredClone (store proxies and plain objects alike)
