@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data on MariaDB JSON columns** (#179): MariaDB stores JSON as LONGTEXT with a `json_valid()` CHECK, so the
+  generator proposed plain text and the server rejected the whole insert. A column behind `json_valid()` (or SQL
+  Server's `ISJSON(…) = 1`) now gets the JSON generator, as on MySQL and PostgreSQL.
 - **MySQL 8 columns with `DEFAULT CURRENT_TIMESTAMP`** (#178): MySQL marks them `DEFAULT_GENERATED`, and Celer took
   them for computed columns. A data comparison's sync script now updates their differences, and the test data
   generator gives them values; only `AUTO_INCREMENT` and `VIRTUAL` / `STORED` generated columns are left to the server.

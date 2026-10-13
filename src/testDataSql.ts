@@ -381,6 +381,8 @@ export interface ColumnRule {
   /** Strict bounds (> and <). */
   minOpen?: boolean;
   maxOpen?: boolean;
+  /** json_valid(col) / ISJSON(col): only JSON text goes in (MariaDB's JSON is LONGTEXT with this CHECK). */
+  json?: boolean;
 }
 
 export interface CheckReading {
@@ -455,6 +457,7 @@ type Node =
   | { k: "in"; left: Expr; list: Expr[]; not: boolean }
   | { k: "between"; left: Expr; low: Expr; high: Expr; not: boolean }
   | { k: "isnull"; left: Expr; not: boolean }
+  | { k: "json"; col: string }
   | { k: "other"; cols: string[] };
 type Expr = { k: "col"; name: string } | { k: "lit"; value: string; num: boolean } | { k: "fn"; name: string; cols: string[] } | { k: "list"; items: Expr[] };
 
@@ -626,6 +629,8 @@ function parseCheck(src: string, columns: string[]): Node {
         return kw.v === "=" ? { k: "in", left, list: list.k === "list" ? list.items : [list], not: false } : { k: "other", cols: colsIn(left) };
       }
       const right = addExpr();
+      // ISJSON(col) = 1 / > 0 (SQL Server writes it so): the column holds JSON.
+      if (left.k === "fn" && /^(json_valid|isjson)$/.test(left.name) && right.k === "lit" && ((kw.v === "=" && right.value === "1") || (kw.v === ">" && right.value === "0"))) return { k: "json", col: left.cols[0] ?? "" };
       return { k: "cmp", op: kw.v === "!=" ? "<>" : kw.v, left, right };
     }
     if (isKw(kw, "LIKE")) {
@@ -633,7 +638,7 @@ function parseCheck(src: string, columns: string[]): Node {
       addExpr();
       return { k: "other", cols: colsIn(left) };
     }
-    return left.k === "fn" && /^(json_valid|isjson)$/.test(left.name) ? { k: "isnull", left: { k: "col", name: left.cols[0] ?? "" }, not: true } : { k: "other", cols: colsIn(left) };
+    return left.k === "fn" && /^(json_valid|isjson)$/.test(left.name) ? { k: "json", col: left.cols[0] ?? "" } : { k: "other", cols: colsIn(left) };
   };
   const notExpr = (): Node => {
     if (isKw(peek(), "NOT")) {
@@ -678,6 +683,8 @@ function nodeCols(node: Node): string[] {
       return [...exprCols(node.left), ...exprCols(node.low), ...exprCols(node.high)];
     case "isnull":
       return exprCols(node.left);
+    case "json":
+      return [node.col];
     case "other":
       return node.cols;
   }
@@ -703,6 +710,7 @@ function ruleOf(node: Node): { col: string; rule: ColumnRule } | null {
     if (op === "<") return { col: left.name, rule: { max: n, maxOpen: true } };
     return null;
   }
+  if (node.k === "json") return node.col ? { col: node.col, rule: { json: true } } : null;
   if (node.k === "in" && !node.not && node.left.k === "col" && node.list.every((e) => e.k === "lit" && e.value !== "NULL")) {
     return { col: node.left.name, rule: { values: node.list.map((e) => (e as { value: string }).value) } };
   }
@@ -719,6 +727,7 @@ function ruleOf(node: Node): { col: string; rule: ColumnRule } | null {
 }
 
 function mergeRule(into: ColumnRule, add: ColumnRule) {
+  if (add.json) into.json = true;
   if (add.values) into.values = into.values ? into.values.filter((v) => add.values!.includes(v)) : [...add.values];
   if (add.min !== undefined && (into.min === undefined || add.min > into.min || (add.min === into.min && add.minOpen))) {
     into.min = add.min;
@@ -733,7 +742,7 @@ function mergeRule(into: ColumnRule, add: ColumnRule) {
 /**
  * What the CHECK constraints of a table say about its columns: value lists (IN, = ANY (ARRAY[…]), OR of equalities)
  * and ranges (BETWEEN, comparisons with a number), joined with AND. A condition read only in part lists its columns
- * in `unknown`; IS NOT NULL and json_valid() say nothing the generator does not already respect.
+ * in `unknown`; IS NOT NULL says nothing the generator does not already respect, json_valid() marks the column `json`.
  */
 export function readChecks(checks: string[], columns: string[]): CheckReading {
   const rules: Record<string, ColumnRule> = {};

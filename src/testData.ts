@@ -193,9 +193,11 @@ export function buildModel(input: ModelInput): TableModel {
   const single = new Set(sets.filter((set) => set.length === 1).map((set) => set[0]));
   const multi = sets.filter((set) => set.length > 1);
   const columns: TestColumn[] = input.columns.map((col, i) => {
-    const type = typeInfo(col, dialect);
-    const listed = catalog.enums[col.name] ?? enumValues(col.typeName) ?? undefined;
     const rule = checks.rules[col.name];
+    // A text column whose CHECK is json_valid() holds JSON (MariaDB's JSON type is LONGTEXT with that CHECK).
+    const declared = typeInfo(col, dialect);
+    const type: TypeInfo = rule?.json && (declared.family === "text" || declared.family === "other") ? { ...declared, family: "json" } : declared;
+    const listed = catalog.enums[col.name] ?? enumValues(col.typeName) ?? undefined;
     const values = rule?.values?.length ? (listed ? rule.values.filter((v) => listed.includes(v)) : rule.values) : listed;
     return {
       col: { ...col, kind: KIND_OF[type.family] ?? col.kind },

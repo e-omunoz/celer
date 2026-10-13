@@ -81,7 +81,25 @@ assert.deepEqual(read.rules.prioridad.values, ["baja", "media", "alta"]);
 assert.deepEqual([read.rules.puntos.min, read.rules.puntos.max], [0, 100]);
 read = readChecks(["`prioridad` in ('baja','media','alta')", "json_valid(`notas`)"], cols);
 assert.deepEqual(read.rules.prioridad.values, ["baja", "media", "alta"]);
-assert.deepEqual(read.unknown, [], "json_valid says nothing new");
+assert.deepEqual(read.unknown, [], "json_valid is read");
+assert.equal(read.rules.notas.json, true, "json_valid marks the column JSON");
+assert.equal(readChecks(["(isjson([notas])=(1))"], cols).rules.notas.json, true, "SQL Server: ISJSON(col) = 1");
+assert.equal(readChecks(["(isjson([notas])>(0))"], cols).rules.notas.json, true);
+// MariaDB's JSON is LONGTEXT with a json_valid CHECK (#179): the column gets the JSON generator, not plain text.
+{
+  const columns = [col("id", "int(11)", "number", { nullable: false, primaryKey: true }), col("datos", "longtext", "text", { nullable: false }), col("extra", "longtext", "text")];
+  const model = buildModel({ dialect: "mysql", qualified: "t", table: "t", columns, quoted: ["`id`", "`datos`", "`extra`"], catalog: { uniques: [], checks: [{ name: "datos", column: "", text: "json_valid(`datos`)" }, { name: "extra", column: "", text: "json_valid(`extra`)" }], enums: {} }, fks: [] });
+  assert.equal(model.columns[1].type.family, "json");
+  const settings = inferSettings(model);
+  assert.equal(settings[1].kind, "json");
+  assert.equal(settings[2].kind, "json");
+  assert.ok(!model.columns[1].checkUnknown);
+  const g = createGenerator(model, settings, 1);
+  for (let k = 0; k < 20; k++) {
+    const v = g.next()[1];
+    assert.doesNotThrow(() => JSON.parse(String(v)), String(v));
+  }
+}
 read = readChecks(["(prioridad IN ('baja' ,'media' ,'alta' ))", "((puntos >= 0 ) AND (puntos <= 100 ) )"], cols);
 assert.deepEqual(read.rules.prioridad.values, ["baja", "media", "alta"]);
 assert.equal(read.rules.puntos.max, 100);

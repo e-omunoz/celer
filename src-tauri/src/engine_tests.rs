@@ -3572,6 +3572,21 @@ fn mysql_default_generated_is_not_identity() {
     println!("✓ {kind}: DEFAULT CURRENT_TIMESTAMP recibe valores; las generadas, no");
 }
 
+/// Column types whose values the server checks beyond the type name, with the generators the dialog proposes: JSON
+/// (#179: on MariaDB a LONGTEXT with an implicit json_valid CHECK, which plain text broke).
+#[test]
+fn testdata_mysql_types() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let kind = format!("mysql ({})", d.server_info().unwrap_or_default());
+    let obj = td_obj(&db, &db, "celer_td_types");
+    let setup = ["CREATE TABLE celer_td_types (id INT NOT NULL PRIMARY KEY, datos JSON NOT NULL, extra JSON) ENGINE=InnoDB".to_string()];
+    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &["DROP TABLE IF EXISTS celer_td_types"], 200);
+    assert!(plan.contains("datos=json") && plan.contains("extra=json"), "{kind}: {plan}");
+    println!("✓ {kind}: tipos con comprobación del servidor: 200 filas");
+}
+
 #[test]
 fn testdata_mssql() {
     let Some(mut master) = mssql("master") else { return };
@@ -3612,6 +3627,10 @@ fn testdata_mssql() {
     testdata_suite(&mut d, &other, "mssql", &ddl, &td_target("celer_test", "dbo", &["celer_test", "dbo"]), &cleanup);
     testdata_defaults(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_auto"), "CREATE TABLE dbo.celer_td_auto (id INT IDENTITY PRIMARY KEY, n INT DEFAULT 3)", "IF OBJECT_ID('dbo.celer_td_auto') IS NOT NULL DROP TABLE dbo.celer_td_auto");
     testdata_unique_null(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_unull"), "IF OBJECT_ID('dbo.celer_td_unull') IS NOT NULL DROP TABLE dbo.celer_td_unull");
+    // JSON in NVARCHAR(MAX) behind ISJSON(…) = 1 / > 0 (#179): the JSON generator, which the CHECK takes.
+    let setup = ["CREATE TABLE dbo.celer_td_types (id INT NOT NULL PRIMARY KEY, datos NVARCHAR(MAX) NOT NULL CHECK (ISJSON(datos) = 1), extra NVARCHAR(MAX) CHECK (ISJSON(extra) > 0))".to_string()];
+    let plan = testdata_proposed(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_types"), &setup, &["IF OBJECT_ID('dbo.celer_td_types') IS NOT NULL DROP TABLE dbo.celer_td_types"], 200);
+    assert!(plan.contains("datos=json") && plan.contains("extra=json"), "mssql: {plan}");
 }
 
 #[test]
