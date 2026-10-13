@@ -3861,6 +3861,12 @@ fn testdata_informix_via(via: &str, cfg: ConnConfig, connect: &Connect) {
     d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
     testdata_sequence_range(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_seq"), "SMALLINT", Some(32767));
     testdata_negative_checks(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+    // Multi-field INTERVALs (#182): the constant is written in the column's qualifier ('1:00' for HOUR TO MINUTE…).
+    let setup = ["CREATE TABLE celer_td_intv (id SERIAL NOT NULL PRIMARY KEY, a INTERVAL HOUR TO MINUTE, b INTERVAL DAY TO SECOND NOT NULL, \
+        c INTERVAL YEAR TO MONTH, d INTERVAL DAY(3) TO DAY, e INTERVAL MINUTE TO FRACTION(3), f INTERVAL YEAR(5) TO YEAR, g INTERVAL HOUR TO SECOND)".to_string()];
+    let plan = testdata_proposed(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_intv"), &setup, &["DROP TABLE IF EXISTS celer_td_intv"], 50);
+    assert!(!plan.contains("‖ problemas:"), "{kind}: {plan}");
+    println!("✓ {kind}: columnas INTERVAL de varios campos: 50 filas");
 }
 
 #[test]

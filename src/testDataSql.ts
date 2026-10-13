@@ -124,6 +124,25 @@ export function typeInfo(col: Pick<TableColumn, "typeName" | "kind">, dialect: D
   return { family: "other" };
 }
 
+/**
+ * An interval of one (its leading field) written in an Informix INTERVAL column's qualifier: '1:00' for HOUR TO MINUTE,
+ * '1 00:00:00' for DAY TO SECOND, '1-00' for YEAR TO MONTH ('1' alone, the only form a multi-field one refuses, is
+ * what a single field takes). Null when the type is not such an interval.
+ */
+export function intervalLiteral(typeName: string): string | null {
+  const m = /^\s*interval\s+(year|month|day|hour|minute|second|fraction)\s*(?:\(\s*\d+\s*\))?\s+to\s+(year|month|day|hour|minute|second|fraction)\b/i.exec(typeName);
+  if (!m) return null;
+  const fields = ["year", "month", "day", "hour", "minute", "second", "fraction"];
+  // The separator written before each field when it follows another.
+  const sep: Record<string, string> = { month: "-", hour: " ", minute: ":", second: ":", fraction: "." };
+  const first = fields.indexOf(m[1].toLowerCase());
+  const last = fields.indexOf(m[2].toLowerCase());
+  if (last < first) return null;
+  let out = "1";
+  for (let i = first + 1; i <= last; i++) out += sep[fields[i]] + (fields[i] === "fraction" ? "0" : "00");
+  return out;
+}
+
 /** The values of a MySQL ENUM('a','b') / SET('a','b') column type, else null. */
 export function enumValues(typeName: string): string[] | null {
   const m = /^\s*(enum|set)\s*\((.*)\)\s*$/is.exec(typeName);

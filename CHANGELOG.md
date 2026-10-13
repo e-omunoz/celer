@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data on Informix multi-field INTERVAL columns** (#182): an `INTERVAL HOUR TO MINUTE`, `DAY TO SECOND` or
+  `YEAR TO MONTH` column got the constant `'1'`, which Informix rejects, so the whole insert was undone. The proposed
+  value is now written in the column's fields (`'1:00'`, `'1 00:00:00'`, `'1-00'`).
 - **Test data on SQL Server CHECKs with `N'…'` literals** (#183): `CHECK (b IN (N'x', N'y'))` was not read, so the
   column got free text and the insert failed on the CHECK. The `N` prefix is now skipped and the value list is proposed.
 - **SQLite `INTEGER PRIMARY KEY DESC`** (#201): SQLite does not make such a column the rowid alias, but Celer took it

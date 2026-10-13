@@ -9,7 +9,7 @@
 import { importStatements, type SheetCell } from "./importFormats.ts";
 import { resultToText } from "./sql.ts";
 import { LOCALES, LOREM, type Locale, type LocaleData, type Place } from "./testDataLocale.ts";
-import { enumValues, nonTransactionalNote, readChecks, typeInfo, type CatalogFacts, type ColumnRule, type TypeInfo } from "./testDataSql.ts";
+import { enumValues, intervalLiteral, nonTransactionalNote, readChecks, typeInfo, type CatalogFacts, type ColumnRule, type TypeInfo } from "./testDataSql.ts";
 import type { Cell, ColKind, ColumnInfo, DbKind, ObjectRef, ResultSet, TableColumn } from "./types";
 
 export type { Locale } from "./testDataLocale.ts";
@@ -380,7 +380,8 @@ export function inferOne(model: TableModel, index: number, locale: Locale = "es"
     case "binary":
       return { ...s, kind: "binary" };
     case "interval":
-      return { ...s, kind: "constant", value: model.dialect === "postgres" ? "1 day" : "1" };
+      // Informix takes a multi-field interval only written in its qualifier's fields.
+      return { ...s, kind: "constant", value: model.dialect === "postgres" ? "1 day" : (model.dialect === "informix" && intervalLiteral(c.col.typeName)) || "1" };
     case "date":
     case "datetime": {
       const birth = has(name, W.birth);

@@ -31,7 +31,7 @@ import {
   type ModelInput,
   type TableModel,
 } from "../src/testData.ts";
-import { catalogQueries, checkClauses, domainCheck, effectiveDialect, enumValues, existingValuesSql, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
+import { catalogQueries, checkClauses, domainCheck, effectiveDialect, enumValues, existingValuesSql, intervalLiteral, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
 import { codeOnly, splitSql } from "../src/sql.ts";
 import type { DbKind, TableColumn } from "../src/types.ts";
 import type { SheetCell } from "../src/importFormats.ts";
@@ -39,6 +39,19 @@ import type { SheetCell } from "../src/importFormats.ts";
 const col = (name: string, typeName: string, kind: TableColumn["kind"], extra: Partial<TableColumn> = {}): TableColumn => ({ name, typeName, kind, nullable: true, primaryKey: false, identity: false, default: null, ...extra });
 
 // ---------------------------------------------------------------- types
+// Informix multi-field INTERVALs take a literal in their qualifier's fields (#182); one field takes '1'.
+assert.equal(intervalLiteral("interval hour to minute"), "1:00");
+assert.equal(intervalLiteral("interval day to second"), "1 00:00:00");
+assert.equal(intervalLiteral("INTERVAL YEAR(6) TO MONTH"), "1-00");
+assert.equal(intervalLiteral("interval minute to fraction(3)"), "1:00.0");
+assert.equal(intervalLiteral("interval day(3) to day"), "1");
+assert.equal(intervalLiteral("interval"), null);
+{
+  const columns = [col("a", "interval hour to minute", "text"), col("b", "INTERVAL DAY TO SECOND", "text"), col("c", "interval", "text")];
+  const model = (dialect: DbKind) => buildModel({ dialect, qualified: "t", table: "t", columns, quoted: ["a", "b", "c"], catalog: { uniques: [], checks: [], enums: {} }, fks: [] });
+  assert.deepEqual(inferSettings(model("informix")).map((s) => s.value), ["1:00", "1 00:00:00", "1"]);
+  assert.deepEqual(inferSettings(model("postgres")).map((s) => s.value), ["1 day", "1 day", "1 day"]);
+}
 assert.deepEqual(typeInfo(col("a", "character varying(80)", "text"), "postgres"), { family: "text", maxLength: 80, bytes: false });
 assert.deepEqual(typeInfo(col("a", "numeric(10,2)", "number"), "postgres"), { family: "decimal", precision: 10, scale: 2 });
 assert.equal(typeInfo(col("a", "numeric", "number"), "postgres").scale, 2, "NUMERIC without precision: 2 decimals");
