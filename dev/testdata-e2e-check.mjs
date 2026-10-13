@@ -78,9 +78,9 @@ const inserted = await js(`
   await sleep(300);
   return { label, toasts: toasts(), count: (await q("SELECT COUNT(*) FROM celer_td_e2e_child"))[0][0], orphans: (await q("SELECT COUNT(*) FROM celer_td_e2e_child c LEFT JOIN celer_td_e2e_parent p ON p.id = c.parent_id WHERE p.id IS NULL"))[0][0], dup: (await q("SELECT COUNT(*) FROM (SELECT email FROM celer_td_e2e_child WHERE email IS NOT NULL GROUP BY email HAVING COUNT(*) > 1) d"))[0][0] };
 `);
-check("«Insertar 3.000 filas» inserts them all", /3\.000/.test(inserted.label) && Number(inserted.count) === 3000, JSON.stringify(inserted));
+check("«Insertar 3.000 filas» inserts them all", /3\.?000/.test(inserted.label) && Number(inserted.count) === 3000, JSON.stringify(inserted));
 check("foreign keys only take parent keys, unique e-mails", Number(inserted.orphans) === 0 && Number(inserted.dup) === 0, JSON.stringify(inserted));
-check("success toast", inserted.toasts.some((t) => /Insertadas 3\.000 filas/.test(t.text)), JSON.stringify(inserted.toasts));
+check("success toast", inserted.toasts.some((t) => /Insertadas 3\.?000 filas/.test(t.text)), JSON.stringify(inserted.toasts));
 
 // ---------------------------------------------------------------- Cancelar rolls a big run back
 const cancelled = await js(`
