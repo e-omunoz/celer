@@ -1515,8 +1515,8 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .te-range-row { display: flex; align-items: center; gap: 8px; }
 .te-range-row input[type="range"] { flex: 1; accent-color: var(--accent); }
 .te-range-value { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 12px; }
-.te-side { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-.te-contrast { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); overflow: hidden; }
+.te-side { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+.te-contrast { flex: 1 1 0; min-height: 120px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); overflow: hidden; }
 .te-contrast-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
 .te-ok { color: var(--success); font-size: 12px; }
 .te-warn { display: inline-flex; align-items: center; gap: 4px; color: var(--warning); font-size: 12px; font-weight: 500; }
@@ -1532,7 +1532,7 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .settings:has(.theme-editor) .settings-foot { display: none; }
 
 /* The live sample: real classes, so every token shows where it is used */
-.te-sample { display: flex; height: 320px; flex: none; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--bg); box-shadow: var(--shadow-md); font-family: var(--sans); }
+.te-sample { display: flex; flex: 0 1 320px; min-height: 180px; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--bg); box-shadow: var(--shadow-md); font-family: var(--sans); }
 .te-s-side { width: 34%; flex: none; display: flex; flex-direction: column; padding: 6px 0; background: var(--panel); border-right: 1px solid var(--border); position: relative; }
 .te-s-side .tree-row { margin: 0 4px; }
 .te-s-gib { position: absolute; left: 10px; bottom: 6px; }
