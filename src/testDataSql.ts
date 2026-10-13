@@ -2,6 +2,7 @@
 // indexes, CHECK constraints, native enums; the catalog SQL for each engine, the row counts and maxima it starts
 // after, the parent keys a foreign key may take, and how a column's declared type bounds its values (length,
 // precision, range). Pure, so dev/testdata-check.ts tests it and dev/engine-sql.ts runs its SQL on every engine.
+import { sqlLiteral } from "./sql.ts";
 import type { Cell, DbKind, TableColumn } from "./types";
 
 // ---------------------------------------------------------------- dialect
@@ -146,7 +147,9 @@ export interface CatalogQuery {
   sql: string;
 }
 
-const lit = (value: string) => `'${value.replace(/'/g, "''")}'`;
+/** A string literal. MySQL and MariaDB read a backslash as an escape, so it is doubled there too: otherwise a name
+ *  with a backslash before a quote would close the literal early and the rest of the name would run as SQL. */
+const lit = (value: string, dialect?: DbKind) => sqlLiteral(value, "text", dialect === "mysql" ? "mysql" : undefined);
 
 /**
  * The catalog queries for a table: its unique keys and indexes (primary key included, partial and expression ones
@@ -187,25 +190,25 @@ export function catalogQueries(dialect: DbKind, t: TableRef, serverInfo = ""): C
         `WHERE (a.attidentity <> '' OR a.attgenerated <> '' OR pg_catalog.pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%') AND ${where}`,
     });
   } else if (dialect === "mysql") {
-    const db = `COALESCE(NULLIF(${lit(t.database || t.schema)}, ''), DATABASE())`;
+    const db = `COALESCE(NULLIF(${lit(t.database || t.schema, dialect)}, ''), DATABASE())`;
     out.push({
       part: "unique",
-      sql: `SELECT INDEX_NAME, COALESCE(COLUMN_NAME, ''), SEQ_IN_INDEX, '' FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name)} AND NON_UNIQUE = 0 ORDER BY 1, 3`,
+      sql: `SELECT INDEX_NAME, COALESCE(COLUMN_NAME, ''), SEQ_IN_INDEX, '' FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} AND NON_UNIQUE = 0 ORDER BY 1, 3`,
     });
     out.push({
       part: "auto",
-      sql: `SELECT '', COLUMN_NAME, ORDINAL_POSITION, '' FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name)} AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%GENERATED%')`,
+      sql: `SELECT '', COLUMN_NAME, ORDINAL_POSITION, '' FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%GENERATED%')`,
     });
     // MariaDB names a column-level CHECK after its column (names repeat across tables) and lists the table itself.
     out.push(
       /mariadb/i.test(serverInfo)
-        ? { part: "check", sql: `SELECT CONSTRAINT_NAME, '', 0, CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name)} ORDER BY 1` }
+        ? { part: "check", sql: `SELECT CONSTRAINT_NAME, '', 0, CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} ORDER BY 1` }
         : {
             part: "check",
             sql:
               "SELECT cc.CONSTRAINT_NAME, '', 0, cc.CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS cc JOIN information_schema.TABLE_CONSTRAINTS tc " +
               "ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME " +
-              `WHERE tc.CONSTRAINT_TYPE = 'CHECK' AND tc.TABLE_SCHEMA = ${db} AND tc.TABLE_NAME = ${lit(t.name)} ORDER BY 1`,
+              `WHERE tc.CONSTRAINT_TYPE = 'CHECK' AND tc.TABLE_SCHEMA = ${db} AND tc.TABLE_NAME = ${lit(t.name, dialect)} ORDER BY 1`,
           },
     );
   } else if (dialect === "mssql") {

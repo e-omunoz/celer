@@ -31,6 +31,7 @@ import {
   type TableModel,
 } from "../src/testData.ts";
 import { catalogQueries, checkClauses, effectiveDialect, enumValues, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
+import { codeOnly, splitSql } from "../src/sql.ts";
 import type { DbKind, TableColumn } from "../src/types.ts";
 import type { SheetCell } from "../src/importFormats.ts";
 
@@ -121,8 +122,20 @@ for (const d of ["postgres", "mysql", "mssql", "sqlite", "informix"] as DbKind[]
   const q = catalogQueries(d, { database: "celer", schema: d === "informix" ? "informix" : "public", name: "o'k", qualified: "[o'k]" }, "MariaDB 11.4");
   assert.ok(q.length >= 2, d);
   assert.ok(q.every((part) => part.sql.includes("o''k")), `${d}: the table name is quoted`);
+  assert.ok(q.every((part) => splitSql(part.sql, d).length === 1), `${d}: each catalog read is one statement`);
 }
 assert.deepEqual(catalogQueries("odbc", { database: "", schema: "", name: "t", qualified: "t" }), []);
+// MySQL / MariaDB read a backslash in a string as an escape: a name with one before a quote stays one literal, so
+// every catalog read is a single statement (#174).
+for (const info of ["MariaDB 11.4", "8.4.0"]) {
+  const evil = "t\\'; DROP TABLE sec_victim; #";
+  const q = catalogQueries("mysql", { database: "celer", schema: "", name: evil, qualified: "`x`" }, info);
+  for (const part of q) {
+    assert.ok(part.sql.includes("'t\\\\''; DROP TABLE sec_victim; #'"), `${info} ${part.part}: the backslash is doubled`);
+    assert.equal(splitSql(part.sql, "mysql").length, 1, `${info} ${part.part}: one statement`);
+    assert.ok(!/DROP/.test(codeOnly(part.sql, "mysql")), `${info} ${part.part}: the name stays inside the literal`);
+  }
+}
 assert.match(parentKeysSql("mssql", "p", ["[id]"], 10), /^SELECT TOP 10 \[id\] FROM p WHERE \[id\] IS NOT NULL ORDER BY 1$/);
 assert.match(parentKeysSql("informix", "p", ["id", "k"], 10), /^SELECT FIRST 10 id, k FROM p WHERE id IS NOT NULL AND k IS NOT NULL ORDER BY 1, 2$/);
 assert.match(parentKeysSql("postgres", "p", ['"id"'], 10), /LIMIT 10$/);

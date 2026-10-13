@@ -26,6 +26,7 @@ import {
   type ParentKeys,
   type TableModel,
 } from "./testData";
+import { splitSql } from "./sql";
 import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, statsSql } from "./testDataSql";
 import type { Cell, ObjectRef } from "./types";
 import type { SheetCell } from "./importFormats";
@@ -125,9 +126,13 @@ export async function openTestData(connId: string, obj: ObjectRef, returnTo: Tes
     const quoted = await api().quoteIdents(session, columns.map((c) => c.name));
     const dialect = effectiveDialect(kindOf(connId), opened.serverInfo);
     const ref = { database: obj.database || opened.database, schema: obj.schema, name: obj.name, qualified: info.qualified };
-    // Each catalog part on its own: one an old server refuses leaves only that part unknown.
+    // Each catalog part on its own: one an old server refuses leaves only that part unknown. Each is one SELECT; one
+    // the splitter reads as several (a name the quoting got wrong) is not sent at all.
     const parts = [];
-    for (const q of catalogQueries(dialect, ref, opened.serverInfo)) parts.push({ part: q.part, rows: await rowsOf(session, q.sql).catch(() => null) });
+    for (const q of catalogQueries(dialect, ref, opened.serverInfo)) {
+      const single = splitSql(q.sql, dialect).length === 1;
+      parts.push({ part: q.part, rows: single ? await rowsOf(session, q.sql).catch(() => null) : null });
+    }
     const catalog = readCatalog(parts, dialect);
     const keys = await api().schemaForeignKeys(session, erSchemaPath(connId, obj, opened.database)).catch(() => []);
     const fks: ParentKeys[] = [];
