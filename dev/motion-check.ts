@@ -6,10 +6,12 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { nextRegion } from "../src/focus.ts";
 import { countLabel, previewLines } from "../src/dnd.ts";
 
-const root = new URL("..", import.meta.url).pathname;
+// fileURLToPath, not .pathname: on Windows the latter is "/C:/…", which join() turns into "C:\C:\…".
+const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path: string) => readFileSync(join(root, path), "utf8");
 
 const sheets = ["src/App.css", "src/gib/activities.css"];
