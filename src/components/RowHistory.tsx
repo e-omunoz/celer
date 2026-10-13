@@ -47,6 +47,18 @@ export function RowHistoryDialog() {
         {(h) => (
           <>
             <Show when={h().range}>{(range) => <p class="rh-range">{rangeText(range(), h().cutShort)}</p>}</Show>
+            <Show when={h().leftOn}>
+              {(left) => (
+                <div class="rh-box warn">
+                  <TriangleAlert size={15} />
+                  <div>
+                    <b>Full row logging sigue activado en la tabla</b>
+                    <p>{left().reason}</p>
+                    <p>Un administrador lo desactiva con <code class="rh-command">{left().command}</code></p>
+                  </div>
+                </div>
+              )}
+            </Show>
             <Show when={h().partial.length}>
               <div class="rh-box warn">
                 <TriangleAlert size={15} />

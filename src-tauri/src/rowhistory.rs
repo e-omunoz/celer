@@ -72,6 +72,8 @@ pub struct History {
     /// The read ended before the end of the log (stopped, time limit, stuck reader, lost connection): no change seen
     /// says nothing about the row.
     pub cut_short: bool,
+    /// Full row logging stays on in the table, which the user did not agree to: shown as a warning, not a note.
+    pub left_on: Option<LeftOn>,
     /// The server's CDC reader stopped answering (a test needs to tell it from a partial history).
     #[serde(skip)]
     pub stalled: bool,
@@ -80,6 +82,20 @@ pub struct History {
 impl History {
     pub fn unavailable(reason: impl Into<String>) -> History {
         History { status: "unavailable", reason: reason.into(), ..Default::default() }
+    }
+}
+
+/// Full row logging left on in a table: why, and the command an administrator runs to turn it off.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeftOn {
+    pub reason: String,
+    pub command: String,
+}
+
+impl LeftOn {
+    fn new(reason: impl Into<String>, full_name: &str) -> LeftOn {
+        LeftOn { reason: reason.into(), command: format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging({}, 0)", lit(full_name)) }
     }
 }
 
@@ -1664,8 +1680,9 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             h.notes.push("La tabla se ha modificado con ALTER TABLE: en los cambios anteriores a ese ALTER, el servidor da como NULL las columnas añadidas después.".into());
         }
         if left_over && read_only {
-            h.notes.push(format!(
-                "Una lectura anterior de Celer se interrumpió con full row logging activado en la tabla, y sigue activado: esta conexión es de solo lectura y no cambia el servidor. Un administrador lo desactiva con EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full_name}', 0)."
+            h.left_on = Some(LeftOn::new(
+                "Una lectura anterior de Celer se interrumpió con full row logging activado en la tabla, y sigue activado: esta conexión es de solo lectura y no cambia el servidor.",
+                &full_name,
             ));
         } else if left_over {
             h.notes.push("Una lectura anterior de Celer se interrumpió con full row logging activado en la tabla: se ha vuelto a desactivar.".into());
@@ -1724,8 +1741,9 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         } else {
             let mut h = result?;
             h.notes.retain(|n| !n.contains("se ha vuelto a desactivar"));
-            h.notes.push(format!(
-                "No se pudo volver a desactivar full row logging en «{full_name}»: hazlo con EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full_name}', 0)."
+            h.left_on = Some(LeftOn::new(
+                format!("Celer lo activó solo para esta lectura y no pudo volver a desactivarlo en «{full_name}»: sigue activado y los cambios de la tabla ocupan más log."),
+                &full_name,
             ));
             return Ok(h);
         }

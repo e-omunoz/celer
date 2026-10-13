@@ -3122,11 +3122,13 @@ fn informix_jdbc_row_history() {
         let left_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh };
         let ro = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), true, &cfg.user, &stop, &left_env).unwrap();
         assert_eq!(ro.status, "ok", "{ro:?}");
-        assert!(ro.notes.iter().any(|n| n.contains("solo lectura") && n.contains("cdc_set_fullrowlogging")), "{:?}", ro.notes);
+        let left = ro.left_on.as_ref().expect("a read-only read says full row logging stays on, as a warning");
+        assert!(left.reason.contains("solo lectura") && left.command.contains("cdc_set_fullrowlogging") && left.command.contains(&full), "{left:?}");
+        assert!(!ro.notes.iter().any(|n| n.contains("cdc_set_fullrowlogging")), "not also as a note: {:?}", ro.notes);
         assert_ne!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a read-only connection leaves full row logging on");
         assert!(std::fs::read_to_string(&ledger).unwrap().contains(&full), "the entry stays for a writable read");
         let rw = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
-        assert!(rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")), "{:?}", rw.notes);
+        assert!(rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")) && rw.left_on.is_none(), "{rw:?}");
         assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a writable read turns the left-over off");
         assert!(!ledger.exists(), "and forgets it");
     }
