@@ -91,6 +91,9 @@ assert.deepEqual(read.unknown, []);
 read = readChecks(["([prioridad]='alta' OR [prioridad]='media' OR [prioridad]='baja')", "([puntos]>=(0) AND [puntos]<=(100))"], cols);
 assert.deepEqual(read.rules.prioridad.values, ["alta", "media", "baja"]);
 assert.equal(read.rules.puntos.max, 100);
+// SQL Server keeps an NVARCHAR CHECK's literals with the N prefix (#183).
+assert.deepEqual(readChecks(["([prioridad]=N'x' OR [prioridad]=N'y')"], cols).rules.prioridad.values, ["x", "y"], "N'x' is the text x");
+assert.deepEqual(readChecks(["([prioridad] IN (n'x', N'it''s'))"], cols).rules.prioridad.values, ["x", "it's"]);
 // MySQL (charset introducers), MariaDB, Informix, SQLite.
 read = readChecks(["(`prioridad` in (_utf8mb4'baja',_utf8mb4'media',_utf8mb4'alta'))", "(`puntos` between 0 and 100)"], cols);
 assert.deepEqual(read.rules.prioridad.values, ["baja", "media", "alta"]);

@@ -3729,9 +3729,10 @@ fn testdata_mssql() {
     testdata_sequence_range(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_seq"), "SMALLINT", Some(32767));
     testdata_negative_checks(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_neg"), "IF OBJECT_ID('dbo.celer_td_neg') IS NOT NULL DROP TABLE dbo.celer_td_neg");
     // JSON in NVARCHAR(MAX) behind ISJSON(…) = 1 / > 0 (#179): the JSON generator, which the CHECK takes.
-    let setup = ["CREATE TABLE dbo.celer_td_types (id INT NOT NULL PRIMARY KEY, datos NVARCHAR(MAX) NOT NULL CHECK (ISJSON(datos) = 1), extra NVARCHAR(MAX) CHECK (ISJSON(extra) > 0))".to_string()];
+    // N'…' literals in a CHECK (#183): the list generator, whose values the CHECK takes.
+    let setup = ["CREATE TABLE dbo.celer_td_types (id INT NOT NULL PRIMARY KEY, datos NVARCHAR(MAX) NOT NULL CHECK (ISJSON(datos) = 1), extra NVARCHAR(MAX) CHECK (ISJSON(extra) > 0), b NVARCHAR(5) NOT NULL CHECK (b IN (N'x', N'y')))".to_string()];
     let plan = testdata_proposed(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_types"), &setup, &["IF OBJECT_ID('dbo.celer_td_types') IS NOT NULL DROP TABLE dbo.celer_td_types"], 200);
-    assert!(plan.contains("datos=json") && plan.contains("extra=json"), "mssql: {plan}");
+    assert!(plan.contains("datos=json") && plan.contains("extra=json") && plan.contains("b=list"), "mssql: {plan}");
 }
 
 #[test]

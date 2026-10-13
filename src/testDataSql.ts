@@ -525,8 +525,9 @@ type Expr = { k: "col"; name: string } | { k: "lit"; value: string; num: boolean
 
 /** A recursive-descent reading of a CHECK expression, enough for IN, BETWEEN, comparisons, AND, OR and NOT. */
 function parseCheck(src: string, columns: string[]): Node {
-  // MySQL charset introducers (_utf8mb4'a') and PostgreSQL casts (::text, ::character varying[]) say nothing here.
-  const toks = tokenize(src).filter((tok, i, all) => !(tok.t === "id" && /^_\w+$/.test(tok.v) && all[i + 1]?.t === "str"));
+  // MySQL charset introducers (_utf8mb4'a'), SQL Server's national string prefix (N'a') and PostgreSQL casts
+  // (::text, ::character varying[]) say nothing here.
+  const toks = tokenize(src).filter((tok, i, all) => !(tok.t === "id" && /^(_\w+|n)$/i.test(tok.v) && all[i + 1]?.t === "str"));
   let pos = 0;
   const lower = new Map(columns.map((c) => [c.toLowerCase(), c]));
   const peek = (o = 0) => toks[pos + o];

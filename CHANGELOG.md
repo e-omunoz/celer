@@ -91,6 +91,8 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data on SQL Server CHECKs with `N'…'` literals** (#183): `CHECK (b IN (N'x', N'y'))` was not read, so the
+  column got free text and the insert failed on the CHECK. The `N` prefix is now skipped and the value list is proposed.
 - **SQLite `INTEGER PRIMARY KEY DESC`** (#201): SQLite does not make such a column the rowid alias, but Celer took it
   for an auto-filled key, so the test data generator left it out and the insert failed on its NOT NULL. It is now an
   ordinary key that gets values (a table-level `PRIMARY KEY (x DESC)` is still the alias).
