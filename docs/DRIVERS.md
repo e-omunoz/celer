@@ -213,7 +213,9 @@ with the Java it found.
   inside the answer to the query and a 4 MB cap per batch. The protocol is described at the top of `jdbc.rs`.
 - **Nothing engine-specific in the bridge or its protocol**: the driver class, its jars, the URL and the properties
   come with each connection, and the driver is loaded in a class loader of its own. The password travels in those
-  properties, through the pipe: never on a command line, in the environment or in a log.
+  properties, through the pipe: never on a command line, in the environment or in a log. The one exception is
+  `LO_READ`, which reads an Informix smart large object descriptor through the driver's `IfxSmartBlob`, found by
+  reflection (the bridge still has no compile-time dependency): the CDC API hands its records over that way (below).
 - Java is started directly (no shell in between) with fixed arguments and without a console window
   (`CREATE_NO_WINDOW`), from the bridge's folder; it writes nothing outside Celer's data folder (`-XX:-UsePerfData`,
   `java.io.tmpdir` there, and on JDK 19+ a class-data archive next to the jar that speeds up the next start).
@@ -225,6 +227,68 @@ properties (`FET_BUF_SIZE=262144`, the fastest in the engine tests' 200,000-row 
 `CLIENT_LOCALE` from the environment unless given) and the
 user's "Parámetros extra", which win over Celer's. `DELIMIDENT` is not set: Celer writes Informix names unquoted, as
 on the other protocols.
+
+### Row history from the logical logs (CDC)
+
+«Historial de la fila» (`rowhistory.rs`, issue #123) reads a row's past values from Informix's logical logs through the
+CDC API (`syscdcv1`), on a JDBC connection of its own. Measured on Informix 15 (the spike report is on the issue):
+
+- `onlog` has every before and after image, but it runs on the server host and prints raw rows by rowid: not usable
+  from a client.
+- A CDC session (`cdc_opensess`, `cdc_startcapture` for the table's capturable columns, `cdc_activatesess` from the
+  start of the oldest log on disk) returns committed inserts, update before/after pairs and deletes with full values,
+  also for changes made **before** full row logging was turned on (Informix logged whole rows for the updates
+  tested of tables with a variable-length column, up to rows spanning pages; a table with only fixed-length columns
+  logs its updates as partial `HUPDAT` records that the CDC API does not send at all when full row logging was off at the
+  time). For such a table (no VARCHAR, NVARCHAR or LVARCHAR column, by `syscolumns.coltype`) Celer says so in the offer
+  to turn full row logging on, labels a history read with it turned on just for the read as partial, and in every case
+  compares the end of the history with the row as it is now and labels the history partial if they differ. The records
+  are read as a smart large object whose descriptor is the session id, which only SQLI offers: JDBC (the bridge's
+  `LO_READ`) yes, DRDA no; the Client SDK path is not wired. The protocol is a precondition of the connection, so the
+  menu entry stays enabled on Informix and the dialog says «No se puede reconstruir: la conexión usa DRDA…».
+- The transaction number in the records (`BEGINTX`/`COMMTX`) is a slot of the server's transaction table, reused by
+  later transactions (measured: autocommit statements of four sessions, seconds apart, all came as 16). Celer names a
+  transaction by the log position of its commit, which is unique and shared by the changes of one transaction.
+- A connection lost during the read (the session ended with `onmode -z`, the server restarted) keeps what was read,
+  labelled partial with the position it reached; the clean-up goes through a new connection, and if that fails too the
+  dialog says full row logging could not be turned off (the ledger below puts it right on the next read).
+- `cdc_startcapture` refuses a table without full row logging (-83706). Its state is bit `0x04000000` of
+  `sysmaster:sysptnhdr.flags`. Celer never turns it on by itself: the user may allow it for one read, and Celer turns
+  it off again after (a read-only connection refuses).
+- An ordinary user (CONNECT only) gets -674 on the CDC routines: `informix` was the user that could run them.
+- An LSN in a log no longer on disk gives -83713; the read then starts at the next log. Logs only in a backup are out
+  of reach.
+- A dropped table can leave records under the same partnum. The read starts at the log where the table was created
+  (the first one that filled after `sysptnhdr.created`), changes committed before that time are left out and counted,
+  and when the API cannot read such records (-83790, `CDC_E_INTERNAL`, measured with a partnum reused by dozens of
+  test tables) Celer bisects to the first position from which it reads cleanly (to within 32 bytes) and goes on from
+  there, which it notes. Across an in-place `ALTER TABLE` the server returns old rows in the new layout (added columns
+  NULL), which the history notes.
+- An LSN offset is the log page number shifted 12 bits plus the byte in the page. The read is complete when the
+  session has nothing more to give (a timeout) at or past the page being written when the read began. The API only
+  hands over what its log reader has reached: when it waits 10 s without progress, the history says the latest changes
+  are not available yet (partial).
+- **The server's reader is not reliable across reads** (measured, Informix 15.0.1.0.3, repeated runs). A session that
+  reaches the end of a log while its last page is still being written leaves that log readable only up to that
+  position for every later session: they get only timeouts there, or nothing at all (a blocked `LO_READ` that never
+  returns), and the reader does not go on to the next log. A server restart clears it; so does a log switch for the
+  changes made after it. Errors on the records of dropped tables (-83790, -83800) abandon sessions abnormally and
+  leave the reader worse for the next read. What Celer does about it: every CDC request has a 30 s limit (a stuck one
+  is abandoned, and the clean-up, closing the session and turning full row logging off, goes through another
+  connection); a read stops at 120 s; no progress for 10 s in a log that is already complete is taken as such a
+  wall, remembered, and the read goes on from the next log, saying that part of that log could not be seen; a read cut
+  short never says «no changes» (that needs a read that reached the end). The history of a row is therefore complete
+  only when the reader was healthy for the whole range; otherwise it says what is missing. The engine test restarts a
+  restartable server (`CELER_INFORMIX_CONTAINER`) before it reads, since only the first read after a restart is
+  dependable; its partition numbers are reused after DROP TABLE, so it drops its table, switches the log and only then
+  creates the next.
+- Celer turns full row logging on only for a read. It notes the table in `informix-full-row-logging.txt` in its data
+  folder first and removes the note once the setting is off again, so a read that was cut short (Celer closed, the
+  connection lost) is put right by the next read of that table, which turns it off after reading and says so.
+- Values are decoded in Rust from the CDC format (big-endian integers, Informix packed decimals for DECIMAL, MONEY,
+  DATETIME and INTERVAL, length-prefixed VARCHAR/LVARCHAR, text in the database's code set); the size Celer computes for
+  each column must add up to the size the server announces, or the table is refused. TEXT, BYTE, BLOB, CLOB and user
+  types are not captured and are listed as left out.
 
 ### Adding another engine over JDBC
 
