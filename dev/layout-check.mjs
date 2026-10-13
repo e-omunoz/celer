@@ -85,8 +85,14 @@ try {
     await until(() => panels().length); await sleep(150);
     const background = labels(0);
     closeMenus(); await sleep(300);
-    return { options, background };
+    // Opened at the window's right edge it stays inside, once its pop-in (a scale) has finished.
+    tree.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: innerWidth - 2, clientY: r.top + 40 }));
+    await until(() => panels().length); await sleep(400);
+    const edge = { right: panels()[0]?.getBoundingClientRect().right, innerWidth };
+    closeMenus(); await sleep(300);
+    return { options, background, edge };
   `);
+  check("a menu opened at the right edge stays inside the window", exp.edge.right != null && exp.edge.right <= exp.edge.innerWidth, JSON.stringify(exp.edge));
   check("explorer options menu has «Importar conexiones ›»", (exp.options ?? []).some((l) => /^Importar conexiones ›/.test(l)), JSON.stringify(exp.options));
   check("the background menu no longer repeats the import", !exp.background.some((l) => /Importar/.test(l)), JSON.stringify(exp.background));
 

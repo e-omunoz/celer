@@ -61,8 +61,8 @@ function MenuPanel(props: { items: MenuItem[]; anchor: { x: number; y: number; r
   onMount(() => {
     queueMicrotask(() => {
       if (!el) return;
-      const rect = el.getBoundingClientRect();
-      setPos(placeMenu(props.anchor, { width: rect.width, height: rect.height }, { width: window.innerWidth, height: window.innerHeight }));
+      // Its layout size: the bounding box is still scaled down by the pop-in animation (it overflowed the edge).
+      setPos(placeMenu(props.anchor, { width: el.offsetWidth, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }));
       el.focus();
     });
   });
