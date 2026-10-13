@@ -1165,7 +1165,8 @@ fn merged(current: Option<&str>, patch: serde_json::Value) -> serde_json::Value 
     base
 }
 
-#[tauri::command]
+// Off the main thread (as the other file commands): a large file would freeze every window while it is read.
+#[tauri::command(async)]
 fn read_text_file(path: String) -> CmdResult<TextFile> {
     let bytes = std::fs::read(&path).map_err(err)?;
     let encoding = detect_encoding(&bytes).to_string();
@@ -1410,7 +1411,8 @@ mod text_tests {
     }
 }
 
-#[tauri::command]
+// Off the main thread: a test-data script or export can be tens of MB, encoded and written to a slow disk.
+#[tauri::command(async)]
 fn write_text_file(path: String, content: String, encoding: Option<String>) -> CmdResult<String> {
     let (bytes, used) = encode_text(&content, encoding.as_deref().unwrap_or("utf-8"));
     std::fs::write(&path, bytes).map_err(err)?;
