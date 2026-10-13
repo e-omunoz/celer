@@ -133,6 +133,10 @@ All notable changes to Celer are documented here. The format follows
 - **Test data on Informix multi-field INTERVAL columns** (#182): an `INTERVAL HOUR TO MINUTE`, `DAY TO SECOND` or
   `YEAR TO MONTH` column got the constant `'1'`, which Informix rejects, so the whole insert was undone. The proposed
   value is now written in the column's fields (`'1:00'`, `'1 00:00:00'`, `'1-00'`).
+- **SQLite INTEGER PRIMARY KEY shown as NOT NULL** (#192): a table's `INTEGER PRIMARY KEY` (the rowid alias, which
+  never holds NULL: a NULL there takes the next rowid) was reported as nullable, so the structure view showed it as
+  «null», schema comparison saw and scripted the key without NOT NULL, the diagram and table docs listed it as
+  nullable and the test data dialog gave it a «NULL» badge. It is now reported as NOT NULL everywhere.
 - **Test data on SQL Server CHECKs with `N'…'` literals** (#183): `CHECK (b IN (N'x', N'y'))` was not read, so the
   column got free text and the insert failed on the CHECK. The `N` prefix is now skipped and the value list is proposed.
 - **SQLite `INTEGER PRIMARY KEY DESC`** (#201): SQLite does not make such a column the rowid alias, but Celer took it
