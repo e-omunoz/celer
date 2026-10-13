@@ -148,6 +148,8 @@ export interface TableModel {
   maxima: (string | null)[];
   /** Values already in unique columns (column index → values), read when the table is small. */
   existingValues: Record<number, string[]>;
+  /** Unique columns that already hold a NULL where it counts as a value (SQL Server, Informix): no second one. */
+  existingNull: number[];
   fks: ParentKeys[];
 }
 
@@ -218,9 +220,12 @@ export function buildModel(input: ModelInput): TableModel {
     maxima[col] = cellString(input.stats?.[k + 1]);
   });
   const existingValues: Record<number, string[]> = {};
+  const existingNull: number[] = [];
   for (const [name, values] of Object.entries(input.existingValues ?? {})) {
     const i = indexOf(name);
-    if (i >= 0) existingValues[i] = values.map((v) => cellString(v)).filter((v): v is string => v !== null);
+    if (i < 0) continue;
+    existingValues[i] = values.map((v) => cellString(v)).filter((v): v is string => v !== null);
+    if (nullIsValue(dialect) && values.some((v) => v === null || v === undefined)) existingNull.push(i);
   }
   return {
     dialect,
@@ -231,6 +236,7 @@ export function buildModel(input: ModelInput): TableModel {
     existing: Number(input.stats?.[0] ?? 0) || 0,
     maxima,
     existingValues,
+    existingNull,
     fks: input.fks,
   };
 }
@@ -1272,7 +1278,7 @@ export function createGenerator(model: TableModel, settings: GenSettings[], seed
   const order = [...model.columns.keys()].filter((i) => settings[i].kind !== "expression").concat([...model.columns.keys()].filter((i) => settings[i].kind === "expression"));
   const written = model.columns.map((_, i) => i).filter((i) => settings[i].kind !== "skip");
   const uniqueCols = written.filter((i) => model.columns[i].unique);
-  const used: Map<number, Set<string>> = new Map(uniqueCols.map((i) => [i, new Set((model.existingValues[i] ?? []).map((v) => uniqueKey(v, model.dialect)))]));
+  const used: Map<number, Set<string>> = new Map(uniqueCols.map((i) => [i, new Set([...(model.existingValues[i] ?? []).map((v) => uniqueKey(v, model.dialect)), ...(model.existingNull.includes(i) ? [uniqueKey(null, model.dialect)] : [])])]));
   const sets = model.uniqueSets.filter((set) => set.every((i) => settings[i].kind !== "skip"));
   const usedSets = sets.map(() => new Set<string>());
   for (const g of fkGroups) {
@@ -1409,7 +1415,7 @@ export function problems(model: TableModel, settings: GenSettings[], count: numb
     if (s.kind === "constant") room = 1;
     else if (s.kind === "boolean") room = 2;
     else if (s.kind === "list") room = new Set(parseList(s.values).map((it) => it.value)).size;
-    else if (s.kind === "null") room = nullIsValue(model.dialect) ? 1 : Infinity;
+    else if (s.kind === "null") room = nullIsValue(model.dialect) ? (model.existingNull.includes(i) ? 0 : 1) : Infinity;
     else if (s.kind === "integer") {
       try {
         room = Number(BigInt(s.max || "1000") - BigInt(s.min || "0") + 1n);

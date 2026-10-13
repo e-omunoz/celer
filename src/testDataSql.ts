@@ -264,11 +264,16 @@ export function parentKeysSql(dialect: DbKind, qualified: string, quoted: string
   return `SELECT ${top}${quoted.join(", ")} FROM ${qualified} WHERE ${quoted.map((q) => `${q} IS NOT NULL`).join(" AND ")} ORDER BY ${order}${tail}`;
 }
 
-/** Up to `limit` values already in a column (so unique values do not repeat them). */
+/**
+ * Up to `limit` values already in a column (so unique values do not repeat them). SQL Server and Informix take a single
+ * NULL in a unique column, so its NULL is read too (a generated one would be a duplicate); the table is read whole
+ * anyway (existingToRead: not more rows than the limit).
+ */
 export function existingValuesSql(dialect: DbKind, qualified: string, quoted: string, limit: number): string {
   const top = dialect === "mssql" ? `TOP ${limit} ` : dialect === "informix" ? `FIRST ${limit} ` : "";
   const tail = dialect === "postgres" || dialect === "mysql" || dialect === "sqlite" ? ` LIMIT ${limit}` : "";
-  return `SELECT ${top}${quoted} FROM ${qualified} WHERE ${quoted} IS NOT NULL${tail}`;
+  const where = dialect === "mssql" || dialect === "informix" ? "" : ` WHERE ${quoted} IS NOT NULL`;
+  return `SELECT ${top}${quoted} FROM ${qualified}${where}${tail}`;
 }
 
 // ---------------------------------------------------------------- reading the catalog's answers

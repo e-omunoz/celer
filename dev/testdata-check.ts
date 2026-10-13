@@ -31,7 +31,7 @@ import {
   type ModelInput,
   type TableModel,
 } from "../src/testData.ts";
-import { catalogQueries, checkClauses, effectiveDialect, enumValues, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
+import { catalogQueries, checkClauses, effectiveDialect, enumValues, existingValuesSql, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
 import { codeOnly, splitSql } from "../src/sql.ts";
 import type { DbKind, TableColumn } from "../src/types.ts";
 import type { SheetCell } from "../src/importFormats.ts";
@@ -474,6 +474,18 @@ assert.notDeepEqual(rowsOf(m, s, 42, 50), rowsOf(m, s, 43, 50), "another seed: o
     const mm = buildModel({ dialect: "mssql", qualified: "t", table: "t", columns: [c], quoted: ["x"], catalog: { uniques: [["x"]], checks: [], enums: {} }, fks: [] });
     const rows = rowsOf(mm, [{ ...inferSettings(mm)[0], kind: "email", nullPct: 50 }], 3, 200);
     assert.equal(rows.filter((r) => r[0] === null).length, 1);
+    // The table already holds its one NULL (#195): no generated row takes another, and «NULL» has no room left.
+    for (const dialect of ["mssql", "informix"] as const) {
+      const held = buildModel({ dialect, qualified: "t", table: "t", columns: [c], quoted: ["x"], catalog: { uniques: [["x"]], checks: [], enums: {} }, fks: [], stats: [2], existingValues: { x: ["a@b.es", null] } });
+      assert.deepEqual(held.existingNull, [0]);
+      assert.equal(rowsOf(held, [{ ...inferSettings(held)[0], kind: "email", nullPct: 50 }], 3, 200).filter((r) => r[0] === null).length, 0, dialect);
+      assert.ok(problems(held, [{ ...inferSettings(held)[0], kind: "null" }], 1).some((p) => p.error && /solo da 0 valores/.test(p.text)), dialect);
+      assert.doesNotMatch(existingValuesSql(dialect, "t", "x", 10), /IS NOT NULL/, "its NULL is read too");
+    }
+    // Elsewhere NULLs never clash in a unique key: not read, not held against the generator.
+    const pg = buildModel({ dialect: "postgres", qualified: "t", table: "t", columns: [c], quoted: ["x"], catalog: { uniques: [["x"]], checks: [], enums: {} }, fks: [], stats: [2], existingValues: { x: ["a@b.es", null] } });
+    assert.deepEqual(pg.existingNull, []);
+    assert.match(existingValuesSql("postgres", "t", "x", 10), /WHERE x IS NOT NULL/);
   }
   // MySQL compares text without case or accents: "García" and "garcia" are the same key.
   {

@@ -64,6 +64,8 @@ interface TestDataShape {
   seed?: number;
   /** Every column left to the server (#194): the rows of defaults as the dialog writes them, and their count. */
   allSkip?: boolean;
+  /** NULL % for the nullable unique columns (#195: one NULL already there on SQL Server / Informix). */
+  nullPct?: number;
 }
 
 interface Statement {
@@ -126,6 +128,7 @@ if (shape.testData) {
   const existing = td.existing ?? [];
   const model = buildModel({ ...input, existingValues: Object.fromEntries(toRead.map((c, i) => [c.name, (existing[i] ?? []).map((row) => row[0])])) });
   const settings = td.allSkip ? model.columns.map(() => blankSettings("skip")) : inferSettings(model, "es");
+  if (td.nullPct !== undefined) model.columns.forEach((c, i) => c.unique && c.col.nullable && !c.col.primaryKey && settings[i].kind !== "skip" && (settings[i].nullPct = td.nullPct!));
   const gen = createGenerator(model, settings, td.seed ?? 172, "es");
   const count = td.rows ?? 10_000;
   const rows = Array.from({ length: count }, () => gen.next());
@@ -160,7 +163,7 @@ if (shape.testData) {
     .map(byName)
     .filter((c): c is NonNullable<typeof c> => Boolean(c) && !c!.type.noLiteral && sample[model.columns.indexOf(c!)] !== null)
     .map((c) => `${c.quoted} = ${importLiteral(sample[model.columns.indexOf(c)], c.col, dialect, false)}`);
-  out.push({ name: `testdata: a generated row reads back as generated (${conds.length} columns)`, sql: `SELECT ${key.quoted} FROM ${model.qualified} WHERE ${conds.join(" AND ")}`, rows: 1 });
+  if (conds.length) out.push({ name: `testdata: a generated row reads back as generated (${conds.length} columns)`, sql: `SELECT ${key.quoted} FROM ${model.qualified} WHERE ${conds.join(" AND ")}`, rows: 1 });
   finish(out);
 }
 

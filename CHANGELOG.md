@@ -91,6 +91,10 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data with a NULL already in a unique column** (#195): on SQL Server and Informix, where a unique column takes
+  one NULL, a table that already held it could get a second one from the generator (NULL % above 0), and the whole
+  insert was undone. The existing NULL is now read with the other values and no new one is generated; a column set to
+  *NULL* says it has no room left.
 - **Test data on Informix, every column left to the server** (#194): a table such as `(id SERIAL PRIMARY KEY)` got
   `INSERT … DEFAULT VALUES`, a syntax error on Informix. Each row now writes 0 in the SERIAL (or NULL in a nullable
   column without a default), in *Insertar* and in *Script SQL*; a table with neither is stopped in the dialog.
