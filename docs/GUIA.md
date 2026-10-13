@@ -313,7 +313,9 @@ Doble clic en una tabla del explorador la abre.
   - El historial sale **parcial**, con el motivo, cuando puede faltar algo: la fila ya existía antes del log más
     antiguo que queda en disco, su clave cambió, el servidor dio un error o se cortó la conexión, se pulsó *Detener*, el
     lector CDC del servidor se quedó parado («no entrega el log N más allá de…», «no respondió…»; un cambio de log
-    lógico con `onmode -l` o reiniciar Informix lo recupera), o el último valor leído no es el que tiene la fila hoy.
+    lógico con `onmode -l` o reiniciar Informix lo recupera; en los minutos después de arrancar Informix, mientras sus
+    tareas de arranque escriben en el log, basta con volver a leer más tarde), o el último valor leído no es el que
+    tiene la fila hoy.
     Una lectura cortada nunca dice «sin cambios». Nunca se rellena un valor que el log no tenga.
   - En un resultado de consulta la opción remite a abrir la tabla (un resultado no dice de qué fila sale cada línea).
     En los demás motores aparece desactivada con «No disponible en …».

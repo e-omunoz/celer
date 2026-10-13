@@ -1636,7 +1636,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             // is already complete it is a wall (see `WALLS`): the read goes on from the next log.
             let mut wall = None;
             if b.caught_up && b.last.0 < end.0 {
-                wall = WALLS.lock().get(&(server_key.clone(), b.last.0)).copied().filter(|w| b.last >= *w);
+                wall = WALLS.lock().get(&(server_key.clone(), b.last.0)).filter(|(w, seen)| b.last >= *w && seen.elapsed() < WALL_KEPT).map(|(w, _)| *w);
             }
             if wall.is_none() {
                 if b.caught_up {
@@ -1644,14 +1644,14 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
                         Some((at, since)) if at == b.last => {
                             if since.elapsed() > MAX_WAIT {
                                 if at.0 < end.0 && at != Lsn::default() {
-                                    WALLS.lock().insert((server_key.clone(), at.0), at);
+                                    WALLS.lock().insert((server_key.clone(), at.0), (at, Instant::now()));
                                     wall = Some(at);
                                 } else {
                                     stopped = Some(if at == Lsn::default() {
                                         "El servidor no ha entregado ningún registro del log: su lector CDC no avanza. No se sabe nada de la fila; vuelve a leer en unos segundos.".to_string()
                                     } else if end.1.saturating_sub(at.1) >= 2 << 12 {
                                         format!(
-                                            "El lector CDC del servidor se detuvo en la posición {at} del log {}, aunque el log ya tiene datos hasta {end}: tras una lectura que llegó al final de ese log mientras se escribía, el servidor no entrega nada más de él hasta que cambie de log lógico (onmode -l, o cuando el log actual se llene). Los cambios posteriores a esa posición no se pueden ver ahora.",
+                                            "El lector CDC del servidor se detuvo en la posición {at} del log {}, aunque el log ya tiene datos hasta {end}: el servidor no entrega nada más de él por ahora. Pasa tras una lectura que llegó al final del log mientras se escribía (hasta un cambio de log lógico: onmode -l, o cuando el log actual se llene) y en los minutos después de arrancar Informix, mientras sus tareas de arranque escriben en el log. Los cambios posteriores a esa posición no se pueden ver ahora: vuelve a leer más tarde.",
                                             at.0
                                         )
                                     } else {
@@ -1842,16 +1842,22 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
 /// history of the same table starts from there at once. The table's own changes never come before it.
 static RESUME: std::sync::LazyLock<parking_lot::Mutex<HashMap<(String, i64, i64), Vec<(Lsn, Lsn, String)>>>> = std::sync::LazyLock::new(Default::default);
 
-/// Per (server address and name, log): the position where the server's CDC reader stops for good in that log. Measured on Informix 15: a
-/// session that reaches the end of a log while its last page is still being written leaves that log unreadable past
-/// that position for every later session, until the server restarts or the log is reused; the reader does not go on
-/// to the next log either. A read that meets such a wall (no progress for `MAX_WAIT` in a log that is already
-/// complete) goes on from the start of the next log, and says what it could not see.
-static WALLS: std::sync::LazyLock<parking_lot::Mutex<HashMap<(String, u32), Lsn>>> = std::sync::LazyLock::new(Default::default);
+/// Per (server address and name, log): the position where the server's CDC reader stops in that log, and when a read
+/// found it. Measured on Informix 15: a session that reaches the end of a log while its last page is still being written
+/// can leave that log unreadable past that position for later sessions; the reader does not go on to the next log
+/// either. The reader also stops for minutes where the server's start-up tasks write to the log, about 90 s after
+/// Informix starts (#206), and reads past it again later: so a wall is trusted for `WALL_KEPT` only. A read that meets
+/// one (no progress for `MAX_WAIT` in a log that is already complete) goes on from the start of the next log, and says
+/// what it could not see.
+static WALLS: std::sync::LazyLock<parking_lot::Mutex<HashMap<(String, u32), (Lsn, Instant)>>> = std::sync::LazyLock::new(Default::default);
+
+/// How long a wall found by one read spares later reads the wait at it: after that they wait again, and read on if the
+/// server has.
+const WALL_KEPT: Duration = Duration::from_secs(300);
 
 fn wall_text(at: Lsn) -> String {
     format!(
-        "El lector CDC del servidor no entrega el log {} más allá de la posición {at} (una lectura anterior llegó al final de ese log mientras se escribía, y el servidor ya no lo lee más allá): los cambios de ese log posteriores a esa posición no se pueden ver.",
+        "El lector CDC del servidor no entrega el log {} más allá de la posición {at} (una lectura anterior llegó al final de ese log mientras se escribía, o Informix acaba de arrancar y sus tareas de arranque escriben en el log): los cambios de ese log posteriores a esa posición no se pueden ver.",
         at.0
     )
 }
