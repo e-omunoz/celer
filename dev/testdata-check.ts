@@ -119,6 +119,20 @@ assert.equal(readChecks(["(isjson([notas])>(0))"], cols).rules.notas.json, true)
 read = readChecks(["(prioridad IN ('baja' ,'media' ,'alta' ))", "((puntos >= 0 ) AND (puntos <= 100 ) )"], cols);
 assert.deepEqual(read.rules.prioridad.values, ["baja", "media", "alta"]);
 assert.equal(read.rules.puntos.max, 100);
+// Negative bounds as each engine stores them (#200): PostgreSQL '-10'::integer and (+ 4), MySQL 8 -(10), SQL Server (-10).
+for (const [checks, x, y, z] of [
+  [["CHECK (((x >= '-10'::integer) AND (x <= 10)))", "CHECK ((y >= '-5.5'::numeric))", "CHECK (((z > '-3'::integer) AND (z < (+ 4))))"], [-10, 10], -5.5, [-3, 4]],
+  [["(`x` between -(10) and 10)", "(`y` >= -(5.5))", "((`z` > -(3)) and (`z` < 4))"], [-10, 10], -5.5, [-3, 4]],
+  [["`x` between -10 and 10", "`y` >= -5.5", "`z` > -3 and `z` < 4"], [-10, 10], -5.5, [-3, 4]],
+  [["([x]>=(-10) AND [x]<=(10))", "([y]>=(-5.5))", "([z]>(-3) AND [z]<(4))"], [-10, 10], -5.5, [-3, 4]],
+] as [string[], number[], number, number[]][]) {
+  const r = readChecks(checks, ["x", "y", "z"]);
+  assert.deepEqual([r.rules.x?.min, r.rules.x?.max], x, checks[0]);
+  assert.equal(r.rules.y?.min, y, checks[1]);
+  assert.deepEqual([r.rules.z?.min, r.rules.z?.max], z, checks[2]);
+  assert.deepEqual(r.unknown, [], checks.join(" · "));
+}
+assert.deepEqual(readChecks(["CHECK ((x <> 'abc'::text))", "CHECK ((y = '5'::text))"], ["x", "y"]).rules.y, { values: ["5"] }, "a text literal stays text");
 // Reversed comparison, NOT IN and a function: a range, then two columns Celer does not read.
 read = readChecks(["0 <= puntos", "estado NOT IN ('x')", "char_length(notas) > 3"], cols);
 assert.equal(read.rules.puntos.min, 0);

@@ -3318,6 +3318,16 @@ fn testdata_pg_domains(d: &mut dyn Driver, kind: &str, obj: &ObjectRef) {
     println!("✓ {kind}: columnas de dominio: 300 filas con su tipo base, NOT NULL y CHECK");
 }
 
+/// CHECKs with negative bounds (#200), which PostgreSQL stores as '-10'::integer and MySQL 8 as -(10): the ranges are
+/// read and the 300 rows keep them (the checks of dev/engine-sql.ts look at every value).
+fn testdata_negative_checks(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, drop: &str) {
+    let qualified = d.qualified_name(obj);
+    let setup = [format!("CREATE TABLE {qualified} (id INT NOT NULL PRIMARY KEY, x INT NOT NULL CHECK (x BETWEEN -10 AND 10), y DECIMAL(6,2) CHECK (y >= -5.5), z INT CHECK (z > -3 AND z < 4))")];
+    let plan = testdata_proposed(d, kind, obj, &setup, &[drop], 300);
+    assert!(plan.contains("x=integer [-10..10]") && plan.contains("z=integer [-3..4]") && plan.contains("[-5.5.."), "{kind}: {plan}");
+    println!("✓ {kind}: CHECK con límites negativos");
+}
+
 /// A table made by `setup` with the generators the dialog proposes: `rows` rows go in in one transaction, the checks
 /// hold, and the plan (column=generator, …) is returned for the caller's own assertions. `drop` runs before and after.
 fn testdata_proposed(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, setup: &[String], drop: &[&str], rows: usize) -> String {
@@ -3522,6 +3532,7 @@ fn testdata_postgres() {
     testdata_unique_null(&mut d, "postgres", &td_obj("celer", "public", "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
     testdata_sequence_range(&mut d, "postgres", &td_obj("celer", "public", "celer_td_seq"), "SMALLINT", Some(32767));
     testdata_pg_domains(&mut d, "postgres", &td_obj("celer", "public", "celer_td_domain"));
+    testdata_negative_checks(&mut d, "postgres", &td_obj("celer", "public", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
 }
 
 /// 100,000 rows into PostgreSQL well under a minute (the issue's bar), in the dialog's batches.
@@ -3588,6 +3599,7 @@ fn testdata_mysql() {
     testdata_unique_null(&mut d, "mysql", &td_obj(&db, &db, "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
     d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
     testdata_sequence_range(&mut d, "mysql", &td_obj(&db, &db, "celer_td_seq"), "TINYINT UNSIGNED", Some(255));
+    testdata_negative_checks(&mut d, "mysql", &td_obj(&db, &db, "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
 }
 
 /// MySQL 8 marks a DEFAULT CURRENT_TIMESTAMP column DEFAULT_GENERATED in EXTRA (#178): it is a plain column, not
@@ -3715,6 +3727,7 @@ fn testdata_mssql() {
     testdata_unique_null(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_unull"), "IF OBJECT_ID('dbo.celer_td_unull') IS NOT NULL DROP TABLE dbo.celer_td_unull");
     d.execute("IF OBJECT_ID('dbo.celer_td_seq') IS NOT NULL DROP TABLE dbo.celer_td_seq", 10).ok();
     testdata_sequence_range(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_seq"), "SMALLINT", Some(32767));
+    testdata_negative_checks(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_neg"), "IF OBJECT_ID('dbo.celer_td_neg') IS NOT NULL DROP TABLE dbo.celer_td_neg");
     // JSON in NVARCHAR(MAX) behind ISJSON(…) = 1 / > 0 (#179): the JSON generator, which the CHECK takes.
     let setup = ["CREATE TABLE dbo.celer_td_types (id INT NOT NULL PRIMARY KEY, datos NVARCHAR(MAX) NOT NULL CHECK (ISJSON(datos) = 1), extra NVARCHAR(MAX) CHECK (ISJSON(extra) > 0))".to_string()];
     let plan = testdata_proposed(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_types"), &setup, &["IF OBJECT_ID('dbo.celer_td_types') IS NOT NULL DROP TABLE dbo.celer_td_types"], 200);
@@ -3766,6 +3779,7 @@ fn testdata_sqlite() {
     testdata_defaults(&mut d, "sqlite", &td_obj("main", "main", "celer_td_auto"), "CREATE TABLE celer_td_auto (id INTEGER PRIMARY KEY, n INT DEFAULT 3)", "DROP TABLE IF EXISTS celer_td_auto");
     testdata_unique_null(&mut d, "sqlite", &td_obj("main", "main", "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
     testdata_sequence_range(&mut d, "sqlite", &td_obj("main", "main", "celer_td_seq"), "SMALLINT", None);
+    testdata_negative_checks(&mut d, "sqlite", &td_obj("main", "main", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
     // SQLite has the foreign keys checked only with the pragma: the generated rows hold anyway.
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3841,6 +3855,7 @@ fn testdata_informix_via(via: &str, cfg: ConnConfig, connect: &Connect) {
     testdata_unique_null(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
     d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
     testdata_sequence_range(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_seq"), "SMALLINT", Some(32767));
+    testdata_negative_checks(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
 }
 
 #[test]
@@ -3872,4 +3887,5 @@ fn testdata_odbc() {
     d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
     testdata_sequence_range(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_seq"), "SMALLINT", Some(32767));
     testdata_pg_domains(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_domain"));
+    testdata_negative_checks(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
 }

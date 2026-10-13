@@ -589,13 +589,21 @@ function parseCheck(src: string, columns: string[]): Node {
     }
     if (tok.t === "str") {
       pos++;
+      // PostgreSQL writes a negative bound as a string cast to a number: '-10'::integer.
+      const numeric = peek()?.t === "op" && peek().v === "::" && /^(integer|int|int[248]|bigint|smallint|numeric|decimal|real|double|float[48])$/i.test(peek(1)?.v ?? "") && /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(tok.v.trim());
       skipCast();
-      return { k: "lit", value: tok.v, num: false };
+      return { k: "lit", value: numeric ? tok.v.trim().replace(/^\+/, "") : tok.v, num: numeric };
     }
     if (tok.t === "op" && (tok.v === "-" || tok.v === "+") && peek(1)?.t === "num") {
       pos += 2;
       skipCast();
       return { k: "lit", value: (tok.v === "-" ? "-" : "") + toks[pos - 1].v, num: true };
+    }
+    // MySQL 8 writes it as -(10).
+    if (tok.t === "op" && (tok.v === "-" || tok.v === "+") && peek(1)?.t === "(" && peek(2)?.t === "num" && peek(3)?.t === ")") {
+      pos += 4;
+      skipCast();
+      return { k: "lit", value: (tok.v === "-" ? "-" : "") + toks[pos - 2].v, num: true };
     }
     if (tok.t === "id") {
       pos++;

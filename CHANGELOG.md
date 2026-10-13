@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data with negative CHECK bounds** (#200): PostgreSQL stores `x BETWEEN -10 AND 10` as `'-10'::integer` and
+  MySQL 8 as `-(10)`, which the generator did not read, so it proposed values outside the range. Both forms are now
+  read, as on MariaDB, SQL Server, Informix and SQLite.
 - **Test data on PostgreSQL domain columns** (#199): a column of a domain was generated from the domain's name alone,
   so a domain over `varchar(4)`, or one with `NOT NULL` or a `CHECK`, got values the server rejected. The generator
   now works from the domain's base type and its modifiers, keeps its NOT NULL and reads its CHECK like a table's.
