@@ -13,6 +13,7 @@ import {
   exportText,
   fileJoiner,
   inferSettings,
+  keptSettings,
   insertShortfall,
   insertStatements,
   nif,
@@ -629,6 +630,27 @@ assert.ok(!validIban("ES92 2100 0418 4502 0005 1332"));
 assert.equal(iban("GB", "NWBK60161331926819"), "GB29NWBK60161331926819");
 assert.equal(normName("FechaAlta"), "fecha_alta");
 assert.equal(normName("Código Postal"), "codigo_postal");
+
+// ---------------------------------------------------------------- back from filling the referenced table first (#208)
+{
+  const at = (name: string) => m.columns.findIndex((c) => c.col.name === name);
+  const saved: Record<string, GenSettings> = {
+    codigo: { ...s[at("codigo")], kind: "pattern", pattern: "X-\\d{6}" },
+    parent_id: { ...s[at("parent_id")] },
+    gone: { ...s[0], kind: "constant", value: "x" },
+  };
+  // The table read again: same columns, and one without its foreign key any more.
+  const again = model("postgres", { fks: [] });
+  const kept = keptSettings(again, inferSettings(again, "es"), saved);
+  assert.equal(kept.length, again.columns.length, "one per column of the table as it is now");
+  assert.equal(kept[at("codigo")].kind, "pattern");
+  assert.equal(kept[at("codigo")].pattern, "X-\\d{6}", "a column's own generator comes back");
+  assert.notEqual(kept[at("parent_id")].kind, "fk", "a foreign key that is gone: what Celer proposes");
+  assert.deepEqual(kept[at("email")], inferSettings(again, "es")[at("email")], "a column not saved: what Celer proposes");
+  assert.equal(keptSettings(m, s, saved)[at("parent_id")].kind, "fk", "the key still there: kept");
+  saved.codigo.pattern = "changed";
+  assert.equal(kept[at("codigo")].pattern, "X-\\d{6}", "a copy, not the saved object");
+}
 
 // ---------------------------------------------------------------- outputs: insert, script and export say the same
 {

@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Back from «Generar antes datos de …»** (#208): after filling the referenced table first, the child table's test
+  data dialog came back with *Filas*, *Semilla* and every generator reset. It now comes back as it was left (rows,
+  seed, data language, output, view and each column's generator), with the parent's keys now available.
 - **A stray click or Esc no longer cancels a running insert** (#186): while *Generar datos de prueba…* or *Importar
   datos* was inserting, a click outside the dialog (coming back to the window, say) or Esc cancelled the run and rolled
   back the whole transaction. Now only the dialog's *Cancelar* / *Detener* button stops it, as in *Exportar*.

@@ -496,6 +496,17 @@ export function inferSettings(model: TableModel, locale: Locale = "es"): GenSett
   return model.columns.map((_, i) => inferOne(model, i, locale));
 }
 
+/**
+ * The generators a dialog had when the user left it (to fill its referenced table first), on the table read again
+ * (#208): each column that still exists keeps its own; a new column, or a key that is gone, takes what Celer proposes.
+ */
+export function keptSettings(model: TableModel, proposed: GenSettings[], saved: Record<string, GenSettings>): GenSettings[] {
+  return model.columns.map((c, i) => {
+    const own = Object.prototype.hasOwnProperty.call(saved, c.col.name) ? saved[c.col.name] : undefined;
+    return own && (own.kind !== "fk" || c.fk) ? { ...own } : proposed[i];
+  });
+}
+
 // ---------------------------------------------------------------- random numbers
 
 /** FNV-1a hash of a text (32 bits). */

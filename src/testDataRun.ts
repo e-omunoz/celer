@@ -15,6 +15,7 @@ import {
   fileJoiner,
   inferOne,
   inferSettings,
+  keptSettings,
   insertShortfall,
   insertStatements,
   PARENT_SAMPLE,
@@ -63,7 +64,20 @@ export interface TestDataState {
   total: number;
   startedAt: number;
   /** The table whose dialog sent the user to fill its referenced table first: reopened afterwards. */
-  returnTo: { connId: string; obj: ObjectRef } | null;
+  returnTo: ReturnTo | null;
+}
+
+/** A dialog left to fill its referenced table first, as the user left it (#208). */
+export interface ReturnTo {
+  connId: string;
+  obj: ObjectRef;
+  count: number;
+  seed: number;
+  locale: Locale;
+  output: TestDataOutput;
+  view: TestDataState["view"];
+  /** Each column's generator, by column name. */
+  settings: Record<string, GenSettings>;
 }
 
 export const [testData, setTestData] = createStore<TestDataState>({
@@ -118,9 +132,13 @@ const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
  * Opens the dialog for a table: reads it on a side session (its columns, unique keys, CHECKs, enums, foreign keys
  * with a sample of the keys they may take, the row count and the largest numbers) and proposes a generator per column.
  */
-export async function openTestData(connId: string, obj: ObjectRef, returnTo: TestDataState["returnTo"] = null) {
+export async function openTestData(connId: string, obj: ObjectRef, returnTo: ReturnTo | null = null, restore: ReturnTo | null = null) {
   const seq = ++openSeq;
-  const keep = testData.open && testData.connId === connId ? { locale: testData.locale, output: testData.output } : {};
+  const keep = restore
+    ? { count: restore.count, seed: restore.seed, locale: restore.locale, output: restore.output, view: restore.view }
+    : testData.open && testData.connId === connId
+      ? { locale: testData.locale, output: testData.output }
+      : {};
   setTestData({ open: true, loading: true, error: "", connId, obj, model: null, settings: [], count: 100, seed: randomSeed(), view: "columns", running: false, phase: "", done: 0, total: 0, returnTo, ...keep });
   let opened: Awaited<ReturnType<typeof openSessionFor>> = null;
   try {
@@ -166,7 +184,8 @@ export async function openTestData(connId: string, obj: ObjectRef, returnTo: Tes
       model = buildModel({ ...input, existingValues });
     }
     if (seq !== openSeq) return;
-    setTestData({ loading: false, model, settings: inferSettings(model, testData.locale) });
+    const proposed = inferSettings(model, testData.locale);
+    setTestData({ loading: false, model, settings: restore ? keptSettings(model, proposed, restore.settings) : proposed });
   } catch (err) {
     if (seq === openSeq) setTestData({ loading: false, error: errorText(err) });
   } finally {
@@ -386,7 +405,7 @@ async function writeExport(model: TableModel, obj: ObjectRef, settings: GenSetti
 function finishRun(inserted: boolean) {
   const back = inserted ? testData.returnTo : null;
   setTestData({ running: false, phase: "", open: false, model: null, settings: [] });
-  if (back) void openTestData(back.connId, back.obj);
+  if (back) void openTestData(back.connId, back.obj, null, back);
 }
 
 /** «Cancelar» while it runs (the transaction is rolled back), else closes the dialog. */
@@ -403,11 +422,16 @@ export function cancelTestData() {
   setTestData({ open: false, loading: false, model: null, settings: [] });
 }
 
-/** Fills the referenced table first (it is empty), then comes back here. */
+/** Fills the referenced table first (it is empty), then comes back here as the user left it. */
 export function fillParentFirst(parent: ObjectRef) {
-  const { connId, obj } = testData;
-  if (!obj) return;
-  void openTestData(connId, parent, { connId, obj });
+  const { connId, obj, count, seed, locale, output, view } = testData;
+  const model = currentModel();
+  if (!obj || !model) return;
+  const settings: Record<string, GenSettings> = {};
+  model.columns.forEach((c, i) => {
+    if (testData.settings[i]) settings[c.col.name] = { ...testData.settings[i] };
+  });
+  void openTestData(connId, parent, { connId, obj, count, seed, locale, output, view, settings });
 }
 
 /** The problems of the current settings (memoised by the dialog). */
