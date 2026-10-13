@@ -1163,6 +1163,32 @@ fn ledger_forget(path: Option<&Path>, key: &str) {
     }
 }
 
+/// The ledger keys of the tables a read running now in this process turned full row logging on for: their ledger entry
+/// is that read's, not one left over, and only that read turns it off.
+static LIVE: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, usize>>> = std::sync::LazyLock::new(Default::default);
+
+/// A read's claim on a `LIVE` key, given up when the read ends (however it ends).
+struct LiveClaim(String);
+
+impl LiveClaim {
+    fn new(key: &str) -> Self {
+        *LIVE.lock().entry(key.to_string()).or_default() += 1;
+        LiveClaim(key.to_string())
+    }
+}
+
+impl Drop for LiveClaim {
+    fn drop(&mut self) {
+        let mut live = LIVE.lock();
+        if let Some(n) = live.get_mut(&self.0) {
+            *n -= 1;
+            if *n == 0 {
+                live.remove(&self.0);
+            }
+        }
+    }
+}
+
 pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &AtomicBool, env: &Env) -> Result<History> {
     let db = ident(&req.database)?;
     let table = ident(&req.table)?;
@@ -1243,7 +1269,8 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     }
     let server = q("SELECT DBSERVERNAME FROM systables WHERE tabid = 1")?.first().and_then(|r| r.first()).map(text).unwrap_or_default();
     let ledger_key = format!("{server}\t{full_name}");
-    let left_over = frl_on && ledger_has(env.ledger, &ledger_key);
+    // An entry of a read still running here (another window) is not left over: that read turns it off.
+    let left_over = frl_on && ledger_has(env.ledger, &ledger_key) && !LIVE.lock().contains_key(&ledger_key);
     if !frl_on && read_only {
         return Ok(History::unavailable("la conexión es de solo lectura y la tabla necesita full row logging, que es un cambio en el servidor."));
     }
@@ -1303,6 +1330,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     let older = used.iter().take_while(|(_, f, fill)| f & 2 == 0 && *fill > 0 && *fill < created).count();
     let start_logs: Vec<i64> = used[older..].iter().map(|l| l.0).collect();
 
+    let _claim = (!frl_on).then(|| LiveClaim::new(&ledger_key));
     if !frl_on {
         ledger_add(env.ledger, &ledger_key);
     }
@@ -1313,7 +1341,8 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             return Ok(h);
         }
     };
-    let turned_on = !frl_on || left_over;
+    // A read-only connection never changes the server: a left-over entry is reported instead (below).
+    let turned_on = !frl_on || (left_over && !read_only);
     let mut session = session;
     // Set when a read of the CDC session got no answer: the connection is stuck behind it and is left alone.
     let wedged = std::cell::Cell::new(false);
@@ -1634,7 +1663,11 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         if altered {
             h.notes.push("La tabla se ha modificado con ALTER TABLE: en los cambios anteriores a ese ALTER, el servidor da como NULL las columnas añadidas después.".into());
         }
-        if left_over {
+        if left_over && read_only {
+            h.notes.push(format!(
+                "Una lectura anterior de Celer se interrumpió con full row logging activado en la tabla, y sigue activado: esta conexión es de solo lectura y no cambia el servidor. Un administrador lo desactiva con EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full_name}', 0)."
+            ));
+        } else if left_over {
             h.notes.push("Una lectura anterior de Celer se interrumpió con full row logging activado en la tabla: se ha vuelto a desactivar.".into());
         } else if turned_on {
             h.notes.push("Se activó full row logging en la tabla solo durante la lectura, y se ha vuelto a desactivar.".into());
@@ -2157,6 +2190,18 @@ mod tests {
         assert_eq!(cut.partial, vec!["El lector CDC del servidor no respondió".to_string()]);
         let walled = b().finish(61, None, vec![wall_text(Lsn(62, 0x1000))]);
         assert!(walled.cut_short && walled.partial.len() == 1, "{:?}", walled.partial);
+    }
+
+    /// A ledger entry of a read still running in this process (another window) is that read's, not one left over (#211).
+    #[test]
+    fn a_running_read_holds_its_ledger_key() {
+        let key = format!("srv\tdb:u.live{}", std::process::id());
+        let first = LiveClaim::new(&key);
+        let second = LiveClaim::new(&key);
+        drop(first);
+        assert!(LIVE.lock().contains_key(&key), "one read still holds it");
+        drop(second);
+        assert!(!LIVE.lock().contains_key(&key), "given up when every read has ended");
     }
 
     /// The note of tables Celer turned full row logging on for survives a crash and is cleared once it is off.

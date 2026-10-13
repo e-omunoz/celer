@@ -3108,6 +3108,29 @@ fn informix_jdbc_row_history() {
     // Full row logging is off again: the next read asks for it once more.
     assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging");
 
+    // A read that died with full row logging on leaves it on and its ledger entry behind (#211). A read-only
+    // connection reads, leaves the server as it is and says how to turn it off; a writable one turns it off.
+    {
+        let full = format!("{db}:{}.rh_t", cfg.user.trim());
+        let server = match try_rows(&mut *d, "SELECT DBSERVERNAME FROM systables WHERE tabid = 1").unwrap().first().and_then(|r| r.first()) {
+            Some(Cell::Text(s)) => s.trim().to_string(),
+            other => panic!("DBSERVERNAME: {other:?}"),
+        };
+        let ledger = std::env::temp_dir().join(format!("celer-rh-ledger-{}.txt", std::process::id()));
+        std::fs::write(&ledger, format!("{server}\t{full}\n")).unwrap();
+        d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 1)"), 10).unwrap();
+        let left_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh };
+        let ro = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), true, &cfg.user, &stop, &left_env).unwrap();
+        assert_eq!(ro.status, "ok", "{ro:?}");
+        assert!(ro.notes.iter().any(|n| n.contains("solo lectura") && n.contains("cdc_set_fullrowlogging")), "{:?}", ro.notes);
+        assert_ne!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a read-only connection leaves full row logging on");
+        assert!(std::fs::read_to_string(&ledger).unwrap().contains(&full), "the entry stays for a writable read");
+        let rw = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
+        assert!(rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")), "{:?}", rw.notes);
+        assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a writable read turns the left-over off");
+        assert!(!ledger.exists(), "and forgets it");
+    }
+
     // The server's reader may stop at the tail of the current log after an earlier read met it there (measured; the
     // history then says so and is partial). A DBA's log switch moves past it: done once, and the read asked again.
     let mut ask_whole = |table: &str, id: &str| {
