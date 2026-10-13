@@ -2475,7 +2475,15 @@ fn informix_large_schema_fks() {
         let listed = t0.elapsed();
         let t1 = Instant::now();
         let keys = d.schema_foreign_keys(&["celer_big".to_string()]).unwrap();
-        let read_keys = t1.elapsed();
+        let mut read_keys = t1.elapsed();
+        // A server just restarted (the row-history test does) reads its catalog from disk the first time: the bound
+        // is for a warm one, so a slow first read is timed again (#206).
+        if read_keys >= Duration::from_secs(5) {
+            println!("Informix por {via}: claves en frío {read_keys:?}, se mide otra vez");
+            let t = Instant::now();
+            d.schema_foreign_keys(&["celer_big".to_string()]).unwrap();
+            read_keys = t.elapsed();
+        }
         let around: Vec<ObjectRef> = keys
             .iter()
             .filter_map(|k| if k.table.name == centre.name { Some(k.target.clone()) } else if k.target.name == centre.name { Some(k.table.clone()) } else { None })
@@ -3239,15 +3247,19 @@ fn informix_jdbc_row_history() {
         assert!(!ledger.exists(), "and the entry is forgotten");
     }
 
-    // The server's reader may stop at the tail of the current log after an earlier read met it there (measured; the
-    // history then says so and is partial). A DBA's log switch moves past it: done once, and the read asked again.
+    // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
+    // newest part of the log ready yet (measured; the history then says so and is partial). A DBA's log switch moves
+    // past both: done, and the read asked again, a few times (#206).
     let mut ask_whole = |table: &str, id: &str| {
-        let h = ask(table, id, true);
-        if !h.partial.iter().any(|p| p.contains("se detuvo en la posición")) {
-            return h;
+        let mut h = ask(table, id, true);
+        for _ in 0..3 {
+            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
+                break;
+            }
+            switch_log();
+            h = ask(table, id, true);
         }
-        switch_log();
-        ask(table, id, true)
+        h
     };
     let gone = ask_whole("rh_t", &id2);
     assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"]);
