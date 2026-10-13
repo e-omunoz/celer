@@ -923,6 +923,7 @@ function compile(model: TableModel, index: number, s: GenSettings, locale: Local
       const start = parseBig(s.start || "1", `«${col}», empieza en`, index);
       const step = parseBig(s.step || "1", `«${col}», incremento`, index);
       if (step === 0n) throw new TestDataError(`«${col}»: el incremento de la secuencia no puede ser 0`, index);
+      if ((t.min !== undefined && start < BigInt(t.min)) || (t.max !== undefined && start > BigInt(t.max))) throw new TestDataError(`«${col}»: ${start} no cabe en ${c.col.typeName}`, index);
       if (t.family === "int" || t.family === "year" || t.family === "decimal" || t.family === "float") return (ctx) => bigCell(start + step * BigInt(ctx.index));
       return (ctx) => fit(String(start + step * BigInt(ctx.index)));
     }
@@ -1382,6 +1383,15 @@ function clearOfExisting(model: TableModel, index: number, s: GenSettings): bool
   }
 }
 
+/** The value a sequence gives the last of `count` rows (null when its settings do not parse). */
+function sequenceLast(s: GenSettings, count: number): bigint | null {
+  try {
+    return BigInt((s.start || "1").trim()) + BigInt((s.step || "1").trim()) * BigInt(count - 1);
+  } catch {
+    return null;
+  }
+}
+
 /** What would stop the run, or deserves a look, before anything is generated. */
 export function problems(model: TableModel, settings: GenSettings[], count: number, locale: Locale = "es"): Problem[] {
   const out: Problem[] = [];
@@ -1410,6 +1420,12 @@ export function problems(model: TableModel, settings: GenSettings[], count: numb
     } catch (err) {
       out.push({ column: i, text: err instanceof Error ? err.message : String(err), error: true });
       return;
+    }
+    // A sequence whose last value runs past the type's range (the insert would fail and be undone).
+    if (s.kind === "sequence" && Number.isInteger(count) && count >= 1) {
+      const last = sequenceLast(s, count);
+      if (last !== null && c.type.max !== undefined && last > BigInt(c.type.max)) out.push({ column: i, text: `«${name}»: la secuencia llega a ${last}, que no cabe en ${c.col.typeName} (máximo ${c.type.max}): empieza antes, usa otro generador o genera menos filas`, error: true });
+      else if (last !== null && c.type.min !== undefined && last < BigInt(c.type.min)) out.push({ column: i, text: `«${name}»: la secuencia llega a ${last}, que no cabe en ${c.col.typeName} (mínimo ${c.type.min}): usa otro generador o genera menos filas`, error: true });
     }
     if (!c.unique || s.kind === "skip") return;
     // Unique columns: is there room for every row?

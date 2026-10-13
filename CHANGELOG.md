@@ -91,6 +91,10 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data sequences past their type's range** (#196): a sequence on an integer key that started after a value near
+  the type's maximum (a SMALLINT, a TINYINT UNSIGNED) ran past it, and the server undid the whole insert. The dialog
+  now stops it beforehand with the value it would reach and the type's limit. On SQLite, whose integers always take
+  8 bytes, the declared type no longer limits the range.
 - **Test data on MariaDB JSON columns** (#179): MariaDB stores JSON as LONGTEXT with a `json_valid()` CHECK, so the
   generator proposed plain text and the server rejected the whole insert. A column behind `json_valid()` (or SQL
   Server's `ISJSON(…) = 1`) now gets the JSON generator, as on MySQL and PostgreSQL.

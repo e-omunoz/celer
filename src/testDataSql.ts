@@ -60,8 +60,9 @@ export function typeInfo(col: Pick<TableColumn, "typeName" | "kind">, dialect: D
   const word = base.replace(/\b(unsigned|zerofill|signed)\b/g, "").trim();
   const n = Number.isFinite(args[0]) && args[0] > 0 ? args[0] : undefined;
   const intRange = (name: keyof typeof INT_RANGES): TypeInfo => {
-    let [min, max] = INT_RANGES[name];
-    if (unsigned) {
+    // SQLite keeps any integer in up to 8 bytes, whatever the declared type says.
+    let [min, max] = INT_RANGES[dialect === "sqlite" ? "bigint" : name];
+    if (unsigned && dialect !== "sqlite") {
       max = (BigInt(max) * 2n + 1n).toString();
       min = "0";
     }

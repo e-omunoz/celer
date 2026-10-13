@@ -10,7 +10,7 @@ import { lookupSql } from "../src/fkLookupSql.ts";
 import { compareSchemas, syncScript, type SchemaTable } from "../src/schemaCompare.ts";
 import { changesSql, filterSql, selectLimit, upsertSql } from "../src/sqlgen.ts";
 import { importLiteral, importStatements, type SheetCell } from "../src/importFormats.ts";
-import { blankSettings, buildModel, createGenerator, EXISTING_SAMPLE, existingToRead, inferSettings, insertStatements, statsColumns, type ParentKeys } from "../src/testData.ts";
+import { blankSettings, buildModel, createGenerator, EXISTING_SAMPLE, existingToRead, inferSettings, insertStatements, problems, statsColumns, type ParentKeys } from "../src/testData.ts";
 import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, statsSql } from "../src/testDataSql.ts";
 import type { Cell, DbKind, ObjectRef, ResultSet, TableColumn } from "../src/types.ts";
 
@@ -129,8 +129,12 @@ if (shape.testData) {
   const model = buildModel({ ...input, existingValues: Object.fromEntries(toRead.map((c, i) => [c.name, (existing[i] ?? []).map((row) => row[0])])) });
   const settings = td.allSkip ? model.columns.map(() => blankSettings("skip")) : inferSettings(model, "es");
   if (td.nullPct !== undefined) model.columns.forEach((c, i) => c.unique && c.col.nullable && !c.col.primaryKey && settings[i].kind !== "skip" && (settings[i].nullPct = td.nullPct!));
-  const gen = createGenerator(model, settings, td.seed ?? 172, "es");
   const count = td.rows ?? 10_000;
+  // What the dialog would stop on: written after the plan (the test decides), and then nothing is generated. The rows
+  // of defaults (allSkip) are asked without the catalog's answers, so they skip this.
+  const stops = td.allSkip ? [] : problems(model, settings, count, "es").filter((p) => p.error).map((p) => p.text);
+  if (stops.length) finish([{ name: `plan: ${model.columns.map((c, i) => `${c.col.name}=${settings[i].kind}`).join(", ")} ‖ problemas: ${stops.join(" · ")}`, sql: "" }]);
+  const gen = createGenerator(model, settings, td.seed ?? 172, "es");
   const rows = Array.from({ length: count }, () => gen.next());
   const plan = model.columns.map((c, i) => `${c.col.name}=${settings[i].kind}${c.unique ? " (única)" : ""}${c.values ? ` [${c.values.join("|")}]` : ""}${c.rule ? ` [${c.rule.min}..${c.rule.max}]` : ""}`);
   out.push({ name: `plan: ${plan.join(", ")}`, sql: "" });

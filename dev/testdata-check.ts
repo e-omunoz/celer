@@ -608,6 +608,25 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   assert.ok(problems(ifxNone, [blankSettings("skip")], 1).some((p) => p.error && /DEFAULT VALUES/.test(p.text)));
 }
 
+// ---------------------------------------------------------------- a sequence past its type's range (#196)
+{
+  const keyed = (typeName: string, dialect: DbKind, max: string) =>
+    buildModel({ dialect, qualified: "t", table: "t", columns: [col("id", typeName, "number", { nullable: false, primaryKey: true })], quoted: ["id"], catalog: { uniques: [], checks: [], enums: {} }, stats: [5, max], fks: [] });
+  const pg = keyed("smallint", "postgres", "32760");
+  const ps = inferSettings(pg);
+  assert.deepEqual([ps[0].kind, ps[0].start], ["sequence", "32761"]);
+  assert.ok(problems(pg, ps, 300).some((p) => p.error && p.column === 0 && /llega a 33060.*smallint/.test(p.text)), "SMALLINT runs out");
+  assert.ok(!problems(pg, ps, 7).some((p) => p.error), "7 rows reach 32767: they fit");
+  assert.ok(problems(pg, ps, 8).some((p) => p.error), "the 8th is 32768");
+  const lite = keyed("smallint", "sqlite", "32760");
+  assert.ok(!problems(lite, inferSettings(lite), 300).some((p) => p.error), "SQLite: any integer fits in 8 bytes");
+  const my = keyed("tinyint(3) unsigned", "mysql", "200");
+  assert.ok(problems(my, inferSettings(my), 300).some((p) => p.error && /máximo 255/.test(p.text)), "TINYINT UNSIGNED runs out");
+  // Going down, and a start already outside the type.
+  assert.ok(problems(pg, [{ ...ps[0], start: "-32760", step: "-1" }], 10).some((p) => p.error && /mínimo -32768/.test(p.text)));
+  assert.ok(problems(pg, [{ ...ps[0], start: "40000" }], 1).some((p) => p.error && /40000 no cabe en smallint/.test(p.text)));
+}
+
 // ---------------------------------------------------------------- speed: 100,000 rows in well under the time of their INSERTs
 {
   const started = performance.now();
