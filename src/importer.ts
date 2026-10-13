@@ -2,6 +2,7 @@ import { createStore } from "solid-js/store";
 import { api, errorText } from "./api";
 import { gib, kindOf, notify, reloadTable, reloadTableSafe, state as appState, tableDirty } from "./state";
 import type { DbKind, ObjectRef, TableColumn } from "./types";
+import { effectiveDialect, nonTransactionalEngine, tableEngineSql } from "./testDataSql";
 import {
   blankRow,
   cellDisplay,
@@ -77,6 +78,8 @@ export interface ImportState {
   pasted: SheetCell[][];
   /** A workbook being read: rows so far and in all (0: not known yet). */
   reading: { rows: number; total: number } | null;
+  /** The table's storage engine when it takes no transactions (MySQL MyISAM, MariaDB Aria…): rows stay on a failure. */
+  nonTransactional: string;
 }
 
 const NO_AREA = { r1: 0, c1: 0, r2: -1, c2: -1 };
@@ -115,6 +118,7 @@ export const [importer, setImporter] = createStore<ImportState>({
   previewRows: [],
   pasted: [],
   reading: null,
+  nonTransactional: "",
 });
 
 let cancelRequested = false;
@@ -194,8 +198,14 @@ export async function startImport(connId: string, obj: ObjectRef) {
       if (obj.database) await api().useDatabase(opened.sessionId, obj.database).catch(() => {});
       const [columns, info] = await Promise.all([api().tableColumns(opened.sessionId, obj), api().objectSql(opened.sessionId, obj)]);
       const quoted = await api().quoteIdents(opened.sessionId, columns.map((col) => col.name));
+      // MyISAM, Aria…: a failure or Detener leaves the rows already written (said before and after).
+      let nonTransactional = "";
+      if (effectiveDialect(kindOf(connId), opened.serverInfo) === "mysql") {
+        const out = await api().execute(opened.sessionId, tableEngineSql({ database: obj.database || opened.database, schema: obj.schema, name: obj.name }), 10).catch(() => null);
+        nonTransactional = nonTransactionalEngine(out?.results.find((r) => r.columns.length)?.rows ?? null);
+      }
       releaseSheet();
-      setImporter({ open: true, connId, obj, qualified: info.qualified, columns, quoted, fileName: "", filePath: "", format: "csv", grid: [], keyedHeader: false, sheets: [], sheet: "", text: "", mapping: columns.map(() => -1), running: false, done: 0, total: 0, ...emptySheet() });
+      setImporter({ open: true, connId, obj, qualified: info.qualified, columns, quoted, nonTransactional, fileName: "", filePath: "", format: "csv", grid: [], keyedHeader: false, sheets: [], sheet: "", text: "", mapping: columns.map(() => -1), running: false, done: 0, total: 0, ...emptySheet() });
     } finally {
       void api().closeSession(opened.sessionId).catch(() => {});
     }
@@ -526,7 +536,11 @@ export async function runImport() {
   } catch (err) {
     setImporter("running", false);
     if (err instanceof SessionOpenError) notify(err.message, "error");
-    else notify("No se importó nada: la operación se deshizo", "error", errorText(err));
+    else if (importer.nonTransactional) {
+      const kept = `${importer.done ? `Al menos ${importer.done.toLocaleString()} filas ya importadas se quedan` : "Puede que alguna fila se haya quedado"} en ${importer.obj?.name}: ${importer.nonTransactional} no admite transacciones.`;
+      notify(cancelRequested ? "Importación detenida" : "La importación falló a medias", cancelRequested ? "warning" : "error", cancelRequested ? kept : `${kept} ${errorText(err)}`);
+      reloadTableTabs(importer.connId, importer.obj?.name);
+    } else notify("No se importó nada: la operación se deshizo", "error", errorText(err));
   }
 }
 

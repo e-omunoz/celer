@@ -137,7 +137,7 @@ if (shape.testData) {
   const gen = createGenerator(model, settings, td.seed ?? 172, "es");
   const rows = Array.from({ length: count }, () => gen.next());
   const plan = model.columns.map((c, i) => `${c.col.name}=${settings[i].kind}${c.unique ? " (única)" : ""}${c.values ? ` [${c.values.join("|")}]` : ""}${c.rule ? ` [${c.rule.min}..${c.rule.max}]` : ""}`);
-  out.push({ name: `plan: ${plan.join(", ")}`, sql: "" });
+  out.push({ name: `plan: ${plan.join(", ")}${model.nonTransactional ? ` ‖ sin transacciones: ${model.nonTransactional}` : ""}`, sql: "" });
   for (const sql of insertStatements(model, gen, rows)) out.push({ name: "testdata insert", sql });
   const byName = (name: string) => model.columns.find((c) => c.col.name.toLowerCase() === name);
   const quotedOf = (name: string) => model.columns.find((m) => m.col.name === name)!.quoted;

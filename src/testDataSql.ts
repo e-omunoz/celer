@@ -140,7 +140,7 @@ export interface TableRef {
   qualified: string;
 }
 
-export type CatalogPart = "unique" | "check" | "enum" | "auto";
+export type CatalogPart = "unique" | "check" | "enum" | "auto" | "engine";
 
 /** One catalog query. Every one returns four columns: a constraint or index name, a column, a position, a text. */
 export interface CatalogQuery {
@@ -201,6 +201,7 @@ export function catalogQueries(dialect: DbKind, t: TableRef, serverInfo = ""): C
       // Computed columns, not MySQL 8's DEFAULT_GENERATED (a DEFAULT CURRENT_TIMESTAMP column takes values).
       sql: `SELECT '', COLUMN_NAME, ORDINAL_POSITION, '' FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%VIRTUAL GENERATED%' OR EXTRA LIKE '%STORED GENERATED%' OR EXTRA LIKE '%PERSISTENT GENERATED%')`,
     });
+    out.push({ part: "engine", sql: tableEngineSql(t) });
     // MariaDB names a column-level CHECK after its column (names repeat across tables) and lists the table itself.
     out.push(
       /mariadb/i.test(serverInfo)
@@ -253,6 +254,29 @@ export function catalogQueries(dialect: DbKind, t: TableRef, serverInfo = ""): C
   return out;
 }
 
+/**
+ * MySQL / MariaDB: the table's storage engine and whether it takes transactions (YES / NO; MyISAM, Aria, MEMORY… keep
+ * every row written before a failure or a Cancelar). Four columns like catalogQueries: engine, '', 0, transactions.
+ */
+export function tableEngineSql(t: Pick<TableRef, "database" | "schema" | "name">): string {
+  const db = `COALESCE(NULLIF(${lit(t.database || t.schema, "mysql")}, ''), DATABASE())`;
+  return (
+    "SELECT t.ENGINE, '', 0, COALESCE(e.TRANSACTIONS, '') FROM information_schema.TABLES t LEFT JOIN information_schema.ENGINES e ON e.ENGINE = t.ENGINE " +
+    `WHERE t.TABLE_SCHEMA = ${db} AND t.TABLE_NAME = ${lit(t.name, "mysql")}`
+  );
+}
+
+/** The engine of a table whose engine takes no transactions, from tableEngineSql's rows; "" when it takes them. */
+export function nonTransactionalEngine(rows: Cell[][] | null): string {
+  const row = rows?.[0];
+  return row && text(row[3]).trim().toUpperCase() === "NO" ? text(row[0]).trim() || "?" : "";
+}
+
+/** The warning before writing into a table whose engine takes no transactions (test data and the import). */
+export function nonTransactionalNote(engine: string): string {
+  return `La tabla es ${engine}, que no admite transacciones: si la inserción falla o se cancela, las filas ya insertadas se quedan en la tabla`;
+}
+
 /** The rows of the table and, for each listed column, its largest value: unique numbers continue after it. */
 export function statsSql(qualified: string, quoted: string[]): string {
   return `SELECT COUNT(*)${quoted.map((q) => `, MAX(${q})`).join("")} FROM ${qualified}`;
@@ -289,6 +313,8 @@ export interface CatalogFacts {
   enums: Record<string, string[]>;
   /** Columns the server fills (identity, computed): what a generic ODBC driver does not say. */
   auto?: string[];
+  /** The table's storage engine when it takes no transactions (MySQL MyISAM, MariaDB Aria…); else empty. */
+  nonTransactional?: string;
 }
 
 const text = (cell: Cell | undefined) => (cell === null || cell === undefined ? "" : String(cell));
@@ -334,6 +360,8 @@ export function readCatalog(parts: { part: CatalogPart; rows: Cell[][] | null }[
         if (dialect === "mysql") joined = joined.replace(/\\'/g, "'");
         facts.checks.push({ name, column: entry.column, text: joined.trim() });
       }
+    } else if (part === "engine") {
+      facts.nonTransactional = nonTransactionalEngine(rows);
     } else if (part === "auto") {
       for (const row of rows) (facts.auto ??= []).push(text(row[1]));
     } else if (part === "enum") {

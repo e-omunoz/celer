@@ -91,6 +91,10 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data and import on MyISAM / Aria tables** (#197): these MySQL and MariaDB engines take no transactions, so
+  the rows written before a failure or a cancel stay in the table, yet the message said nothing had been inserted.
+  Both dialogs now warn before inserting into such a table, and afterwards say that rows may remain (at least how
+  many) and reload the table's tabs.
 - **Test data sequences past their type's range** (#196): a sequence on an integer key that started after a value near
   the type's maximum (a SMALLINT, a TINYINT UNSIGNED) ran past it, and the server undid the whole insert. The dialog
   now stops it beforehand with the value it would reach and the type's limit. On SQLite, whose integers always take

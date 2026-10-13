@@ -270,7 +270,13 @@ async function insertRows(model: TableModel, obj: ObjectRef, connId: string, set
   } catch (err) {
     setTestData({ running: false, phase: "" });
     if (err instanceof SessionOpenError) notify(err.message, "error");
-    else if (cancelRequested) notify("Cancelado: no se insertó nada", "info", "La transacción se deshizo entera.");
+    else if (model.nonTransactional) {
+      // MyISAM, Aria…: the rollback undoes nothing, the rows written so far stay.
+      const kept = `${done ? `Al menos ${done.toLocaleString("es-ES")} filas ya insertadas se quedan` : "Puede que alguna fila se haya quedado"} en ${obj.name}: ${model.nonTransactional} no admite transacciones.`;
+      if (cancelRequested) notify("Cancelado", "warning", kept);
+      else notify("La inserción falló a medias", "error", `${kept} ${errorText(err)}`);
+      reloadTableTabs(connId, obj.name);
+    } else if (cancelRequested) notify("Cancelado: no se insertó nada", "info", "La transacción se deshizo entera.");
     else notify("No se insertó nada: la operación se deshizo", "error", errorText(err));
   }
 }

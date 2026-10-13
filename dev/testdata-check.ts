@@ -608,6 +608,21 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   assert.ok(problems(ifxNone, [blankSettings("skip")], 1).some((p) => p.error && /DEFAULT VALUES/.test(p.text)));
 }
 
+// ---------------------------------------------------------------- a table without transactions (#197)
+{
+  assert.ok(catalogQueries("mysql", { database: "db", schema: "db", name: "t", qualified: "`db`.`t`" }).some((q) => q.part === "engine" && /ENGINES/.test(q.sql)));
+  assert.ok(!catalogQueries("postgres", { database: "db", schema: "public", name: "t", qualified: "t" }).some((q) => q.part === "engine"));
+  assert.equal(readCatalog([{ part: "engine", rows: [["MyISAM", "", 0, "NO"]] }], "mysql").nonTransactional, "MyISAM");
+  assert.equal(readCatalog([{ part: "engine", rows: [["InnoDB", "", 0, "YES"]] }], "mysql").nonTransactional, "");
+  assert.equal(readCatalog([{ part: "engine", rows: null }], "mysql").nonTransactional, undefined, "not read: no warning");
+  const columns = [col("id", "int", "number", { nullable: false, primaryKey: true })];
+  const base = { dialect: "mysql" as DbKind, qualified: "t", table: "t", columns, quoted: ["id"], fks: [] };
+  const myisam = buildModel({ ...base, catalog: { uniques: [], checks: [], enums: {}, nonTransactional: "MyISAM" } });
+  assert.ok(problems(myisam, inferSettings(myisam), 10).some((p) => !p.error && p.column === -1 && /MyISAM, que no admite transacciones/.test(p.text)));
+  const innodb = buildModel({ ...base, catalog: { uniques: [], checks: [], enums: {}, nonTransactional: "" } });
+  assert.ok(!problems(innodb, inferSettings(innodb), 10).some((p) => /transacciones/.test(p.text)));
+}
+
 // ---------------------------------------------------------------- a sequence past its type's range (#196)
 {
   const keyed = (typeName: string, dialect: DbKind, max: string) =>

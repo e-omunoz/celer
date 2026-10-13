@@ -9,7 +9,7 @@
 import { importStatements, type SheetCell } from "./importFormats.ts";
 import { resultToText } from "./sql.ts";
 import { LOCALES, LOREM, type Locale, type LocaleData, type Place } from "./testDataLocale.ts";
-import { enumValues, readChecks, typeInfo, type CatalogFacts, type ColumnRule, type TypeInfo } from "./testDataSql.ts";
+import { enumValues, nonTransactionalNote, readChecks, typeInfo, type CatalogFacts, type ColumnRule, type TypeInfo } from "./testDataSql.ts";
 import type { Cell, ColKind, ColumnInfo, DbKind, ObjectRef, ResultSet, TableColumn } from "./types";
 
 export type { Locale } from "./testDataLocale.ts";
@@ -151,6 +151,8 @@ export interface TableModel {
   /** Unique columns that already hold a NULL where it counts as a value (SQL Server, Informix): no second one. */
   existingNull: number[];
   fks: ParentKeys[];
+  /** The storage engine when it takes no transactions (MySQL MyISAM, MariaDB Aria…): rows written stay on a failure. */
+  nonTransactional?: string;
 }
 
 export interface ModelInput {
@@ -240,6 +242,7 @@ export function buildModel(input: ModelInput): TableModel {
     existingValues,
     existingNull,
     fks: input.fks,
+    nonTransactional: catalog.nonTransactional || undefined,
   };
 }
 
@@ -1459,6 +1462,7 @@ export function problems(model: TableModel, settings: GenSettings[], count: numb
       out.push({ column: i, text: `«${name}» es única y la tabla ya tiene ${model.existing.toLocaleString("es-ES")} filas, demasiadas para comprobar sus valores: alguno nuevo podría repetirse y se desharía toda la inserción. Usa una secuencia que empiece tras el máximo, un UUID o un patrón con mucha más variedad`, error: false });
     }
   });
+  if (model.nonTransactional) out.push({ column: -1, text: nonTransactionalNote(model.nonTransactional), error: false });
   if (model.dialect === "informix" && settings.every((s) => s.kind === "skip") && !informixDefaultsRow(model)) out.push({ column: -1, text: INFORMIX_NO_DEFAULTS, error: true });
   // Keys of several columns: existing combinations are not read; one column clear of the existing values is enough.
   if (model.existing > 0) {

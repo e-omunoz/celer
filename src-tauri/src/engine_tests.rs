@@ -3614,6 +3614,39 @@ fn testdata_mysql_types() {
     println!("✓ {kind}: tipos con comprobación del servidor: 200 filas");
 }
 
+/// A table whose storage engine takes no transactions (#197: MyISAM; Aria on MariaDB): the dialog reads it and warns
+/// that rows written before a failure or a Cancelar stay; an InnoDB table does not. A failing insert in the dialog's
+/// transaction leaves the rows before it, which is what the warning says.
+#[test]
+fn testdata_mysql_non_transactional() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let info = d.server_info().unwrap_or_default();
+    let kind = format!("mysql ({info})");
+    let obj = td_obj(&db, &db, "celer_td_myisam");
+    let drop = ["DROP TABLE IF EXISTS celer_td_myisam"];
+    let mut engines = vec!["MyISAM"];
+    if info.contains("MariaDB") {
+        engines.push("Aria");
+    }
+    for engine in engines {
+        let setup = [format!("CREATE TABLE celer_td_myisam (id INT NOT NULL PRIMARY KEY, nota VARCHAR(10)) ENGINE={engine}")];
+        let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &drop, 20);
+        assert!(plan.contains(&format!("‖ sin transacciones: {engine}")), "{kind}: {plan}");
+        // What the warning says: a failure inside the transaction leaves the rows before it.
+        d.execute(&setup[0], 10).unwrap();
+        let rows: Vec<Statement> = ["INSERT INTO celer_td_myisam VALUES (1, 'a')", "INSERT INTO celer_td_myisam VALUES (1, 'b')"].iter().map(|sql| Statement { name: "testdata insert".into(), sql: sql.to_string(), rows: None }).collect();
+        assert!(testdata_try_insert(&mut d, &rows, true).is_err());
+        assert_eq!(scalar(&mut d, "SELECT COUNT(*) FROM celer_td_myisam").trim(), "1", "{kind}: {engine} conserva la fila anterior al fallo");
+        d.execute(drop[0], 10).unwrap();
+    }
+    let setup = ["CREATE TABLE celer_td_myisam (id INT NOT NULL PRIMARY KEY, nota VARCHAR(10)) ENGINE=InnoDB".to_string()];
+    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &drop, 20);
+    assert!(!plan.contains("sin transacciones"), "{kind}: {plan}");
+    println!("✓ {kind}: las tablas sin transacciones se avisan");
+}
+
 #[test]
 fn testdata_mssql() {
     let Some(mut master) = mssql("master") else { return };
