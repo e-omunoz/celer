@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data and import keep unsaved edits** (#177): *Insertar* in *Generar datos de prueba…* and a CSV/Excel import
+  reloaded every open tab of the table, throwing away its unsaved edits, deletions and new rows. A tab with pending
+  changes is now left as it is, with a notice whose *Recargar* asks first, as F5 does.
 - **Theme contrast** (#176): error text in Fjord was hard to read on dialogs (2.46:1); every built-in theme's red,
   table numbers, strings and comments now reach WCAG AA where they are shown.
 - **Tear-off outline** (#108): dragged into the lower part of a large screen, the outline hung off the screen with its

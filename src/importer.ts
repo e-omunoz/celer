@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store";
 import { api, errorText } from "./api";
-import { gib, kindOf, notify, reloadTable, state as appState } from "./state";
+import { gib, kindOf, notify, reloadTable, reloadTableSafe, state as appState, tableDirty } from "./state";
 import type { DbKind, ObjectRef, TableColumn } from "./types";
 import {
   blankRow,
@@ -469,10 +469,22 @@ export async function insertInTransaction(connId: string, database: string | und
   }
 }
 
-/** Reloads the open tabs of a table (after rows went in). */
+/**
+ * Reloads the open tabs of a table (after rows went in). A tab with unsaved edits, deletions or new rows is left as it
+ * is (reloading would throw them away): a notice says so and offers the reload, which asks first as F5 does.
+ */
 export function reloadTableTabs(connId: string, name: string | undefined) {
   for (const tab of appState.tabs) {
-    if (tab.kind === "table" && tab.connId === connId && tab.obj.name === name) void reloadTable(tab.id);
+    if (tab.kind !== "table" || tab.connId !== connId || tab.obj.name !== name) continue;
+    if (!tableDirty(tab)) {
+      void reloadTable(tab.id);
+      continue;
+    }
+    const tabId = tab.id;
+    notify(`La pestaña ${tab.title} no se recargó: tiene cambios sin guardar`, "warning", "Guarda o descarta los cambios y recárgala (F5) para ver las filas nuevas.", {
+      label: "Recargar",
+      run: () => void reloadTableSafe(tabId),
+    });
   }
 }
 
