@@ -60,8 +60,9 @@ struct Drag {
 /// El contorno que sigue al puntero mientras una pestaña se arrastra fuera de las ventanas: no es una ventana de
 /// Celer (no tiene pestañas, ni disposición, ni sale en las listas).
 pub const GHOST: &str = "drag-ghost";
-/// Dónde queda el puntero dentro del contorno, en píxeles físicos: lo mismo que `DROP_OFFSET` en windowModel.ts,
-/// así el contorno está justo donde se abrirá la ventana nueva.
+/// Dónde queda el puntero dentro del contorno, en píxeles lógicos (sobre su pestaña): `ghost_corner` lo pasa a los
+/// físicos del monitor. `DROP_OFFSET` en windowModel.ts lo resta sin escalar y `window_open` lo suma igual: solo
+/// sirve para devolver el punto donde se soltó.
 const GHOST_OFFSET: (f64, f64) = (120.0, 18.0);
 /// El tamaño de una ventana completa nueva (`window_open`, "full"), en píxeles lógicos: el contorno tiene el mismo.
 const FULL_SIZE: (f64, f64) = (1280.0, 820.0);
@@ -455,7 +456,7 @@ struct Frame {
 }
 
 /// Dónde queda una ventana de `logical` píxeles lógicos soltada con el puntero en `cursor`: su esquina a
-/// `GHOST_OFFSET` del puntero, su tamaño en píxeles del monitor que hay bajo el puntero (su escala: 100 %, 150 %…)
+/// `GHOST_OFFSET` (escalado) del puntero, su tamaño en píxeles del monitor que hay bajo el puntero (su escala: 100 %, 150 %…)
 /// y todo dentro del área de trabajo de ese monitor. El contorno y la ventana usan esta misma cuenta, así el
 /// contorno está siempre justo donde se abrirá la ventana. `None` si no se sabe qué monitor hay ahí.
 fn drop_frame(app: &AppHandle, cursor: (f64, f64), logical: (f64, f64)) -> Option<Frame> {
@@ -503,7 +504,7 @@ fn client_corner(frame: Frame, outer: (i32, i32), inner: (i32, i32)) -> (i32, i3
 fn frame_in(cursor: (f64, f64), logical: (f64, f64), scale: f64, area: (i32, i32, i32, i32)) -> Frame {
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     let size = ((logical.0 * scale).round() as i32, (logical.1 * scale).round() as i32);
-    let (x, y) = clamp_corner(ghost_corner(cursor), size, area);
+    let (x, y) = clamp_corner(ghost_corner(cursor, scale), size, area);
     Frame { x, y, width: size.0 as u32, height: size.1 as u32 }
 }
 
@@ -527,9 +528,10 @@ fn inside(point: (f64, f64), area: &Area) -> bool {
     point.0 >= area.x && point.0 < area.x + area.width && point.1 >= area.y && point.1 < area.y + area.height
 }
 
-/// La esquina de la ventana que se abriría con el puntero en `cursor`, antes de encajarla en la pantalla.
-fn ghost_corner(cursor: (f64, f64)) -> (i32, i32) {
-    ((cursor.0 - GHOST_OFFSET.0).round() as i32, (cursor.1 - GHOST_OFFSET.1).round() as i32)
+/// La esquina de la ventana que se abriría con el puntero en `cursor`, antes de encajarla en la pantalla: el puntero
+/// sobre la pestaña del contorno, que a 150 % está 1,5 veces más lejos de la esquina en píxeles físicos.
+fn ghost_corner(cursor: (f64, f64), scale: f64) -> (i32, i32) {
+    ((cursor.0 - GHOST_OFFSET.0 * scale).round() as i32, (cursor.1 - GHOST_OFFSET.1 * scale).round() as i32)
 }
 
 /// Las ventanas de Celer a la vista (no el contorno, ni las minimizadas u ocultas).
@@ -656,8 +658,18 @@ fn follow_with_ghost(app: AppHandle, generation: u64, style: Value) {
             }
             let Some(frame) = drop_frame(&app, point, FULL_SIZE) else { continue };
             if placed != Some(frame) {
-                if placed.map(|p| (p.width, p.height)) != Some((frame.width, frame.height)) {
-                    let _ = ghost.set_size(tauri::PhysicalSize::new(frame.width, frame.height));
+                // Moved first, then sized: landing on a monitor with another scale the system resizes the window
+                // (to keep its size in logical pixels), so the size is asked again until it is the frame's.
+                let _ = ghost.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
+                let target = tauri::PhysicalSize::new(frame.width, frame.height);
+                for _ in 0..3 {
+                    match ghost.inner_size() {
+                        Ok(size) if size == target => break,
+                        Ok(_) => {
+                            let _ = ghost.set_size(target);
+                        }
+                        Err(_) => break,
+                    }
                 }
                 let _ = ghost.set_position(tauri::PhysicalPosition::new(frame.x, frame.y));
                 placed = Some(frame);
@@ -834,8 +846,10 @@ mod tests {
     #[test]
     fn the_ghost_sits_where_the_new_window_will_open() {
         // The pointer stays on the ghost's tab strip, at the same spot as the new window's (windowModel.ts).
-        assert_eq!(ghost_corner((1000.0, 500.0)), ((1000.0 - GHOST_OFFSET.0) as i32, (500.0 - GHOST_OFFSET.1) as i32));
-        assert_eq!(ghost_corner((10.4, 5.6)), (-110, -12), "near the screen's corner it may start off screen");
+        assert_eq!(ghost_corner((1000.0, 500.0), 1.0), ((1000.0 - GHOST_OFFSET.0) as i32, (500.0 - GHOST_OFFSET.1) as i32));
+        assert_eq!(ghost_corner((10.4, 5.6), 1.0), (-110, -12), "near the screen's corner it may start off screen");
+        // At 150 % the tab is drawn 1.5 times as far from the corner in physical pixels: the pointer stays on it.
+        assert_eq!(ghost_corner((1000.0, 500.0), 1.5), (820, 473));
     }
 
     #[test]
@@ -856,7 +870,7 @@ mod tests {
         // At 150 %, the window is 1920x1230 physical pixels: the outline too.
         let scaled = frame_in((500.0, 300.0), FULL_SIZE, 1.5, (0, 0, 3840, 2100));
         assert_eq!((scaled.width, scaled.height), (1920, 1230));
-        assert_eq!((scaled.x, scaled.y), (380, 282), "away from the edges the pointer keeps its spot on the tab strip");
+        assert_eq!((scaled.x, scaled.y), (320, 273), "away from the edges the pointer keeps its spot on the tab, scaled");
         // A second monitor left of the first one (negative coordinates) clamps to its own work area.
         let left = frame_in((-100.0, 20.0), FULL_SIZE, 1.0, (-1920, 0, 1920, 1040));
         assert_eq!((left.x, left.y), (-1280, 2));

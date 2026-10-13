@@ -65,7 +65,8 @@ All notable changes to Celer are documented here. The format follows
 ### Fixed
 - **Tear-off outline** (#108): dragged into the lower part of a large screen, the outline hung off the screen with its
   label while the window opened somewhere else; both now come from the same frame. The window opens where the
-  button was let go, not where the pointer is a moment later.
+  button was let go, not where the pointer is a moment later. At 150 % and other scales the pointer stays on the
+  outline's tab, and moved onto a monitor with another scale the outline keeps the size of the window that will open.
 - **Theme editor**: a saved theme reopens in the editor (drafts no longer throw DataCloneError on store proxies).
 
 ## [2.3.0] - 2026-10-12
