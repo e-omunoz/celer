@@ -229,6 +229,7 @@ export function TestDataDialog() {
                           </span>
                           <select
                             value={testData.settings[index]?.kind}
+                            title={GENERATORS.find((g) => g.kind === testData.settings[index]?.kind)?.label}
                             disabled={testData.running}
                             onChange={(event) => setGenerator(index, event.currentTarget.value as GenKind)}
                           >
@@ -286,7 +287,7 @@ export function TestDataDialog() {
                         <For each={preview()?.rows ?? []}>
                           {(row) => (
                             <tr>
-                              <For each={preview()?.written ?? []}>{(i) => <td classList={{ null: row[i] === null }}>{shown(row[i])}</td>}</For>
+                              <For each={preview()?.written ?? []}>{(i) => <td classList={{ null: row[i] === null, num: model().columns[i].col.kind === "number" }} title={shown(row[i])}>{shown(row[i])}</td>}</For>
                             </tr>
                           )}
                         </For>
