@@ -6,6 +6,24 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Test data generator** (#172): «Generar datos de prueba…» in a table's menu (explorer and tab) and in the palette
+  fills a table with realistic, valid rows on every engine. A generator per column is inferred from its type and its
+  name (Spanish and English: names, e-mail, phone, address, city, postal code, country, company, NIF/CIF with their
+  check letter, IBAN with its check digits, URL, user, password hash, description, price, quantity, status…) and can
+  be changed: ranges, constant, sequence, weighted value list, regex-like pattern, expression of other columns, NULL
+  ratio, or left to the server (identity, serial, computed, rowversion). NOT NULL, lengths, precision, simple CHECKs
+  (IN, BETWEEN, comparisons), MySQL ENUM/SET and PostgreSQL enums, unique keys (also against a small table's existing
+  values) and foreign keys (keys read from the referenced table; an empty one is offered to be filled first) are kept.
+  Same seed and settings, same rows; Spanish data by default, English selectable; a 20-row preview. The rows go in
+  through the import's pipeline (batched per dialect, one transaction on its own session, progress, rows/s, Cancelar
+  rolls back; read-only connections refuse, production ones ask), or to a script in a new console (a .sql file past
+  10,000 rows), or to CSV / JSON. 100,000 rows into PostgreSQL take a few seconds.
+
+### Changed
+- Import: a value written as the grid shows bytes (`0x…`) goes into a binary column as those bytes (PostgreSQL,
+  MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
+
 ## [2.3.0] - 2026-10-12
 
 ### Added

@@ -2,7 +2,7 @@
 // Excel; the header row and cell range of a spreadsheet; and the INSERT statements, with each value as its column
 // takes it. Pure, so dev/import-check.ts tests it and dev/engine-sql.ts runs its SQL on every engine; spreadsheets
 // are read by the Rust side (sheets.rs), which hands over typed cells.
-import { fitValue } from "./sqlgen.ts";
+import { binaryLiteral, fitValue } from "./sqlgen.ts";
 import { sqlLiteral } from "./sql.ts";
 import type { DbKind, TableColumn } from "./types";
 
@@ -327,6 +327,11 @@ export function importLiteral(cell: SheetCell, col: TableColumn, dialect: DbKind
     if (cell === "" && emptyAsNull) return "NULL";
     if (/^null$/i.test(cell) && col.nullable) return "NULL";
     text = cell;
+  }
+  // Bytes written as the grid shows them (0x…) go in as bytes, in the engine's own literal.
+  if (kind === "binary" && /^0x[0-9a-f]*$/i.test(text.trim())) {
+    const bytes = binaryLiteral(text, dialect);
+    if (bytes) return bytes;
   }
   if (kind === "date" && /^date$/i.test(col.typeName.trim())) {
     const iso = ISO_DATE.exec(text.trim());

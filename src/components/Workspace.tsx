@@ -125,6 +125,7 @@ import { RECONNECTING_TEXT, markTab, tabLink } from "../connStatus";
 import { DataGrid, type GridApi } from "./Grid";
 import { askAi } from "../ai";
 import { startImport } from "../importer";
+import { openTestData } from "../testDataRun";
 import { withShortcut } from "../commands";
 import { unsupportedReason } from "../engineCompat";
 import { resolvedFor, scopeText } from "../variableStore";
@@ -182,6 +183,7 @@ function TabBar() {
       { separator: true },
       { label: "Renombrar", disabled: tab.kind !== "sql", run: () => setRenaming(tab.id) },
       { label: "Duplicar consola", disabled: tab.kind !== "sql", run: () => tab.kind === "sql" && openQuery(tab.connId, tab.sql, `${tab.title} (2)`) },
+      ...(tab.kind === "table" && tab.obj.kind === "table" ? [{ separator: true }, { label: "Generar datos de prueba…", run: () => void openTestData(tab.connId, tab.obj) }] : []),
       ...windows,
     ]);
   }

@@ -2942,3 +2942,420 @@ fn informix_types_drda_and_jdbc() {
         assert_eq!(got, ["12345678901234567890.123456789", "12345678901234567890.123456789", "2024-01-15 10:30:15.123", "10:30", "true"]);
     }
 }
+
+// ───────────────────────────────────────────────────────────────── test data generator (#172)
+//
+// A parent table and a child with a primary key, an identity, NOT NULL, unique, a foreign key, an enum or CHECK list, a
+// CHECK range, a date, a date-time, a decimal, a boolean, text and bytes, on every engine. The dialog's catalog
+// queries run first (dev/engine-sql.ts, stage "catalog"), then the values already in unique columns ("existing"), then
+// 10,000 generated rows go in as the import writes them, in one transaction; their count, their foreign keys, their
+// uniqueness, their lists and ranges and one row read back by its values are checked by SQL. Then a second run is
+// rolled back (Cancelar), and a third commits while another session holds a manual transaction open (a console's):
+// that one is left as it was.
+
+/// Every row of `sql`'s first result, or the error (catalog queries an old server refuses are not a failure).
+fn try_rows(d: &mut dyn Driver, sql: &str) -> anyhow::Result<Vec<Vec<Cell>>> {
+    let out = d.execute(sql, 5000)?;
+    let Some(first) = out.results.into_iter().find(|r| !r.columns.is_empty()) else { return Ok(vec![]) };
+    let mut rows = first.rows;
+    let mut more = first.has_more;
+    while more {
+        let f = d.fetch(5000)?;
+        rows.extend(f.rows);
+        more = f.has_more;
+    }
+    Ok(rows)
+}
+
+/// Where a driver's schema_foreign_keys reads the table's schema, and the table itself.
+struct TdTarget {
+    parent: ObjectRef,
+    child: ObjectRef,
+    /// A table of its own for the other session's open transaction.
+    other: String,
+    fk_path: Vec<String>,
+}
+
+/// The generator's statements for the child table: the catalog stage, its answers, the existing values, the inserts.
+fn testdata_run(d: &mut dyn Driver, kind: &str, t: &TdTarget, rows: usize, seed: u64) -> (Vec<Statement>, Vec<Statement>) {
+    let columns = d.table_columns(&t.child).unwrap();
+    let quoted: Vec<String> = columns.iter().map(|c| d.quote_ident(&c.name)).collect();
+    let qualified = d.qualified_name(&t.child);
+    let server_info = d.server_info().unwrap_or_default();
+    let fks: Vec<serde_json::Value> = d
+        .schema_foreign_keys(&t.fk_path)
+        .unwrap_or_else(|e| panic!("{kind}: claves foráneas: {e}"))
+        .into_iter()
+        .filter(|k| k.table.name.eq_ignore_ascii_case(&t.child.name))
+        .map(|k| {
+            let mut target = k.target.clone();
+            if target.database.is_empty() {
+                target.database = k.table.database.clone();
+            }
+            json!({
+                "name": k.name, "columns": k.columns, "target": target, "targetColumns": k.target_columns,
+                "targetQualified": d.qualified_name(&target),
+                "targetQuoted": k.target_columns.iter().map(|c| d.quote_ident(c)).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    assert_eq!(fks.len(), 1, "{kind}: la clave foránea de la tabla hija");
+    let table = json!({ "database": t.child.database, "schema": t.child.schema, "name": t.child.name, "qualified": qualified });
+    let mut shape = json!({ "kind": kind.split_whitespace().next().unwrap_or(kind), "testData": { "stage": "catalog", "serverInfo": server_info, "table": table, "columns": columns, "quoted": quoted, "fks": fks, "rows": rows, "seed": seed } });
+    let answer = |d: &mut dyn Driver, asked: &[Statement]| -> Vec<serde_json::Value> {
+        asked
+            .iter()
+            .map(|st| match try_rows(d, &st.sql) {
+                Ok(rows) => serde_json::to_value(rows).unwrap(),
+                Err(e) if st.name.starts_with("catalog") => {
+                    println!("  ({kind}: sin «{}»: {e})", st.name);
+                    serde_json::Value::Null
+                }
+                Err(e) => panic!("{kind}: {}\n{}\n→ {e}", st.name, st.sql),
+            })
+            .collect()
+    };
+    let asked = generated(shape.clone());
+    let answers = answer(d, &asked);
+    shape["testData"]["answers"] = json!(answers);
+    shape["testData"]["stage"] = json!("existing");
+    let existing_asked = generated(shape.clone());
+    let existing = answer(d, &existing_asked);
+    shape["testData"]["existing"] = json!(existing);
+    shape["testData"]["stage"] = json!("insert");
+    let statements = generated(shape);
+    if let Some(plan) = statements.iter().find(|st| st.name.starts_with("plan:")) {
+        println!("  {kind} {}", plan.name);
+    }
+    let (inserts, checks): (Vec<Statement>, Vec<Statement>) = statements.into_iter().filter(|st| !st.name.starts_with("plan:")).partition(|st| st.name == "testdata insert");
+    (inserts, checks)
+}
+
+/// Runs the inserts in one transaction, as the dialog does (rolled back instead of committed when `commit` is false).
+fn testdata_insert(d: &mut dyn Driver, kind: &str, inserts: &[Statement], commit: bool) -> Duration {
+    testdata_try_insert(d, inserts, commit).unwrap_or_else(|e| panic!("{kind}: {e}"))
+}
+
+/// The same, with the failure as an error (after rolling back, as the dialog does).
+fn testdata_try_insert(d: &mut dyn Driver, inserts: &[Statement], commit: bool) -> Result<Duration, String> {
+    let t0 = Instant::now();
+    d.close_cursor().ok();
+    d.set_autocommit(false).unwrap();
+    for (i, st) in inserts.iter().enumerate() {
+        if let Err(e) = d.execute(&st.sql, 1) {
+            d.rollback().ok();
+            d.set_autocommit(true).ok();
+            return Err(format!("INSERT {} de {} falló: {e}\n{}", i + 1, inserts.len(), st.sql.chars().take(1500).collect::<String>()));
+        }
+    }
+    if commit {
+        d.commit().unwrap();
+    } else {
+        d.rollback().unwrap();
+    }
+    d.set_autocommit(true).unwrap();
+    Ok(t0.elapsed())
+}
+
+fn testdata_suite(d: &mut dyn Driver, open_other: &dyn Fn() -> Box<dyn Driver>, kind: &str, ddl: &[&str], t: &TdTarget, cleanup: &[&str]) {
+    println!("── datos de prueba: {kind} ({})", d.server_info().unwrap_or_default());
+    for sql in cleanup.iter().chain(ddl) {
+        if let Err(e) = d.execute(sql, 10) {
+            assert!(cleanup.contains(sql), "{kind}: {sql}\n→ {e}");
+        }
+    }
+    let parent = d.qualified_name(&t.parent);
+    for id in 1..=50 {
+        d.execute(&format!("INSERT INTO {parent} (id, nombre) VALUES ({id}, 'Padre {id}')"), 10).unwrap();
+    }
+    let child = d.qualified_name(&t.child);
+    let count = |d: &mut dyn Driver, table: &str| -> usize { scalar(d, &format!("SELECT COUNT(*) FROM {table}")).trim().parse().unwrap() };
+
+    // 10,000 rows, then every check.
+    let (inserts, checks) = testdata_run(d, kind, t, 10_000, 172);
+    let took = testdata_insert(d, kind, &inserts, true);
+    println!("✓ {kind}: 10.000 filas en {} sentencias, {:.1} s ({:.0} filas/s)", inserts.len(), took.as_secs_f64(), 10_000.0 / took.as_secs_f64().max(0.001));
+    run_generated(d, &checks);
+
+    // Cancelar: 500 more rows in a transaction that is rolled back; none stays.
+    let (inserts, _) = testdata_run(d, kind, t, 500, 173);
+    testdata_insert(d, kind, &inserts, false);
+    assert_eq!(count(d, &child), 10_000, "{kind}: Cancelar no deja ninguna fila");
+    println!("✓ {kind}: cancelado, todo deshecho");
+
+    // A console's manual transaction, open in its own session meanwhile, is not touched by the generator's commit.
+    let mut other = open_other();
+    other.set_autocommit(false).unwrap();
+    other.execute(&format!("INSERT INTO {} (id) VALUES (1)", t.other), 10).unwrap();
+    let (inserts, _) = testdata_run(d, kind, t, 200, 174);
+    if kind == "sqlite" {
+        // One writer per SQLite file: the console's pending write makes the generator give up (database is locked)
+        // and undo its own work; the console's transaction stays open with its row, for it to end.
+        let failed = testdata_try_insert(d, &inserts, true).expect_err("sqlite: el fichero está bloqueado por la consola");
+        assert!(failed.contains("locked"), "{failed}");
+        assert_eq!(count(d, &child), 10_000, "{kind}: nada a medias");
+        assert_eq!(count(other.as_mut(), &t.other), 1, "{kind}: la consola conserva su fila pendiente");
+    } else {
+        testdata_insert(d, kind, &inserts, true);
+        assert_eq!(count(d, &child), 10_200, "{kind}: los datos de prueba se guardan");
+    }
+    other.rollback().unwrap();
+    other.set_autocommit(true).unwrap();
+    assert_eq!(count(other.as_mut(), &t.other), 0, "{kind}: la transacción de la consola sigue siendo suya");
+    println!("✓ {kind}: la transacción abierta de otra sesión no se mezcla");
+    drop(other);
+    for sql in cleanup {
+        d.execute(sql, 10).ok();
+    }
+}
+
+fn td_obj(database: &str, schema: &str, name: &str) -> ObjectRef {
+    ObjectRef { database: database.into(), schema: schema.into(), name: name.into(), kind: "table".into() }
+}
+
+fn td_target(database: &str, schema: &str, fk_path: &[&str]) -> TdTarget {
+    TdTarget { parent: td_obj(database, schema, "celer_td_parent"), child: td_obj(database, schema, "celer_td_child"), other: "celer_td_other".into(), fk_path: fk_path.iter().map(|s| s.to_string()).collect() }
+}
+
+const TD_PG_DDL: &[&str] = &[
+    "CREATE TYPE celer_td_estado AS ENUM ('nuevo', 'enviado', 'entregado')",
+    "CREATE TABLE celer_td_parent (id INT PRIMARY KEY, nombre VARCHAR(60) NOT NULL)",
+    "CREATE TABLE celer_td_other (id INT)",
+    "CREATE TABLE celer_td_child (
+        id INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        codigo VARCHAR(12) NOT NULL UNIQUE,
+        nombre VARCHAR(40) NOT NULL,
+        apellidos VARCHAR(60),
+        email VARCHAR(120) UNIQUE,
+        parent_id INT NOT NULL REFERENCES celer_td_parent(id),
+        estado celer_td_estado NOT NULL,
+        prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+        puntos INT CHECK (puntos BETWEEN 0 AND 100),
+        alta DATE NOT NULL,
+        momento TIMESTAMP,
+        importe NUMERIC(10,2) NOT NULL CHECK (importe >= 0),
+        activo BOOLEAN NOT NULL,
+        notas TEXT,
+        foto BYTEA,
+        nif CHAR(9),
+        telefono VARCHAR(20),
+        ciudad VARCHAR(40),
+        cp VARCHAR(5))",
+];
+const TD_PG_CLEANUP: &[&str] = &["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other", "DROP TYPE IF EXISTS celer_td_estado"];
+
+#[test]
+fn testdata_postgres() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg.clone()).expect("conexión PostgreSQL");
+    let other = || Box::new(crate::postgres::PostgresDriver::connect(cfg.clone()).unwrap()) as Box<dyn Driver>;
+    testdata_suite(&mut d, &other, "postgres", TD_PG_DDL, &td_target("celer", "public", &["celer", "public"]), TD_PG_CLEANUP);
+}
+
+/// 100,000 rows into PostgreSQL well under a minute (the issue's bar), in the dialog's batches.
+#[test]
+fn testdata_postgres_100k() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    let d: &mut dyn Driver = &mut d;
+    for sql in TD_PG_CLEANUP.iter().chain(TD_PG_DDL) {
+        d.execute(sql, 10).unwrap();
+    }
+    for id in 1..=50 {
+        d.execute(&format!("INSERT INTO celer_td_parent (id, nombre) VALUES ({id}, 'Padre {id}')"), 10).unwrap();
+    }
+    let t = td_target("celer", "public", &["celer", "public"]);
+    let t0 = Instant::now();
+    let (inserts, _) = testdata_run(d, "postgres", &t, 100_000, 1);
+    let generated_in = t0.elapsed();
+    let took = testdata_insert(d, "postgres", &inserts, true);
+    let total = t0.elapsed();
+    println!("✓ postgres: 100.000 filas generadas en {:.1} s e insertadas en {:.1} s ({:.0} filas/s)", generated_in.as_secs_f64(), took.as_secs_f64(), 100_000.0 / took.as_secs_f64());
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM celer_td_child"), "100000");
+    assert!(total < Duration::from_secs(45), "100.000 filas en {total:?}");
+    for sql in TD_PG_CLEANUP {
+        d.execute(sql, 10).unwrap();
+    }
+}
+
+/// MySQL, and MariaDB in the second run of dev/wsl/engines.sh (it runs the tests named "mysql").
+#[test]
+fn testdata_mysql() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg.clone()).expect("conexión MySQL / MariaDB");
+    let other = || Box::new(crate::mysql::MysqlDriver::connect(cfg.clone()).unwrap()) as Box<dyn Driver>;
+    let ddl = [
+        "CREATE TABLE celer_td_parent (id INT PRIMARY KEY, nombre VARCHAR(60) NOT NULL) ENGINE=InnoDB",
+        "CREATE TABLE celer_td_other (id INT) ENGINE=InnoDB",
+        "CREATE TABLE celer_td_child (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            codigo VARCHAR(12) NOT NULL UNIQUE,
+            nombre VARCHAR(40) NOT NULL,
+            apellidos VARCHAR(60),
+            email VARCHAR(120) UNIQUE,
+            parent_id INT NOT NULL,
+            estado ENUM('nuevo', 'enviado', 'entregado') NOT NULL,
+            prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+            puntos INT CHECK (puntos BETWEEN 0 AND 100),
+            alta DATE NOT NULL,
+            momento DATETIME,
+            importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
+            activo BOOLEAN NOT NULL,
+            notas TEXT,
+            foto VARBINARY(32),
+            nif CHAR(9),
+            telefono VARCHAR(20),
+            ciudad VARCHAR(40),
+            cp VARCHAR(5),
+            CONSTRAINT fk_celer_td_parent FOREIGN KEY (parent_id) REFERENCES celer_td_parent(id)) ENGINE=InnoDB",
+    ];
+    let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+    testdata_suite(&mut d, &other, "mysql", &ddl, &td_target(&db, &db, &[&db, &db]), &cleanup);
+}
+
+#[test]
+fn testdata_mssql() {
+    let Some(mut master) = mssql("master") else { return };
+    master.execute("IF DB_ID('celer_test') IS NULL CREATE DATABASE celer_test", 10).unwrap();
+    drop(master);
+    let mut d = mssql("celer_test").unwrap();
+    let other = || Box::new(mssql("celer_test").unwrap()) as Box<dyn Driver>;
+    let ddl = [
+        "CREATE TABLE dbo.celer_td_parent (id INT PRIMARY KEY, nombre NVARCHAR(60) NOT NULL)",
+        "CREATE TABLE dbo.celer_td_other (id INT)",
+        "CREATE TABLE dbo.celer_td_child (
+            id INT IDENTITY PRIMARY KEY,
+            codigo NVARCHAR(12) NOT NULL UNIQUE,
+            nombre NVARCHAR(40) NOT NULL,
+            apellidos NVARCHAR(60),
+            email NVARCHAR(120) UNIQUE,
+            parent_id INT NOT NULL REFERENCES dbo.celer_td_parent(id),
+            estado NVARCHAR(10) NOT NULL CHECK (estado IN ('nuevo', 'enviado', 'entregado')),
+            prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+            puntos INT CHECK (puntos BETWEEN 0 AND 100),
+            alta DATE NOT NULL,
+            momento DATETIME,
+            importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
+            activo BIT NOT NULL,
+            notas NVARCHAR(MAX),
+            foto VARBINARY(32),
+            nif CHAR(9),
+            telefono VARCHAR(20),
+            ciudad NVARCHAR(40),
+            cp VARCHAR(5),
+            rv ROWVERSION)",
+    ];
+    let cleanup = [
+        "IF OBJECT_ID('dbo.celer_td_child') IS NOT NULL DROP TABLE dbo.celer_td_child",
+        "IF OBJECT_ID('dbo.celer_td_parent') IS NOT NULL DROP TABLE dbo.celer_td_parent",
+        "IF OBJECT_ID('dbo.celer_td_other') IS NOT NULL DROP TABLE dbo.celer_td_other",
+    ];
+    testdata_suite(&mut d, &other, "mssql", &ddl, &td_target("celer_test", "dbo", &["celer_test", "dbo"]), &cleanup);
+}
+
+#[test]
+fn testdata_sqlite() {
+    let dir = std::env::temp_dir().join(format!("celer-testdata-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("td.db");
+    let _ = std::fs::remove_file(&file);
+    let open = || {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.id = "testdata-sqlite".into();
+        cfg.file_path = file.to_string_lossy().into_owned();
+        crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite")
+    };
+    let mut d = open();
+    let other = || Box::new(open()) as Box<dyn Driver>;
+    let ddl = [
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE celer_td_parent (id INTEGER PRIMARY KEY, nombre TEXT NOT NULL)",
+        "CREATE TABLE celer_td_other (id INT)",
+        "CREATE TABLE celer_td_child (
+            id INTEGER PRIMARY KEY,
+            codigo VARCHAR(12) NOT NULL UNIQUE,
+            nombre VARCHAR(40) NOT NULL,
+            apellidos VARCHAR(60),
+            email VARCHAR(120) UNIQUE,
+            parent_id INTEGER NOT NULL REFERENCES celer_td_parent(id),
+            estado TEXT NOT NULL CHECK (estado IN ('nuevo', 'enviado', 'entregado')),
+            prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+            puntos INTEGER CHECK (puntos BETWEEN 0 AND 100),
+            alta DATE NOT NULL,
+            momento DATETIME,
+            importe NUMERIC(10,2) NOT NULL CHECK (importe >= 0),
+            activo BOOLEAN NOT NULL,
+            notas TEXT,
+            foto BLOB,
+            nif CHAR(9),
+            telefono VARCHAR(20),
+            ciudad VARCHAR(40),
+            cp VARCHAR(5))",
+    ];
+    let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+    testdata_suite(&mut d, &other, "sqlite", &ddl, &td_target("main", "main", &["main", "main"]), &cleanup);
+    // SQLite has the foreign keys checked only with the pragma: the generated rows hold anyway.
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+const TD_IFX_DDL: &[&str] = &[
+    "CREATE TABLE celer_td_parent (id INT NOT NULL PRIMARY KEY, nombre VARCHAR(60) NOT NULL)",
+    "CREATE TABLE celer_td_other (id INT)",
+    "CREATE TABLE celer_td_child (
+        id SERIAL NOT NULL PRIMARY KEY,
+        codigo VARCHAR(12) NOT NULL UNIQUE,
+        nombre VARCHAR(40) NOT NULL,
+        apellidos VARCHAR(60),
+        email VARCHAR(120) UNIQUE,
+        parent_id INT NOT NULL REFERENCES celer_td_parent(id),
+        estado VARCHAR(10) NOT NULL CHECK (estado IN ('nuevo', 'enviado', 'entregado')),
+        prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+        puntos INT CHECK (puntos BETWEEN 0 AND 100),
+        alta DATE NOT NULL,
+        momento DATETIME YEAR TO SECOND,
+        importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
+        activo BOOLEAN NOT NULL,
+        notas LVARCHAR(500),
+        foto BYTE,
+        nif CHAR(9),
+        telefono VARCHAR(20),
+        ciudad VARCHAR(40),
+        cp VARCHAR(5))",
+];
+const TD_IFX_CLEANUP: &[&str] = &["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+
+fn testdata_informix_via(via: &str, cfg: ConnConfig, connect: &Connect) {
+    let mut d = connect(cfg.clone()).unwrap_or_else(|e| panic!("conexión Informix por {via}: {e}"));
+    let other = || connect(cfg.clone()).unwrap_or_else(|e| panic!("otra sesión Informix por {via}: {e}"));
+    let db = cfg.database.clone();
+    let owner = cfg.user.clone();
+    testdata_suite(d.as_mut(), &other, &format!("informix ({via})"), TD_IFX_DDL, &td_target(&db, &owner, &[&db]), TD_IFX_CLEANUP);
+}
+
+#[test]
+fn testdata_informix() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    testdata_informix_via("DRDA", cfg, &drda_connect(lib));
+}
+
+#[test]
+fn testdata_informix_jdbc() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    testdata_informix_via("JDBC", cfg, &jdbc_connect(rt));
+}
+
+/// Generic ODBC (CELER_ODBC_TEST: PostgreSQL through psqlODBC in dev/wsl/engines.sh): the dialect is the engine
+/// the driver reports, the catalog is read as that engine's.
+#[test]
+fn testdata_odbc() {
+    let Ok(conn_str) = std::env::var("CELER_ODBC_TEST") else { return };
+    let open = || {
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: conn_str.clone(), ..Default::default() };
+        Box::new(crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC")) as Box<dyn Driver>
+    };
+    let mut d = open();
+    let db = d.current_database().unwrap_or_default();
+    testdata_suite(d.as_mut(), &open, "odbc", TD_PG_DDL, &td_target(db.trim(), "public", &[]), TD_PG_CLEANUP);
+}

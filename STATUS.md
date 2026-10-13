@@ -45,6 +45,10 @@ one has today.
 - **Import / export**: streaming export to CSV, TSV, Excel, JSON, XML, SQL INSERT, Markdown and HTML with progress
   and cancel; import of CSV, TSV, JSON and spreadsheets (xlsx, xls, ods) with column mapping, preview, required-column
   warnings and one transaction.
+- **Test data**: fills a table with realistic, valid rows (up to 1,000,000) on every engine: a generator per column
+  inferred from type and name (Spanish or English data), CHECK lists and ranges, enums, unique and foreign keys kept,
+  reproducible by seed, previewed; inserted through the import pipeline in one transaction with cancel, or written as
+  a script or CSV / JSON.
 - **Migrate**: connections from DBeaver (saved passwords only when asked) and DbVisualizer, with folders, production
   flags and Informix properties.
 - **Settings**: 8 themes (Celer Oscuro and Claro, Darcula, Fjord, Sand, high contrast dark and light, follow the
@@ -58,8 +62,8 @@ one has today.
   routines, reactions, tips learned from use and advice about the query just run; quiet or off in Settings.
 - **Safety**: read-only connections enforced in the Rust core, production connections confirm risky statements,
   passwords only in the OS credential store, damaged data files set aside instead of overwritten.
-- **Tests**: `cargo test --lib` has 219 tests, the live ones run against every engine when its `CELER_*_TEST`
-  variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix); 30 pure logic
+- **Tests**: `cargo test --lib` has 250 tests, the live ones run against every engine when its `CELER_*_TEST`
+  variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix); 31 pure logic
   checks (`dev/*-check.ts`); 26 end-to-end scripts that drive the desktop app over CDP (`dev/*-check.mjs`) plus
   `dev/e2e.mjs`, all run by `dev/check-all.ps1`.
 - **Performance** (debug build, PostgreSQL, 6 columns): first page of 200k rows in 3 ms; loading all 200,000 rows in

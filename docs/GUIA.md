@@ -287,6 +287,41 @@ Doble clic en una tabla del explorador la abre.
 Desde el menú de una tabla también se generan scripts: SELECT con los joins de sus claves, INSERT, UPDATE,
 UPSERT/MERGE, DELETE, DROP y su DDL.
 
+### Datos de prueba
+
+*Generar datos de prueba…* (menú de la tabla en el explorador o de su pestaña, o «Generar datos de prueba» en la paleta
+con la tabla abierta) llena una tabla con datos realistas que cumplen sus restricciones, en todos los motores.
+
+- **Filas** (hasta 1.000.000) y **semilla**: la misma semilla con los mismos ajustes da siempre las mismas filas; el
+  dado pone otra. **Datos** en español (nombres, ciudades, teléfonos, NIF…) o en inglés.
+- **Un generador por columna**, propuesto por su tipo y su nombre (en español y en inglés: `nombre`, `apellidos`,
+  `email`, `telefono`, `direccion`, `ciudad`, `cp`, `pais`, `empresa`, `nif`, `cif`, `iban`, `url`, `usuario`,
+  `password`, `descripcion`, `precio`, `cantidad`, `estado`…), que puedes cambiar:
+  - por tipo: enteros y decimales en el rango y la escala del tipo (o el que indiques), booleanos, fechas, fechas con
+    hora y horas en un rango, UUID, texto dentro de la longitud de la columna, binario (unos bytes al azar), JSON;
+  - **Constante**, **Secuencia** (inicio e incremento), **Lista de valores** (uno por línea; `activo *3` sale el
+    triple de veces), **Patrón** (`[A-Z]{3}-\d{4}`: clases `[…]`, `\d` dígito, `\l` minúscula, `\u` mayúscula,
+    repeticiones `{n}` `{n,m}` `?`, alternativas `(a|b)`), **Expresión** con otras columnas de la misma fila
+    (`{nombre|slug}.{apellidos|slug}@example.com`; filtros `lower`, `upper`, `slug`, `initial`; `{#}` es el número de
+    fila) y **% de NULL** en las columnas que lo admiten;
+  - **No generar**: las columnas de identidad, serial, calculadas o rowversion se dejan al servidor; puedes dejar
+    también las que tienen valor por defecto.
+- **Restricciones**: NOT NULL, longitudes, precisión y escala; los CHECK sencillos (`IN`, `BETWEEN`, comparaciones) y
+  los enum nativos (ENUM/SET de MySQL, tipos enum de PostgreSQL) se convierten en listas y rangos; las columnas únicas
+  y la clave primaria reciben valores distintos (también de los que ya hay en una tabla pequeña); las **claves
+  foráneas** toman claves que existen en la tabla referenciada. Si esa tabla está vacía, el diálogo lo dice y ofrece
+  *Generar antes datos de …*, que vuelve después a esta tabla. Un CHECK que Celer no sabe leer se avisa.
+- **Vista previa**: las 20 primeras filas, y un ejemplo por columna mientras ajustas.
+- **Resultado**:
+  - *Insertar en la tabla*: por lotes como la importación, en **una sola transacción** y en una sesión propia (la
+    transacción que tengas abierta en una consola no se mezcla), con progreso, filas por segundo y **Cancelar**, que
+    lo deshace todo. Una conexión de solo lectura no inserta; una de producción pide confirmación.
+  - *Script SQL*: los mismos INSERT en una consola nueva sin ejecutar nada (más de 10.000 filas van a un fichero
+    `.sql`).
+  - *CSV* o *JSON*: las mismas filas a un fichero, sin tocar la base de datos.
+- Informix no admite valores literales en columnas BYTE, TEXT, BLOB o CLOB: se quedan en NULL (o con su valor por
+  defecto).
+
 ## Entender una base de datos
 
 - **Plan de ejecución** (Ctrl+Mayús+E): un árbol con lo que hará el motor, filas estimadas y coste. *Plan real*

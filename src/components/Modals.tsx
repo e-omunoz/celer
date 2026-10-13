@@ -28,6 +28,8 @@ import { DataCompareView } from "./DataCompareView";
 import { dataCompare } from "../dataCompareRun";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
+import { TestDataDialog } from "./TestDataDialog";
+import { testData } from "../testDataRun";
 import { checkForUpdates, openReleasePage } from "../update";
 import { isDetached, isPanelWindow } from "../windows";
 import { InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
@@ -41,6 +43,7 @@ export function Modals() {
       <Show when={state.settingsOpen}><SettingsDialog /></Show>
       <Show when={state.exportOpen}><ExportDialog /></Show>
       <Show when={importer.open}><ImportDialog /></Show>
+      <Show when={testData.open}><TestDataDialog /></Show>
       <Show when={state.aboutOpen}><AboutDialog /></Show>
       <Show when={errorLog.open}><ErrorLogView /></Show>
       <Show when={report.open}><ReportDialog /></Show>

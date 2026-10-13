@@ -33,6 +33,7 @@ import type { GenerateKind, MenuItem } from "../state";
 import { isTauri } from "../api";
 import { emptyConn, ENGINES, type ConnSummary, type DbKind, type MetaNode } from "../types";
 import { startImport } from "../importer";
+import { openTestData } from "../testDataRun";
 import { openMigration } from "../migrate";
 import { withShortcut } from "../commands";
 import { unsupportedReason, type Feature } from "../engineCompat";
@@ -839,6 +840,8 @@ export function Sidebar() {
           { label: "Generar UPDATE", run: () => void generateSql(connId, obj, "update") },
           { label: "Generar DELETE", run: () => void generateSql(connId, obj, "delete") },
           { label: kindOf(connId) === "mysql" || kindOf(connId) === "postgres" || kindOf(connId) === "sqlite" ? "Generar UPSERT (insertar o actualizar)" : "Generar MERGE (insertar o actualizar)", run: () => void generateSql(connId, obj, "upsert") },
+          // Rows of realistic test data (#172): next to the generated statements.
+          { label: "Generar datos de prueba…", run: () => void openTestData(connId, obj) },
         );
       }
       items.push(
