@@ -1127,14 +1127,20 @@ fn privilege_error(e: &anyhow::Error) -> bool {
     e.downcast_ref::<JdbcError>().is_some_and(|j| matches!(j.code, -674 | -387 | -272))
 }
 
-/// Opens its own Informix connection over JDBC (in the row's database) and reads the history. `stop`: the user
-/// closed the window; the read ends between two reads of the CDC session.
+/// Opens its own Informix connection over JDBC (in the row's database) and reads the history. Every connection it
+/// opens (the first and the fresh ones) runs the connection's startup script first, as its sessions do. `stop`: the
+/// user closed the window; the read ends between two reads of the CDC session.
 /// `dir`: where Celer keeps the note of the tables it turned full row logging on for (see `ledger_add`).
 pub fn read(mut cfg: ConnConfig, rt: crate::jdbc::Runtime, req: Request, stop: &AtomicBool, dir: Option<&Path>) -> Result<History> {
     cfg.database = req.database.trim().to_string();
+    crate::startup::check(&cfg)?;
     let read_only = cfg.read_only;
     let user = cfg.user.clone();
-    let connect = || JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).map_err(crate::jdbc::explain);
+    let connect = || {
+        let mut conn = JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).map_err(crate::jdbc::explain)?;
+        crate::odbc_driver::run_startup(&mut conn, &cfg)?;
+        Ok(conn)
+    };
     let conn = connect()?;
     let ledger = dir.map(|d| d.join(LEDGER));
     let endpoint = endpoint(&cfg);

@@ -1849,6 +1849,36 @@ fn ssh_tunnel_row_history() {
     let _ = std::fs::remove_dir_all(&store.dir);
 }
 
+/// «Historial de la fila» runs the connection's startup script on the connection it opens, as every session does
+/// (#180): a broken script fails the read and says so, a good one lets it through.
+#[test]
+fn row_history_runs_startup_script() {
+    use crate::rowhistory::{KeyPart, Request};
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    for sql in ["DROP TABLE IF EXISTS rh_startup", "CREATE TABLE rh_startup (id INT PRIMARY KEY, n INT)", "INSERT INTO rh_startup VALUES (1, 10)"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    let request = || Request {
+        database: cfg.database.clone(),
+        owner: String::new(),
+        table: "rh_startup".into(),
+        key: vec![KeyPart { column: "id".into(), value: "1".into() }],
+        enable_full_row_logging: false,
+    };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut broken = cfg.clone();
+    broken.startup_sql = "SELEC 1".into();
+    let err = crate::rowhistory::read(broken, rt.clone(), request(), &stop, None).err().expect("script erróneo").to_string();
+    assert!(err.contains("script de inicio"), "{err}");
+    let mut good = cfg.clone();
+    good.startup_sql = "SET LOCK MODE TO WAIT 5".into();
+    let h = crate::rowhistory::read(good, rt, request(), &stop, None).unwrap_or_else(|e| panic!("con script de inicio: {e}"));
+    assert!(h.status == "needsFullRowLogging" || h.reason.contains("syscdcv1"), "{h:?}");
+    println!("✓ Informix JDBC: historial de la fila con el script de inicio ({})", h.status);
+    d.execute("DROP TABLE IF EXISTS rh_startup", 10).ok();
+}
+
 /// Disconnecting (or deleting) a tunnelled connection closes its tunnel once its sessions have gone: the local port
 /// stops listening and the bastion's login ends, instead of waiting for the janitor (#164).
 #[test]
