@@ -1468,7 +1468,9 @@ export function insertStatements(model: TableModel, generator: RowGenerator, row
 
 /** A script of INSERT statements (nothing runs): what «Insertar» would send, statement by statement. */
 export function scriptText(model: TableModel, statements: string[], header: { rows: number; seed: number; locale: Locale }): string {
-  const head = `-- Datos de prueba para ${model.qualified}: ${header.rows.toLocaleString("es-ES")} filas, semilla ${header.seed}, ${header.locale === "es" ? "español" : "inglés"}.\n-- Generado por Celer. Revisa antes de ejecutar.\n\n`;
+  // A line break in the name would end the «--» comment and leave the rest of the name as SQL.
+  const name = model.qualified.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/g, " ");
+  const head = `-- Datos de prueba para ${name}: ${header.rows.toLocaleString("es-ES")} filas, semilla ${header.seed}, ${header.locale === "es" ? "español" : "inglés"}.\n-- Generado por Celer. Revisa antes de ejecutar.\n\n`;
   return head + statements.map((sql) => `${sql};`).join("\n\n") + "\n";
 }
 

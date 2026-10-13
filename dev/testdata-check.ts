@@ -533,6 +533,10 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   assert.deepEqual(statements, importStatements(rows, { qualified: m.qualified, columns: m.columns.map((c) => c.col), quoted: m.columns.map((c) => c.quoted), mapping, emptyAsNull: false }, "postgres"));
   const script = scriptText(m, statements, { rows: 1001, seed: 77, locale: "es" });
   assert.ok(script.includes(statements[1]) && script.trimEnd().endsWith(";"));
+  // A line break in the table name stays inside the header comment (#210).
+  const evilScript = scriptText({ ...m, qualified: '"a\nDROP TABLE sec_victim2; --"' }, ["INSERT INTO x VALUES (1)"], { rows: 1, seed: 1, locale: "es" });
+  assert.equal(splitSql(evilScript, "postgres").length, 1, "one statement: the INSERT");
+  assert.ok(!/DROP/.test(codeOnly(evilScript, "postgres")), "the name stays in the comment");
   // The same seed again: the script of a new generator is the insert of the first.
   const again = createGenerator(m, s, 77, "es");
   assert.deepEqual(insertStatements(m, again, Array.from({ length: 1001 }, () => again.next())), statements);
