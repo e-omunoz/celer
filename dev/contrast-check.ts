@@ -79,6 +79,14 @@ for (const theme of Object.keys(themes)) {
       const ratio = contrastRatio(mix(tokens[state], tokens["--text"], 0.5), tokens[bg]);
       assert.ok(ratio >= 4.5, `${theme}: ${state} chip label on ${bg} is ${ratio.toFixed(2)}:1`);
     }
+    // On their own tint too: the row history's operation chips (.rh-op, 12 % over the panel) and the theme editor's
+    // level chips (.te-level, 13 % over the panel; .te-level.low, 40 % warning in its label, 8 % over the 9 %
+    // warning tint of a low row), #188.
+    const chips = [["--panel", 0.12, 0.5], ["--surface", 0.12, 0.5], ["--panel", 0.13, 0.5], ["--panel", 1 - 0.92 * 0.91, 0.4]] as const;
+    for (const [bg, tint, share] of chips) {
+      const ratio = contrastRatio(mix(tokens[state], tokens["--text"], share), mix(tokens[state], tokens[bg], tint));
+      assert.ok(ratio >= 4.5, `${theme}: ${state} chip label on a ${Math.round(tint * 100)} % tint over ${bg} is ${ratio.toFixed(2)}:1`);
+    }
   }
 }
 

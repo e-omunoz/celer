@@ -1528,8 +1528,8 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .te-aa { display: grid; place-items: center; height: 20px; border-radius: var(--radius-xs); border: 1px solid var(--border); font-weight: 600; font-size: 11.5px; }
 .te-pair { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
 .te-ratio { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 11.5px; }
-.te-level { justify-self: end; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-xs); color: var(--success); background: color-mix(in srgb, var(--success) 13%, transparent); }
-.te-level.low { color: var(--warning); background: color-mix(in srgb, var(--warning) 15%, transparent); }
+.te-level { justify-self: end; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-xs); color: color-mix(in srgb, var(--success) 50%, var(--text)); background: color-mix(in srgb, var(--success) 13%, transparent); }
+.te-level.low { color: color-mix(in srgb, var(--warning) 40%, var(--text)); background: color-mix(in srgb, var(--warning) 8%, transparent); }
 .te-foot { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 .settings:has(.theme-editor) .settings-foot { display: none; }
 
@@ -2162,9 +2162,9 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .rh-event > header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 6px; }
 .rh-event time { font-variant-numeric: tabular-nums; font-size: 12.5px; }
 .rh-op { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 7px; border-radius: 999px; background: var(--surface-alt); color: var(--text); }
-.rh-event.insert .rh-op { color: var(--success); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }
-.rh-event.delete .rh-op, .rh-event.truncate .rh-op { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }
-.rh-event.update .rh-op { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, var(--panel)); }
+.rh-event.insert .rh-op { color: color-mix(in srgb, var(--success) 50%, var(--text)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }
+.rh-event.delete .rh-op, .rh-event.truncate .rh-op { color: color-mix(in srgb, var(--danger) 50%, var(--text)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }
+.rh-event.update .rh-op { color: color-mix(in srgb, var(--warning) 50%, var(--text)); background: color-mix(in srgb, var(--warning) 12%, var(--panel)); }
 .rh-values { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
 .rh-values th { text-align: left; font-weight: 500; color: var(--text-faint); padding: 3px 6px; border-bottom: 1px solid var(--border); }
 .rh-values td { padding: 3px 6px; font-family: var(--mono); word-break: break-word; vertical-align: top; }
