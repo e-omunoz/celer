@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-14
+
 ### Added
 - **Theme editor** (#107): *Ajustes › Editor de tema* (in the *General* group; also the *Editor de tema* button and the
   pencil on a custom theme in *Apariencia*, and *Editor de tema…* in the palette) makes a custom theme from any
@@ -984,7 +986,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/e-omunoz/celer/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/e-omunoz/celer/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/e-omunoz/celer/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/e-omunoz/celer/compare/v2.1.0...v2.1.1

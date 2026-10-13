@@ -1,6 +1,6 @@
 [package]
 name = "celer"
-version = "2.3.0"
+version = "2.4.0"
 description = "Celer - cliente SQL rápido"
 authors = ["Celer"]
 edition = "2021"
