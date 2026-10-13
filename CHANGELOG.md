@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **SQLite `INTEGER PRIMARY KEY DESC`** (#201): SQLite does not make such a column the rowid alias, but Celer took it
+  for an auto-filled key, so the test data generator left it out and the insert failed on its NOT NULL. It is now an
+  ordinary key that gets values (a table-level `PRIMARY KEY (x DESC)` is still the alias).
 - **Test data with negative CHECK bounds** (#200): PostgreSQL stores `x BETWEEN -10 AND 10` as `'-10'::integer` and
   MySQL 8 as `-(10)`, which the generator did not read, so it proposed values outside the range. Both forms are now
   read, as on MariaDB, SQL Server, Informix and SQLite.

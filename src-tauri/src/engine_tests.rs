@@ -3780,6 +3780,10 @@ fn testdata_sqlite() {
     testdata_unique_null(&mut d, "sqlite", &td_obj("main", "main", "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
     testdata_sequence_range(&mut d, "sqlite", &td_obj("main", "main", "celer_td_seq"), "SMALLINT", None);
     testdata_negative_checks(&mut d, "sqlite", &td_obj("main", "main", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+    // `INTEGER PRIMARY KEY DESC` is not the rowid alias (#201): the generator gives it values, which its NOT NULL needs.
+    let setup = ["CREATE TABLE celer_td_desc (x INTEGER PRIMARY KEY DESC NOT NULL, y TEXT)".to_string()];
+    let plan = testdata_proposed(&mut d, "sqlite", &td_obj("main", "main", "celer_td_desc"), &setup, &["DROP TABLE IF EXISTS celer_td_desc"], 300);
+    assert!(plan.contains("x=sequence"), "sqlite: {plan}");
     // SQLite has the foreign keys checked only with the pragma: the generated rows hold anyway.
     let _ = std::fs::remove_dir_all(&dir);
 }
