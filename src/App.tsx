@@ -8,7 +8,7 @@ import { openMyReports, openReport } from "./reportStore";
 import { trackAltGr } from "./keymap";
 import { trackRegionFocus } from "./focus";
 import { Inspector } from "./components/Inspector";
-import { Modals } from "./components/Modals";
+import { hasOpenDialog, Modals } from "./components/Modals";
 import { ContextMenu, Palette, Toasts } from "./components/Overlays";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
@@ -87,11 +87,13 @@ export default function App() {
     });
     let lastShift = 0;
     const onKey = (event: KeyboardEvent) => {
+      // A modal dialog (test data, row history, import, export…) keeps the keys: only Esc and its own keys work.
+      const covered = state.paletteOpen || state.connDialog || state.settingsOpen || hasOpenDialog();
       if (event.key === "F5" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r")) {
         // A page reload would drop results, edits and open transactions.
-        if (state.paletteOpen || state.connDialog || state.settingsOpen) event.preventDefault();
+        if (covered) event.preventDefault();
       }
-      if (state.paletteOpen || state.connDialog || state.settingsOpen) return;
+      if (covered) return;
       if (event.key === "Shift" && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey) {
         const t = performance.now();
         if (t - lastShift < 350) {

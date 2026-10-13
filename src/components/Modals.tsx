@@ -277,6 +277,9 @@ function ParamsDialog(props: { ask: NonNullable<typeof state.paramAsk> }) {
 /** Dialogs open, newest last: Esc closes only the one on top (a confirmation over Ajustes, not both). */
 const openDialogs: symbol[] = [];
 
+/** A modal dialog is open: the workspace shortcuts behind it wait (App.tsx), as F6 does (focus.ts). */
+export const hasOpenDialog = () => openDialogs.length > 0;
+
 export function Dialog(props: { title: string; onClose: () => void; children: JSX.Element; wide?: boolean; small?: boolean; class?: string }) {
   // Read before the children render (they focus their first field): it gets the focus back on close.
   const opener = document.activeElement;

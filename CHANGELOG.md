@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Shortcuts behind a dialog** (#193): with a dialog open (test data, row history, import, export…), Ctrl+W,
+  Ctrl+Tab, F5 and the other workspace shortcuts acted on the tabs behind it. They now wait until it closes; Esc and
+  the dialog's own keys still work.
 - **Test data and import keep unsaved edits** (#177): *Insertar* in *Generar datos de prueba…* and a CSV/Excel import
   reloaded every open tab of the table, throwing away its unsaved edits, deletions and new rows. A tab with pending
   changes is now left as it is, with a notice whose *Recargar* asks first, as F5 does.
