@@ -408,6 +408,9 @@ function sqlString(value: string): string {
 
 function tableColumns(db: Database, obj: ObjectRef): TableColumn[] {
   const rows = query(db, `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(${sqlString(obj.name)})`);
+  // Only the rowid alias is auto-filled: a single-column key declared exactly INTEGER on a rowid table.
+  const pkCols = rows.filter((row) => num(row[4]) > 0).length;
+  const withoutRowid = /\bwithout\s+rowid\b/i.test(text(query(db, `SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ${sqlString(obj.name)}`)[0]?.[0] ?? ""));
   return rows.map((row) => {
     const typeName = text(row[1]) || "any";
     const kind: ColKind = /int|real|num|dec|floa|doub/i.test(typeName) ? "number" : /date|time/i.test(typeName) ? "date" : "text";
@@ -416,7 +419,7 @@ function tableColumns(db: Database, obj: ObjectRef): TableColumn[] {
       typeName,
       nullable: num(row[2]) === 0,
       primaryKey: num(row[4]) > 0,
-      identity: /int/i.test(typeName) && num(row[4]) > 0,
+      identity: pkCols === 1 && !withoutRowid && num(row[4]) > 0 && /^\s*integer\s*$/i.test(typeName),
       default: row[3] === null || row[3] === undefined ? null : text(row[3]),
       kind,
     };

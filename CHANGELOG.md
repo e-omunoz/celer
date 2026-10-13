@@ -24,6 +24,11 @@ All notable changes to Celer are documented here. The format follows
 - Import: a value written as the grid shows bytes (`0x…`) goes into a binary column as those bytes (PostgreSQL,
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
+### Fixed
+- SQLite: only the rowid alias (a single `INTEGER PRIMARY KEY` on a rowid table) counts as filled by the server.
+  `INT PRIMARY KEY`, `BIGINT PRIMARY KEY`, the columns of a composite key and the key of a WITHOUT ROWID table were
+  marked «auto», so the grid's new rows, the import and the test data generator left them out (#172).
+
 ## [2.3.0] - 2026-10-12
 
 ### Added

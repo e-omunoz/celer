@@ -365,6 +365,16 @@ assert.notDeepEqual(rowsOf(m, s, 42, 50), rowsOf(m, s, 43, 50), "another seed: o
   assert.ok(problems(m, s, 2_000_000).some((x) => x.error));
 }
 
+// A primary key the server does not fill (SQLite `INT PRIMARY KEY`, a composite key): never left out by default.
+{
+  const pk = (name: string) => col(name, "INT", "number", { primaryKey: true });
+  const mk = buildModel({ dialect: "sqlite", qualified: "lp", table: "lp", columns: [pk("pedido_id"), pk("linea"), col("x", "TEXT", "text")], quoted: ["pedido_id", "linea", "x"], catalog: { uniques: [], checks: [], enums: {} }, fks: [] });
+  const sk = inferSettings(mk);
+  assert.ok(sk[0].kind !== "skip" && sk[1].kind !== "skip", JSON.stringify(sk.map((x) => x.kind)));
+  sk[0] = { ...sk[0], kind: "skip" };
+  assert.ok(problems(mk, sk, 10).some((x) => x.error && x.column === 0 && /obligatoria/.test(x.text)));
+}
+
 // ---------------------------------------------------------------- generators one by one
 {
   const one = (typeName: string, kind: TableColumn["kind"], settings: Partial<GenSettings>, n = 200, dialect: DbKind = "postgres", extra: Partial<TableColumn> = {}) => {

@@ -1366,7 +1366,8 @@ export function problems(model: TableModel, settings: GenSettings[], count: numb
   model.columns.forEach((c, i) => {
     const s = settings[i];
     const name = c.col.name;
-    const required = !c.col.nullable;
+    // A primary key column needs a value even where the catalog says nullable (SQLite: `INT PRIMARY KEY` takes NULLs).
+    const required = !c.col.nullable || c.col.primaryKey;
     if (s.kind === "skip" && required && !c.auto && !c.col.default) out.push({ column: i, text: `«${name}» es obligatoria y no tiene valor por defecto: elige un generador`, error: true });
     if (s.kind === "null" && required) out.push({ column: i, text: `«${name}» no admite NULL`, error: true });
     if (s.kind !== "skip" && s.kind !== "null" && c.type.noLiteral) out.push({ column: i, text: `«${name}»: ${c.type.noLiteral}; déjala en NULL o sin generar`, error: true });
