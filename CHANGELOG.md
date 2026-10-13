@@ -13,8 +13,9 @@ All notable changes to Celer are documented here. The format follows
   check letter, IBAN with its check digits, URL, user, password hash, description, price, quantity, status…) and can
   be changed: ranges, constant, sequence, weighted value list, regex-like pattern, expression of other columns, NULL
   ratio, or left to the server (identity, serial, computed, rowversion). NOT NULL, lengths, precision, simple CHECKs
-  (IN, BETWEEN, comparisons), MySQL ENUM/SET and PostgreSQL enums, unique keys (also against a small table's existing
-  values) and foreign keys (keys read from the referenced table; an empty one is offered to be filled first) are kept.
+  (IN, BETWEEN, comparisons), MySQL ENUM/SET and PostgreSQL enums, unique keys (also against the existing values of a
+  table up to 200,000 rows; past that, or for a key of several columns, the dialog warns when a new value could
+  repeat an existing one) and foreign keys (keys read from the referenced table; an empty one is offered to be filled first) are kept.
   Same seed and settings, same rows; Spanish data by default, English selectable; a 20-row preview. The rows go in
   through the import's pipeline (batched per dialect, one transaction on its own session, progress, rows/s, Cancelar
   rolls back; read-only connections refuse, production ones ask), or to a script in a new console (a .sql file past

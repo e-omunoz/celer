@@ -308,7 +308,9 @@ con la tabla abierta) llena una tabla con datos realistas que cumplen sus restri
     también las que tienen valor por defecto.
 - **Restricciones**: NOT NULL, longitudes, precisión y escala; los CHECK sencillos (`IN`, `BETWEEN`, comparaciones) y
   los enum nativos (ENUM/SET de MySQL, tipos enum de PostgreSQL) se convierten en listas y rangos; las columnas únicas
-  y la clave primaria reciben valores distintos (también de los que ya hay en una tabla pequeña); las **claves
+  y la clave primaria reciben valores distintos, también de los que ya hay en la tabla hasta 200.000 filas (con más,
+  o en una clave de varias columnas, el diálogo avisa si un valor nuevo podría repetir uno existente; una secuencia
+  que empieza tras el máximo o un UUID no avisan); las **claves
   foráneas** toman claves que existen en la tabla referenciada. Si esa tabla está vacía, el diálogo lo dice y ofrece
   *Generar antes datos de …*, que vuelve después a esta tabla. Un CHECK que Celer no sabe leer se avisa.
 - **Vista previa**: las 20 primeras filas, y un ejemplo por columna mientras ajustas.

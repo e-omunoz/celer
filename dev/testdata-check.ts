@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { importStatements } from "../src/importFormats.ts";
 import {
   buildModel,
+  EXISTING_SAMPLE,
+  existingToRead,
   cif,
   createGenerator,
   exportText,
@@ -373,6 +375,35 @@ assert.notDeepEqual(rowsOf(m, s, 42, 50), rowsOf(m, s, 43, 50), "another seed: o
   assert.ok(sk[0].kind !== "skip" && sk[1].kind !== "skip", JSON.stringify(sk.map((x) => x.kind)));
   sk[0] = { ...sk[0], kind: "skip" };
   assert.ok(problems(mk, sk, 10).some((x) => x.error && x.column === 0 && /obligatoria/.test(x.text)));
+}
+
+// Unique columns of a table that already has rows: its values are read up to EXISTING_SAMPLE; past that, a warning.
+{
+  const mid = model("postgres", { stats: [100_000, 100_000, 8, 100] });
+  assert.deepEqual(existingToRead(mid).map((c) => c.name), ["codigo", "email"], "a 100,000-row table: its unique values are read");
+  assert.ok(!problems(mid, inferSettings(mid), 300_000).some((x) => /demasiadas/.test(x.text)));
+  const big = model("postgres", { stats: [EXISTING_SAMPLE + 1, EXISTING_SAMPLE + 1, 8, 100] });
+  assert.deepEqual(existingToRead(big), []);
+  const sb = inferSettings(big);
+  const warned = (ss: GenSettings[]) => problems(big, ss, 1000).filter((x) => /demasiadas para comprobar/.test(x.text)).map((x) => big.columns[x.column].col.name);
+  assert.deepEqual(warned(sb), ["codigo", "email"], JSON.stringify(problems(big, sb, 1000)));
+  assert.ok(problems(big, sb, 1000).every((x) => !x.error || !/demasiadas/.test(x.text)), "a warning, not an error");
+  const ids = big.columns.map((c, i) => ({ ...sb[i] }));
+  ids[at("codigo")] = { ...ids[at("codigo")], kind: "uuid" };
+  ids[at("email")] = { ...ids[at("email")], kind: "null" };
+  assert.deepEqual(warned(ids), []);
+  // An integer unique column: a sequence past the maximum is clear of the existing values, one from 1 is not.
+  const bigInt = buildModel({ dialect: "mysql", qualified: "t", table: "t", columns: [col("n", "int", "number", { nullable: false })], quoted: ["n"], catalog: { uniques: [["n"]], checks: [], enums: {} }, stats: [EXISTING_SAMPLE + 5, EXISTING_SAMPLE + 9], fks: [] });
+  const seq = (start: string) => problems(bigInt, [{ ...inferSettings(bigInt)[0], kind: "sequence", start, step: "1" }], 10).filter((x) => /demasiadas/.test(x.text)).length;
+  assert.equal(seq(String(EXISTING_SAMPLE + 10)), 0);
+  assert.equal(seq("1"), 1);
+  // A key of several columns on a table with rows: warned unless one of its columns is clear of the existing values.
+  const pk = (name: string) => col(name, "INT", "number", { primaryKey: true });
+  const lp = buildModel({ dialect: "sqlite", qualified: "lp", table: "lp", columns: [pk("pedido_id"), pk("linea")], quoted: ["pedido_id", "linea"], catalog: { uniques: [], checks: [], enums: {} }, stats: [40, 12, 4], fks: [] });
+  const sl = inferSettings(lp).map((x) => ({ ...x, kind: "integer" as const, min: "1", max: "1000000" }));
+  assert.ok(problems(lp, sl, 10).some((x) => !x.error && /La clave \(pedido_id, linea\) no se comprueba contra las 40 filas/.test(x.text)), JSON.stringify(problems(lp, sl, 10)));
+  sl[1] = { ...sl[1], kind: "sequence", start: "5", step: "1" };
+  assert.ok(!problems(lp, sl, 10).some((x) => /La clave/.test(x.text)));
 }
 
 // ---------------------------------------------------------------- generators one by one

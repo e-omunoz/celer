@@ -18,7 +18,7 @@ export const MAX_ROWS = 1_000_000;
 /** Parent keys read for a foreign key (a sample when the parent is bigger). */
 export const PARENT_SAMPLE = 50_000;
 /** Existing values of a unique column read so new ones do not repeat them (only when the table is this small). */
-export const EXISTING_SAMPLE = 50_000;
+export const EXISTING_SAMPLE = 200_000;
 
 // ---------------------------------------------------------------- generators
 
@@ -1357,6 +1357,18 @@ export interface Problem {
   parent?: ObjectRef;
 }
 
+/** Whether a column's generator cannot repeat a value the table already has: a UUID, or a rising sequence past the maximum. */
+function clearOfExisting(model: TableModel, index: number, s: GenSettings): boolean {
+  if (s.kind === "uuid") return true;
+  if (s.kind !== "sequence") return false;
+  const max = model.maxima[index];
+  try {
+    return BigInt(s.step || "1") > 0n && max !== null && /^-?\d+$/.test(max) && BigInt(s.start || "1") > BigInt(max);
+  } catch {
+    return false;
+  }
+}
+
 /** What would stop the run, or deserves a look, before anything is generated. */
 export function problems(model: TableModel, settings: GenSettings[], count: number, locale: Locale = "es"): Problem[] {
   const out: Problem[] = [];
@@ -1413,7 +1425,18 @@ export function problems(model: TableModel, settings: GenSettings[], count: numb
       }
     } else if (s.kind === "status" || s.kind === "country" || s.kind === "city" || s.kind === "province") room = 60;
     if (room < total) out.push({ column: i, text: `«${name}» es única y su generador solo da ${room.toLocaleString("es-ES")} valores distintos (hacen falta ${total.toLocaleString("es-ES")})`, error: true });
+    // A big table: its values were not read, so a new one may repeat one (the whole insert would be undone).
+    else if (model.existing > EXISTING_SAMPLE && s.kind !== "null" && !clearOfExisting(model, i, s)) {
+      out.push({ column: i, text: `«${name}» es única y la tabla ya tiene ${model.existing.toLocaleString("es-ES")} filas, demasiadas para comprobar sus valores: alguno nuevo podría repetirse y se desharía toda la inserción. Usa una secuencia que empiece tras el máximo, un UUID o un patrón con mucha más variedad`, error: false });
+    }
   });
+  // Keys of several columns: existing combinations are not read; one column clear of the existing values is enough.
+  if (model.existing > 0) {
+    for (const set of model.uniqueSets) {
+      if (set.some((i) => settings[i].kind === "skip" || model.columns[i].auto || clearOfExisting(model, i, settings[i]))) continue;
+      out.push({ column: set[0], text: `La clave (${set.map((i) => model.columns[i].col.name).join(", ")}) no se comprueba contra las ${model.existing.toLocaleString("es-ES")} filas que ya tiene la tabla: alguna combinación podría repetirse y se desharía toda la inserción`, error: false });
+    }
+  }
   // Expressions read generated columns.
   settings.forEach((s, i) => {
     if (s.kind !== "expression") return;
