@@ -12,6 +12,7 @@ import {
   existingToRead,
   EXISTING_SAMPLE,
   exportText,
+  fileJoiner,
   inferOne,
   inferSettings,
   insertShortfall,
@@ -19,6 +20,7 @@ import {
   PARENT_SAMPLE,
   problems,
   randomSeed,
+  scriptHead,
   scriptText,
   statementRows,
   statsColumns,
@@ -215,6 +217,25 @@ async function* chunks(model: TableModel, settings: GenSettings[], count: number
   }
 }
 
+/**
+ * A file written a piece at a time to «<path>.celer-part» and given its name at the end (#185): a file of a million
+ * wide rows does not fit in one string, and a run cancelled or failed half way leaves no file and keeps the one it
+ * would have replaced.
+ */
+function pieceWriter(path: string, encoding: string) {
+  const part = `${path}.celer-part`;
+  let started = false;
+  return {
+    async write(text: string) {
+      if (!text && started) return;
+      await api().writeTextFile(part, text, started ? "utf-8" : encoding, started);
+      started = true;
+    },
+    finish: () => api().finishTextFile(part, path),
+    discard: () => (started ? api().finishTextFile(part, null).catch(() => {}) : Promise.resolve()),
+  };
+}
+
 /** Runs the chosen output. Nothing reaches the database except «Insertar», which is one transaction. */
 export async function runTestData() {
   const { obj, connId, count, seed, locale, output } = testData;
@@ -305,23 +326,30 @@ async function writeScript(model: TableModel, obj: ObjectRef, connId: string, se
     if (!path) return;
   }
   setTestData({ running: true, phase: "Generando el script", done: 0, total: count, startedAt: Date.now() });
+  const header = { rows: count, seed, locale };
+  // To a file: each chunk's statements as they come, never the whole script in one string.
+  const file = path ? pieceWriter(path, "utf-8") : null;
+  const joiner = fileJoiner("sql", scriptHead(model, header));
   try {
     const statements: string[] = [];
     for await (const { generator, rows, start } of chunks(model, settings, count, seed, locale)) {
-      statements.push(...insertStatements(model, generator, rows));
+      const sql = insertStatements(model, generator, rows);
+      if (file) await file.write(joiner.next(sql.map((s) => `${s};`).join("\n\n")));
+      else statements.push(...sql);
       setTestData("done", Math.min(count, start + rows.length));
     }
-    const script = scriptText(model, statements, { rows: count, seed, locale });
-    if (path) {
+    if (file) {
       setTestData("phase", "Guardando");
-      await api().writeTextFile(path, script);
+      await file.write(joiner.end());
+      await file.finish();
       notify(`Script de ${count.toLocaleString("es-ES")} filas guardado`, "success", path);
     } else {
-      openQuery(connId, script, name, { database: obj.database || undefined });
+      openQuery(connId, scriptText(model, statements, header), name, { database: obj.database || undefined });
       notify("Script en una consola nueva: no se ha ejecutado nada", "success");
     }
     finishRun(false);
   } catch (err) {
+    await file?.discard();
     setTestData({ running: false, phase: "" });
     if (!cancelRequested) notify(errorText(err), "error");
   }
@@ -334,21 +362,21 @@ async function writeExport(model: TableModel, obj: ObjectRef, settings: GenSetti
   // The CSV conventions of Exportar (its delimiter and BOM), so the file opens the same way in Excel.
   const { delimiter, bom } = state.exportOpts;
   setTestData({ running: true, phase: "Generando", done: 0, total: count, startedAt: Date.now() });
+  // Each chunk goes to the file as it comes, with one header (CSV) and one array (JSON) for every chunk together.
+  const file = pieceWriter(path, format === "csv" && bom ? "utf-8-bom" : "utf-8");
+  const joiner = fileJoiner(format);
   try {
-    const parts: string[] = [];
     for await (const { generator, rows, start } of chunks(model, settings, count, seed, locale)) {
-      const text = exportText(model, generator, rows, format, delimiter);
-      // One header (CSV) and one array (JSON) for every chunk together.
-      if (format === "csv") parts.push(start === 0 ? text : text.slice(text.indexOf("\n") + 1));
-      else parts.push(text.replace(/^\[\n?/, "").replace(/\n?\]$/, ""));
+      await file.write(joiner.next(exportText(model, generator, rows, format, delimiter)));
       setTestData("done", Math.min(count, start + rows.length));
     }
     setTestData("phase", "Guardando");
-    const body = format === "csv" ? parts.join("\n") + "\n" : `[\n${parts.filter(Boolean).join(",\n")}\n]\n`;
-    await api().writeTextFile(path, body, format === "csv" && bom ? "utf-8-bom" : "utf-8");
+    await file.write(joiner.end());
+    await file.finish();
     notify(`Exportadas ${count.toLocaleString("es-ES")} filas de prueba a ${format.toUpperCase()}`, "success", path);
     finishRun(false);
   } catch (err) {
+    await file.discard();
     setTestData({ running: false, phase: "" });
     if (!cancelRequested) notify(errorText(err), "error");
   }

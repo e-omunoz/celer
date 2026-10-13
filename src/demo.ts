@@ -80,6 +80,8 @@ const sessions = new Map<string, DemoSession>();
 const databases = new Map<string, Database>();
 const fileBytes = new Map<string, Uint8Array>();
 const textFiles = new Map<string, string>();
+/** Files written in pieces (writeTextFile with append), kept as their pieces: together they may not fit in a string. */
+const partFiles = new Map<string, string[]>();
 
 let sqlPromise: ReturnType<typeof initSqlJs> | null = null;
 
@@ -440,8 +442,8 @@ function demoAudit(): McpAuditEntry[] {
   ];
 }
 
-function download(filename: string, body: string, type: string) {
-  const blob = new Blob([body], { type });
+function download(filename: string, body: string | string[], type: string) {
+  const blob = new Blob(typeof body === "string" ? [body] : body, { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -893,10 +895,23 @@ export function createDemoBackend(): Backend {
       throw new Error("Las hojas de cálculo se importan en la aplicación de escritorio");
     },
     async sheetClose() {},
-    async writeTextFile(path, content) {
+    async writeTextFile(path, content, _encoding, append) {
+      // A file written in pieces is downloaded once, when it is finished.
+      if (path.endsWith(".celer-part")) {
+        const pieces = (append && partFiles.get(path)) || [];
+        pieces.push(content);
+        partFiles.set(path, pieces);
+        return "utf-8";
+      }
       textFiles.set(path, content);
       download(path.split(/[\\/]/).pop() || "script.sql", content, "text/plain");
       return "utf-8";
+    },
+    async finishTextFile(part, path) {
+      const pieces = partFiles.get(part) ?? [];
+      partFiles.delete(part);
+      if (path === null) return;
+      download(path.split(/[\\/]/).pop() || "script.sql", pieces, "text/plain");
     },
     async odbcDrivers() {
       return [];

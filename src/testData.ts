@@ -1569,10 +1569,43 @@ export function insertShortfall(results: Pick<ResultSet, "rowsAffected">[], mess
 
 /** A script of INSERT statements (nothing runs): what «Insertar» would send, statement by statement. */
 export function scriptText(model: TableModel, statements: string[], header: { rows: number; seed: number; locale: Locale }): string {
+  return scriptHead(model, header) + statements.map((sql) => `${sql};`).join("\n\n") + "\n";
+}
+
+/**
+ * Joins the pieces of a file written a chunk at a time (#185): a CSV with one header, one JSON array, a script with
+ * one opening comment. `next` gives what to write for a chunk's text (exportText, or a chunk's statements for "sql"),
+ * `end` what closes the file; together they are the file the whole text in one string would have been.
+ */
+export function fileJoiner(format: "csv" | "json" | "sql", head = "") {
+  let first = true;
+  return {
+    next(text: string): string {
+      let out: string;
+      if (format === "csv") out = first ? text : `\n${text.slice(text.indexOf("\n") + 1)}`;
+      else if (format === "json") {
+        const body = text.replace(/^\[\n?/, "").replace(/\n?\]$/, "");
+        if (!body) return "";
+        out = (first ? "[\n" : ",\n") + body;
+      } else {
+        if (!text) return "";
+        out = (first ? head : "\n\n") + text;
+      }
+      first = false;
+      return out;
+    },
+    end(): string {
+      if (format === "json") return `${first ? "[\n" : ""}\n]\n`;
+      return format === "sql" && first ? `${head}\n` : "\n";
+    },
+  };
+}
+
+/** The comment that opens a script (scriptText), for a script written to a file a piece at a time. */
+export function scriptHead(model: TableModel, header: { rows: number; seed: number; locale: Locale }): string {
   // A line break in the name would end the «--» comment and leave the rest of the name as SQL.
   const name = model.qualified.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/g, " ");
-  const head = `-- Datos de prueba para ${name}: ${header.rows.toLocaleString("es-ES")} filas, semilla ${header.seed}, ${header.locale === "es" ? "español" : "inglés"}.\n-- Generado por Celer. Revisa antes de ejecutar.\n\n`;
-  return head + statements.map((sql) => `${sql};`).join("\n\n") + "\n";
+  return `-- Datos de prueba para ${name}: ${header.rows.toLocaleString("es-ES")} filas, semilla ${header.seed}, ${header.locale === "es" ? "español" : "inglés"}.\n-- Generado por Celer. Revisa antes de ejecutar.\n\n`;
 }
 
 /** The generated rows as a result (the written columns), for CSV / JSON export. */

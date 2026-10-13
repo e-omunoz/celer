@@ -126,7 +126,10 @@ export interface Backend {
   sheetRows(handle: number, row0: number, row1: number, col0: number, col1: number): Promise<SheetCell[][]>;
   sheetClose(handle: number): Promise<void>;
   /** Writes in `encoding` (UTF-8 by default); returns the encoding used (UTF-8 when Windows-1252 cannot hold the text). */
-  writeTextFile(path: string, content: string, encoding?: string): Promise<string>;
+  /** `append` adds to a file already started (no BOM): a file too big for one string goes a piece at a time. */
+  writeTextFile(path: string, content: string, encoding?: string, append?: boolean): Promise<string>;
+  /** Ends a file written in pieces to `part` (a «.celer-part» path): renamed to `path`, or deleted when it is null. */
+  finishTextFile(part: string, path: string | null): Promise<void>;
   odbcDrivers(): Promise<string[]>;
   odbcDsns(): Promise<string[]>;
   ibmDriverStatus(): Promise<string | null>;
@@ -296,7 +299,8 @@ function tauriBackend(): Backend {
     sheetCancel: (openId) => invoke("sheet_cancel", { openId }),
     sheetRows: (handle, row0, row1, col0, col1) => invoke("sheet_rows", { handle, row0, row1, col0, col1 }),
     sheetClose: (handle) => invoke("sheet_close", { handle }),
-    writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),
+    writeTextFile: (path, content, encoding, append) => invoke("write_text_file", { path, content, encoding: encoding ?? null, append: append ?? null }),
+    finishTextFile: (part, path) => invoke("finish_text_file", { part, path }),
     odbcDrivers: () => invoke("odbc_drivers"),
     odbcDsns: () => invoke("odbc_dsns"),
     ibmDriverStatus: () => invoke("ibm_driver_status"),

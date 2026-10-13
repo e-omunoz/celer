@@ -11,6 +11,7 @@ import {
   cif,
   createGenerator,
   exportText,
+  fileJoiner,
   inferSettings,
   insertShortfall,
   insertStatements,
@@ -21,6 +22,7 @@ import {
   patternVariety,
   previewRows,
   problems,
+  scriptHead,
   scriptText,
   slug,
   statementRows,
@@ -660,6 +662,22 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   assert.equal(json[0].codigo, rows[0][at("codigo")]);
   assert.equal(json[0].alta, (rows[0][at("alta")] as { d: string }).d);
   assert.equal(json[0].activo, rows[0][at("activo")]);
+  // Written a chunk at a time (#185): the pieces make the same file as the whole text, and a JSON that parses.
+  {
+    const pieces = [rows.slice(0, 400), rows.slice(400, 800), rows.slice(800)];
+    const joined = (format: "csv" | "json" | "sql", text: (part: SheetCell[][]) => string, head = "") => {
+      const j = fileJoiner(format, head);
+      return pieces.map((p) => j.next(text(p))).join("") + j.end();
+    };
+    const csvWhole = exportText(m, gen, rows, "csv", ";") + "\n";
+    assert.equal(joined("csv", (p) => exportText(m, gen, p, "csv", ";")), csvWhole, "one CSV header");
+    const jsonFile = joined("json", (p) => exportText(m, gen, p, "json"));
+    assert.deepEqual(JSON.parse(jsonFile), JSON.parse(exportText(m, gen, rows, "json")), "one JSON array");
+    assert.deepEqual(JSON.parse(fileJoiner("json").end()), [], "no rows: an empty array");
+    const header = { rows: 1001, seed: 77, locale: "es" as const };
+    const sqlFile = joined("sql", (p) => insertStatements(m, gen, p).map((x) => `${x};`).join("\n\n"), scriptHead(m, header));
+    assert.equal(sqlFile, scriptText(m, pieces.flatMap((p) => insertStatements(m, gen, p)), header), "one script comment");
+  }
   // Per dialect: SQL Server batches 900, Informix one INSERT per row; booleans as each engine takes them.
   const mm = model("mssql");
   const gm = createGenerator(mm, inferSettings(mm), 1, "es");

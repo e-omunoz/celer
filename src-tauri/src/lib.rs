@@ -1412,11 +1412,89 @@ mod text_tests {
 }
 
 // Off the main thread: a test-data script or export can be tens of MB, encoded and written to a slow disk.
+// `append` adds the text to the end of a file already started (without the BOM its first part carried), so a file
+// too big for one string is written a piece at a time.
 #[tauri::command(async)]
-fn write_text_file(path: String, content: String, encoding: Option<String>) -> CmdResult<String> {
-    let (bytes, used) = encode_text(&content, encoding.as_deref().unwrap_or("utf-8"));
-    std::fs::write(&path, bytes).map_err(err)?;
+fn write_text_file(path: String, content: String, encoding: Option<String>, append: Option<bool>) -> CmdResult<String> {
+    write_text(&path, &content, encoding.as_deref().unwrap_or("utf-8"), append.unwrap_or(false)).map_err(err)
+}
+
+fn write_text(path: &str, content: &str, encoding: &str, append: bool) -> std::io::Result<String> {
+    use std::io::Write;
+    let (mut bytes, used) = encode_text(content, encoding);
+    if !append {
+        std::fs::write(path, bytes)?;
+        return Ok(used.to_string());
+    }
+    let bom = match used {
+        "utf-8-bom" => 3,
+        "utf-16le" | "utf-16be" => 2,
+        _ => 0,
+    };
+    bytes.drain(..bom);
+    std::fs::OpenOptions::new().append(true).open(path)?.write_all(&bytes)?;
     Ok(used.to_string())
+}
+
+/// Suffix of a file written in pieces before it takes its real name: the only files `finish_text_file` touches.
+const PART_SUFFIX: &str = ".celer-part";
+
+/// Ends a file written in pieces: renames `part` to `path` (replacing it), or deletes `part` when `path` is None
+/// (a run cancelled or failed half way leaves nothing behind and the file it would have replaced untouched).
+#[tauri::command(async)]
+fn finish_text_file(part: String, path: Option<String>) -> CmdResult<()> {
+    finish_text(&part, path.as_deref()).map_err(err)
+}
+
+fn finish_text(part: &str, path: Option<&str>) -> std::io::Result<()> {
+    if !part.ends_with(PART_SUFFIX) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{part} no es un fichero a medio escribir")));
+    }
+    match path {
+        Some(path) => {
+            // Windows' rename does not replace an existing file.
+            if std::path::Path::new(path).exists() {
+                std::fs::remove_file(path)?;
+            }
+            std::fs::rename(part, path)
+        }
+        None => match std::fs::remove_file(part) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        },
+    }
+}
+
+#[cfg(test)]
+mod write_text_tests {
+    use super::{finish_text, write_text};
+
+    #[test]
+    fn writes_a_file_in_pieces() {
+        let dir = std::env::temp_dir().join(format!("celer-write-text-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.csv");
+        let part = dir.join("out.csv.celer-part");
+        let (path, part) = (path.to_str().unwrap(), part.to_str().unwrap());
+        std::fs::write(path, "old").unwrap();
+        write_text(part, "a;ñ\n", "utf-8-bom", false).unwrap();
+        write_text(part, "1;2\n", "utf-8-bom", true).unwrap();
+        write_text(part, "3;4\n", "utf-8", true).unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "old", "the old file stays until the end");
+        finish_text(part, Some(path)).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), [&[0xEF, 0xBB, 0xBF][..], "a;ñ\n1;2\n3;4\n".as_bytes()].concat(), "one BOM, then every piece");
+        assert!(!std::path::Path::new(part).exists());
+        // Cancelled: the part goes, the file it would have replaced stays.
+        write_text(part, "x", "utf-8", false).unwrap();
+        finish_text(part, None).unwrap();
+        assert!(!std::path::Path::new(part).exists());
+        assert!(std::path::Path::new(path).exists());
+        finish_text(part, None).unwrap();
+        // Only part files: never another path.
+        assert!(finish_text(path, None).is_err());
+        assert!(std::path::Path::new(path).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -2024,6 +2102,7 @@ pub fn run() {
             save_json,
             read_text_file,
             write_text_file,
+            finish_text_file,
             odbc_drivers,
             odbc_dsns,
             ibm_driver_status,

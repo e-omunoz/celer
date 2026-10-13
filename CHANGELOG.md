@@ -91,6 +91,10 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Large test-data exports and scripts** (#185): a JSON (or CSV, or `.sql` script) of up to 1,000,000 rows of a wide
+  table failed with «Invalid string length» once every row had been generated, because the whole file was built as
+  one string. The rows now go to the file a chunk at a time, under a temporary `.celer-part` name that takes the
+  file's name at the end, so a cancelled or failed run leaves no half-written file and keeps the one it would replace.
 - **Test data dialog on a large table with unique columns** (#184): every change in *Generar datos de prueba…* (a
   pattern, a range, the NULL %) rebuilt the sets of up to 200,000 existing values per unique column through the
   dialog's reactive state, so each keystroke froze the window for a fraction of a second or more and the memory stayed
