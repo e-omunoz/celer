@@ -197,7 +197,8 @@ export function catalogQueries(dialect: DbKind, t: TableRef, serverInfo = ""): C
     });
     out.push({
       part: "auto",
-      sql: `SELECT '', COLUMN_NAME, ORDINAL_POSITION, '' FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%GENERATED%')`,
+      // Computed columns, not MySQL 8's DEFAULT_GENERATED (a DEFAULT CURRENT_TIMESTAMP column takes values).
+      sql: `SELECT '', COLUMN_NAME, ORDINAL_POSITION, '' FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${lit(t.name, dialect)} AND (EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%VIRTUAL GENERATED%' OR EXTRA LIKE '%STORED GENERATED%' OR EXTRA LIKE '%PERSISTENT GENERATED%')`,
     });
     // MariaDB names a column-level CHECK after its column (names repeat across tables) and lists the table itself.
     out.push(

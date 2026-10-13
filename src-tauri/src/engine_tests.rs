@@ -3246,7 +3246,13 @@ fn testdata_run(d: &mut dyn Driver, kind: &str, t: &TdTarget, rows: usize, seed:
 
 /// The dialog's three steps for `shape` (stage "catalog"): the catalog queries and their answers, the values already
 /// in unique columns, then the inserts and their checks.
-fn testdata_stages(d: &mut dyn Driver, kind: &str, mut shape: serde_json::Value) -> (Vec<Statement>, Vec<Statement>) {
+fn testdata_stages(d: &mut dyn Driver, kind: &str, shape: serde_json::Value) -> (Vec<Statement>, Vec<Statement>) {
+    let (_, inserts, checks) = testdata_plan_stages(d, kind, shape);
+    (inserts, checks)
+}
+
+/// The same, with the plan (column=generator, … as dev/engine-sql.ts writes it) first.
+fn testdata_plan_stages(d: &mut dyn Driver, kind: &str, mut shape: serde_json::Value) -> (String, Vec<Statement>, Vec<Statement>) {
     let answer = |d: &mut dyn Driver, asked: &[Statement]| -> Vec<serde_json::Value> {
         asked
             .iter()
@@ -3269,11 +3275,35 @@ fn testdata_stages(d: &mut dyn Driver, kind: &str, mut shape: serde_json::Value)
     shape["testData"]["existing"] = json!(existing);
     shape["testData"]["stage"] = json!("insert");
     let statements = generated(shape);
-    if let Some(plan) = statements.iter().find(|st| st.name.starts_with("plan:")) {
-        println!("  {kind} {}", plan.name);
-    }
+    let plan = statements.iter().find(|st| st.name.starts_with("plan:")).map(|st| st.name.clone()).unwrap_or_default();
+    println!("  {kind} {plan}");
     let (inserts, checks): (Vec<Statement>, Vec<Statement>) = statements.into_iter().filter(|st| !st.name.starts_with("plan:")).partition(|st| st.name == "testdata insert");
-    (inserts, checks)
+    (plan, inserts, checks)
+}
+
+/// A table made by `setup` with the generators the dialog proposes: `rows` rows go in in one transaction, the checks
+/// hold, and the plan (column=generator, …) is returned for the caller's own assertions. `drop` runs before and after.
+fn testdata_proposed(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, setup: &[String], drop: &[&str], rows: usize) -> String {
+    for sql in drop {
+        d.execute(sql, 10).ok();
+    }
+    for sql in setup {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{kind}: {sql}\n→ {e}"));
+    }
+    let columns = d.table_columns(obj).unwrap();
+    let quoted: Vec<String> = columns.iter().map(|c| d.quote_ident(&c.name)).collect();
+    let qualified = d.qualified_name(obj);
+    let table = json!({ "database": obj.database, "schema": obj.schema, "name": obj.name, "qualified": qualified });
+    let shape = json!({ "kind": kind.split_whitespace().next().unwrap_or(kind), "testData": {
+        "stage": "catalog", "serverInfo": d.server_info().unwrap_or_default(), "table": table, "columns": columns, "quoted": quoted,
+        "fks": [], "rows": rows, "seed": 178 } });
+    let (plan, inserts, checks) = testdata_plan_stages(d, kind, shape);
+    testdata_insert(d, kind, &inserts, true);
+    run_generated(d, &checks);
+    for sql in drop {
+        d.execute(sql, 10).ok();
+    }
+    plan
 }
 
 /// A table whose every column is left to the server (#194): the dialog's rows of defaults go in (Informix takes neither
@@ -3514,6 +3544,32 @@ fn testdata_mysql() {
     testdata_suite(&mut d, &other, "mysql", &ddl, &td_target(&db, &db, &[&db, &db]), &cleanup);
     testdata_defaults(&mut d, "mysql", &td_obj(&db, &db, "celer_td_auto"), "CREATE TABLE celer_td_auto (id INT AUTO_INCREMENT PRIMARY KEY, n INT DEFAULT 3) ENGINE=InnoDB", "DROP TABLE IF EXISTS celer_td_auto");
     testdata_unique_null(&mut d, "mysql", &td_obj(&db, &db, "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
+}
+
+/// MySQL 8 marks a DEFAULT CURRENT_TIMESTAMP column DEFAULT_GENERATED in EXTRA (#178): it is a plain column, not
+/// identity (a data comparison's sync script updates it, the test data generator gives it values); auto_increment and
+/// VIRTUAL / STORED generated columns are still the server's. MariaDB runs it too (its EXTRA has no DEFAULT_GENERATED).
+#[test]
+fn mysql_default_generated_is_not_identity() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let kind = format!("mysql ({})", d.server_info().unwrap_or_default());
+    let obj = td_obj(&db, &db, "celer_td_defgen");
+    let setup = ["CREATE TABLE celer_td_defgen (id INT AUTO_INCREMENT PRIMARY KEY, k INT NOT NULL, \
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+        updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, \
+        v INT AS (k + 1) VIRTUAL, s INT AS (k + 2) STORED, note VARCHAR(10)) ENGINE=InnoDB"
+        .to_string()];
+    d.execute("DROP TABLE IF EXISTS celer_td_defgen", 10).ok();
+    d.execute(&setup[0], 10).unwrap();
+    let cols = d.table_columns(&obj).unwrap();
+    let identity = |name: &str| cols.iter().find(|c| c.name == name).unwrap().identity;
+    assert!(identity("id") && identity("v") && identity("s"), "{kind}: auto_increment y columnas generadas");
+    assert!(!identity("created_at") && !identity("updated_at"), "{kind}: DEFAULT CURRENT_TIMESTAMP no es identidad");
+    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &["DROP TABLE IF EXISTS celer_td_defgen"], 50);
+    assert!(!plan.contains("created_at=skip") && plan.contains("v=skip") && plan.contains("s=skip"), "{kind}: {plan}");
+    println!("✓ {kind}: DEFAULT CURRENT_TIMESTAMP recibe valores; las generadas, no");
 }
 
 #[test]

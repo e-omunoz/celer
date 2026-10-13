@@ -1574,7 +1574,12 @@ impl Driver for MysqlDriver {
                     type_name: column_type,
                     nullable: cell_str(&r[2]) == "YES",
                     primary_key: cell_str(&r[3]) == "PRI",
-                    identity: extra.contains("auto_increment") || extra.contains("generated"),
+                    // VIRTUAL / STORED (MariaDB also PERSISTENT) GENERATED columns are computed; MySQL 8's
+                    // DEFAULT_GENERATED only says the default is an expression (CURRENT_TIMESTAMP): a plain column.
+                    identity: extra.contains("auto_increment")
+                        || extra.contains("virtual generated")
+                        || extra.contains("stored generated")
+                        || extra.contains("persistent generated"),
                     default: match &r[5] {
                         Cell::Null => None,
                         // MariaDB devuelve 'NULL' (texto) cuando no hay valor por defecto.

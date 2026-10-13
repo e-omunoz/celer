@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **MySQL 8 columns with `DEFAULT CURRENT_TIMESTAMP`** (#178): MySQL marks them `DEFAULT_GENERATED`, and Celer took
+  them for computed columns. A data comparison's sync script now updates their differences, and the test data
+  generator gives them values; only `AUTO_INCREMENT` and `VIRTUAL` / `STORED` generated columns are left to the server.
 - **Test data with a NULL already in a unique column** (#195): on SQL Server and Informix, where a unique column takes
   one NULL, a table that already held it could get a second one from the generator (NULL % above 0), and the whole
   insert was undone. The existing NULL is now read with the other values and no new one is generated; a column set to
