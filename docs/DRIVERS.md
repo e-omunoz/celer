@@ -269,10 +269,15 @@ CDC API (`syscdcv1`), on a JDBC connection of its own. Measured on Informix 15 (
   20:55:05; the server started at 20:54:58, `sysmaster:sysshmvals.sh_boottime`, and went on-line at 20:55:08, its
   `Startup` checkpoint in `sysmaster:syscheckpoint`). A clean restart does not. A creation time between the start and
   the on-line mode (the `Startup` checkpoint while it is among the last 20, else the first internal session, pid 0 in
-  `sysmaster:syssessions`) is taken as the replay's: nothing is left out or skipped by time, the row's changes before
-  it are shown, and the history says it is not certain. After that recovery the API sometimes refuses the
-  transaction of the table's first insert (-83800, seen in one of four runs), which is said as a part of the log
-  not read. Once the server restarts again, such a creation time can no longer be told from a real one.
+  `sysmaster:syssessions`) is taken as the replay's. The read still starts from it and leaves out the commits before
+  it, as for any table: before it the log may hold a dropped table that had the same partnum (measured: three tables
+  created and dropped before it all had the new one's partnum, and their records of the same key are in the log), and
+  nothing there tells them from the table's own. The history is partial with that reason (the changes before the
+  recovery's time are not shown), never calls them a dropped table's, says neither that the row had no changes nor
+  where it began; changes after the recovery are shown. After the recovery the API sometimes refuses the transaction
+  of the table's first insert (-83800, seen in one of four runs); the read goes past it as before any creation, and
+  says it as a part of the log not read. Once the server restarts again, such a creation time can no longer be told
+  from a real one.
 - An LSN offset is the log page number shifted 12 bits plus the byte in the page. The read is complete when the
   session has nothing more to give (a timeout) at or past the page being written when the read began. The API only
   hands over what its log reader has reached: when it waits 10 s without progress, the history says the latest changes

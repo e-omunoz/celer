@@ -641,6 +641,11 @@ export interface RowHistory {
   notes: string[];
   /** The read ended before the end of the log: no change seen says nothing about the row. */
   cutShort: boolean;
+  /**
+   * Changes committed before this time (epoch seconds) are not shown: Informix's fast recovery rewrote the table's
+   * creation time, and what came before it may be a dropped table's. Null otherwise.
+   */
+  shownFrom: number | null;
   /** Full row logging stays on in the table, which the user did not agree to: why, and the command that turns it off. */
   leftOn: { reason: string; command: string } | null;
 }
