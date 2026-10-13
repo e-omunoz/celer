@@ -37,7 +37,9 @@ try {
   `;
   const js = (code) => app.js(H + code);
   const shot = async (name) => out && writeFileSync(`${out}/${name}.png`, await app.shot());
-  await js(`await until(() => document.querySelector('.app.ready'), 15000); await sleep(800);`);
+  // The start-up guide opens once Gib's splash has landed (later on a cold dev server): wait for it to go, or the
+  // guide opens mid-check and takes the Esc a menu step sends.
+  await js(`await until(() => document.querySelector('.app.ready') && !document.querySelector('.splash'), 20000); await sleep(800);`);
   // The guide may be open on a first run.
   await js(`for (let i = 0; i < 4 && document.querySelector('.onboarding'); i++) { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); document.querySelector('.onboarding')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await sleep(400); } const skip = [...document.querySelectorAll('.onboarding button')].find((b) => /saltar|cerrar|empezar/i.test(b.textContent)); skip?.click(); await sleep(500);`);
   await shot("00-start");
