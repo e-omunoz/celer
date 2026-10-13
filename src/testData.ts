@@ -1,8 +1,9 @@
 // The test data generator (#172): rows of realistic, valid data for a table, from its columns and constraints.
 // Each column gets a generator, inferred from its type and its name (Spanish and English), that the user may change;
 // NOT NULL, lengths, precision, CHECK lists and ranges, native enums, unique keys and foreign keys (values taken
-// from the referenced table) are respected. The same seed and settings always give the same rows: every column
-// draws from its own stream, so changing one column's generator leaves the others as they were.
+// from the referenced table) are respected. The same seed and settings always give the same rows for a table with
+// the same number of rows: every column draws from its own stream, so changing one column's generator leaves the
+// others as they were.
 // The rows become the import's INSERT statements (importFormats.ts), a script, or CSV / JSON. Pure, so
 // dev/testdata-check.ts tests it and dev/engine-sql.ts inserts its rows on every engine.
 import { importStatements, type SheetCell } from "./importFormats.ts";
@@ -1252,17 +1253,21 @@ export function createGenerator(model: TableModel, settings: GenSettings[], seed
   const L = LOCALES[locale];
   const n = model.columns.length;
   const fns: (ValueFn | null)[] = settings.map((s, i) => compile(model, i, s, locale));
-  const rngs = model.columns.map((c) => stream(seed, `col:${c.col.name}`));
-  const nullRngs = model.columns.map((c) => stream(seed, `null:${c.col.name}`));
+  // A table that already has rows gets streams of its own for that row count: the same seed again on a table that
+  // holds the rows it gave last time would otherwise walk the same values and find every one of them taken.
+  const at = model.existing > 0 ? `@${model.existing}:` : "";
+  const draw = (label: string) => stream(seed, at + label);
+  const rngs = model.columns.map((c) => draw(`col:${c.col.name}`));
+  const nullRngs = model.columns.map((c) => draw(`null:${c.col.name}`));
   const fkGroups = model.fks.map((fk, key) => ({
     key,
     fk,
-    rng: stream(seed, `fk:${fk.name}:${fk.columns.join(",")}`),
+    rng: draw(`fk:${fk.name}:${fk.columns.join(",")}`),
     cols: model.columns.map((c, i) => (c.fk?.key === key && settings[i].kind === "fk" ? i : -1)).filter((i) => i >= 0),
   })).filter((g) => g.cols.length);
-  const personRng = stream(seed, "row:person");
-  const placeRng = stream(seed, "row:place");
-  const companyRng = stream(seed, "row:company");
+  const personRng = draw("row:person");
+  const placeRng = draw("row:place");
+  const companyRng = draw("row:company");
   // Expressions after the columns they read.
   const order = [...model.columns.keys()].filter((i) => settings[i].kind !== "expression").concat([...model.columns.keys()].filter((i) => settings[i].kind === "expression"));
   const written = model.columns.map((_, i) => i).filter((i) => settings[i].kind !== "skip");
@@ -1320,7 +1325,7 @@ export function createGenerator(model: TableModel, settings: GenSettings[], seed
             const goNull = c.col.nullable && pct > 0 && nullRngs[i].next() * 100 < pct;
             value = goNull && !(seen && nullIsValue(model.dialect) && seen.has("\u0000NULL")) ? null : fn(ctx);
             if (!seen || (value === null && !nullIsValue(model.dialect)) || !seen.has(uniqueKey(value, model.dialect))) break;
-            if (attempt >= MAX_ATTEMPTS) throw new TestDataError(`«${c.col.name}» es única y no quedan valores distintos tras ${index.toLocaleString("es-ES")} filas: amplía el rango, cambia el generador o genera menos filas`, i);
+            if (attempt >= MAX_ATTEMPTS) throw new TestDataError(`«${c.col.name}» es única y no quedan valores distintos tras ${index.toLocaleString("es-ES")} filas nuevas${model.existingValues[i]?.length ? ` y los ${model.existingValues[i].length.toLocaleString("es-ES")} valores que ya tiene la tabla` : ""}: amplía el rango, cambia el generador o genera menos filas`, i);
           }
           row[i] = value;
         }

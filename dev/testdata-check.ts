@@ -468,6 +468,21 @@ assert.notDeepEqual(rowsOf(m, s, 42, 50), rowsOf(m, s, 43, 50), "another seed: o
     const rows = rowsOf(mm, [{ ...inferSettings(mm)[0], kind: "list", values: "abc\nAbc\nÁbc\nxyz" }], 3, 1);
     assert.deepEqual(rows, [["xyz"]], "existing values and their case / accent variants are taken");
   }
+  // The same seed again on a table that holds the rows it gave: other values, not 40 retries on the taken ones.
+  {
+    const columns = [col("id", "integer", "number", { identity: true, primaryKey: true }), col("codigo", "varchar(12)", "text", { maxLength: 12 })];
+    const base = { dialect: "postgres" as const, qualified: "t", table: "t", columns, quoted: ['"id"', '"codigo"'], catalog: { uniques: [["codigo"]], checks: [], enums: {} }, fks: [] };
+    const empty = buildModel(base);
+    const ss = inferSettings(empty);
+    const first = rowsOf(empty, ss, 777, 500).map((r) => r[1]);
+    assert.deepEqual(rowsOf(empty, ss, 777, 500).map((r) => r[1]), first, "an empty table: the same seed gives the same rows");
+    const full = buildModel({ ...base, stats: [500], existingValues: { codigo: first } } as any);
+    const again = rowsOf(full, ss, 777, 500).map((r) => r[1]);
+    assert.equal(new Set([...first, ...again]).size, 1000, "the second run's values are all new");
+    // Values that really run out: the message counts the table's own values too.
+    const list = buildModel({ ...base, stats: [2], existingValues: { codigo: ["a", "b"] } } as any);
+    assert.throws(() => rowsOf(list, ss.map((x, i) => (i === 1 ? { ...x, kind: "list" as const, values: "a\nb" } : x)), 1, 1), /tras 0 filas nuevas y los 2 valores que ya tiene la tabla/);
+  }
   // Composite keys: every combination once.
   {
     const columns = [col("a", "int", "number", { nullable: false, primaryKey: true }), col("b", "int", "number", { nullable: false, primaryKey: true })];
