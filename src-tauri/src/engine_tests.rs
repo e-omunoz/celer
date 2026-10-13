@@ -3300,6 +3300,35 @@ fn testdata_sqlite() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// SQLite keys that are not the rowid alias (`INT NOT NULL PRIMARY KEY`, a composite key): the generator gives them
+/// values (they were taken for auto-filled, left out, and the insert failed on NOT NULL).
+#[test]
+fn testdata_sqlite_int_keys() {
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Sqlite;
+    cfg.id = "testdata-sqlite-keys".into();
+    cfg.file_path = ":memory:".into();
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite");
+    d.execute("CREATE TABLE celer_td_parent (id INTEGER PRIMARY KEY, nombre TEXT NOT NULL)", 10).unwrap();
+    d.execute("INSERT INTO celer_td_parent (id, nombre) VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')", 10).unwrap();
+    let children = [
+        ("celer_td_int", "CREATE TABLE celer_td_int (id INT NOT NULL PRIMARY KEY, parent_id INT NOT NULL REFERENCES celer_td_parent(id), codigo VARCHAR(12) NOT NULL)"),
+        ("celer_td_lines", "CREATE TABLE celer_td_lines (pedido_id INT NOT NULL REFERENCES celer_td_parent(id), linea INT NOT NULL, codigo VARCHAR(12) NOT NULL, PRIMARY KEY (pedido_id, linea))"),
+    ];
+    for (name, ddl) in children {
+        d.execute(ddl, 10).unwrap();
+        let mut t = td_target("main", "main", &["main", "main"]);
+        t.child = td_obj("main", "main", name);
+        assert!(d.table_columns(&t.child).unwrap().iter().all(|c| !c.identity), "{name}: no column is filled by SQLite");
+        let (inserts, checks) = testdata_run(&mut d, "sqlite", &t, 300, 172);
+        testdata_insert(&mut d, "sqlite", &inserts, true);
+        for st in &checks {
+            let got = try_rows(&mut d, &st.sql).unwrap_or_else(|e| panic!("{name}: {}\n{}\n→ {e}", st.name, st.sql));
+            assert_eq!(Some(got.len()), st.rows, "{name}: {}", st.name);
+        }
+    }
+}
+
 const TD_IFX_DDL: &[&str] = &[
     "CREATE TABLE celer_td_parent (id INT NOT NULL PRIMARY KEY, nombre VARCHAR(60) NOT NULL)",
     "CREATE TABLE celer_td_other (id INT)",
