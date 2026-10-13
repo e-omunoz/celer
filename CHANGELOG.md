@@ -91,6 +91,10 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Row history on servers that share a name** (#202): the note of tables Celer turned full row logging on for was
+  kept by server name (DBSERVERNAME) and table only, so an entry left over from one server could make Celer turn off
+  full row logging that a DBA had set on another server with the same name. The note now also carries the server's
+  address; older entries without it match no server.
 - **Row history through an SSH tunnel** (#180): *Historial de la fila* on an Informix JDBC connection with an SSH
   tunnel connected straight to the configured host, which only the bastion reaches, and failed with a misleading
   «revisa servidor, puerto» error. It now goes through the connection's tunnel, as its sessions do.

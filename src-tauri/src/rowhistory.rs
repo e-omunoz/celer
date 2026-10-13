@@ -1137,7 +1137,23 @@ pub fn read(mut cfg: ConnConfig, rt: crate::jdbc::Runtime, req: Request, stop: &
     let connect = || JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).map_err(crate::jdbc::explain);
     let conn = connect()?;
     let ledger = dir.map(|d| d.join(LEDGER));
-    run(&conn, &req, read_only, &user, stop, &Env { ledger: ledger.as_deref(), fresh: &connect })
+    let endpoint = endpoint(&cfg);
+    run(&conn, &req, read_only, &user, stop, &Env { ledger: ledger.as_deref(), fresh: &connect, endpoint: &endpoint })
+}
+
+/// The server's address as the connection names it, host:port (through an SSH tunnel, as the bastion reaches it): with
+/// DBSERVERNAME, which servers often share ("informix"), it tells one server's ledger entries from another's.
+fn endpoint(cfg: &ConnConfig) -> String {
+    if !cfg.ssh.forwarded_to.is_empty() {
+        return cfg.ssh.forwarded_to.to_lowercase();
+    }
+    crate::ssh::target(cfg).map(|(host, port)| format!("{host}:{port}").to_lowercase()).unwrap_or_default()
+}
+
+/// A table's key in the ledger, `LIVE` and `RESUME`: the server's address and name, and the table. A line written
+/// before the address was part of it (server and table only) matches no key, so it is never taken for this server's.
+fn ledger_key(endpoint: &str, server: &str, full_name: &str) -> String {
+    format!("{endpoint}\t{server}\t{full_name}")
 }
 
 /// `read`, reaching the server the way the connection's sessions do: through its SSH tunnel when it has one (lib.rs
@@ -1166,6 +1182,8 @@ pub struct Env<'a> {
     pub ledger: Option<&'a Path>,
     /// Another connection like the first, for when that one is stuck behind a read the server never answered.
     pub fresh: &'a dyn Fn() -> Result<JdbcConn>,
+    /// The server's host:port (see `endpoint`): part of every key kept across reads.
+    pub endpoint: &'a str,
 }
 
 impl Env<'_> {
@@ -1304,7 +1322,9 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         ));
     }
     let server = q("SELECT DBSERVERNAME FROM systables WHERE tabid = 1")?.first().and_then(|r| r.first()).map(text).unwrap_or_default();
-    let ledger_key = format!("{server}\t{full_name}");
+    let ledger_key = ledger_key(env.endpoint, &server, &full_name);
+    // The server for `WALLS`: its address and name.
+    let server_key = format!("{}\t{server}", env.endpoint);
     // An entry of a read still running here (another window) is not left over: that read turns it off.
     let left_over = frl_on && ledger_has(env.ledger, &ledger_key) && !LIVE.lock().contains_key(&ledger_key);
     if !frl_on && read_only {
@@ -1578,7 +1598,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             // is already complete it is a wall (see `WALLS`): the read goes on from the next log.
             let mut wall = None;
             if b.caught_up && b.last.0 < end.0 {
-                wall = WALLS.lock().get(&(server.clone(), b.last.0)).copied().filter(|w| b.last >= *w);
+                wall = WALLS.lock().get(&(server_key.clone(), b.last.0)).copied().filter(|w| b.last >= *w);
             }
             if wall.is_none() {
                 if b.caught_up {
@@ -1586,7 +1606,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
                         Some((at, since)) if at == b.last => {
                             if since.elapsed() > MAX_WAIT {
                                 if at.0 < end.0 && at != Lsn::default() {
-                                    WALLS.lock().insert((server.clone(), at.0), at);
+                                    WALLS.lock().insert((server_key.clone(), at.0), at);
                                     wall = Some(at);
                                 } else {
                                     stopped = Some(if at == Lsn::default() {
@@ -1771,12 +1791,12 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
     result
 }
 
-/// Per table (server, name, creation time, first log read): the errors the server gave before the table existed and
+/// Per table (`ledger_key`: server address and name, table; creation time, first log read): the errors the server gave before the table existed and
 /// the position each read went on from. Finding it takes a bisection of sessions (tens of seconds), and the next
 /// history of the same table starts from there at once. The table's own changes never come before it.
 static RESUME: std::sync::LazyLock<parking_lot::Mutex<HashMap<(String, i64, i64), Vec<(Lsn, Lsn, String)>>>> = std::sync::LazyLock::new(Default::default);
 
-/// Per (server, log): the position where the server's CDC reader stops for good in that log. Measured on Informix 15: a
+/// Per (server address and name, log): the position where the server's CDC reader stops for good in that log. Measured on Informix 15: a
 /// session that reaches the end of a log while its last page is still being written leaves that log unreadable past
 /// that position for every later session, until the server restarts or the log is reused; the reader does not go on
 /// to the next log either. A read that meets such a wall (no progress for `MAX_WAIT` in a log that is already
@@ -2240,6 +2260,29 @@ mod tests {
         assert!(LIVE.lock().contains_key(&key), "one read still holds it");
         drop(second);
         assert!(!LIVE.lock().contains_key(&key), "given up when every read has ended");
+    }
+
+    /// The ledger key carries the server's address (#202): a left-over entry of another server with the same
+    /// DBSERVERNAME, or one written before the address was part of the key, is not taken for this server's.
+    #[test]
+    fn the_ledger_key_tells_servers_apart() {
+        let dir = std::env::temp_dir().join(format!("celer-ledger-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LEDGER);
+        let p = Some(path.as_path());
+        std::fs::write(&path, "informix\tceler:informix.t\n").unwrap();
+        let a = ledger_key("dev-a:9088", "informix", "celer:informix.t");
+        let b = ledger_key("dev-b:9088", "informix", "celer:informix.t");
+        assert!(!ledger_has(p, &a) && !ledger_has(p, &b), "an old line matches no server");
+        ledger_add(p, &a);
+        assert!(ledger_has(p, &a) && !ledger_has(p, &b), "server A's entry is not server B's");
+        let mut cfg = ConnConfig { kind: DbKind::Informix, informix_mode: "jdbc".into(), host: "Dev-A".into(), port: Some(9088), ..Default::default() };
+        assert_eq!(endpoint(&cfg), "dev-a:9088");
+        cfg.ssh.forwarded_to = "celer-ifx:9088".into();
+        cfg.host = "127.0.0.1".into();
+        cfg.port = Some(24567);
+        assert_eq!(endpoint(&cfg), "celer-ifx:9088", "through a tunnel: the server as the bastion reaches it, not the local port");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The note of tables Celer turned full row logging on for survives a crash and is cleared once it is off.

@@ -3078,7 +3078,8 @@ fn informix_jdbc_row_history() {
     };
     let (fresh_cfg, fresh_rt) = (cfg.clone(), rt2);
     let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
-    let env = rowhistory::Env { ledger: None, fresh: &fresh };
+    let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
+    let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
     let run = |req: &Request, read_only: bool| rowhistory::run(&conn, req, read_only, &cfg.user, &stop, &env);
     let ask = |table: &str, id: &str, enable: bool| {
         let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
@@ -3151,9 +3152,17 @@ fn informix_jdbc_row_history() {
             other => panic!("DBSERVERNAME: {other:?}"),
         };
         let ledger = std::env::temp_dir().join(format!("celer-rh-ledger-{}.txt", std::process::id()));
-        std::fs::write(&ledger, format!("{server}\t{full}\n")).unwrap();
         d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 1)"), 10).unwrap();
-        let left_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh };
+        let left_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh, endpoint: &endpoint };
+        // An entry of another server with the same DBSERVERNAME, or an old one without the address (#202), is not
+        // this server's: full row logging set here (as a DBA would) stays on.
+        for other in [format!("other-host:9088\t{server}\t{full}\n"), format!("{server}\t{full}\n")] {
+            std::fs::write(&ledger, other).unwrap();
+            let rw = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
+            assert!(!rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")), "{rw:?}");
+            assert_ne!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "another server's entry leaves it on");
+        }
+        std::fs::write(&ledger, format!("{endpoint}\t{server}\t{full}\n")).unwrap();
         let ro = rowhistory::run(&conn, &request(&db, "rh_t", Some(&id1), false), true, &cfg.user, &stop, &left_env).unwrap();
         assert_eq!(ro.status, "ok", "{ro:?}");
         let left = ro.left_on.as_ref().expect("a read-only read says full row logging stays on, as a warning");
