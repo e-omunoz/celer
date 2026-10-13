@@ -36,7 +36,7 @@ export const GENERATORS: { kind: GenKind; label: string; group: string }[] = [
   { kind: "constant", label: "Constante", group: "Especiales" },
   { kind: "sequence", label: "Secuencia", group: "Especiales" },
   { kind: "list", label: "Lista de valores", group: "Especiales" },
-  { kind: "pattern", label: "Patrón ([A-Z]{3}-\\d{4})", group: "Especiales" },
+  { kind: "pattern", label: "Patrón", group: "Especiales" },
   { kind: "expression", label: "Expresión de otras columnas", group: "Especiales" },
   { kind: "fk", label: "Clave de la tabla referenciada", group: "Especiales" },
   { kind: "integer", label: "Entero", group: "Por tipo" },
