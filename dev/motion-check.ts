@@ -81,6 +81,13 @@ assert.equal(nextRegion([], null, 1), null);
 // ---- the drag ghost
 assert.equal(previewLines("\n  SELECT *\n\n  FROM t   \nWHERE x\nAND y\nAND z"), "  SELECT *\n  FROM t\nWHERE x\nAND y");
 assert.equal(previewLines("x".repeat(60), 4, 10), `${"x".repeat(9)}…`);
+// The tab drag sends only the short preview (#209); drawing it again (ghostCard) changes nothing.
+{
+  const big = Array.from({ length: 100_000 }, (_, i) => `SELECT ${"c".repeat(60)} FROM t${i};`).join("\n");
+  const short = previewLines(big);
+  assert.ok(short.length <= 4 * 49, "a few lines, whatever the console holds");
+  assert.equal(previewLines(short), short);
+}
 assert.equal(countLabel(1, "elemento", "elementos"), "1 elemento");
 assert.equal(countLabel(3, "elemento", "elementos"), "3 elementos");
 

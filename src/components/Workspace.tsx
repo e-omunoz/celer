@@ -310,12 +310,13 @@ function TabBar() {
                 if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
                 // The ghost under the pointer (it follows it out of the window too): the title, where it is connected
                 // and a few lines of what it holds.
-                const preview = tab.kind === "sql" ? tab.sql : `${tab.qualified}\n${tab.rows.length.toLocaleString()} filas cargadas`;
+                // Only those few lines: the card goes to every window through the core, and a console may hold megabytes.
+                const preview = previewLines(tab.kind === "sql" ? tab.sql : `${tab.qualified}\n${tab.rows.length.toLocaleString()} filas cargadas`);
                 const where = [conn()?.name, tab.database].filter(Boolean).join(" · ") || "Sin conexión";
                 const card = { title: tab.title, detail: where, preview, color: tab.connId ? connColor(conn()) : undefined };
                 followDragGhost(event, card);
                 // Out of the window it goes to another one, or to a new one where it is let go (the window it passes over draws the card).
-                startTabDrag(tab.id, tab.title, { preview: previewLines(preview), color: tab.connId ? connColor(conn()) : undefined }, card);
+                startTabDrag(tab.id, tab.title, { preview, color: tab.connId ? connColor(conn()) : undefined }, card);
               }}
               onDragEnd={() => {
                 setDragFrom(-1);
