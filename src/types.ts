@@ -1,4 +1,5 @@
 import { defaultGibPrefs, type GibPrefs } from "./gib/prefs.ts";
+import type { CustomTheme } from "./themes";
 
 export type Cell = null | boolean | number | string;
 
@@ -247,6 +248,8 @@ export interface ExportOptions {
 }
 
 export type ThemeName = "system" | "light" | "dark" | "darcula" | "contrast" | "contrast-light" | "fjord" | "sand";
+/** A built-in theme, "system", or a custom theme ("custom:<id>", src/themes.ts). */
+export type ThemeChoice = ThemeName | `custom:${string}`;
 
 export const ACCENTS = [
   { name: "Clay", value: "#D97757" },
@@ -258,7 +261,12 @@ export const ACCENTS = [
 ] as const;
 
 export interface Settings {
-  theme: ThemeName;
+  theme: ThemeChoice;
+  /** With the theme "Seguir al sistema": the theme for the system's light mode and for its dark mode. */
+  systemLight: ThemeChoice;
+  systemDark: ThemeChoice;
+  /** The user's own themes (Ajustes › Apariencia › Editor de tema). */
+  customThemes: CustomTheme[];
   accent: string;
   fontSize: number;
   editorFontSize: number;
@@ -392,6 +400,9 @@ export interface UpdateInfo {
 
 export const defaultSettings: Settings = {
   theme: "dark",
+  systemLight: "light",
+  systemDark: "dark",
+  customThemes: [],
   accent: "#D97757",
   fontSize: 13,
   editorFontSize: 13,
@@ -587,4 +598,54 @@ export interface McpStatus {
   /** The WSL distros have been read (it takes a moment after start). */
   wslChecked: boolean;
   lastCall: McpAuditEntry | null;
+}
+
+/** «Historial de la fila» (src-tauri/src/rowhistory.rs): the row asked for. */
+export interface RowHistoryRequest {
+  database: string;
+  /** The table's owner (Informix's schema). */
+  owner: string;
+  table: string;
+  /** The primary key, each column with its value as the grid shows it. */
+  key: { column: string; value: string }[];
+  /** The user agreed to turn on full row logging for the read only (and off again after it). */
+  enableFullRowLogging: boolean;
+}
+
+export interface RowHistoryEvent {
+  /** Log position (uniqid:0xoffset). */
+  lsn: string;
+  /** Commit time of the transaction, in Unix seconds. */
+  time: number;
+  /** The transaction, by the log position of its commit (the records' own number is a reused slot). */
+  tx: string;
+  uid: number | null;
+  /** The user name of `uid` when a session of that user is connected now. */
+  user: string | null;
+  op: "insert" | "update" | "delete" | "truncate";
+  /** One value per column of `RowHistory.columns` (null: NULL). */
+  before: (string | null)[] | null;
+  after: (string | null)[] | null;
+}
+
+export interface RowHistory {
+  status: "ok" | "unavailable" | "needsFullRowLogging";
+  reason: string;
+  columns: string[];
+  /** Columns the CDC API does not send (TEXT, BYTE, BLOB…). */
+  skipped: string[];
+  events: RowHistoryEvent[];
+  range: { firstLog: number; firstLogFilled: number | null; currentLog: number; fromLsn: string; readUntil: string; readAt: number } | null;
+  /** Why the history is not complete; empty when it is. */
+  partial: string[];
+  notes: string[];
+  /** The read ended before the end of the log: no change seen says nothing about the row. */
+  cutShort: boolean;
+  /**
+   * Changes committed before this time (epoch seconds) are not shown: Informix's fast recovery rewrote the table's
+   * creation time, and what came before it may be a dropped table's. Null otherwise.
+   */
+  shownFrom: number | null;
+  /** Full row logging stays on in the table, which the user did not agree to: why, and the command that turns it off. */
+  leftOn: { reason: string; command: string } | null;
 }

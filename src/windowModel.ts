@@ -286,6 +286,22 @@ export function dropTarget(source: string, cursor: [number, number] | null, wind
   return { kind: "new", x: Math.round(cursor[0] - DROP_OFFSET.x), y: Math.round(cursor[1] - DROP_OFFSET.y) };
 }
 
+/**
+ * Where a tab let go at `x` lands in a tab bar: before the first tab whose middle is right of it, so 0 … n (n: after
+ * the last). `mids` are the middles of the tabs, left to right.
+ */
+export function insertionGap(mids: number[], x: number): number {
+  let gap = 0;
+  for (const mid of mids) if (x > mid) gap++;
+  return gap;
+}
+
+/** The position (moveTab's `to`) of the tab at `from` dropped at gap `gap` of its own bar; null: it stays. */
+export function reorderTarget(from: number, gap: number): number | null {
+  if (gap === from || gap === from + 1) return null;
+  return gap > from ? gap - 1 : gap;
+}
+
 /** `items` put into `list` at `index` (the end when it is null or past it). */
 export function insertAt<T>(list: T[], items: T[], index: number | null): T[] {
   const at = index === null || index < 0 || index > list.length ? list.length : index;

@@ -3,15 +3,16 @@
 Fast desktop SQL client: Tauri 2 + Rust core + SolidJS interface.
 Full plan: [docs/ROADMAP.md](docs/ROADMAP.md) · drivers: [docs/DRIVERS.md](docs/DRIVERS.md).
 
-## Done (2.2.0)
+## Done (2.4.0)
 
 What each area is for is defined in [docs/ARCHITECTURE.md › Areas](docs/ARCHITECTURE.md#areas); here is what each
 one has today.
 
 - **Platform**: Windows, macOS (universal dmg) and Linux (AppImage, deb, rpm) builds from GitHub Actions on a `vX.Y.Z`
   tag; Celer Setup (per-user, no administrator, silent mode for deployment) and portable builds; in-app updates on
-  Windows verified against `SHA256SUMS.txt`. Several windows with tabs dragged between them, sessions kept, and the
-  layout restored per monitor. Custom title bar in the theme's colours.
+  Windows verified against `SHA256SUMS.txt`. Several windows with tabs dragged between them (a ghost card follows the
+  tab, and outside the windows an outline shows exactly where the new window opens), sessions kept, and the layout
+  restored per monitor; F6 / Shift+F6 move the focus between panels. Custom title bar in the theme's colours.
 - **Drivers** (nothing to install except for Informix):
   - PostgreSQL (server-side cursors, full DDL, dollar-quote aware splitter, error position), MySQL / MariaDB
     (streaming reader, `KILL QUERY`, `DELIMITER`), SQL Server (TDS, Windows authentication, its own connection pool),
@@ -35,6 +36,8 @@ one has today.
 - **Table viewer**: per-column filter chips and free WHERE / ORDER BY (with a fix for `"text"`), server-side sort,
   exact count, typed cell editors (booleans, dates, foreign-key lookup), add/clone/delete rows, SQL preview and atomic
   save, foreign keys followed to the referenced row; Columns, Indexes, Keys and DDL tabs.
+  On Informix, «Historial de la fila» reads a row's past changes from the logical logs (CDC API over JDBC), with
+  before → after per column, and says why when it cannot or when the history may be partial.
 - **Library**: named scripts in folders with tags and a connection, linked consoles that save back, search and
   palette entries, drag into the editor, import/export of `.sql` files keeping folders and tags.
 - **History**: every statement with connection, time, duration and rows, searchable, pasted or reopened in a click.
@@ -45,11 +48,18 @@ one has today.
 - **Import / export**: streaming export to CSV, TSV, Excel, JSON, XML, SQL INSERT, Markdown and HTML with progress
   and cancel; import of CSV, TSV, JSON and spreadsheets (xlsx, xls, ods) with column mapping, preview, required-column
   warnings and one transaction.
+- **Test data**: fills a table with realistic, valid rows (up to 1,000,000) on every engine: a generator per column
+  inferred from type and name (Spanish or English data), CHECK lists and ranges, enums, unique and foreign keys kept,
+  reproducible by seed, previewed; inserted through the import pipeline in one transaction with cancel, or written as
+  a script or CSV / JSON.
 - **Migrate**: connections from DBeaver (saved passwords only when asked) and DbVisualizer, with folders, production
   flags and Informix properties.
 - **Settings**: 8 themes (Celer Oscuro and Claro, Darcula, Fjord, Sand, high contrast dark and light, follow the
-  system) with live previews, accent colour, density, interface and editor size, motion, page size, templates,
-  every shortcut rebindable (AltGr safe), safety confirmations, AI and MCP, Informix drivers.
+  system, with a theme for its light mode and one for its dark mode) with live previews; a theme editor makes custom
+  themes from any built-in one (every token, fonts, radius, motion speed; live preview, WCAG contrast checks,
+  `.celer-theme.json` export/import); sections grouped as General, Editor, Conexiones and IA y MCP; accent colour,
+  density, interface and editor size, motion, page size, templates, every shortcut rebindable (AltGr safe), safety
+  confirmations, AI and MCP, Informix drivers.
 - **AI / MCP**: in-app assistant (Claude Opus 5.5 by default, Sonnet 5.5 / Haiku 4.5) that writes, explains, fixes
   and optimises SQL from the schema, never rows, key in the OS credential store; MCP server (`celer --mcp`) with a
   permission level per connection, row and time limits, masked columns and an audit log. See
@@ -58,33 +68,29 @@ one has today.
   routines, reactions, tips learned from use and advice about the query just run; quiet or off in Settings.
 - **Safety**: read-only connections enforced in the Rust core, production connections confirm risky statements,
   passwords only in the OS credential store, damaged data files set aside instead of overwritten.
-- **Tests**: `cargo test --lib` has 219 tests, the live ones run against every engine when its `CELER_*_TEST`
-  variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix); 30 pure logic
-  checks (`dev/*-check.ts`); 26 end-to-end scripts that drive the desktop app over CDP (`dev/*-check.mjs`) plus
-  `dev/e2e.mjs`, all run by `dev/check-all.ps1`.
+- **Tests** (counts at 2.4): `cargo test --lib` has 284 tests, the live ones run against every engine when its
+  `CELER_*_TEST` variable is set (`dev/wsl.ps1 test`, or `engines.yml` on GitHub Actions for SQL Server and Informix);
+  35 pure logic checks (`dev/*-check.ts`, all run by CI and by `dev/check-all.ps1`); 28 scripts that drive the
+  desktop app over CDP (`dev/*-check.mjs`) plus `dev/e2e.mjs`. `dev/check-all.ps1` runs the end-to-end ones that pass
+  or fail on their own; its header lists the few it leaves out (observation and profiling scripts, first-run ones).
 - **Performance** (debug build, PostgreSQL, 6 columns): first page of 200k rows in 3 ms; loading all 200,000 rows in
   1.3 s with a 54 MB JS heap; scrolling the grid at ~7 ms per frame.
 - Browser preview: `npm run dev` runs the same UI against an in-memory sql.js demo.
 
 ## Next
 
-Implemented in the current sprint (one branch per package, integrated in one PR; listed here so the docs match the
-code): Gib's animations, colour, accessories and reactions (#103, #104, #105); SSH tunnels, export with secrets and
-JDBC URL parsing in the import (#115, #101, #102); transaction timer and whole-window environment colours (#116,
-#117); library on any database, engine compatibility indicator and variables (#99, #113, #118); MCP acting in the app
-and from WSL (#100, #124); results grid column drag, pinned result compare and typed Excel import (#109, #119, #120);
-settings review, error log and bug reports from the app (#106, #122, #112); SQL Server PRINT messages, Informix
-idle-drop recovery and E-R foreign keys in one query (#67, #97, #98); docs refresh (#111, #121).
+Implemented in the current sprint (2.4; one branch per package, integrated in one PR; listed here so the docs match
+the code): theme editor (#107); tear-off outline and ghost card for dragged tabs (#108); consistent motion, component
+styles, drag and drop and F6 between panels (#110); the approved reorganisation of menus, toolbars, dialogs and
+settings, with keyboard submenus (#111); Informix row history from the logical logs (#123); test data generator on
+every engine (#172); and the fixes from the sprint's macro review.
 
 Still open (see [docs/ROADMAP.md](docs/ROADMAP.md) for the longer view):
 
-1. **Simplify**: apply the reorganisation of overgrown menus, toolbars, dialogs and settings proposed on #111 (the four
-   groups were approved; one follow-up PR each).
-2. **Look and feel**: theme editor, tear-off hint and animations (#107, #108, #110), held back from this sprint
-   because the tear-off outline could hang off-screen on large displays.
-3. **Drivers**: Informix point-in-time row history (#123), held back because its transaction numbers do not identify
-   a transaction and a cancelled read was reported as «Sin cambios».
-4. **Docs**: keep this file and the roadmap refreshed at the end of each sprint (#121).
+1. **Drivers**: Oracle and IBM Db2, a generic connection form driven by each driver's fields, and capability flags
+   wired into the UI (Phase 2 of the roadmap).
+2. **Platform**: code signing for the Windows builds.
+3. **Docs**: keep this file and the roadmap refreshed at the end of each sprint (#121).
 
 ## Development
 ```powershell

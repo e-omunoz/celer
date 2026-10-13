@@ -19,6 +19,7 @@ import {
   setImportRange,
 } from "../importer";
 import { columnLetters } from "../importFormats";
+import { nonTransactionalNote } from "../testDataSql";
 import { ObjIcon } from "../icons";
 import { Dialog } from "./Modals";
 
@@ -63,7 +64,7 @@ export function ImportDialog() {
   };
 
   return (
-    <Dialog title={`Importar datos en ${importer.obj?.name ?? ""}`} wide class="import-dialog" onClose={cancelImport}>
+    <Dialog title={`Importar datos en ${importer.obj?.name ?? ""}`} wide class="import-dialog" onClose={() => !importer.running && cancelImport()}>
       <div class="import-body">
         <Show when={importer.reading}>
           {(reading) => (
@@ -178,6 +179,9 @@ export function ImportDialog() {
               )}
             </For>
           </div>
+          <Show when={importer.nonTransactional}>
+            <p class="import-warn">{nonTransactionalNote(importer.nonTransactional)}.</p>
+          </Show>
           <Show when={missingRequired().length}>
             <p class="import-warn">Sin valor para columnas obligatorias: {missingRequired().join(", ")}. La base de datos rechazará las filas.</p>
           </Show>
@@ -192,7 +196,7 @@ export function ImportDialog() {
         </Show>
       </div>
       <footer>
-        <span class="muted small">Todo se importa en una sola transacción: si una fila falla, no se guarda ninguna.</span>
+        <span class="muted small">{importer.nonTransactional ? `${importer.nonTransactional} no admite transacciones: lo importado antes de un fallo se queda.` : "Todo se importa en una sola transacción: si una fila falla, no se guarda ninguna."}</span>
         <span class="spacer" />
         <button type="button" class="btn" onClick={cancelImport}>{importer.running ? "Detener" : "Cancelar"}</button>
         <button type="button" class="btn primary" disabled={importer.running || Boolean(importer.reading) || !count() || !mappedCount() || rangeBad()} onClick={() => void runImport()}>

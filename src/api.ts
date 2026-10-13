@@ -12,6 +12,8 @@ import type {
   ObjectRef,
   OpenSessionOptions,
   SchemaForeignKey,
+  RowHistory,
+  RowHistoryRequest,
   SessionHealth,
   SessionInfo,
   SshHostKeyInfo,
@@ -79,6 +81,11 @@ export interface Backend {
   objectSql(sessionId: string, obj: ObjectRef): Promise<{ qualified: string; select: string }>;
   quoteIdents(sessionId: string, names: string[]): Promise<string[]>;
   exportQuery(connId: string, database: string, sql: string, exportId: string, options: ExportOptions): Promise<number>;
+  /**
+   * «Historial de la fila»: the row's past values from Informix's logical logs (CDC API), on a connection of its own.
+   * `historyId` is what `cancel` takes to stop it. Engines without it answer "unavailable" with the reason.
+   */
+  rowHistory(connId: string, password: string | undefined, historyId: string, request: RowHistoryRequest): Promise<RowHistory>;
   addHistory(entry: HistoryEntry): Promise<void>;
   getHistory(filter: string, limit: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
@@ -119,7 +126,10 @@ export interface Backend {
   sheetRows(handle: number, row0: number, row1: number, col0: number, col1: number): Promise<SheetCell[][]>;
   sheetClose(handle: number): Promise<void>;
   /** Writes in `encoding` (UTF-8 by default); returns the encoding used (UTF-8 when Windows-1252 cannot hold the text). */
-  writeTextFile(path: string, content: string, encoding?: string): Promise<string>;
+  /** `append` adds to a file already started (no BOM): a file too big for one string goes a piece at a time. */
+  writeTextFile(path: string, content: string, encoding?: string, append?: boolean): Promise<string>;
+  /** Ends a file written in pieces to `part` (a «.celer-part» path): renamed to `path`, or deleted when it is null. */
+  finishTextFile(part: string, path: string | null): Promise<void>;
   odbcDrivers(): Promise<string[]>;
   odbcDsns(): Promise<string[]>;
   ibmDriverStatus(): Promise<string | null>;
@@ -268,6 +278,7 @@ function tauriBackend(): Backend {
     quoteIdents: (sessionId, names) => invoke("quote_idents", { sessionId: sessionId, names }),
     exportQuery: (connId, database, sql, exportId, options) =>
       invoke("export_query", { connId: connId, database, sql, exportId: exportId, options }),
+    rowHistory: (connId, password, historyId, request) => invoke("row_history", { connId, password: password ?? null, historyId, request }),
     addHistory: (entry) => invoke("add_history", { entry }),
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
     clearHistory: () => invoke("clear_history"),
@@ -288,7 +299,8 @@ function tauriBackend(): Backend {
     sheetCancel: (openId) => invoke("sheet_cancel", { openId }),
     sheetRows: (handle, row0, row1, col0, col1) => invoke("sheet_rows", { handle, row0, row1, col0, col1 }),
     sheetClose: (handle) => invoke("sheet_close", { handle }),
-    writeTextFile: (path, content, encoding) => invoke("write_text_file", { path, content, encoding: encoding ?? null }),
+    writeTextFile: (path, content, encoding, append) => invoke("write_text_file", { path, content, encoding: encoding ?? null, append: append ?? null }),
+    finishTextFile: (part, path) => invoke("finish_text_file", { part, path }),
     odbcDrivers: () => invoke("odbc_drivers"),
     odbcDsns: () => invoke("odbc_dsns"),
     ibmDriverStatus: () => invoke("ibm_driver_status"),

@@ -39,6 +39,8 @@ seed() {
   docker exec -i celer-mariadb mariadb -uroot -pceler < dev/seed-mysql.sql
   docker exec -i celer-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_PASSWORD" -i /dev/stdin < dev/seed-mssql.sql
   docker exec celer-ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster - 2>/dev/null || true"
+  # The CDC API's database (row history, src-tauri/src/rowhistory.rs), as a DBA creates it once.
+  docker exec celer-ifx bash -lc "echo 'SELECT 1 FROM sysmaster:sysdatabases WHERE name = \"syscdcv1\"' | dbaccess sysmaster - 2>/dev/null | grep -q '1 row' || dbaccess - \$INFORMIXDIR/etc/syscdcv1.sql >/dev/null 2>&1"
   docker exec -i celer-ifx bash -lc "dbaccess - -" < dev/seed-informix.sql
 }
 
@@ -59,6 +61,14 @@ engine_env() {
     export CELER_ODBC_LIB=/usr/lib/x86_64-linux-gnu/libodbc.so.2
     export CELER_ODBC_TEST="Driver={PostgreSQL Unicode};Server=localhost;Port=15432;Database=celer;Uid=celer;Pwd=celer;"
   fi
+  # Generic ODBC to MariaDB (testdata_odbc_mysql): MariaDB Connector/ODBC, installed by setup.sh or unpacked into $D.
+  local maodbc
+  for maodbc in /usr/lib/x86_64-linux-gnu/odbc/libmaodbc.so "$D/odbc-mariadb/root/usr/lib/x86_64-linux-gnu/odbc/libmaodbc.so"; do
+    if [ -f "$maodbc" ] && [ -n "${CELER_ODBC_LIB:-}" ]; then
+      export CELER_ODBC_MYSQL_TEST="Driver=$maodbc;Server=127.0.0.1;Port=33307;Database=celer;Uid=celer;Pwd=celer;"
+      break
+    fi
+  done
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"
   export CELER_JDBC_JARS="$D/jdbc/jdbc-15.0.1.4.jar:$D/jdbc/bson-3.8.0.jar"
   export CELER_REQUIRE_BRIDGE=1 CELER_NODE=node CELER_INFORMIX_CONTAINER=celer-ifx

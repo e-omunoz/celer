@@ -2,6 +2,10 @@
 # app (debug build, its own data folder, see dev/run-desktop.ps1). Needs the PostgreSQL test database
 # (dev/testdb-postgres.ps1). Prints a summary and exits 1 if anything failed.
 #   powershell -ExecutionPolicy Bypass -File dev\check-all.ps1 [-NoBuild] [-SkipRust]
+# Not run here: dev/busy-check.mjs, where-check.mjs and perf-check.mjs print what they see instead of passing or
+# failing; tour-check.mjs and guide-import-check.mjs need a first run (run-desktop.ps1 -Fresh); runtime-deps-check.mjs
+# needs CELER_FAKE_VERSION and the network; gib-settings-check.mjs drives a headless browser against the preview.
+# The live engine matrix is dev\wsl.ps1 test (or engines.yml), not this script.
 param([switch]$NoBuild, [switch]$SkipRust)
 $ErrorActionPreference = "Continue"
 $root = Split-Path $PSScriptRoot -Parent
@@ -30,24 +34,13 @@ function Restart-App([switch]$Build) {
 }
 
 Step "typescript" { & $node node_modules\typescript\bin\tsc --noEmit -p . }
-Step "sql context" { & $node --experimental-strip-types --no-warnings dev\sqlcontext-check.ts }
-Step "templates and parameters" { & $node --experimental-strip-types --no-warnings dev\snippets-check.ts }
-Step "ER layout" { & $node --experimental-strip-types --no-warnings dev\erlayout-check.ts }
-Step "plan readers" { & $node --experimental-strip-types --no-warnings dev\plan-check.ts }
-Step "result comparison" { & $node --experimental-strip-types --no-warnings dev\compare-check.ts }
-Step "foreign-key lookup SQL" { & $node --experimental-strip-types --no-warnings dev\fklookup-check.ts }
-Step "data comparison script" { & $node --experimental-strip-types --no-warnings dev\datacompare-check.ts }
-Step "schema comparison logic" { & $node --experimental-strip-types --no-warnings dev\schemacompare-check.ts }
-Step "table SQL builders" { & $node --experimental-strip-types --no-warnings dev\sqlgen-check.ts }
-Step "XML formatting" { & $node --experimental-strip-types --no-warnings dev\prettyxml-check.ts }
-Step "keyboard shortcuts" { & $node --experimental-strip-types --no-warnings dev\keymap-check.ts }
-Step "import formats" { & $node --experimental-strip-types --no-warnings dev\import-check.ts }
-Step "connection import (JDBC URLs)" { & $node --experimental-strip-types --no-warnings dev\migrate-check.ts }
-Step "connection form" { & $node --experimental-strip-types --no-warnings dev\connform-check.ts }
-Step "explorer" { & $node --experimental-strip-types --no-warnings dev\explorer-check.ts }
-Step "theme contrast" { & $node --experimental-strip-types --no-warnings dev\contrast-check.ts }
-Step "update notes" { & $node --experimental-strip-types --no-warnings dev\update-check.ts }
+# Every pure logic check (dev/*-check.ts), as ci.yml runs them: a new one is picked up without editing this file.
+Get-ChildItem dev\*-check.ts | Sort-Object Name | ForEach-Object {
+  $check = $_.FullName
+  Step "logic: $($_.BaseName)" { & $node --experimental-strip-types --no-warnings $check }
+}
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
+if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "menus, settings and theme editor (preview)" { & $node dev\layout-check.mjs } }
 if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
 
 # The MCP settings start from their defaults (the e2e checks them): one left enabled by an earlier manual test is
@@ -60,6 +53,7 @@ Step "disconnect" { & $node dev\disconnect-check.mjs }
 Step "generated scripts" { & $node dev\generate-check.mjs }
 Step "misc (startup script, pins, undo)" { & $node dev\misc-check.mjs }
 Step "import (Excel, JSON)" { & $node dev\import-e2e-check.mjs }
+Step "test data generator" { $env:CONN = "Postgres local"; & $node dev\testdata-e2e-check.mjs }
 Step "grid editors (bool, date, FK lookup) and explorer refresh" { & $node dev\grid-editors-check.mjs }
 Step "schema comparison" { & $node dev\schema-compare-check.mjs }
 Step "data comparison" { & $node dev\data-compare-check.mjs }
@@ -69,6 +63,12 @@ Step "Gib companion" { & $node dev\gib-companion-check.mjs "$env:TEMP\gib-compan
 Step "ER diagram" { & $node dev\er-check.mjs "$env:TEMP\celer-er" }
 Step "execution plans" { & $node dev\plan-view-check.mjs "$env:TEMP\celer-plan" }
 Step "server activity" { & $node dev\activity-check.mjs "$env:TEMP\celer-activity" }
+Step "editor completion and navigation" { & $node dev\editor-check.mjs }
+Step "pinned result compare" { & $node dev\result-compare-check.mjs }
+Step "typed Excel import" { & $node dev\import-typed-check.mjs }
+Restart-App
+# Tabs are told apart by title, so this one starts from an empty workspace.
+Step "several windows" { & $node dev\windows-check.mjs "Postgres local" }
 Restart-App
 Step "restore (prepare)" { & $node dev\restore-check.mjs prepare }
 $exe = "$env:CARGO_TARGET_DIR\debug\celer.exe"

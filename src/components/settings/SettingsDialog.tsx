@@ -3,7 +3,9 @@ import { createSignal, For, Show, type JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { api, errorText, isTauri } from "../../api";
 import { applyTheme, notify, saveSettings, setState, state } from "../../state";
-import { exportSettings, parseSettingsFile, resetPatch, searchSettings, SETTINGS_SECTIONS, type SettingsSectionInfo } from "../../settingsSections";
+import { exportSettings, parseSettingsFile, resetPatch, searchSettings, SETTINGS_GROUPS, SETTINGS_SECTIONS, type SettingsSectionInfo } from "../../settingsSections";
+import { confirmLeaveThemeEditor } from "../../themeStore";
+import { ThemeEditor } from "../ThemeEditor";
 import type { Settings } from "../../types";
 import { Dialog } from "../Modals";
 import { AiSettings } from "../AiSettings";
@@ -25,6 +27,7 @@ import { WindowSection } from "./WindowSection";
  */
 export const SECTION_VIEWS: Record<string, () => JSX.Element> = {
   appearance: AppearanceSection,
+  theme: ThemeEditor,
   editor: EditorSection,
   results: ResultsSection,
   execution: ExecutionSection,
@@ -47,16 +50,24 @@ export function SettingsDialog() {
   const [query, setQuery] = createSignal("");
   const section = () => sections().find((item) => item.id === state.settingsSection) ?? sections()[0];
   const matches = () => searchSettings(query(), sections());
-  const close = () => {
+  const close = async () => {
+    // The theme editor's unsaved changes are not dropped without asking.
+    if (!(await confirmLeaveThemeEditor())) return;
     applyTheme();
     setState({ settingsOpen: false, settingsSection: "appearance" });
+  };
+  /** Another section (or a search result): the theme editor asks first when it has unsaved changes. */
+  const goTo = async (id: string) => {
+    if (id !== state.settingsSection && !(await confirmLeaveThemeEditor())) return false;
+    setState("settingsSection", id);
+    return true;
   };
   let body: HTMLDivElement | undefined;
 
   /** A search result: its section, scrolled to the setting, which lights up for a moment. */
-  const jump = (id: string, label: string) => {
+  const jump = async (id: string, label: string) => {
+    if (!(await goTo(id))) return;
     setQuery("");
-    setState("settingsSection", id);
     requestAnimationFrame(() => {
       const target = [...(body?.querySelectorAll<HTMLElement>("[data-setting]") ?? [])].find((el) => el.dataset.setting === label);
       if (!target) return;
@@ -77,7 +88,7 @@ export function SettingsDialog() {
   };
 
   return (
-    <Dialog title="Ajustes" wide class="settings" onClose={close}>
+    <Dialog title="Ajustes" wide class="settings" onClose={() => void close()}>
       <div class="settings-layout">
         <nav class="settings-nav">
           <label class="settings-search">
@@ -91,15 +102,27 @@ export function SettingsDialog() {
               onInput={(event) => setQuery(event.currentTarget.value)}
               onKeyDown={(event) => {
                 const first = matches()[0];
-                if (event.key === "Enter" && first) jump(first.section, first.label);
+                if (event.key === "Enter" && first) void jump(first.section, first.label);
               }}
             />
           </label>
-          <For each={sections()}>
-            {(item) => (
-              <button type="button" classList={{ on: !query() && section().id === item.id }} onClick={() => { setQuery(""); setState("settingsSection", item.id); }}>
-                {item.label}
-              </button>
+          <For each={SETTINGS_GROUPS.filter((group) => sections().some((item) => item.group === group))}>
+            {(group) => (
+              <div class="settings-group" role="group" aria-label={group}>
+                <span class="settings-group-label">{group}</span>
+                <For each={sections().filter((item) => item.group === group)}>
+                  {(item) => (
+                    <button
+                      type="button"
+                      data-section={item.id}
+                      classList={{ on: !query() && section().id === item.id }}
+                      onClick={() => void goTo(item.id).then((moved) => moved && setQuery(""))}
+                    >
+                      {item.label}
+                    </button>
+                  )}
+                </For>
+              </div>
             )}
           </For>
           <span class="spacer" />
@@ -117,7 +140,7 @@ export function SettingsDialog() {
               <div class="settings-results">
                 <For each={matches()} fallback={<p class="settings-note">Ningún ajuste coincide con «{query()}».</p>}>
                   {(match) => (
-                    <button type="button" class="settings-result" onClick={() => jump(match.section, match.label)}>
+                    <button type="button" class="settings-result" onClick={() => void jump(match.section, match.label)}>
                       <span>{match.label}</span>
                       <small>{match.sectionLabel}</small>
                     </button>

@@ -384,6 +384,63 @@ impl SqliteDriver {
     }
 }
 
+/// Whether a CREATE TABLE statement ends with WITHOUT ROWID (a table with no rowid, so no auto-filled key).
+fn without_rowid_sql(sql: &str) -> bool {
+    let words: Vec<String> = sql.rsplit(')').next().unwrap_or("").split(|c: char| !c.is_ascii_alphanumeric() && c != '_').filter(|w| !w.is_empty()).map(|w| w.to_ascii_lowercase()).collect();
+    words.windows(2).any(|w| w[0] == "without" && w[1] == "rowid")
+}
+
+/// Whether `column`'s own definition in a CREATE TABLE statement says PRIMARY KEY DESC: SQLite does not make such an
+/// INTEGER column the rowid alias (a table-level `PRIMARY KEY (x DESC)` still is).
+fn primary_key_desc(sql: &str, column: &str) -> bool {
+    let Some(open) = sql.find('(') else { return false };
+    // The column definitions and table constraints, split at top-level commas (quotes and parentheses kept whole).
+    let mut defs = vec![String::new()];
+    let (mut depth, mut quote) = (0usize, None::<char>);
+    for c in sql[open + 1..].chars() {
+        match quote {
+            Some(q) => {
+                if c == q || (q == '[' && c == ']') {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' | '`' | '[' => quote = Some(c),
+                '(' => depth += 1,
+                ')' if depth == 0 => break,
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    defs.push(String::new());
+                    continue;
+                }
+                _ => {}
+            },
+        }
+        defs.last_mut().unwrap().push(c);
+    }
+    defs.iter().any(|def| {
+        let def = def.trim_start();
+        let (name, rest) = match def.chars().next() {
+            Some(q @ ('"' | '`' | '[')) => {
+                let close = if q == '[' { ']' } else { q };
+                match def[1..].find(close) {
+                    Some(end) => (def[1..1 + end].to_string(), &def[2 + end..]),
+                    None => return false,
+                }
+            }
+            _ => {
+                let end = def.find(|c: char| c.is_whitespace()).unwrap_or(def.len());
+                (def[..end].to_string(), &def[end..])
+            }
+        };
+        if !name.eq_ignore_ascii_case(column) {
+            return false;
+        }
+        let words: Vec<String> = rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').filter(|w| !w.is_empty()).map(|w| w.to_ascii_lowercase()).collect();
+        words.windows(3).any(|w| w[0] == "primary" && w[1] == "key" && w[2] == "desc")
+    })
+}
+
 /// The referenced table of a row `f` of pragma_foreign_key_list by its name in the catalog `cat`: REFERENCES takes the
 /// name in any case (`customers` for `Customers`), and the E-R diagram and the explorer link to the table's own name.
 fn fk_table(cat: &str) -> String {
@@ -678,6 +735,21 @@ impl Driver for SqliteDriver {
             "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?1, ?2) ORDER BY cid",
             rusqlite::params![obj.name, sch],
         )?;
+        // Only the rowid alias is filled by SQLite: a single-column primary key declared exactly INTEGER on a rowid
+        // table. `INT PRIMARY KEY`, `BIGINT PRIMARY KEY`, the columns of a composite key, any key of a WITHOUT ROWID
+        // table and `INTEGER PRIMARY KEY DESC` in the column's own definition (an SQLite quirk; `PRIMARY KEY (x DESC)`
+        // at the table's level is still the alias) are ordinary columns the INSERT has to give a value.
+        let pk_cols = rows.iter().filter(|r| cell_i64(&r[4]) > 0).count();
+        let create_sql = if pk_cols == 1 {
+            let sql = self.query(
+                &format!("SELECT sql FROM {} WHERE type = 'table' AND name = ?1", self.catalog(sch)),
+                rusqlite::params![obj.name],
+            )?;
+            sql.first().map(|r| cell_string(&r[0])).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let without_rowid = without_rowid_sql(&create_sql);
         Ok(rows
             .into_iter()
             .map(|r| {
@@ -689,12 +761,18 @@ impl Driver for SqliteDriver {
                         t
                     }
                 };
+                let rowid_alias = pk_cols == 1
+                    && !without_rowid
+                    && cell_i64(&r[4]) > 0
+                    && type_name.trim().eq_ignore_ascii_case("integer")
+                    && !primary_key_desc(&create_sql, &cell_string(&r[0]));
                 TableColumn {
                     name: cell_string(&r[0]),
                     kind: kind_from_decl(&type_name),
-                    nullable: cell_i64(&r[2]) == 0,
+                    // The rowid alias is never NULL (a NULL inserted there takes the next rowid), whatever the pragma says.
+                    nullable: cell_i64(&r[2]) == 0 && !rowid_alias,
                     primary_key: cell_i64(&r[4]) > 0,
-                    identity: type_name.to_ascii_lowercase().contains("int") && cell_i64(&r[4]) > 0,
+                    identity: rowid_alias,
                     default: match &r[3] {
                         Cell::Null => None,
                         other => Some(cell_string(other)),
@@ -999,6 +1077,28 @@ mod tests {
         crate::assert_report_banner("SQLite", &d.server_info().unwrap(), &[":memory:", "memory"]);
     }
 
+    /// Generar datos de prueba (#172): only the rowid alias is auto-filled; other integer keys need a value.
+    #[test]
+    fn identity_is_only_the_rowid_alias() {
+        let mut d = mem();
+        d.execute("CREATE TABLE a (id INTEGER PRIMARY KEY, x TEXT); CREATE TABLE b (id INT NOT NULL PRIMARY KEY); CREATE TABLE c (p INTEGER, l INTEGER, PRIMARY KEY (p, l)); CREATE TABLE w (id INTEGER PRIMARY KEY) WITHOUT ROWID; CREATE TABLE g (id BIGINT PRIMARY KEY)", 10).unwrap();
+        // #201: PRIMARY KEY DESC in the column's definition is not the alias; at the table's level, or ASC, it is.
+        d.execute("CREATE TABLE dsc (x INTEGER PRIMARY KEY DESC NOT NULL, y TEXT); CREATE TABLE \"q d\" (\"pk, (x)\" TEXT DEFAULT 'a,b', [id] integer primary  key desc); CREATE TABLE tdsc (x INTEGER, y TEXT, PRIMARY KEY (x DESC)); CREATE TABLE asc_ (x INTEGER PRIMARY KEY ASC, y TEXT); CREATE TABLE other (x INTEGER PRIMARY KEY, y TEXT CHECK (y <> 'x primary key desc'))", 10).unwrap();
+        let auto = |d: &mut SqliteDriver, t: &str| d.table_columns(&ObjectRef::new("main", "main", t, "table")).unwrap().iter().map(|c| c.identity).collect::<Vec<_>>();
+        assert_eq!(auto(&mut d, "a"), vec![true, false]);
+        assert_eq!(auto(&mut d, "b"), vec![false]);
+        assert_eq!(auto(&mut d, "c"), vec![false, false]);
+        assert_eq!(auto(&mut d, "w"), vec![false]);
+        assert_eq!(auto(&mut d, "g"), vec![false]);
+        assert_eq!(auto(&mut d, "dsc"), vec![false, false]);
+        assert_eq!(auto(&mut d, "q d"), vec![false, false]);
+        assert_eq!(auto(&mut d, "tdsc"), vec![true, false]);
+        assert_eq!(auto(&mut d, "asc_"), vec![true, false]);
+        assert_eq!(auto(&mut d, "other"), vec![true, false]);
+        // And so it takes no value of its own: an INSERT without it fails on NOT NULL.
+        assert!(d.execute("INSERT INTO dsc (y) VALUES ('a')", 10).is_err());
+    }
+
     #[test]
     fn runs_the_startup_script() {
         let mut cfg = ConnConfig::default();
@@ -1054,6 +1154,7 @@ mod tests {
         let cols = d.table_columns(&obj).unwrap();
         assert!(cols[0].primary_key);
         assert!(!cols[1].nullable);
+        assert!(cols[0].identity && !cols[0].nullable, "the rowid alias is not nullable: {:?}", cols[0]);
         let ddl = d.ddl(&obj).unwrap();
         assert!(ddl.to_ascii_lowercase().contains("create table"));
         let comp = d.completion("main").unwrap();

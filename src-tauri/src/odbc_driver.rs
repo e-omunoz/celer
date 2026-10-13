@@ -760,7 +760,7 @@ fn code_words(sql: &str) -> Vec<String> {
 }
 
 /// El script de inicio de la conexión, en cada conexión nueva (todavía en autocommit).
-fn run_startup<L: Link>(conn: &mut L, cfg: &ConnConfig) -> Result<()> {
+pub fn run_startup<L: Link>(conn: &mut L, cfg: &ConnConfig) -> Result<()> {
     for sql in crate::startup::statements(cfg) {
         conn.exec(&sql, 1).map_err(|e| crate::startup::failed(&sql, e))?;
     }

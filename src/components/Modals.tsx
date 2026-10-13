@@ -3,6 +3,7 @@ import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js"
 import { Mark } from "../brand/Mark";
 import { returnFocus } from "../focus";
 import { isTauri } from "../api";
+import { leaveOnCleanup } from "../motion";
 import {
   answerParams,
   answerPassword,
@@ -28,6 +29,10 @@ import { DataCompareView } from "./DataCompareView";
 import { dataCompare } from "../dataCompareRun";
 import { ImportDialog } from "./ImportDialog";
 import { importer } from "../importer";
+import { rowHistory } from "../rowHistory";
+import { RowHistoryDialog } from "./RowHistory";
+import { TestDataDialog } from "./TestDataDialog";
+import { testData } from "../testDataRun";
 import { checkForUpdates, openReleasePage } from "../update";
 import { isDetached, isPanelWindow } from "../windows";
 import { InformixGuideDialog, JdbcSetupDialog } from "./InformixDrivers";
@@ -41,6 +46,8 @@ export function Modals() {
       <Show when={state.settingsOpen}><SettingsDialog /></Show>
       <Show when={state.exportOpen}><ExportDialog /></Show>
       <Show when={importer.open}><ImportDialog /></Show>
+      <Show when={rowHistory.open}><RowHistoryDialog /></Show>
+      <Show when={testData.open}><TestDataDialog /></Show>
       <Show when={state.aboutOpen}><AboutDialog /></Show>
       <Show when={errorLog.open}><ErrorLogView /></Show>
       <Show when={report.open}><ReportDialog /></Show>
@@ -270,6 +277,9 @@ function ParamsDialog(props: { ask: NonNullable<typeof state.paramAsk> }) {
 /** Dialogs open, newest last: Esc closes only the one on top (a confirmation over Ajustes, not both). */
 const openDialogs: symbol[] = [];
 
+/** A modal dialog is open: the workspace shortcuts behind it wait (App.tsx), as F6 does (focus.ts). */
+export const hasOpenDialog = () => openDialogs.length > 0;
+
 export function Dialog(props: { title: string; onClose: () => void; children: JSX.Element; wide?: boolean; small?: boolean; class?: string }) {
   // Read before the children render (they focus their first field): it gets the focus back on close.
   const opener = document.activeElement;
@@ -292,8 +302,8 @@ export function Dialog(props: { title: string; onClose: () => void; children: JS
   });
   return (
     <>
-      <div class="scrim" onMouseDown={props.onClose} />
-      <div class={`dialog ${props.class ?? ""}`} classList={{ wide: props.wide, small: props.small }} role="dialog" aria-label={props.title}>
+      <div class="scrim" ref={leaveOnCleanup("scrim")} onMouseDown={props.onClose} />
+      <div class={`dialog ${props.class ?? ""}`} ref={leaveOnCleanup("dialog")} classList={{ wide: props.wide, small: props.small }} role="dialog" aria-label={props.title}>
         <header>
           <h2>{props.title}</h2>
           <button type="button" class="icon-btn" title="Cerrar (Esc)" onClick={props.onClose}><X size={15} /></button>

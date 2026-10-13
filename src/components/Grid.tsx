@@ -1,13 +1,13 @@
 import { CalendarDays } from "lucide-solid";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
 import { raw } from "../raw";
-import { easeTowards, identityOrder, inOrder, inverseOrder, isIdentity, layoutByColumn, moveColumn, slideGap, type ColumnOrder } from "../columnOrder";
+import { easeTowards, identityOrder, inOrder, inverseOrder, isIdentity, isPermutation, layoutByColumn, moveColumn, slideGap, type ColumnOrder } from "../columnOrder";
 import { endBusy, nextPaint, startBusy } from "../busy";
 import { BusyOverlay } from "./BusyOverlay";
 import { cellText, isNullCell, quoteIdentFor, resultToText, sqlLiteral, uniqueNames } from "../sql";
 import { cellLabel } from "../cellFormat";
 import { Gib } from "../gib/Gib";
-import { gibShows, copyText, openMenu, reducedMotion, setState, state, type GridStats, type MenuItem } from "../state";
+import { gibShows, copyText, openMenu, reducedMotion, rowHeight, setState, state, type GridStats, type MenuItem } from "../state";
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
 import { parseCsv, pastedValue } from "../importFormats";
@@ -67,10 +67,17 @@ export interface GridProps {
   sortState?: { col: number; dir: 1 | -1 } | null;
   onSortChange?: (sort: { col: number; dir: 1 | -1 } | null) => void;
   onExport?: () => void;
+  /**
+   * «Historial de la fila» in the row menu: `blocked` disables it with the reason (engine, protocol, no key), and
+   * `rowBlocked` for one row (a new one); `open` gets the row's index in `rows`.
+   */
+  rowHistory?: { blocked: string | null; rowBlocked?: (row: number) => string | null; open: (row: number) => void };
   /** Shift+Enter or a double click on a read-only cell: the grid has put the cell and its row (in screen order) in the inspector state. */
   onActivate?: (row: number, col: number) => void;
   /** The column order changed (headers dragged): null when it is the query's own again. */
   onColumnOrder?: (order: ColumnOrder | null) => void;
+  /** An order to start with (a tab moved from another window), asked once per result; used when it fits its columns. */
+  initialColumnOrder?: () => ColumnOrder | null | undefined;
   /**
    * Ctrl+V in an editable grid: the block on the clipboard (copied from Excel: tab-separated) goes into the cells
    * from the active one rightwards and down, each value read for its column; a `row` past the rows shown is new.
@@ -91,6 +98,8 @@ interface Palette {
   muted: string;
   faint: string;
   line: string;
+  /** Drag and drop: the insertion line and the dragged header's border (--dnd-line, shared with tabs and the explorer). */
+  dnd: string;
   head: string;
   headFg: string;
   sel: string;
@@ -159,6 +168,7 @@ function readPalette(): Palette {
     sel: v("--grid-sel"),
     selStrong: v("--grid-sel-strong", v("--grid-sel")),
     accent: v("--accent"),
+    dnd: v("--dnd-line", v("--accent")),
     alt: v("--grid-alt"),
     bg: v("--surface"),
     modified: v("--grid-modified"),
@@ -221,7 +231,7 @@ export function DataGrid(props: GridProps) {
   let lifted = -1;
   let selecting: "cells" | "rows" | "cols" | null = null;
 
-  const rowH = () => (state.settings.density === "comfortable" ? 28 : 24);
+  const rowH = rowHeight;
   const gutter = () => Math.max(44, String(props.rows.length).length * 8 + 22);
 
   function computeOrder(data: Cell[][], current: { col: number; dir: 1 | -1 } | null) {
@@ -328,8 +338,28 @@ export function DataGrid(props: GridProps) {
     });
   }
 
+  /** The widths last measured for the result (a column still at its own was not resized by hand). */
+  let autoWidths: number[] = [];
+
+  /** Measures the result's columns and gives every column its measured width. */
+  function measureAll() {
+    autoWidths = measureWidths();
+    setWidths(autoWidths);
+  }
+
   function refreshPalette() {
+    const before = palette;
     palette = readPalette();
+    // A theme with another font: the text no longer fits the widths (and cell size) measured for the old one. The
+    // columns still at their measured width are measured again; one resized by hand keeps its width.
+    if (before && (before.mono !== palette.mono || before.sans !== palette.sans) && autoWidths.length) refitFont();
+  }
+
+  function refitFont() {
+    const old = autoWidths;
+    const next = measureWidths();
+    autoWidths = next;
+    setWidths(widths().map((width, index) => (width === old[index] ? next[index] : width)));
   }
 
   function schedule() {
@@ -634,7 +664,7 @@ export function DataGrid(props: GridProps) {
       ctx.fillRect(gx, 0, w, HEAD_H);
       drawHeader(liftedAt, gx);
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = p.accent;
+      ctx.strokeStyle = p.dnd;
       ctx.lineWidth = 1;
       ctx.strokeRect(gx + 0.5, 0.5, w - 1, ghostH - 1);
       ctx.restore();
@@ -973,13 +1003,11 @@ export function DataGrid(props: GridProps) {
   }
 
   function autofit(col?: number) {
+    if (col === undefined) return measureAll();
     const measured = measureWidths();
-    if (col === undefined) setWidths(measured);
-    else {
-      const next = widths().slice();
-      next[col] = measured[col];
-      setWidths(next);
-    }
+    const next = widths().slice();
+    next[col] = measured[col];
+    setWidths(next);
   }
 
   function beginEdit(pos: Pos, initial?: string) {
@@ -1320,45 +1348,67 @@ export function DataGrid(props: GridProps) {
     if (target.type !== "cell" && target.type !== "gutter") return;
     const many = selectedRows().length;
     const items: MenuItem[] = [
-      { label: "Copiar", hint: "Ctrl+C", icon: "copy", run: () => copy(state.settings.copyFormat) },
-      { label: "Copiar con cabeceras", hint: "Ctrl+Shift+C", run: () => copy("tsv-head") },
-      { label: "Copiar como CSV", run: () => copy("csv") },
-      { label: "Copiar como JSON", run: () => copy("json") },
-      { label: "Copiar como Markdown", run: () => copy("markdown") },
-      { label: "Copiar como XML", run: () => copy("xml") },
-      { label: "Copiar como SQL INSERT", run: () => copy("insert") },
-      { label: "Copiar como lista IN (…)", run: () => copy("in") },
-      { label: "Copiar como WHERE", run: () => copy("where") },
+      { label: "Copiar", keys: "Ctrl+C", icon: "copy", run: () => copy(state.settings.copyFormat) },
+      { label: "Copiar con cabeceras", keys: "Ctrl+Shift+C", run: () => copy("tsv-head") },
+      // The other formats in one submenu (#111); each copies exactly what its own entry did.
+      {
+        label: "Copiar como",
+        submenu: [
+          { label: "CSV", run: () => copy("csv") },
+          { label: "JSON", run: () => copy("json") },
+          { label: "Markdown", run: () => copy("markdown") },
+          { label: "XML", run: () => copy("xml") },
+          { separator: true },
+          { label: "SQL INSERT", run: () => copy("insert") },
+          { label: "Lista IN (…)", run: () => copy("in") },
+          { label: "WHERE", run: () => copy("where") },
+        ],
+      },
       { separator: true },
-      { label: "Ver valor", hint: "Mayús+Intro", icon: "eye", run: () => activate() },
+      { label: "Ver valor", keys: "Mayús+Intro", icon: "eye", run: () => activate() },
     ];
+    const history = props.rowHistory;
+    if (history) {
+      // The row under the pointer: the focus is only set once a click has selected something (not on the first right-click).
+      const source = ordered()[target.row];
+      const why = history.blocked ?? (source === undefined ? "Ninguna fila elegida" : (history.rowBlocked?.(source) ?? null));
+      // Disabled with its reason, as greyed-out features are: the short part beside the label, all of it as the tooltip.
+      items.push({ label: "Historial de la fila", icon: "history", disabled: Boolean(why), hint: why?.split(":")[0], title: why ?? undefined, run: () => source !== undefined && history.open(source) });
+    }
     const f = focus();
     const fc = f ? src(f.col) : -1;
     if (f && props.onFollow && props.linkCols?.includes(fc)) {
       const source = ordered()[f.row];
       items.unshift(
-        { label: `Ir a la fila referenciada${props.linkLabel ? ` (${props.linkLabel(fc)})` : ""}`, hint: "Ctrl+clic", icon: "link", run: () => source !== undefined && props.onFollow?.(source, fc) },
+        { label: `Ir a la fila referenciada${props.linkLabel ? ` (${props.linkLabel(fc)})` : ""}`, keys: "Ctrl+Clic", icon: "link", run: () => source !== undefined && props.onFollow?.(source, fc) },
         { separator: true },
       );
     }
     if (props.onFilter) {
       items.push(
         { separator: true },
-        { label: "Filtrar por este valor", icon: "filter", run: () => quickFilter("eq") },
-        { label: "Excluir este valor", run: () => quickFilter("ne") },
-        { label: "Contiene este texto", run: () => quickFilter("contains") },
-        { label: "Es NULL", run: () => quickFilter("null") },
-        { label: "No es NULL", run: () => quickFilter("not-null") },
+        {
+          label: "Filtrar",
+          icon: "filter",
+          submenu: [
+            { label: "Por este valor", run: () => quickFilter("eq") },
+            { label: "Excluir este valor", run: () => quickFilter("ne") },
+            { label: "Contiene este texto", run: () => quickFilter("contains") },
+            { separator: true },
+            { label: "Es NULL", run: () => quickFilter("null") },
+            { label: "No es NULL", run: () => quickFilter("not-null") },
+          ],
+        },
       );
     }
     if (props.editable) {
       items.push(
         { separator: true },
-        { label: "Editar celda", hint: "F2", run: () => focus() && beginEdit(focus()!) },
-        { label: "Poner a NULL", hint: "Ctrl+Mayús+N", run: setNull },
-        { label: "Añadir fila", hint: "Alt+Insert", icon: "plus", run: () => props.onInsert?.() },
-        { label: "Clonar fila", hint: "Ctrl+D", run: () => focus() && props.onClone?.(ordered()[focus()!.row]) },
-        { label: many > 1 ? `Eliminar ${many} filas` : "Eliminar fila", hint: "Supr", icon: "trash", danger: true, run: () => props.onDelete?.(selectedRows()) },
+        { label: "Editar celda", keys: "F2", run: () => focus() && beginEdit(focus()!) },
+        { label: "Poner a NULL", keys: "Ctrl+Mayús+N", run: setNull },
+        { label: "Añadir fila", keys: "Alt+Insert", icon: "plus", run: () => props.onInsert?.() },
+        { label: "Clonar fila", keys: "Ctrl+D", run: () => focus() && props.onClone?.(ordered()[focus()!.row]) },
+        { label: many > 1 ? `Eliminar ${many} filas` : "Eliminar fila", keys: "Supr", icon: "trash", danger: true, run: () => props.onDelete?.(selectedRows()) },
       );
       // Undo pending changes: the cell under the cursor, or its whole row (edits, deletion or a new row).
       const at = focus();
@@ -1595,6 +1645,13 @@ export function DataGrid(props: GridProps) {
       schedule();
     });
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "data-density"] });
+    // A theme's font that was still loading when the grid measured: measure again once it is there.
+    const fontsLoaded = () => {
+      if (autoWidths.length) refitFont();
+      schedule();
+    };
+    document.fonts?.addEventListener?.("loadingdone", fontsLoaded);
+    onCleanup(() => document.fonts?.removeEventListener?.("loadingdone", fontsLoaded));
     const up = () => onMouseUp();
     window.addEventListener("mouseup", up);
     // Resizing or moving a column goes on outside the grid.
@@ -1624,14 +1681,17 @@ export function DataGrid(props: GridProps) {
         headerPress = null;
         if (colMove()) endMove();
         stopSlide();
-        setColOrder(identityOrder(props.columns.length));
+        const start = untrack(() => props.initialColumnOrder?.());
+        const names = props.columns.map((col) => col.name);
+        const fits = start && start.names.length === names.length && start.names.every((name, i) => name === names[i]) && isPermutation(start.order, names.length);
+        setColOrder(fits ? start.order : identityOrder(props.columns.length));
         if (scroller) {
           scroller.scrollTop = 0;
           scroller.scrollLeft = 0;
         }
         setScroll({ x: 0, y: 0 });
         refreshPalette();
-        setWidths(measureWidths());
+        measureAll();
       },
     ),
   );
@@ -1776,7 +1836,7 @@ export function DataGrid(props: GridProps) {
   };
 
   return (
-    <div class="grid" ref={root} tabIndex={0} onKeyDown={onKey} onContextMenu={contextMenu} onPaste={onPaste}>
+    <div class="grid" ref={root} tabIndex={0} data-focus-default onKeyDown={onKey} onContextMenu={contextMenu} onPaste={onPaste}>
       <canvas ref={canvas} class="grid-canvas" />
       <div
         class="grid-scroll"

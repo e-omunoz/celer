@@ -1,13 +1,14 @@
-import { ArrowDownToLine, BookMarked, CircleHelp, Database, History, MessageSquareWarning, Moon, PanelLeft, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun } from "lucide-solid";
+import { ArrowDownToLine, BookMarked, CircleHelp, Database, History, MessageSquareWarning, Moon, PanelRight, Plus, RotateCcw, Search, Settings2, Sparkles, Sun, Variable } from "lucide-solid";
 import { createEffect, onCleanup, onMount, Show, untrack } from "solid-js";
 import { isTauri } from "./api";
 import { Mark } from "./brand/Mark";
-import { handleGlobalKey, shortcutLabel, withShortcut } from "./commands";
+import { handleGlobalKey, withShortcut } from "./commands";
 import { openErrorLog } from "./errorLog";
 import { openMyReports, openReport } from "./reportStore";
 import { trackAltGr } from "./keymap";
+import { trackRegionFocus } from "./focus";
 import { Inspector } from "./components/Inspector";
-import { Modals } from "./components/Modals";
+import { hasOpenDialog, Modals } from "./components/Modals";
 import { ContextMenu, Palette, Toasts } from "./components/Overlays";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
@@ -46,7 +47,7 @@ import { engineOf } from "./types";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { EnvChip, TxStatus } from "./components/ConsoleSafety";
 import { MigrateDialog } from "./components/MigrateDialog";
-import { migration, openMigration } from "./migrate";
+import { importConnectionsItem, migration } from "./migrate";
 import { checkForUpdates, setUpdate, startUpdateChecks, update, updateChipVisible } from "./update";
 
 export default function App() {
@@ -86,11 +87,13 @@ export default function App() {
     });
     let lastShift = 0;
     const onKey = (event: KeyboardEvent) => {
+      // A modal dialog (test data, row history, import, export…) keeps the keys: only Esc and its own keys work.
+      const covered = state.paletteOpen || state.connDialog || state.settingsOpen || hasOpenDialog();
       if (event.key === "F5" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r")) {
         // A page reload would drop results, edits and open transactions.
-        if (state.paletteOpen || state.connDialog || state.settingsOpen) event.preventDefault();
+        if (covered) event.preventDefault();
       }
-      if (state.paletteOpen || state.connDialog || state.settingsOpen) return;
+      if (covered) return;
       if (event.key === "Shift" && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey) {
         const t = performance.now();
         if (t - lastShift < 350) {
@@ -111,6 +114,8 @@ export default function App() {
     };
     window.addEventListener("contextmenu", blockMenu);
     const stopAltGr = trackAltGr(window);
+    // F6 / Mayús+F6 come back to where the focus was in each panel (focus.ts).
+    trackRegionFocus();
     onCleanup(() => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("contextmenu", blockMenu);
@@ -131,6 +136,9 @@ export default function App() {
           </button>
           <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "library" }} title={withShortcut("Biblioteca de scripts", "library")} onClick={() => toggleInspector("library")}>
             <BookMarked size={17} />
+          </button>
+          <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "variables" }} title={withShortcut("Variables", "variables")} onClick={() => toggleInspector("variables")}>
+            <Variable size={17} />
           </button>
           <button type="button" class="stripe-btn" classList={{ on: state.inspectorOpen && state.inspectorMode === "ai" }} title={withShortcut("Asistente IA", "ai")} onClick={() => toggleInspector("ai")}>
             <Sparkles size={17} />
@@ -172,12 +180,12 @@ export default function App() {
 export function helpMenu(): MenuItem[] {
   return [
     { label: "Guía de inicio", run: () => setState("onboardingOpen", true) },
-    { label: "Atajos de teclado…", hint: shortcutLabel("shortcuts"), run: () => setState({ settingsOpen: true, settingsSection: "keys" }) },
+    { label: "Atajos de teclado…", command: "shortcuts", run: () => setState({ settingsOpen: true, settingsSection: "keys" }) },
     { separator: true },
-    { label: "Reportar un fallo…", hint: shortcutLabel("report-bug"), run: () => void openReport("bug") },
-    { label: "Sugerir una mejora…", hint: shortcutLabel("report-idea"), run: () => void openReport("idea") },
+    { label: "Reportar un fallo…", command: "report-bug", run: () => void openReport("bug") },
+    { label: "Sugerir una mejora…", command: "report-idea", run: () => void openReport("idea") },
     { label: "Mis reportes", run: () => void openMyReports() },
-    { label: "Registro de errores", hint: shortcutLabel("error-log"), run: () => void openErrorLog() },
+    { label: "Registro de errores", command: "error-log", run: () => void openErrorLog() },
     { separator: true },
     { label: "Buscar actualizaciones", run: () => void checkForUpdates(true) },
     { label: "Acerca de Celer", run: () => setState("aboutOpen", true) },
@@ -197,11 +205,11 @@ function TopBar() {
         title="Nuevo"
         onClick={(event) =>
           openMenu(event, [
-            { label: "Nueva conexión…", hint: "Ctrl+Alt+N", run: () => openConnDialog() },
-            { label: "Nueva consola", hint: "Ctrl+Mayús+L", run: () => openQuery(activeTab()?.connId ?? state.connections[0]?.id ?? null) },
-            { label: "Nueva ventana", hint: "Ctrl+Mayús+N", run: () => void openNewWindow() },
+            { label: "Nueva conexión…", command: "new-conn", run: () => openConnDialog() },
+            { label: "Nueva consola", command: "new-console", run: () => openQuery(activeTab()?.connId ?? state.connections[0]?.id ?? null) },
+            { label: "Nueva ventana", command: "new-window", run: () => void openNewWindow() },
             { separator: true },
-            { label: "Importar conexiones de DBeaver o DbVisualizer…", run: () => void openMigration() },
+            importConnectionsItem(),
           ])
         }
       >
@@ -216,9 +224,6 @@ function TopBar() {
       <span class="spacer" data-tauri-drag-region />
       <button type="button" class="top-icon" title={isLightTheme() ? "Tema oscuro" : "Tema claro"} onClick={() => void saveSettings({ theme: isLightTheme() ? "dark" : "light" })}>
         <Show when={isLightTheme()} fallback={<Sun size={16} />}><Moon size={16} /></Show>
-      </button>
-      <button type="button" class="top-icon" classList={{ on: state.explorerOpen }} title={withShortcut("Explorador", "toggle-explorer")} onClick={() => setState("explorerOpen", !state.explorerOpen)}>
-        <PanelLeft size={16} />
       </button>
       <button type="button" class="top-icon" classList={{ on: state.inspectorOpen }} title={withShortcut("Panel derecho", "toggle-inspector")} onClick={() => (state.inspectorOpen ? setState("inspectorOpen", false) : toggleInspector("value"))}>
         <PanelRight size={16} />

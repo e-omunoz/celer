@@ -20,7 +20,7 @@ fi
 apt-get update -q
 apt-get install -y -q build-essential curl wget git pkg-config file unzip jq ca-certificates gnupg \
   libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev libssl-dev rpm \
-  openjdk-21-jdk-headless unixodbc unixodbc-dev odbc-postgresql docker.io docker-compose-v2 \
+  openjdk-21-jdk-headless unixodbc unixodbc-dev odbc-postgresql odbc-mariadb docker.io docker-compose-v2 \
   postgresql-client mariadb-client xvfb
 
 if ! node --version 2>/dev/null | grep -q '^v22'; then

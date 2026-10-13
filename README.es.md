@@ -80,6 +80,12 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
 - **Exportar e importar.** CSV, TSV, Excel, JSON, XML, `INSERT`s SQL, Markdown o HTML directos a disco; importa CSV,
   JSON u hojas de Excel / OpenDocument con mapeo de columnas en una sola transacción. Genera SELECT con joins, INSERT,
   UPDATE, UPSERT/MERGE y DDL desde el explorador.
+- **Datos de prueba en segundos.** «Generar datos de prueba…» llena cualquier tabla con filas realistas y válidas en
+  todos los motores, hasta 1.000.000: nombres, correos, direcciones, NIF/CIF e IBAN con su letra o dígitos de control,
+  precios, fechas… deducidos del tipo y el nombre de cada columna (datos en español o en inglés), respetando NOT NULL,
+  longitudes, listas y rangos de CHECK, enumerados, claves únicas y foráneas. La misma semilla da las mismas filas;
+  previsualiza 20 y luego insértalas en una transacción que se puede cancelar o escríbelas como script SQL, CSV o
+  JSON.
 - **IA con permisos.** Un asistente que escribe, explica, corrige y optimiza SQL con Claude usando tu esquema, nunca
   tus filas. Un **servidor MCP** (`celer.exe --mcp`) deja que Claude Desktop, Claude Code y otros clientes usen tus
   conexiones con un nivel de permiso por conexión, límites de filas y tiempo, columnas enmascaradas y registro de
@@ -91,13 +97,20 @@ tu usuario, sin permisos de administrador, y se mantiene actualizado solo.
   del fichero (Argon2id + AES-256-GCM). Organízalas en carpetas anidadas con favoritas y búsqueda, arrástralas entre
   carpetas y actúa sobre varias a la vez. «Probar conexión» enseña cada paso y qué hacer si uno falla; una conexión
   caída vuelve sola, y nunca en silencio si se perdería una transacción.
-- **Varias ventanas.** Arrastra una pestaña fuera para llevarla a su propia ventana, una por monitor si quieres: la
-  consola conserva su sesión, la transacción abierta y las filas que faltaban por cargar. La biblioteca, el asistente
-  de IA, los planes, los diagramas y las comparaciones también pueden tener su ventana, y todas vuelven a su sitio.
-- **Pensado para jornadas largas.** Ocho temas, densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos
-  configurables, biblioteca de scripts que ejecuta cualquier script guardado en cualquier conexión o en varias a la vez, `${variables}` por consola, conexión o globales, script de inicio por conexión y **Gib**: piensa mientras corren las consultas,
-  tiene una idea cuando acaba una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como
-  a una mosca si le molestas mientras espera.
+- **Varias ventanas.** Arrastra una pestaña fuera para llevarla a su propia ventana, una por monitor si quieres (un
+  contorno enseña exactamente dónde se abrirá): la consola conserva su sesión, la transacción abierta y las filas que
+  faltaban por cargar. La biblioteca, el asistente de IA, los planes, los diagramas y las comparaciones también pueden
+  tener su ventana, y todas vuelven a su sitio.
+- **Historial de una fila en Informix.** «Historial de la fila» lee los cambios pasados de una fila en los logs
+  lógicos: cuándo, quién, qué transacción y cada columna antes y después, y dice con claridad cuándo no se puede leer
+  o puede estar incompleto.
+- **Pensado para jornadas largas.** Ocho temas y un **editor de temas** para crear los tuyos (cada color, las fuentes,
+  las esquinas y el movimiento, con vista previa en vivo, comprobación de contraste y exportación a un fichero),
+  densidad compacta o cómoda, paleta de comandos (Shift Shift), atajos configurables, biblioteca de scripts que
+  ejecuta cualquier script guardado en cualquier conexión o en varias a la vez, `${variables}` por consola, conexión o
+  globales, script de inicio por conexión y **Gib**: piensa mientras corren las consultas, tiene una idea cuando acaba
+  una larga, se va a por un café o hace malabares cuando no estás, y aparta el cursor como a una mosca si le molestas
+  mientras espera.
 - **Actualizaciones en la app.** Celer comprueba en GitHub si hay versiones nuevas, te enseña las novedades y las
   instala en un clic, tras verificar la descarga con las sumas SHA-256 de la versión.
 
@@ -224,6 +237,8 @@ pasar a Celer Setup, desinstala la copia MSI (tus datos se conservan) e instala 
 | `Ctrl+Alt+I` | Asistente de IA |
 | `Ctrl+Alt+E` | Historial |
 | `Ctrl+Alt+B` | Guardar la consola en la biblioteca de scripts |
+| `Alt+1` | Mostrar u ocultar el explorador |
+| `F6` / `Shift+F6` | Llevar el foco al panel siguiente / anterior |
 | `Alt+8` | Biblioteca de scripts |
 | `Alt+9` | Variables (valores de `${nombre}` por consola, conexión o globales) |
 | `Ctrl+Alt+S` | Ajustes |

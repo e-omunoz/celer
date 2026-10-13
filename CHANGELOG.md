@@ -6,6 +6,203 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Theme editor** (#107): *Ajustes › Editor de tema* (in the *General* group; also the *Editor de tema* button and the
+  pencil on a custom theme in *Apariencia*, and *Editor de tema…* in the palette) makes a custom theme from any
+  built-in one. Every token can be changed, grouped (surfaces, text, borders, accent, states, results grid, editor and
+  syntax, explorer, Gib), with the UI and editor fonts, corner radius, results row height, shadows and animation
+  speed; the whole interface shows it live, next to a sample of the explorer, tabs, editor, grid, a dialog and Gib. A
+  contrast checker measures each text/background pair and warns below WCAG AA. Themes are created, duplicated,
+  renamed, deleted, saved (*Guardar*, *Guardar y usar*, *Descartar cambios*), exported to and imported from a
+  `.celer-theme.json` file (it carries its accent, so it looks the same on another machine; a damaged, hostile or
+  newer file is refused with the reason), show next to the built-in ones and in the palette, and tear-off windows
+  follow them. Leaving the editor with unsaved changes asks first. *Seguir al sistema* now picks the theme for the
+  system's light mode and for its dark mode, custom themes included; exported settings carry the custom themes.
+- **F6 / Shift+F6 move the focus between panels** (#110): explorer, editor, results and right panel in screen order,
+  back to where the focus was in each, with a brief highlight; nothing happens while a dialog, the palette, a menu or
+  the guide is open. Closing a panel that has the focus hands it to the active tab's editor or results.
+- **Submenus in context menus** (#111): rows with › open a submenu on hover, → or Intro; ← or Esc go back; a submenu
+  stays inside the window near its edges.
+- Palette commands to import connections from a Celer file, from DBeaver or from DbVisualizer, and to export every
+  connection.
+- **Row history on Informix, from the logical logs** (#123): «Historial de la fila» in a table row's menu lists the
+  row's changes still in the logs on disk, newest first: commit time, transaction (named by the log position of its
+  commit, since the number in the log records is a reused slot), user, operation, and each column before → after, or
+  the whole row at that moment. It is read through Informix's CDC API over a JDBC connection. Nothing is guessed: what
+  stops it is said as «No se puede reconstruir: …» (database without log, RAW table, no `syscdcv1`, a user who may not
+  use the CDC API, no primary key, a read-only connection that would need full row logging, a DRDA or Client SDK
+  connection). A history that may miss something is labelled partial with the reason: the row existed before the
+  oldest log, its key changed, a server error or a lost connection, the read was stopped, the server's CDC reader
+  stalled, or the last value read is not the row's value now (updates of a table with only fixed-length columns made
+  without full row logging never reach the CDC API, and the offer to turn it on says so for such a table). A read cut
+  short shows how far it got and never says the row had no changes. When the table has no full row logging, which the
+  CDC API requires, Celer offers to turn it on only for the read and off again, says so afterwards, and says when it
+  could not (a later read puts it right). Other engines show the entry disabled with «No disponible en …».
+- **Test data generator** (#172): «Generar datos de prueba…» in a table's menu (explorer and tab) and in the palette
+  fills a table with realistic, valid rows on every engine. A generator per column is inferred from its type and its
+  name (Spanish and English: names, e-mail, phone, address, city, postal code, country, company, NIF/CIF with their
+  check letter, IBAN with its check digits, URL, user, password hash, description, price, quantity, status…) and can
+  be changed: ranges, constant, sequence, weighted value list, regex-like pattern, expression of other columns, NULL
+  ratio, or left to the server (identity, serial, computed, rowversion). NOT NULL, lengths, precision, simple CHECKs
+  (IN, BETWEEN, comparisons), MySQL ENUM/SET and PostgreSQL enums, unique keys (also against the existing values of a
+  table up to 200,000 rows; past that, or for a key of several columns, the dialog warns when a new value could
+  repeat an existing one) and foreign keys (keys read from the referenced table; an empty one is offered to be filled first) are kept.
+  Same seed and settings, same rows; Spanish data by default, English selectable; a 20-row preview. The rows go in
+  through the import's pipeline (batched per dialect, one transaction on its own session, progress, rows/s, Cancelar
+  rolls back; read-only connections refuse, production ones ask), or to a script in a new console (a .sql file past
+  10,000 rows), or to CSV / JSON. 100,000 rows into PostgreSQL take a few seconds.
+
+### Changed
+- **Menus and panels reorganised, nothing removed** (#111, approved on 2026-10-12):
+  - The top bar's explorer button is gone; the stripe button and Alt+1 toggle the explorer.
+  - The right panel's header shows *Valor / Registro*, or the title of the tool that is open: *Historial*,
+    *Biblioteca*, *Variables* and the assistant open from the stripe (Variables now has its button there) and their
+    shortcuts.
+  - One *Importar conexiones ›* submenu (fichero de Celer · DBeaver · DbVisualizer) in *Nuevo* and in the explorer's
+    options menu; the explorer's background menu no longer repeats it.
+  - Tables and views: *Abrir datos*, *Abrir estructura*, *Ver DDL* and the diagram on top, then *Generar SQL ›* (the
+    eight *Generar …* entries) and *Comparar ›* (mark and compare data). *DDL en consola* is now the DDL tab's
+    *Abrir en consola*, which opens on the table's database.
+  - Result cells: *Copiar*, *Copiar con cabeceras*, *Copiar como ›* (CSV, JSON, Markdown, XML, INSERT, IN, WHERE) and
+    *Filtrar ›*, each copying or filtering exactly as before.
+  - Connection form: environment, *Solo lectura* and *Color* together in one *Entorno* row below engine, server,
+    login and database.
+  - *Ajustes* groups its sections as *General*, *Editor*, *Conexiones* and *IA y MCP*.
+- **Motion and component styles are consistent** (#110): every transition and animation uses the motion tokens
+  (`--motion-fast/normal/slow` and easings, Gib's own tempo), follows the theme's animation speed and *Animaciones* /
+  the system's reduced motion (`dev/motion-check.ts` fails on a hard-coded duration). Panels slide in and out, tabs
+  glide when one opens, closes or moves, toasts stack and leave smoothly, dialogs, menus and the palette animate on
+  the way out too, and buttons share one hover and press feel. Text fields share one focus ring, menus and popovers
+  one surface, badges and empty states one style, and the high-contrast themes get stronger focus rings and
+  scrollbars. Every corner follows the radius tokens, so a theme's radius reaches every component.
+- **Drag and drop looks the same everywhere** (#110): tabs, result columns, explorer rows and library scripts dim what
+  is dragged, light up where it can be dropped and show the same ghost card under the pointer.
+- **Context menus show shortcuts consistently** (#110): the user's own shortcut for actions that are commands (it
+  follows *Atajos de teclado*), every key in the same notation, and notes (an engine, "actual") apart from shortcuts.
+- **Tearing a tab off is obvious** (#108): dragging a tab shows a ghost card (title, connection · database and the
+  first lines of its SQL or its table) that follows the pointer over every Celer window. Outside them it becomes the
+  dashed outline of the new window, at its real size and exactly where it will open (kept inside the screen, at any
+  Windows scaling and on the monitor under the pointer), with «Soltar para abrir en una ventana nueva» at its top.
+  Over another Celer window, or within the tab bar, a line shows where the tab will land. Esc cancels the drag and the
+  tab stays. The tab menu says «Abrir en ventana nueva», the tab's tooltip mentions dragging, the first time a window
+  has two tabs Gib (or a notice) says so once, and the new window grows into place. The console keeps its session
+  when it moves, as before.
+- Import: a value written as the grid shows bytes (`0x…`) goes into a binary column as those bytes (PostgreSQL,
+  MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
+
+### Fixed
+- **Dragging the tab of a console with a large script** (#209): the drag sent the console's whole SQL to every Celer
+  window as the card's preview; it now sends only the few lines the card shows.
+- **Back from «Generar antes datos de …»** (#208): after filling the referenced table first, the child table's test
+  data dialog came back with *Filas*, *Semilla* and every generator reset. It now comes back as it was left (rows,
+  seed, data language, output, view and each column's generator), with the parent's keys now available.
+- **A stray click or Esc no longer cancels a running insert** (#186): while *Generar datos de prueba…* or *Importar
+  datos* was inserting, a click outside the dialog (coming back to the window, say) or Esc cancelled the run and rolled
+  back the whole transaction. Now only the dialog's *Cancelar* / *Detener* button stops it, as in *Exportar*.
+- **Large test-data exports and scripts** (#185): a JSON (or CSV, or `.sql` script) of up to 1,000,000 rows of a wide
+  table failed with «Invalid string length» once every row had been generated, because the whole file was built as
+  one string. The rows now go to the file a chunk at a time, under a temporary `.celer-part` name that takes the
+  file's name at the end, so a cancelled or failed run leaves no half-written file and keeps the one it would replace.
+- **Test data dialog on a large table with unique columns** (#184): every change in *Generar datos de prueba…* (a
+  pattern, a range, the NULL %) rebuilt the sets of up to 200,000 existing values per unique column through the
+  dialog's reactive state, so each keystroke froze the window for a fraction of a second or more and the memory stayed
+  in use after closing it. The existing values are now indexed once per table read and released with the dialog.
+- **Row history right after Informix starts** (#206): about 90 s after a start, the server's start-up tasks write to
+  the log and its CDC reader stops where it meets them, for minutes. A history read then was partial and blamed an
+  earlier read, and Celer kept skipping that point of the log for the rest of the session even once the server read
+  past it again. The reason now names both causes and says to read again later, and a stop found by one read is
+  trusted for five minutes only. The engine test waits for those tasks, reads each history on its own connection as
+  the app does, and restarts the Informix container only when its CDC reader does not read a short history whole.
+- **Row history of a table rebuilt by Informix's fast recovery** (#123): when the server stopped uncleanly (a crash, a
+  killed process) before the checkpoint that followed a table's creation, fast recovery recreates the table on start
+  and stamps that moment as its creation time. The history took it as the real one and left out the row's own insert
+  and updates as «de una tabla borrada que tenía el mismo número de partición», then said the row had no changes. A
+  creation time that falls between the server's start and its on-line mode is now recognised as the recovery's: the
+  changes before it still are not shown, since in the log they cannot be told from those of a dropped table that had
+  the same partition number, but the history is marked partial with the true reason, never says they were a dropped
+  table's, that the row had no changes or where it began. Changes made after the recovery are shown as usual.
+- **Two row-history reads of one table at once** (#205): when two windows read the history of rows of the same
+  table, the first to end turned full row logging off while the other was still reading. It now stays on until the
+  last of them ends, which turns it off once and says so.
+- **Row history on servers that share a name** (#202): the note of tables Celer turned full row logging on for was
+  kept by server name (DBSERVERNAME) and table only, so an entry left over from one server could make Celer turn off
+  full row logging that a DBA had set on another server with the same name. The note now also carries the server's
+  address; older entries without it match no server.
+- **Row history through an SSH tunnel** (#180): *Historial de la fila* on an Informix JDBC connection with an SSH
+  tunnel connected straight to the configured host, which only the bastion reaches, and failed with a misleading
+  «revisa servidor, puerto» error. It now goes through the connection's tunnel, as its sessions do, and runs the
+  connection's startup script on every connection it opens.
+- **Saving a large test-data script or export** (#207): writing the file ran on the app's main thread, so every
+  window froze while a script of a million rows was saved. Reading and saving text files now run in the background.
+- **Test data CSV in Excel** (#204): *Generar datos de prueba…* saved CSV with a comma and no UTF-8 BOM, so Excel
+  showed accented text garbled. It now uses the delimiter and BOM of *Exportar* (the BOM is on by default).
+- **Test data on a generic ODBC engine Celer does not recognise** (#203): opening the dialog on a child table read
+  every key of the parent table into memory (the query had no row limit for that engine). At most the usual sample
+  is read now, on every engine, and the rest of the result is discarded.
+- **Test data over generic ODBC to MySQL / MariaDB ENUM columns** (#181): the ODBC driver names an ENUM column only
+  `enum`, so it got values outside its list; MariaDB Connector/ODBC turned the refusal into a warning with no rows
+  inserted, and the dialog said the rows were in. The ENUM and SET values are now read from the catalog, and an
+  insert the server answers with fewer rows than were sent stops the dialog and undoes everything, with the server's
+  message.
+- **Test data on Informix multi-field INTERVAL columns** (#182): an `INTERVAL HOUR TO MINUTE`, `DAY TO SECOND` or
+  `YEAR TO MONTH` column got the constant `'1'`, which Informix rejects, so the whole insert was undone. The proposed
+  value is now written in the column's fields (`'1:00'`, `'1 00:00:00'`, `'1-00'`).
+- **SQLite INTEGER PRIMARY KEY shown as NOT NULL** (#192): a table's `INTEGER PRIMARY KEY` (the rowid alias, which
+  never holds NULL: a NULL there takes the next rowid) was reported as nullable, so the structure view showed it as
+  «null», schema comparison saw and scripted the key without NOT NULL, the diagram and table docs listed it as
+  nullable and the test data dialog gave it a «NULL» badge. It is now reported as NOT NULL everywhere.
+- **Test data on SQL Server CHECKs with `N'…'` literals** (#183): `CHECK (b IN (N'x', N'y'))` was not read, so the
+  column got free text and the insert failed on the CHECK. The `N` prefix is now skipped and the value list is proposed.
+- **SQLite `INTEGER PRIMARY KEY DESC`** (#201): SQLite does not make such a column the rowid alias, but Celer took it
+  for an auto-filled key, so the test data generator left it out and the insert failed on its NOT NULL. It is now an
+  ordinary key that gets values (a table-level `PRIMARY KEY (x DESC)` is still the alias).
+- **Test data with negative CHECK bounds** (#200): PostgreSQL stores `x BETWEEN -10 AND 10` as `'-10'::integer` and
+  MySQL 8 as `-(10)`, which the generator did not read, so it proposed values outside the range. Both forms are now
+  read, as on MariaDB, SQL Server, Informix and SQLite.
+- **Test data on PostgreSQL domain columns** (#199): a column of a domain was generated from the domain's name alone,
+  so a domain over `varchar(4)`, or one with `NOT NULL` or a `CHECK`, got values the server rejected. The generator
+  now works from the domain's base type and its modifiers, keeps its NOT NULL and reads its CHECK like a table's.
+- **Test data on MySQL / MariaDB BIT(n) and spatial columns** (#198): a `BIT(8)` column now gets integers that fit in
+  its bits (0 to 255) instead of text the server rejected, and a `GEOMETRY`, `POINT`, `POLYGON`… column is left NULL
+  (or stops the dialog when it is required), since Celer does not generate spatial values.
+- **Test data and import on MyISAM / Aria tables** (#197): these MySQL and MariaDB engines take no transactions, so
+  the rows written before a failure or a cancel stay in the table, yet the message said nothing had been inserted.
+  Both dialogs now warn before inserting into such a table, and afterwards say that rows may remain (at least how
+  many) and reload the table's tabs.
+- **Test data sequences past their type's range** (#196): a sequence on an integer key that started after a value near
+  the type's maximum (a SMALLINT, a TINYINT UNSIGNED) ran past it, and the server undid the whole insert. The dialog
+  now stops it beforehand with the value it would reach and the type's limit. On SQLite, whose integers always take
+  8 bytes, the declared type no longer limits the range.
+- **Test data on MariaDB JSON columns** (#179): MariaDB stores JSON as LONGTEXT with a `json_valid()` CHECK, so the
+  generator proposed plain text and the server rejected the whole insert. A column behind `json_valid()` (or SQL
+  Server's `ISJSON(…) = 1`) now gets the JSON generator, as on MySQL and PostgreSQL.
+- **MySQL 8 columns with `DEFAULT CURRENT_TIMESTAMP`** (#178): MySQL marks them `DEFAULT_GENERATED`, and Celer took
+  them for computed columns. A data comparison's sync script now updates their differences, and the test data
+  generator gives them values; only `AUTO_INCREMENT` and `VIRTUAL` / `STORED` generated columns are left to the server.
+- **Test data with a NULL already in a unique column** (#195): on SQL Server and Informix, where a unique column takes
+  one NULL, a table that already held it could get a second one from the generator (NULL % above 0), and the whole
+  insert was undone. The existing NULL is now read with the other values and no new one is generated; a column set to
+  *NULL* says it has no room left.
+- **Test data on Informix, every column left to the server** (#194): a table such as `(id SERIAL PRIMARY KEY)` got
+  `INSERT … DEFAULT VALUES`, a syntax error on Informix. Each row now writes 0 in the SERIAL (or NULL in a nullable
+  column without a default), in *Insertar* and in *Script SQL*; a table with neither is stopped in the dialog.
+- **Shortcuts behind a dialog** (#193): with a dialog open (test data, row history, import, export…), Ctrl+W,
+  Ctrl+Tab, F5 and the other workspace shortcuts acted on the tabs behind it. They now wait until it closes; Esc and
+  the dialog's own keys still work.
+- **Test data and import keep unsaved edits** (#177): *Insertar* in *Generar datos de prueba…* and a CSV/Excel import
+  reloaded every open tab of the table, throwing away its unsaved edits, deletions and new rows. A tab with pending
+  changes is now left as it is, with a notice whose *Recargar* asks first, as F5 does.
+- **Theme contrast** (#176): error text in Fjord was hard to read on dialogs (2.46:1); every built-in theme's red,
+  table numbers, strings and comments now reach WCAG AA where they are shown.
+- **Tear-off outline** (#108): dragged into the lower part of a large screen, the outline hung off the screen with its
+  label while the window opened somewhere else; both now come from the same frame. The window opens where the
+  button was let go, not where the pointer is a moment later. At 150 % and other scales the pointer stays on the
+  outline's tab, and moved onto a monitor with another scale the outline keeps the size of the window that will open.
+- **Theme editor**: a saved theme reopens in the editor (drafts no longer throw DataCloneError on store proxies).
+- SQLite: only the rowid alias (a single `INTEGER PRIMARY KEY` on a rowid table) counts as filled by the server.
+  `INT PRIMARY KEY`, `BIGINT PRIMARY KEY`, the columns of a composite key and the key of a WITHOUT ROWID table were
+  marked «auto», so the grid's new rows, the import and the test data generator left them out (#172).
+
 ## [2.3.0] - 2026-10-12
 
 ### Added

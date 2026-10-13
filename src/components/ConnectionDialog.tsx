@@ -555,19 +555,21 @@ export function ConnectionDialog(props: { cfg: ConnConfig }) {
             </div>
           </Show>
 
-          <EnvironmentField cfg={cfg()} onChange={fix} />
-
-          <div class="checks">
-            <label class="check"><input type="checkbox" checked={cfg().readOnly} onChange={(event) => set("readOnly", event.currentTarget.checked)} /> Solo lectura</label>
-          </div>
-
-          <div class="field">
-            <span>Color</span>
-            <div class="swatches">
-              <button type="button" class="swatch none" classList={{ on: !cfg().color }} title="Automático" onClick={() => set("color", "")} />
-              <For each={["#E5534B", "#E8833A", "#D4A72C", "#57AB5A", "#4A9BD9", "#986EE2", "#8B949E"]}>
-                {(color) => <button type="button" class="swatch" classList={{ on: cfg().color.toLowerCase() === color.toLowerCase() }} style={{ background: color }} onClick={() => set("color", color)} />}
-              </For>
+          {/* One Entorno row (#111): the environment (production included), read-only and the connection's colour, apart
+              from the main block (engine, server, login, database). */}
+          <div class="env-group" role="group" aria-label="Entorno">
+            <EnvironmentField cfg={cfg()} onChange={fix} />
+            <div class="env-extras">
+              <label class="check"><input type="checkbox" checked={cfg().readOnly} onChange={(event) => set("readOnly", event.currentTarget.checked)} /> Solo lectura</label>
+              <div class="env-color">
+                <span>Color</span>
+                <div class="swatches">
+                  <button type="button" class="swatch none" classList={{ on: !cfg().color }} title="Automático" onClick={() => set("color", "")} />
+                  <For each={["#E5534B", "#E8833A", "#D4A72C", "#57AB5A", "#4A9BD9", "#986EE2", "#8B949E"]}>
+                    {(color) => <button type="button" class="swatch" classList={{ on: cfg().color.toLowerCase() === color.toLowerCase() }} style={{ background: color }} title={color} onClick={() => set("color", color)} />}
+                  </For>
+                </div>
+              </div>
             </div>
           </div>
 

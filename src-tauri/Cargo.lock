@@ -724,6 +724,7 @@ dependencies = [
  "tokio-util",
  "ureq",
  "uuid",
+ "windows-sys 0.59.0",
  "winreg",
  "zip",
 ]

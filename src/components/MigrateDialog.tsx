@@ -27,22 +27,24 @@ export function MigrateDialog() {
     for (const c of importable()) selected[c.key] = on && c.status === "new";
     setMigration({ selected });
   };
+  /** The tool(s) searched: one from Importar conexiones › DBeaver / DbVisualizer, else both. */
+  const tools = () => (migration.tool ? toolLabel(migration.tool) : "DBeaver y DbVisualizer");
   const where = (c: Candidate) =>
     c.cfg.kind === "sqlite" ? c.cfg.filePath || "fichero" : `${c.cfg.host}${c.cfg.instance ? `\\${c.cfg.instance}` : ""}${c.cfg.port ? `:${c.cfg.port}` : ""}${c.cfg.database ? ` / ${c.cfg.database}` : ""}`;
 
   return (
-    <Dialog title="Importar conexiones" class="migrate-dialog" onClose={close}>
+    <Dialog title={migration.tool ? `Importar conexiones de ${toolLabel(migration.tool)}` : "Importar conexiones"} class="migrate-dialog" onClose={close}>
       <Show
         when={!migration.loading && migration.candidates.length}
         fallback={
           <div class="mig-empty">
             <Show when={gibShows("overlays")}><Gib size={84} pose={migration.loading ? "laptop" : "poker"} mood={migration.loading ? "busy" : "think"} /></Show>
             <div>
-              <h3>{migration.loading ? "Buscando DBeaver y DbVisualizer…" : "No hay nada que importar"}</h3>
+              <h3>{migration.loading ? `Buscando ${tools()}…` : "No hay nada que importar"}</h3>
               <p class="muted">
                 {migration.loading
                   ? "Leo sus ficheros de configuración; no modifico nada."
-                  : migration.error || "No he encontrado conexiones de DBeaver ni de DbVisualizer en este equipo."}
+                  : migration.error || `No he encontrado conexiones de ${migration.tool ? toolLabel(migration.tool) : "DBeaver ni de DbVisualizer"} en este equipo.`}
               </p>
             </div>
           </div>

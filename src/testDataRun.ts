@@ -1,0 +1,447 @@
+// The test data dialog's state and what it does with the database (#172): reading the table (columns, keys,
+// CHECKs, enums, parent keys) on a side session, and the three outputs: inserting through the import's pipeline (one
+// transaction on a session of its own, with progress and Cancelar), a script in a new console (or a file when it is
+// big) and a CSV / JSON file. The generator itself is testData.ts.
+import { createStore, unwrap } from "solid-js/store";
+import { api, errorText, isTauri } from "./api";
+import { insertInTransaction, reloadTableTabs, SessionOpenError } from "./importer";
+import { confirmDialog, connectionById, erSchemaPath, gib, kindOf, notify, openQuery, openSessionFor, state } from "./state";
+import {
+  buildModel,
+  createGenerator,
+  existingToRead,
+  EXISTING_SAMPLE,
+  exportText,
+  fileJoiner,
+  inferOne,
+  inferSettings,
+  keptSettings,
+  insertShortfall,
+  insertStatements,
+  PARENT_SAMPLE,
+  problems,
+  randomSeed,
+  scriptHead,
+  scriptText,
+  statementRows,
+  statsColumns,
+  type GenKind,
+  type GenSettings,
+  type Locale,
+  type ParentKeys,
+  type TableModel,
+} from "./testData";
+import { splitSql } from "./sql";
+import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, readRows, statsSql } from "./testDataSql";
+import type { Cell, ObjectRef } from "./types";
+import type { SheetCell } from "./importFormats";
+
+export type TestDataOutput = "insert" | "script" | "csv" | "json";
+
+/** Rows a script may have to open in a console; more go to a .sql file. */
+export const SCRIPT_CONSOLE_ROWS = 10_000;
+/** Rows generated between two looks at the interface (progress, Cancelar). */
+const CHUNK = 5_000;
+
+export interface TestDataState {
+  open: boolean;
+  loading: boolean;
+  /** Why the table could not be read. */
+  error: string;
+  connId: string;
+  obj: ObjectRef | null;
+  model: TableModel | null;
+  settings: GenSettings[];
+  count: number;
+  seed: number;
+  locale: Locale;
+  output: TestDataOutput;
+  view: "columns" | "preview";
+  running: boolean;
+  /** What a run is doing: generating rows, inserting them, writing the file. */
+  phase: string;
+  done: number;
+  total: number;
+  startedAt: number;
+  /** The table whose dialog sent the user to fill its referenced table first: reopened afterwards. */
+  returnTo: ReturnTo | null;
+}
+
+/** A dialog left to fill its referenced table first, as the user left it (#208). */
+export interface ReturnTo {
+  connId: string;
+  obj: ObjectRef;
+  count: number;
+  seed: number;
+  locale: Locale;
+  output: TestDataOutput;
+  view: TestDataState["view"];
+  /** Each column's generator, by column name. */
+  settings: Record<string, GenSettings>;
+}
+
+export const [testData, setTestData] = createStore<TestDataState>({
+  open: false,
+  loading: false,
+  error: "",
+  connId: "",
+  obj: null,
+  model: null,
+  settings: [],
+  count: 100,
+  seed: 1,
+  locale: "es",
+  output: "insert",
+  view: "columns",
+  running: false,
+  phase: "",
+  done: 0,
+  total: 0,
+  startedAt: 0,
+  returnTo: null,
+});
+
+/**
+ * The table model as a plain object. Read through the store it would wrap each of its (up to 200,000 per unique
+ * column) existing values in a proxy with its own signals on every settings change, and keep them on the heap (#184).
+ */
+export function currentModel(): TableModel | null {
+  const model = testData.model;
+  return model ? unwrap(model) : null;
+}
+
+let cancelRequested = false;
+let runningSession: string | null = null;
+let openSeq = 0;
+
+/** The rows of a query on the side session, at most `maxRows` (readRows). */
+function rowsOf(sessionId: string, sql: string, maxRows = Infinity): Promise<Cell[][]> {
+  return readRows(
+    {
+      execute: (n) => api().execute(sessionId, sql, n),
+      fetch: (n) => api().fetch(sessionId, n),
+      closeCursor: () => api().closeCursor(sessionId),
+    },
+    maxRows,
+  );
+}
+
+const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/**
+ * Opens the dialog for a table: reads it on a side session (its columns, unique keys, CHECKs, enums, foreign keys
+ * with a sample of the keys they may take, the row count and the largest numbers) and proposes a generator per column.
+ */
+export async function openTestData(connId: string, obj: ObjectRef, returnTo: ReturnTo | null = null, restore: ReturnTo | null = null) {
+  const seq = ++openSeq;
+  const keep = restore
+    ? { count: restore.count, seed: restore.seed, locale: restore.locale, output: restore.output, view: restore.view }
+    : testData.open && testData.connId === connId
+      ? { locale: testData.locale, output: testData.output }
+      : {};
+  setTestData({ open: true, loading: true, error: "", connId, obj, model: null, settings: [], count: 100, seed: randomSeed(), view: "columns", running: false, phase: "", done: 0, total: 0, returnTo, ...keep });
+  let opened: Awaited<ReturnType<typeof openSessionFor>> = null;
+  try {
+    opened = await openSessionFor(connId, obj.database || undefined);
+    if (!opened) {
+      if (seq === openSeq) setTestData({ loading: false, error: "No hay conexión" });
+      return;
+    }
+    const session = opened.sessionId;
+    if (obj.database) await api().useDatabase(session, obj.database).catch(() => {});
+    const [columns, info] = await Promise.all([api().tableColumns(session, obj), api().objectSql(session, obj)]);
+    if (!columns.length) throw new Error(`No se pudieron leer las columnas de ${obj.name}`);
+    const quoted = await api().quoteIdents(session, columns.map((c) => c.name));
+    const dialect = effectiveDialect(kindOf(connId), opened.serverInfo);
+    const ref = { database: obj.database || opened.database, schema: obj.schema, name: obj.name, qualified: info.qualified };
+    // Each catalog part on its own: one an old server refuses leaves only that part unknown. Each is one SELECT; one
+    // the splitter reads as several (a name the quoting got wrong) is not sent at all.
+    const parts = [];
+    for (const q of catalogQueries(dialect, ref, opened.serverInfo)) {
+      const single = splitSql(q.sql, dialect).length === 1;
+      parts.push({ part: q.part, rows: single ? await rowsOf(session, q.sql).catch(() => null) : null });
+    }
+    const catalog = readCatalog(parts, dialect);
+    const keys = await api().schemaForeignKeys(session, erSchemaPath(connId, obj, opened.database)).catch(() => []);
+    const fks: ParentKeys[] = [];
+    for (const fk of keys) {
+      if (!sameName(fk.table.name, obj.name) || (fk.table.schema && obj.schema && !sameName(fk.table.schema, obj.schema)) || !fk.columns.length) continue;
+      const target = { ...fk.target, database: fk.target.database || fk.table.database };
+      const targetSql = await api().objectSql(session, target).catch(() => null);
+      const targetQuoted = await api().quoteIdents(session, fk.targetColumns);
+      const rows = targetSql ? await rowsOf(session, parentKeysSql(dialect, targetSql.qualified, targetQuoted, PARENT_SAMPLE), PARENT_SAMPLE).catch(() => [] as Cell[][]) : [];
+      fks.push({ name: fk.name, columns: fk.columns, target, targetColumns: fk.targetColumns, rows });
+    }
+    const numeric = statsColumns(columns, dialect);
+    const stats = (await rowsOf(session, statsSql(info.qualified, numeric.map((i) => quoted[i]))).catch(() => [] as Cell[][]))[0] ?? null;
+    const input = { dialect, qualified: info.qualified, table: obj.name, columns, quoted, catalog, stats, fks };
+    let model = buildModel(input);
+    // A small table: the values its unique columns already have, so new ones do not repeat them.
+    const toRead = existingToRead(model);
+    if (toRead.length) {
+      const existingValues: Record<string, Cell[]> = {};
+      for (const c of toRead) existingValues[c.name] = (await rowsOf(session, existingValuesSql(dialect, info.qualified, c.quoted, EXISTING_SAMPLE), EXISTING_SAMPLE).catch(() => [] as Cell[][])).map((r) => r[0]);
+      model = buildModel({ ...input, existingValues });
+    }
+    if (seq !== openSeq) return;
+    const proposed = inferSettings(model, testData.locale);
+    setTestData({ loading: false, model, settings: restore ? keptSettings(model, proposed, restore.settings) : proposed });
+  } catch (err) {
+    if (seq === openSeq) setTestData({ loading: false, error: errorText(err) });
+  } finally {
+    if (opened) void api().closeSession(opened.sessionId).catch(() => {});
+  }
+}
+
+/** Another generator for a column: its parameters start from what Celer would propose for that generator. */
+export function setGenerator(index: number, kind: GenKind) {
+  const model = currentModel();
+  if (!model) return;
+  const proposed = inferOne(model, index, testData.locale);
+  const current = testData.settings[index];
+  const base: GenSettings = proposed.kind === kind ? proposed : { ...proposed, kind, min: "", max: "", scale: "", start: "", step: "", value: "", values: "", pattern: "", template: "" };
+  if (kind === "sequence" && !base.start) base.start = "1";
+  if (kind === "pattern" && !base.pattern) base.pattern = "[A-Z]{3}-\\d{4}";
+  if (kind === "list" && !base.values) base.values = model.columns[index].values?.join("\n") ?? "";
+  if (kind === "expression" && !base.template) base.template = "{#}";
+  setTestData("settings", index, { ...base, nullPct: kind === "skip" || kind === "null" ? 0 : current.nullPct });
+}
+
+export function setSetting<K extends keyof GenSettings>(index: number, key: K, value: GenSettings[K]) {
+  setTestData("settings", index, key, value);
+}
+
+/** Another locale: the generators are proposed again (names, phones and statuses change with it). */
+export function setLocale(locale: Locale) {
+  setTestData("locale", locale);
+  const model = currentModel();
+  if (model) setTestData("settings", inferSettings(model, locale));
+}
+
+/** Every generator as Celer proposes it again. */
+export function resetSettings() {
+  const model = currentModel();
+  if (model) setTestData("settings", inferSettings(model, testData.locale));
+}
+
+/** The generator's rows a chunk at a time (with a pause between chunks so the window stays responsive). */
+async function* chunks(model: TableModel, settings: GenSettings[], count: number, seed: number, locale: Locale) {
+  const generator = createGenerator(model, settings, seed, locale);
+  for (let start = 0; start < count; start += CHUNK) {
+    if (cancelRequested) throw new Error("Cancelado");
+    const rows: SheetCell[][] = [];
+    for (let i = start; i < Math.min(count, start + CHUNK); i++) rows.push(generator.next());
+    yield { generator, rows, start };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+/**
+ * A file written a piece at a time to «<path>.celer-part» and given its name at the end (#185): a file of a million
+ * wide rows does not fit in one string, and a run cancelled or failed half way leaves no file and keeps the one it
+ * would have replaced.
+ */
+function pieceWriter(path: string, encoding: string) {
+  const part = `${path}.celer-part`;
+  let started = false;
+  return {
+    async write(text: string) {
+      if (!text && started) return;
+      await api().writeTextFile(part, text, started ? "utf-8" : encoding, started);
+      started = true;
+    },
+    finish: () => api().finishTextFile(part, path),
+    discard: () => (started ? api().finishTextFile(part, null).catch(() => {}) : Promise.resolve()),
+  };
+}
+
+/** Runs the chosen output. Nothing reaches the database except «Insertar», which is one transaction. */
+export async function runTestData() {
+  const { obj, connId, count, seed, locale, output } = testData;
+  const model = currentModel();
+  if (!model || !obj || testData.running) return;
+  const settings = testData.settings.map((s) => ({ ...s }));
+  const blocking = problems(model, settings, count, locale).filter((p) => p.error);
+  if (blocking.length) {
+    notify(blocking[0].text, "error", blocking.length > 1 ? `Y ${blocking.length - 1} problema(s) más en la lista de columnas.` : undefined);
+    return;
+  }
+  cancelRequested = false;
+  if (output === "insert") await insertRows(model, obj, connId, settings, count, seed, locale);
+  else if (output === "script") await writeScript(model, obj, connId, settings, count, seed, locale);
+  else await writeExport(model, obj, settings, count, seed, locale, output);
+}
+
+async function insertRows(model: TableModel, obj: ObjectRef, connId: string, settings: GenSettings[], count: number, seed: number, locale: Locale) {
+  const conn = connectionById(connId);
+  if (conn?.readOnly) {
+    notify("La conexión es de solo lectura: no se inserta nada", "error", "Genera el script o exporta a CSV / JSON, o quita «Solo lectura» en la conexión.");
+    return;
+  }
+  if (conn?.production) {
+    const ok = await confirmDialog(
+      `Insertar en ${conn.name} (producción)`,
+      `Se insertarán ${count.toLocaleString("es-ES")} filas de datos de prueba en ${obj.name}, en una sola transacción. Revisa que es lo que quieres antes de continuar.`,
+      "Insertar de todos modos",
+      true,
+    );
+    if (!ok) return;
+  }
+  setTestData({ running: true, phase: "Insertando", done: 0, total: count, startedAt: Date.now() });
+  let done = 0;
+  try {
+    await insertInTransaction(
+      connId,
+      obj.database || undefined,
+      async (exec) => {
+        for await (const { generator, rows, start } of chunks(model, settings, count, seed, locale)) {
+          const statements = insertStatements(model, generator, rows);
+          const expected = statementRows(model, generator, rows.length);
+          const per = Math.ceil(rows.length / Math.max(1, statements.length));
+          for (let i = 0; i < statements.length; i++) {
+            if (cancelRequested) throw new Error("Cancelado");
+            try {
+              const out = await exec(statements[i]);
+              // Rows the server dropped with only a warning are a failure: the whole insert is undone.
+              const short = insertShortfall(out.results, out.messages, expected[i] ?? per);
+              if (short) throw new Error(short);
+            } catch (err) {
+              if (cancelRequested) throw new Error("Cancelado");
+              throw new Error(`Filas ${(start + i * per + 1).toLocaleString("es-ES")}–${(start + Math.min(rows.length, (i + 1) * per)).toLocaleString("es-ES")}: ${errorText(err)}`);
+            }
+            done = Math.min(count, start + (i + 1) * per);
+            setTestData("done", done);
+          }
+        }
+      },
+      (session) => {
+        runningSession = session;
+      },
+    );
+    notify(`Insertadas ${count.toLocaleString("es-ES")} filas de prueba en ${obj.name}`, "success");
+    gib("saved");
+    reloadTableTabs(connId, obj.name);
+    finishRun(true);
+  } catch (err) {
+    setTestData({ running: false, phase: "" });
+    if (err instanceof SessionOpenError) notify(err.message, "error");
+    else if (model.nonTransactional) {
+      // MyISAM, Aria…: the rollback undoes nothing, the rows written so far stay.
+      const kept = `${done ? `Al menos ${done.toLocaleString("es-ES")} filas ya insertadas se quedan` : "Puede que alguna fila se haya quedado"} en ${obj.name}: ${model.nonTransactional} no admite transacciones.`;
+      if (cancelRequested) notify("Cancelado", "warning", kept);
+      else notify("La inserción falló a medias", "error", `${kept} ${errorText(err)}`);
+      reloadTableTabs(connId, obj.name);
+    } else if (cancelRequested) notify("Cancelado: no se insertó nada", "info", "La transacción se deshizo entera.");
+    else notify("No se insertó nada: la operación se deshizo", "error", errorText(err));
+  }
+}
+
+async function writeScript(model: TableModel, obj: ObjectRef, connId: string, settings: GenSettings[], count: number, seed: number, locale: Locale) {
+  // A big script goes to a file: a console with hundreds of thousands of INSERTs would be slow to edit.
+  let path = "";
+  const name = `datos_${obj.name}.sql`;
+  if (count > SCRIPT_CONSOLE_ROWS) {
+    path = isTauri() ? ((await api().pickSavePath([{ name: "SQL", extensions: ["sql"] }], name)) ?? "") : name;
+    if (!path) return;
+  }
+  setTestData({ running: true, phase: "Generando el script", done: 0, total: count, startedAt: Date.now() });
+  const header = { rows: count, seed, locale };
+  // To a file: each chunk's statements as they come, never the whole script in one string.
+  const file = path ? pieceWriter(path, "utf-8") : null;
+  const joiner = fileJoiner("sql", scriptHead(model, header));
+  try {
+    const statements: string[] = [];
+    for await (const { generator, rows, start } of chunks(model, settings, count, seed, locale)) {
+      const sql = insertStatements(model, generator, rows);
+      if (file) await file.write(joiner.next(sql.map((s) => `${s};`).join("\n\n")));
+      else statements.push(...sql);
+      setTestData("done", Math.min(count, start + rows.length));
+    }
+    if (file) {
+      setTestData("phase", "Guardando");
+      await file.write(joiner.end());
+      await file.finish();
+      notify(`Script de ${count.toLocaleString("es-ES")} filas guardado`, "success", path);
+    } else {
+      openQuery(connId, scriptText(model, statements, header), name, { database: obj.database || undefined });
+      notify("Script en una consola nueva: no se ha ejecutado nada", "success");
+    }
+    finishRun(false);
+  } catch (err) {
+    await file?.discard();
+    setTestData({ running: false, phase: "" });
+    if (!cancelRequested) notify(errorText(err), "error");
+  }
+}
+
+async function writeExport(model: TableModel, obj: ObjectRef, settings: GenSettings[], count: number, seed: number, locale: Locale, format: "csv" | "json") {
+  const name = `datos_${obj.name}.${format}`;
+  const path = isTauri() ? ((await api().pickSavePath([{ name: format.toUpperCase(), extensions: [format] }], name)) ?? "") : name;
+  if (!path) return;
+  // The CSV conventions of Exportar (its delimiter and BOM), so the file opens the same way in Excel.
+  const { delimiter, bom } = state.exportOpts;
+  setTestData({ running: true, phase: "Generando", done: 0, total: count, startedAt: Date.now() });
+  // Each chunk goes to the file as it comes, with one header (CSV) and one array (JSON) for every chunk together.
+  const file = pieceWriter(path, format === "csv" && bom ? "utf-8-bom" : "utf-8");
+  const joiner = fileJoiner(format);
+  try {
+    for await (const { generator, rows, start } of chunks(model, settings, count, seed, locale)) {
+      await file.write(joiner.next(exportText(model, generator, rows, format, delimiter)));
+      setTestData("done", Math.min(count, start + rows.length));
+    }
+    setTestData("phase", "Guardando");
+    await file.write(joiner.end());
+    await file.finish();
+    notify(`Exportadas ${count.toLocaleString("es-ES")} filas de prueba a ${format.toUpperCase()}`, "success", path);
+    finishRun(false);
+  } catch (err) {
+    await file.discard();
+    setTestData({ running: false, phase: "" });
+    if (!cancelRequested) notify(errorText(err), "error");
+  }
+}
+
+/** A run that ended well: the dialog closes; a referenced table filled first sends the user back to its child. */
+function finishRun(inserted: boolean) {
+  const back = inserted ? testData.returnTo : null;
+  setTestData({ running: false, phase: "", open: false, model: null, settings: [] });
+  if (back) void openTestData(back.connId, back.obj, null, back);
+}
+
+/** «Cancelar» while it runs (the transaction is rolled back), else closes the dialog. */
+export function cancelTestData() {
+  if (testData.running) {
+    cancelRequested = true;
+    setTestData("phase", "Cancelando");
+    // A statement that is running stops now, not when it ends.
+    if (runningSession) void api().cancel(runningSession).catch(() => {});
+    return;
+  }
+  openSeq++;
+  // The model (and the existing values it holds) goes with the dialog.
+  setTestData({ open: false, loading: false, model: null, settings: [] });
+}
+
+/** Fills the referenced table first (it is empty), then comes back here as the user left it. */
+export function fillParentFirst(parent: ObjectRef) {
+  const { connId, obj, count, seed, locale, output, view } = testData;
+  const model = currentModel();
+  if (!obj || !model) return;
+  const settings: Record<string, GenSettings> = {};
+  model.columns.forEach((c, i) => {
+    if (testData.settings[i]) settings[c.col.name] = { ...testData.settings[i] };
+  });
+  void openTestData(connId, parent, { connId, obj, count, seed, locale, output, view, settings });
+}
+
+/** The problems of the current settings (memoised by the dialog). */
+export function currentProblems() {
+  const model = currentModel();
+  return model ? problems(model, testData.settings, testData.count, testData.locale) : [];
+}
+
+/** Rows per second so far. */
+export function rowsPerSecond(): number {
+  const secs = (Date.now() - testData.startedAt) / 1000;
+  return secs > 0.2 ? Math.round(testData.done / secs) : 0;
+}

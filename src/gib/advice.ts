@@ -23,7 +23,7 @@ export const TIPS: Tip[] = [
   { id: "go-table", text: (k) => `Salta a cualquier tabla de las conexiones abiertas ${via(k, "go-table")}.` },
   { id: "stats", text: () => "Selecciona varias celdas: la barra de estado muestra suma, media, mínimo y máximo." },
   { id: "filter", text: () => "En una tabla, «+ Filtro» crea filtros por columna sin escribir SQL." },
-  { id: "filter-value", text: () => "Clic derecho en una celda: «Filtrar por este valor» añade el filtro por ti." },
+  { id: "filter-value", text: () => "Clic derecho en una celda: «Filtrar › Por este valor» añade el filtro por ti." },
   { id: "find", text: () => "Ctrl+F busca dentro de los resultados; F3 salta a la siguiente coincidencia." },
   { id: "explain", text: (k) => `Mira el plan de ejecución de la sentencia ${via(k, "explain")}.` },
   { id: "drag-table", text: () => "Arrastra una tabla del explorador al editor para escribir su nombre." },
@@ -37,6 +37,7 @@ export const TIPS: Tip[] = [
   { id: "library-folders", text: () => "En la biblioteca puedes crear carpetas, poner etiquetas y arrastrar los scripts de una a otra." },
   { id: "library-drag", text: () => "Arrastra un script de la biblioteca al editor para pegar su SQL donde lo sueltes." },
   { id: "library-run", text: () => "En la biblioteca, Ctrl+Intro sobre un script lo abre y lo ejecuta; F2 lo renombra y Supr lo borra (con deshacer)." },
+  { id: "tear-off", text: () => "Arrastra una pestaña fuera de la ventana para abrirla en una ventana nueva, o suéltala en la barra de pestañas de otra ventana de Celer." },
   { id: "params", text: () => "Escribe :nombre en una consulta y Celer te pedirá su valor al ejecutarla." },
   { id: "pin", text: () => "Fija un resultado con la chincheta y compáralo después con el de la siguiente ejecución." },
 ];

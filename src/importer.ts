@@ -1,7 +1,8 @@
 import { createStore } from "solid-js/store";
 import { api, errorText } from "./api";
-import { gib, kindOf, notify, reloadTable, state as appState } from "./state";
-import type { DbKind, ObjectRef, TableColumn } from "./types";
+import { gib, kindOf, notify, reloadTable, reloadTableSafe, state as appState, tableDirty } from "./state";
+import type { DbKind, ExecOutput, ObjectRef, TableColumn } from "./types";
+import { effectiveDialect, nonTransactionalEngine, tableEngineSql } from "./testDataSql";
 import {
   blankRow,
   cellDisplay,
@@ -77,6 +78,8 @@ export interface ImportState {
   pasted: SheetCell[][];
   /** A workbook being read: rows so far and in all (0: not known yet). */
   reading: { rows: number; total: number } | null;
+  /** The table's storage engine when it takes no transactions (MySQL MyISAM, MariaDB Aria…): rows stay on a failure. */
+  nonTransactional: string;
 }
 
 const NO_AREA = { r1: 0, c1: 0, r2: -1, c2: -1 };
@@ -115,6 +118,7 @@ export const [importer, setImporter] = createStore<ImportState>({
   previewRows: [],
   pasted: [],
   reading: null,
+  nonTransactional: "",
 });
 
 let cancelRequested = false;
@@ -194,8 +198,14 @@ export async function startImport(connId: string, obj: ObjectRef) {
       if (obj.database) await api().useDatabase(opened.sessionId, obj.database).catch(() => {});
       const [columns, info] = await Promise.all([api().tableColumns(opened.sessionId, obj), api().objectSql(opened.sessionId, obj)]);
       const quoted = await api().quoteIdents(opened.sessionId, columns.map((col) => col.name));
+      // MyISAM, Aria…: a failure or Detener leaves the rows already written (said before and after).
+      let nonTransactional = "";
+      if (effectiveDialect(kindOf(connId), opened.serverInfo) === "mysql") {
+        const out = await api().execute(opened.sessionId, tableEngineSql({ database: obj.database || opened.database, schema: obj.schema, name: obj.name }), 10).catch(() => null);
+        nonTransactional = nonTransactionalEngine(out?.results.find((r) => r.columns.length)?.rows ?? null);
+      }
       releaseSheet();
-      setImporter({ open: true, connId, obj, qualified: info.qualified, columns, quoted, fileName: "", filePath: "", format: "csv", grid: [], keyedHeader: false, sheets: [], sheet: "", text: "", mapping: columns.map(() => -1), running: false, done: 0, total: 0, ...emptySheet() });
+      setImporter({ open: true, connId, obj, qualified: info.qualified, columns, quoted, nonTransactional, fileName: "", filePath: "", format: "csv", grid: [], keyedHeader: false, sheets: [], sheet: "", text: "", mapping: columns.map(() => -1), running: false, done: 0, total: 0, ...emptySheet() });
     } finally {
       void api().closeSession(opened.sessionId).catch(() => {});
     }
@@ -436,6 +446,56 @@ async function* importChunks(): AsyncGenerator<{ rows: SheetCell[][]; span: numb
   yield { rows, span: rows.length };
 }
 
+/** The session could not be opened: nothing was tried (as opposed to a failure inside the transaction). */
+export class SessionOpenError extends Error {}
+
+/**
+ * Runs `work` on a session of its own, in one transaction: the import's inserts and the test data generator's. A
+ * console's open transaction is never mixed in (it is another session). Commits when `work` ends; any failure, or a
+ * Cancelar that throws from `work`, rolls everything back and is thrown again. `onSession` gets the session (to cancel
+ * a statement that is running).
+ */
+export async function insertInTransaction(connId: string, database: string | undefined, work: (exec: (sql: string) => Promise<ExecOutput>) => Promise<void>, onSession?: (sessionId: string | null) => void): Promise<void> {
+  const opened = await api()
+    .openSession(connId, appState.passwords[connId])
+    .catch((err) => {
+      throw new SessionOpenError(errorText(err));
+    });
+  const session = opened.sessionId;
+  onSession?.(session);
+  try {
+    if (database) await api().useDatabase(session, database).catch(() => {});
+    await api().setAutocommit(session, false);
+    await work((sql) => api().execute(session, sql, 1));
+    await api().commit(session);
+  } catch (err) {
+    await api().rollback(session).catch(() => {});
+    throw err;
+  } finally {
+    onSession?.(null);
+    void api().closeSession(session).catch(() => {});
+  }
+}
+
+/**
+ * Reloads the open tabs of a table (after rows went in). A tab with unsaved edits, deletions or new rows is left as it
+ * is (reloading would throw them away): a notice says so and offers the reload, which asks first as F5 does.
+ */
+export function reloadTableTabs(connId: string, name: string | undefined) {
+  for (const tab of appState.tabs) {
+    if (tab.kind !== "table" || tab.connId !== connId || tab.obj.name !== name) continue;
+    if (!tableDirty(tab)) {
+      void reloadTable(tab.id);
+      continue;
+    }
+    const tabId = tab.id;
+    notify(`La pestaña ${tab.title} no se recargó: tiene cambios sin guardar`, "warning", "Guarda o descarta los cambios y recárgala (F5) para ver las filas nuevas.", {
+      label: "Recargar",
+      run: () => void reloadTableSafe(tabId),
+    });
+  }
+}
+
 /** Imports every row in one transaction; any failure rolls the whole import back. */
 export async function runImport() {
   const total = importRowCount();
@@ -443,52 +503,42 @@ export async function runImport() {
   const dialect = kindOf(importer.connId);
   cancelRequested = false;
   setImporter({ running: true, done: 0, total });
-  const opened = await api().openSession(importer.connId, appState.passwords[importer.connId]).catch((err) => {
-    notify(errorText(err), "error");
-    return null;
-  });
-  if (!opened) {
-    setImporter("running", false);
-    return;
-  }
-  const session = opened.sessionId;
   const batch = importBatch(dialect);
   let imported = 0;
   let covered = 0;
   try {
-    if (importer.obj?.database) await api().useDatabase(session, importer.obj.database).catch(() => {});
-    await api().setAutocommit(session, false);
-    for await (const { rows, span } of importChunks()) {
-      if (cancelRequested) throw new Error("Importación cancelada");
-      const statements = importSql(rows, dialect);
-      for (let i = 0; i < statements.length; i++) {
+    await insertInTransaction(importer.connId, importer.obj?.database, async (exec) => {
+      for await (const { rows, span } of importChunks()) {
         if (cancelRequested) throw new Error("Importación cancelada");
-        try {
-          await api().execute(session, statements[i], 1);
-        } catch (err) {
-          throw new Error(`Filas ${imported + i * batch + 1}–${imported + Math.min(rows.length, (i + 1) * batch)}: ${errorText(err)}`);
+        const statements = importSql(rows, dialect);
+        for (let i = 0; i < statements.length; i++) {
+          if (cancelRequested) throw new Error("Importación cancelada");
+          try {
+            await exec(statements[i]);
+          } catch (err) {
+            throw new Error(`Filas ${imported + i * batch + 1}–${imported + Math.min(rows.length, (i + 1) * batch)}: ${errorText(err)}`);
+          }
+          const part = rows.length ? Math.min(rows.length, (i + 1) * batch) / rows.length : 1;
+          setImporter("done", Math.min(total, covered + Math.round(span * part)));
         }
-        const part = rows.length ? Math.min(rows.length, (i + 1) * batch) / rows.length : 1;
-        setImporter("done", Math.min(total, covered + Math.round(span * part)));
+        imported += rows.length;
+        covered += span;
+        setImporter("done", Math.min(total, covered));
       }
-      imported += rows.length;
-      covered += span;
-      setImporter("done", Math.min(total, covered));
-    }
-    await api().commit(session);
+    });
     notify(`Importadas ${imported.toLocaleString()} filas en ${importer.obj?.name}`, "success");
     gib("saved");
     releaseSheet();
     setImporter({ open: false, running: false, handle: 0 });
-    for (const tab of appState.tabs) {
-      if (tab.kind === "table" && tab.connId === importer.connId && tab.obj.name === importer.obj?.name) void reloadTable(tab.id);
-    }
+    reloadTableTabs(importer.connId, importer.obj?.name);
   } catch (err) {
-    await api().rollback(session).catch(() => {});
     setImporter("running", false);
-    notify("No se importó nada: la operación se deshizo", "error", errorText(err));
-  } finally {
-    void api().closeSession(session).catch(() => {});
+    if (err instanceof SessionOpenError) notify(err.message, "error");
+    else if (importer.nonTransactional) {
+      const kept = `${importer.done ? `Al menos ${importer.done.toLocaleString()} filas ya importadas se quedan` : "Puede que alguna fila se haya quedado"} en ${importer.obj?.name}: ${importer.nonTransactional} no admite transacciones.`;
+      notify(cancelRequested ? "Importación detenida" : "La importación falló a medias", cancelRequested ? "warning" : "error", cancelRequested ? kept : `${kept} ${errorText(err)}`);
+      reloadTableTabs(importer.connId, importer.obj?.name);
+    } else notify("No se importó nada: la operación se deshizo", "error", errorText(err));
   }
 }
 

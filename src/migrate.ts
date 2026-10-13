@@ -5,7 +5,8 @@
 // straight to the OS credential store (saveConnection).
 import { createStore } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
-import { notify, refreshConnections, state } from "./state";
+import { importConnections } from "./connManage";
+import { notify, refreshConnections, state, type MenuItem } from "./state";
 import type { ConnConfig } from "./types";
 
 export * from "./migrateParse";
@@ -13,6 +14,8 @@ import { applyDbeaverCredentials, parseDbeaver, parseDbVisualizer, type Candidat
 
 export const [migration, setMigration] = createStore({
   open: false,
+  /** Only this tool's connections (Importar conexiones › DBeaver / DbVisualizer); null: both. */
+  tool: null as MigrationTool | null,
   loading: false,
   error: "",
   candidates: [] as Candidate[],
@@ -29,10 +32,13 @@ function sameConnection(a: ConnConfig, b: ConnConfig) {
   return a.host.toLowerCase() === b.host.toLowerCase() && (a.port ?? 0) === (b.port ?? 0) && a.database.toLowerCase() === b.database.toLowerCase() && a.user.toLowerCase() === b.user.toLowerCase();
 }
 
-export async function openMigration() {
-  setMigration({ open: true, loading: true, error: "", candidates: [], selected: {}, passwords: false, importing: false });
+type MigrationTool = Candidate["tool"];
+
+/** The assistant, with the connections of `tool` (DBeaver or DbVisualizer) or of both. */
+export async function openMigration(tool: MigrationTool | null = null) {
+  setMigration({ open: true, tool, loading: true, error: "", candidates: [], selected: {}, passwords: false, importing: false });
   try {
-    const sources = isTauri() ? await api().migrationSources() : [];
+    const sources = (isTauri() ? await api().migrationSources() : []).filter((s) => !tool || s.tool === tool);
     const parsed = sources.map((s) => {
       try {
         return s.tool === "dbeaver" ? parseDbeaver(s) : parseDbVisualizer(s);
@@ -88,4 +94,20 @@ export async function runMigration() {
     failed.length ? "warning" : "success",
     [skipped ? `${skipped} sin importar (ya existían, no soportadas o desmarcadas).` : "", failed.length ? `Fallaron: ${failed.join("; ")}` : ""].filter(Boolean).join(" ") || undefined,
   );
+}
+
+/**
+ * «Importar conexiones ›»: the one submenu for bringing connections in (#111), in Nuevo and in the explorer's options
+ * menu: a file exported by Celer, or the connections of DBeaver or DbVisualizer on this computer.
+ */
+export function importConnectionsItem(): MenuItem {
+  return {
+    label: "Importar conexiones",
+    submenu: [
+      { label: "Fichero de Celer…", command: "import-conns-file", run: () => void importConnections() },
+      { separator: true },
+      { label: "DBeaver…", command: "import-conns-dbeaver", run: () => void openMigration("dbeaver") },
+      { label: "DbVisualizer…", command: "import-conns-dbvis", run: () => void openMigration("dbvisualizer") },
+    ],
+  };
 }

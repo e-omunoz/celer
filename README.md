@@ -83,6 +83,11 @@ without administrator rights, and keeps itself up to date.
 - **Export and import.** Stream CSV, TSV, Excel, JSON, XML, SQL `INSERT`s, Markdown or HTML straight to disk;
   import CSV, JSON or Excel / OpenDocument sheets with column mapping in a single transaction. Generate SELECT with
   joins, INSERT, UPDATE, UPSERT/MERGE and DDL from the explorer.
+- **Test data in seconds.** «Generar datos de prueba…» fills any table with realistic, valid rows on every engine, up
+  to 1,000,000: names, e-mails, addresses, NIF/CIF and IBAN with their check digits, prices, dates… inferred from each
+  column's type and name (Spanish or English data), with NOT NULL, lengths, CHECK lists and ranges, enums, unique keys
+  and foreign keys kept. The same seed gives the same rows; preview 20 first, then insert them in one cancellable
+  transaction or write them as a SQL script, CSV or JSON.
 - **AI with permissions.** An assistant that writes, explains, fixes and optimises SQL with Claude using your schema,
   never your rows. An **MCP server** (`celer.exe --mcp`) lets Claude Desktop, Claude Code and other clients use your
   connections with a permission level per connection, row and time limits, masked columns and an audit log, also from
@@ -94,13 +99,18 @@ without administrator rights, and keeps itself up to date.
   (Argon2id + AES-256-GCM). Organise them in nested folders with favourites and search, drag them between folders and
   act on several at once. "Probar conexión" shows each step and what to do when one fails; a dropped connection
   comes back on its own, and never in silence when a transaction would be lost.
-- **Several windows.** Drag a tab out to its own window, one per monitor if you like: the console keeps its session,
-  its open transaction and the rows still to load. The library, the AI assistant, plans, diagrams and comparisons can
-  have their own window too, and every window comes back where it was.
-- **Made for long days.** Eight themes, compact or comfortable density, a command palette (Shift Shift),
-  shortcuts you can change, a script library that runs any saved script on any connection or several at once, `${variables}` per console, connection or global, a startup script per connection, and **Gib**: he thinks while queries
-  run, has an idea when a long one finishes, goes for a coffee or juggles when you are away, and swats the cursor if
-  you poke him while he waits.
+- **Several windows.** Drag a tab out to its own window, one per monitor if you like (an outline shows exactly where
+  it will open): the console keeps its session, its open transaction and the rows still to load. The library, the AI
+  assistant, plans, diagrams and comparisons can have their own window too, and every window comes back where it was.
+- **Row history on Informix.** «Historial de la fila» reads a row's past changes from the logical logs: when, who,
+  which transaction, and each column before and after, saying plainly when the history cannot be read or may be
+  partial.
+- **Made for long days.** Eight themes and a **theme editor** to make your own (every colour, the fonts, corners and
+  motion, with a live preview, contrast checks and export to a file), compact or comfortable density, a command
+  palette (Shift Shift), shortcuts you can change, a script library that runs any saved script on any connection or
+  several at once, `${variables}` per console, connection or global, a startup script per connection, and **Gib**: he
+  thinks while queries run, has an idea when a long one finishes, goes for a coffee or juggles when you are away, and
+  swats the cursor if you poke him while he waits.
 - **Updates in the app.** Celer checks GitHub for new releases, shows what's new and installs them in one click,
   after verifying the download against the release's SHA-256 sums.
 
@@ -226,6 +236,8 @@ to Celer Setup, uninstall the MSI copy (your data is kept) and install `Celer-Se
 | `Ctrl+Alt+I` | AI assistant |
 | `Ctrl+Alt+E` | History |
 | `Ctrl+Alt+B` | Save the console in the script library |
+| `Alt+1` | Show or hide the explorer |
+| `F6` / `Shift+F6` | Move the focus to the next / previous panel |
 | `Alt+8` | Script library |
 | `Alt+9` | Variables (`${name}` values per console, connection or global) |
 | `Ctrl+Alt+S` | Settings |

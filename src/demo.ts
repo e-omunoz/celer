@@ -5,6 +5,7 @@ import { quoteIdent, resultToText } from "./sql";
 import { inOrder, isPermutation } from "./columnOrder";
 import { scrubStack, scrubText } from "./scrub";
 import type { ErrorEntry } from "./errorLogText";
+import { rowHistoryBlocked } from "./rowHistoryView";
 import type {
   Cell,
   ColKind,
@@ -79,6 +80,8 @@ const sessions = new Map<string, DemoSession>();
 const databases = new Map<string, Database>();
 const fileBytes = new Map<string, Uint8Array>();
 const textFiles = new Map<string, string>();
+/** Files written in pieces (writeTextFile with append), kept as their pieces: together they may not fit in a string. */
+const partFiles = new Map<string, string[]>();
 
 let sqlPromise: ReturnType<typeof initSqlJs> | null = null;
 
@@ -408,15 +411,20 @@ function sqlString(value: string): string {
 
 function tableColumns(db: Database, obj: ObjectRef): TableColumn[] {
   const rows = query(db, `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(${sqlString(obj.name)})`);
+  // Only the rowid alias is auto-filled: a single-column key declared exactly INTEGER on a rowid table.
+  const pkCols = rows.filter((row) => num(row[4]) > 0).length;
+  const withoutRowid = /\bwithout\s+rowid\b/i.test(text(query(db, `SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ${sqlString(obj.name)}`)[0]?.[0] ?? ""));
   return rows.map((row) => {
     const typeName = text(row[1]) || "any";
     const kind: ColKind = /int|real|num|dec|floa|doub/i.test(typeName) ? "number" : /date|time/i.test(typeName) ? "date" : "text";
+    const rowidAlias = pkCols === 1 && !withoutRowid && num(row[4]) > 0 && /^\s*integer\s*$/i.test(typeName);
     return {
       name: text(row[0]),
       typeName,
-      nullable: num(row[2]) === 0,
+      // The rowid alias is never NULL, whatever the pragma says (as the core's sqlite.rs).
+      nullable: num(row[2]) === 0 && !rowidAlias,
       primaryKey: num(row[4]) > 0,
-      identity: /int/i.test(typeName) && num(row[4]) > 0,
+      identity: rowidAlias,
       default: row[3] === null || row[3] === undefined ? null : text(row[3]),
       kind,
     };
@@ -434,8 +442,8 @@ function demoAudit(): McpAuditEntry[] {
   ];
 }
 
-function download(filename: string, body: string, type: string) {
-  const blob = new Blob([body], { type });
+function download(filename: string, body: string | string[], type: string) {
+  const blob = new Blob(typeof body === "string" ? [body] : body, { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -785,6 +793,12 @@ export function createDemoBackend(): Backend {
     async quoteIdents(_sessionId, names) {
       return names.map(quoteIdent);
     },
+    async rowHistory(connId) {
+      // The preview only has SQLite: no logical logs to read.
+      const cfg = loadConns().find((item) => item.id === connId);
+      const reason = rowHistoryBlocked(cfg?.kind ?? "sqlite") ?? "No disponible en la vista previa del navegador";
+      return { status: "unavailable", reason, columns: [], skipped: [], events: [], range: null, partial: [], notes: [], cutShort: false, shownFrom: null, leftOn: null };
+    },
     async exportQuery(connId, _database, sql, _exportId, options) {
       const cfg = loadConns().find((item) => item.id === connId);
       if (!cfg) throw new Error("Conexión no encontrada");
@@ -881,10 +895,23 @@ export function createDemoBackend(): Backend {
       throw new Error("Las hojas de cálculo se importan en la aplicación de escritorio");
     },
     async sheetClose() {},
-    async writeTextFile(path, content) {
+    async writeTextFile(path, content, _encoding, append) {
+      // A file written in pieces is downloaded once, when it is finished.
+      if (path.endsWith(".celer-part")) {
+        const pieces = (append && partFiles.get(path)) || [];
+        pieces.push(content);
+        partFiles.set(path, pieces);
+        return "utf-8";
+      }
       textFiles.set(path, content);
       download(path.split(/[\\/]/).pop() || "script.sql", content, "text/plain");
       return "utf-8";
+    },
+    async finishTextFile(part, path) {
+      const pieces = partFiles.get(part) ?? [];
+      partFiles.delete(part);
+      if (path === null) return;
+      download(path.split(/[\\/]/).pop() || "script.sql", pieces, "text/plain");
     },
     async odbcDrivers() {
       return [];

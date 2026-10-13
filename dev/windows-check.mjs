@@ -20,7 +20,7 @@ const opened = await main.js(`return await newConsole(${JSON.stringify(conn)})`,
 check(`console on ${conn} connected`, opened);
 await main.js(`await runSql("SELECT 1 AS uno"); return true`, { helpers: true });
 const title = await main.js(`return tabs().find((t) => t.active)?.title`, { helpers: true });
-check("menu «Mover a una ventana nueva»", await main.js(`return await tabMenu(/^Mover a una ventana nueva/)`, { helpers: true }));
+check("menu «Abrir en ventana nueva»", await main.js(`return await tabMenu(/^Abrir en ventana nueva/)`, { helpers: true }));
 
 const known = new Set(before.map((w) => w.label));
 let added = null;

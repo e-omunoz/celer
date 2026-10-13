@@ -168,6 +168,12 @@ fn result_set(d: &mut dyn Driver, sql: &str) -> ResultSet {
 /// A test that hangs fails instead: after `secs` it prints the JDBC bridge's threads (if it runs) and ends the process.
 struct Watchdog(Option<std::sync::mpsc::Sender<()>>);
 
+/// Where a test leaves a file for the engines workflow to collect: `CELER_ENGINE_OUT` (the workflow sets it), else the
+/// system's temp folder, never the checkout.
+fn engine_out(name: &str) -> std::path::PathBuf {
+    std::env::var_os("CELER_ENGINE_OUT").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(name)
+}
+
 fn watchdog(what: &'static str, secs: u64) -> Watchdog {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
@@ -468,7 +474,7 @@ fn mssql_engine() {
         let out = d.execute(sql, 10).unwrap();
         let xml = out.results.iter().find(|r| !r.columns.is_empty()).map(|r| txt(&r.rows[0][0])).unwrap_or_default();
         assert!(xml.contains("<ShowPlanXML") && xml.contains("<QueryPlan"), "{name}: {xml:.200}");
-        let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-showplan-").to_string() + name + ".xml", &xml);
+        let _ = std::fs::write(engine_out(&format!("target-showplan-{name}.xml")), &xml);
     }
     d.execute("SET SHOWPLAN_XML OFF", 1).unwrap();
     assert_eq!(scalar(d, "SELECT importe FROM dbo.celer_t WHERE id = 1"), "120.50", "el UPDATE bajo SHOWPLAN no debe ejecutarse");
@@ -1187,7 +1193,7 @@ fn informix_speed() {
     }
     let text = report.join("\n");
     println!("\n{text}\n");
-    let _ = std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../target-informix-speed.txt"), text);
+    let _ = std::fs::write(engine_out("target-informix-speed.txt"), text);
 }
 
 // ───────────────────────────────────────────────────────────────── reconnection and the pool (guard.rs)
@@ -1809,6 +1815,70 @@ fn ssh_tunnel_every_engine() {
     let _ = std::fs::remove_dir_all(&store.dir);
 }
 
+/// «Historial de la fila» on an Informix JDBC connection through SSH (#180): the read goes through the connection's
+/// tunnel, as its sessions do, instead of straight to a host only the bastion reaches. Asked without turning full row
+/// logging on, it changes nothing on the server.
+#[test]
+fn ssh_tunnel_row_history() {
+    use crate::rowhistory::{KeyPart, Request};
+    let Some(s) = ssh_spec() else { return };
+    let Some(t) = tunnelled_engines(&s).into_iter().find(|t| t.name == "Informix JDBC") else { return };
+    let Some((direct, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt.clone())(direct.clone()).expect("conexión Informix por JDBC");
+    for sql in ["DROP TABLE IF EXISTS rh_ssh", "CREATE TABLE rh_ssh (id INT PRIMARY KEY, n INT)", "INSERT INTO rh_ssh VALUES (1, 10)"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    let store = sample_store("rowhistory");
+    trust_bastion(&store, &t.cfg);
+    let request = || Request {
+        database: direct.database.clone(),
+        owner: String::new(),
+        table: "rh_ssh".into(),
+        key: vec![KeyPart { column: "id".into(), value: "1".into() }],
+        enable_full_row_logging: false,
+    };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    // Straight to the host behind the bastion: it does not resolve here.
+    let straight = crate::rowhistory::read_via(t.cfg.clone(), None, rt.clone(), request(), &stop, None);
+    assert!(straight.is_err(), "{}: sin el túnel no se llega: {:?}", t.name, straight.map(|h| h.status));
+    let plan = crate::ssh::Plan::new(&t.cfg, &store.dir).unwrap();
+    let h = crate::rowhistory::read_via(t.cfg.clone(), Some(&plan), rt, request(), &stop, None).unwrap_or_else(|e| panic!("{}: por el túnel: {e}", t.name));
+    assert!(h.status == "needsFullRowLogging" || h.reason.contains("syscdcv1"), "{h:?}");
+    println!("✓ {}: historial de la fila por el túnel SSH ({})", t.name, h.status);
+    d.execute("DROP TABLE IF EXISTS rh_ssh", 10).ok();
+    let _ = std::fs::remove_dir_all(&store.dir);
+}
+
+/// «Historial de la fila» runs the connection's startup script on the connection it opens, as every session does
+/// (#180): a broken script fails the read and says so, a good one lets it through.
+#[test]
+fn row_history_runs_startup_script() {
+    use crate::rowhistory::{KeyPart, Request};
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    for sql in ["DROP TABLE IF EXISTS rh_startup", "CREATE TABLE rh_startup (id INT PRIMARY KEY, n INT)", "INSERT INTO rh_startup VALUES (1, 10)"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    let request = || Request {
+        database: cfg.database.clone(),
+        owner: String::new(),
+        table: "rh_startup".into(),
+        key: vec![KeyPart { column: "id".into(), value: "1".into() }],
+        enable_full_row_logging: false,
+    };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut broken = cfg.clone();
+    broken.startup_sql = "SELEC 1".into();
+    let err = crate::rowhistory::read(broken, rt.clone(), request(), &stop, None).err().expect("script erróneo").to_string();
+    assert!(err.contains("script de inicio"), "{err}");
+    let mut good = cfg.clone();
+    good.startup_sql = "SET LOCK MODE TO WAIT 5".into();
+    let h = crate::rowhistory::read(good, rt, request(), &stop, None).unwrap_or_else(|e| panic!("con script de inicio: {e}"));
+    assert!(h.status == "needsFullRowLogging" || h.reason.contains("syscdcv1"), "{h:?}");
+    println!("✓ Informix JDBC: historial de la fila con el script de inicio ({})", h.status);
+    d.execute("DROP TABLE IF EXISTS rh_startup", 10).ok();
+}
+
 /// Disconnecting (or deleting) a tunnelled connection closes its tunnel once its sessions have gone: the local port
 /// stops listening and the bastion's login ends, instead of waiting for the janitor (#164).
 #[test]
@@ -2405,7 +2475,15 @@ fn informix_large_schema_fks() {
         let listed = t0.elapsed();
         let t1 = Instant::now();
         let keys = d.schema_foreign_keys(&["celer_big".to_string()]).unwrap();
-        let read_keys = t1.elapsed();
+        let mut read_keys = t1.elapsed();
+        // A server just restarted (the row-history test does) reads its catalog from disk the first time: the bound
+        // is for a warm one, so a slow first read is timed again (#206).
+        if read_keys >= Duration::from_secs(5) {
+            println!("Informix por {via}: claves en frío {read_keys:?}, se mide otra vez");
+            let t = Instant::now();
+            d.schema_foreign_keys(&["celer_big".to_string()]).unwrap();
+            read_keys = t.elapsed();
+        }
         let around: Vec<ObjectRef> = keys
             .iter()
             .filter_map(|k| if k.table.name == centre.name { Some(k.target.clone()) } else if k.target.name == centre.name { Some(k.table.clone()) } else { None })
@@ -2942,3 +3020,1252 @@ fn informix_types_drda_and_jdbc() {
         assert_eq!(got, ["12345678901234567890.123456789", "12345678901234567890.123456789", "2024-01-15 10:30:15.123", "10:30", "true"]);
     }
 }
+
+/// `onmode -l` as a DBA does it: through sysadmin's task(), or in the container.
+fn informix_switch_log(admin: &mut dyn Driver) {
+    let switched = admin.execute("EXECUTE FUNCTION task('onmode', 'l')", 10).is_ok()
+        || std::env::var("CELER_INFORMIX_CONTAINER")
+            .is_ok_and(|c| Command::new("docker").args(["exec", c.as_str(), "bash", "-lc", "onmode -l"]).status().is_ok_and(|s| s.success()));
+    assert!(switched, "no se pudo cambiar de log lógico (sysadmin:task ni onmode en el contenedor)");
+}
+
+/// Restarts the Informix container and waits for it to answer again.
+fn informix_restart(container: &str) {
+    assert!(Command::new("docker").args(["restart", container]).status().is_ok_and(|s| s.success()), "no se pudo reiniciar el contenedor de Informix");
+    informix_wait_up(container);
+}
+
+/// Waits for the Informix container to answer again after a (re)start.
+fn informix_wait_up(container: &str) {
+    let up = (0..80).any(|_| {
+        let ok = Command::new("docker")
+            .args(["exec", container, "bash", "-lc", "echo 'SELECT COUNT(*) FROM systables' | dbaccess sysmaster -"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            std::thread::sleep(Duration::from_secs(3));
+        }
+        ok
+    });
+    assert!(up, "Informix no volvió a arrancar tras reiniciarlo");
+}
+
+/// Waits (up to three minutes) for the sysadmin scheduler's start-up sensors (mon_sysenv, mon_config_startup) to have
+/// run since the server started: about 90 s after a start they write a burst of sysadmin transactions to the log, and a
+/// CDC read that meets those records while they are being written stops there for minutes (measured on Informix 15:
+/// every read after it is partial, the CI failure of #206). A history test started right after a start (a new container,
+/// or the restart above) would race with them.
+fn informix_wait_startup_tasks(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) {
+    let Ok(mut d) = jdbc_connect(rt.clone())(cfg.clone()) else { return };
+    const DONE: &str = "SELECT (SELECT COUNT(*) FROM sysadmin:ph_run r, sysadmin:ph_task t WHERE r.run_task_id = t.tk_id \
+        AND t.tk_name = 'mon_config_startup' AND r.run_time >= DBINFO('utc_to_datetime', b.sh_boottime)), \
+        DBINFO('utc_current') - b.sh_boottime FROM sysmaster:sysshmvals b";
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(180) {
+        let Ok(rows) = try_rows(&mut *d, DONE) else { return };
+        let n = |i: usize| rows.first().and_then(|r| r.get(i)).map(txt).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0);
+        // Ran since the start, or a server up long enough that it has (a scheduler that does not run them).
+        if n(0) > 0 || n(1) > 180 {
+            if t0.elapsed() > Duration::from_secs(1) {
+                println!("Informix: tareas de arranque del servidor terminadas tras esperar {:?}", t0.elapsed());
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// Whether the server's CDC reader reads a short history whole: one row inserted into a new table, in a log of its own,
+/// read back (with full row logging on only for the read) as one insert and nothing partial. Err: what came back.
+fn informix_cdc_reader_works(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) -> Result<(), String> {
+    use crate::rowhistory::{self, KeyPart, Request};
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).map_err(|e| e.to_string())?;
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).map_err(|e| e.to_string())?;
+    let db = d.current_database().map_err(|e| e.to_string())?;
+    if !try_rows(&mut *d, "SELECT 1 FROM sysmaster:sysdatabases WHERE name = 'syscdcv1'").is_ok_and(|r| !r.is_empty()) {
+        return Ok(()); // nothing to read with: the test says so itself
+    }
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.rh_probe', 0)", cfg.user), 10);
+    d.execute("DROP TABLE IF EXISTS rh_probe", 10).map_err(|e| e.to_string())?;
+    informix_switch_log(&mut admin);
+    d.execute("CREATE TABLE rh_probe (id INT PRIMARY KEY, v VARCHAR(10))", 10).map_err(|e| e.to_string())?;
+    d.execute("INSERT INTO rh_probe VALUES (1, 'a')", 10).map_err(|e| e.to_string())?;
+    informix_switch_log(&mut admin);
+    let conn = crate::jdbc::JdbcConn::connect(cfg, rt.clone(), crate::jdbc::informix_params).map_err(|e| e.to_string())?;
+    let (fresh_cfg, fresh_rt) = (cfg.clone(), rt.clone());
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
+    let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
+    let req = Request {
+        database: db,
+        owner: String::new(),
+        table: "rh_probe".into(),
+        key: vec![KeyPart { column: "id".into(), value: "1".into() }],
+        enable_full_row_logging: true,
+    };
+    let h = rowhistory::run(&conn, &req, false, &cfg.user, &std::sync::atomic::AtomicBool::new(false), &env).map_err(|e| e.to_string())?;
+    drop(conn);
+    let _ = d.execute("DROP TABLE rh_probe", 10);
+    let ops: Vec<&str> = h.events.iter().map(|e| e.op).collect();
+    if h.status == "ok" && ops == ["insert"] && h.partial.is_empty() && !h.stalled {
+        Ok(())
+    } else {
+        Err(format!("{} {ops:?} {:?}", h.status, h.partial))
+    }
+}
+
+/// «Historial de la fila» over JDBC (rowhistory.rs): a row inserted and updated three times, another inserted and
+/// deleted, read back from the logical logs through the CDC API, with full row logging turned on only for the read.
+/// The preconditions that stop it (no log, RAW table, no key, read-only) answer with their reason.
+#[test]
+fn informix_jdbc_row_history() {
+    use crate::rowhistory::{self, KeyPart, Request};
+    use std::sync::atomic::AtomicBool;
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let _guard = watchdog("historial de la fila", 540);
+    // The server's CDC reader keeps what earlier reads left (it stops for good where a read met the tail of a log, and
+    // after errors on the records of dropped tables: measured), which the app reports as partial. A test needs a
+    // reader that works, and the first read after a restart is reliable: a short history is read first, and only a
+    // reader that does not give it whole has the server restarted, since others may be using it (#206). Either way the
+    // server's own start-up tasks go first (see `informix_wait_startup_tasks`).
+    informix_wait_startup_tasks(&cfg, &rt);
+    if let Ok(container) = std::env::var("CELER_INFORMIX_CONTAINER") {
+        if let Err(why) = informix_cdc_reader_works(&cfg, &rt) {
+            println!("El lector CDC del servidor no lee entero un historial corto ({why}): se reinicia {container}");
+            informix_restart(&container);
+            informix_wait_startup_tasks(&cfg, &rt);
+        }
+    }
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    let db = d.current_database().unwrap();
+    // A run cut short (the watchdog) may have left full row logging on, which forbids the DROP.
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.rh_t', 0)", cfg.user), 10);
+    // The server's CDC reader sees a log only up to where an earlier read of it stopped at the tail (measured), so the
+    // changes go into a log nobody has read yet (a switch before they are made) and are completed by another switch
+    // (after), as a DBA would do both.
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
+    let mut switch_log = || informix_switch_log(&mut admin);
+    // Dropping a table and creating another reuses its partition number, and the CDC API fails on the log records of
+    // the dropped one (-83800) when a read covers them, which leaves its server-side reader stuck for the next run
+    // (measured). So the old table is dropped, the log switched, and only then the new one created: the read starts
+    // in a log after the drop.
+    for sql in ["DROP TABLE IF EXISTS rh_t", "DROP TABLE IF EXISTS rh_raw", "DROP TABLE IF EXISTS rh_fill", "DROP TABLE IF EXISTS rh_fix"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    switch_log();
+    d.execute("CREATE TABLE rh_t (id INT PRIMARY KEY, nombre VARCHAR(40), qty INT, precio DECIMAL(10,2), momento DATETIME YEAR TO SECOND, notas TEXT)", 10).unwrap();
+    d.execute("CREATE TABLE rh_fix (id INT PRIMARY KEY, q INT, d DECIMAL(8,2), v DATETIME YEAR TO SECOND)", 10).unwrap();
+    let id1 = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() % 2_000_000_000).to_string();
+    let id2 = (id1.parse::<u64>().unwrap() + 1).to_string();
+    let id3 = (id1.parse::<u64>().unwrap() + 2).to_string();
+    let (id4, id5) = ((id1.parse::<u64>().unwrap() + 3).to_string(), (id1.parse::<u64>().unwrap() + 4).to_string());
+    for sql in [
+        format!("INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES ({id1}, 'alfa', 10, 1.50, DATETIME(2024-03-15 10:20:30) YEAR TO SECOND)"),
+        format!("INSERT INTO rh_t (id, nombre, qty, precio) VALUES ({id2}, 'beta', 20, 2.50)"),
+        format!("INSERT INTO rh_t (id, nombre, qty, precio, momento) VALUES ({id3}, 'gamma', 5, 0.25, DATETIME(2024-02-29 23:59:59) YEAR TO SECOND)"),
+        format!("UPDATE rh_t SET qty = 11 WHERE id = {id1}"),
+        format!("UPDATE rh_t SET nombre = 'alfa-2', precio = 1.75 WHERE id = {id1}"),
+        format!("UPDATE rh_t SET qty = 12, momento = NULL WHERE id = {id1}"),
+        format!("DELETE FROM rh_t WHERE id = {id2}"),
+        // A key moved away: the old key's history ends with that update, and nothing is missing.
+        format!("INSERT INTO rh_t (id, nombre, qty, precio) VALUES ({id4}, 'delta', 4, 4.00)"),
+        format!("UPDATE rh_t SET id = {id5} WHERE id = {id4}"),
+        // Fixed-length columns only: the server logs these updates as partial records, not as full images.
+        format!("INSERT INTO rh_fix VALUES ({id1}, 10, 1.00, DATETIME(2024-02-29 23:59:59) YEAR TO SECOND)"),
+        format!("UPDATE rh_fix SET q = 20, d = 2.00 WHERE id = {id1}"),
+        format!("UPDATE rh_fix SET q = 30, d = 3.00 WHERE id = {id1}"),
+        "CREATE RAW TABLE rh_raw (id INT)".to_string(),
+        // The CDC API reads complete log pages only: a busy server fills them, this one is idle, so the log is pushed
+        // past the changes above with some logged traffic.
+        "CREATE TABLE rh_fill (c CHAR(1500))".to_string(),
+        "INSERT INTO rh_fill SELECT FIRST 60 'x' FROM systables".to_string(),
+        "DROP TABLE rh_fill".to_string(),
+    ] {
+        d.execute(&sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    switch_log();
+    let rt2 = rt.clone();
+    let rt3 = rt.clone();
+    // Each read opens its own connection, as the app's do (rowhistory::read): a CDC session the server never closed
+    // (a cdc_deactivatesess it did not answer) stays on its connection, and another session there is refused (-83715).
+    let open = || crate::jdbc::JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).expect("conexión para el historial");
+    let stop = AtomicBool::new(false);
+    let request = |database: &str, table: &str, id: Option<&str>, enable: bool| Request {
+        database: database.into(),
+        owner: String::new(),
+        table: table.into(),
+        key: id.map(|v| vec![KeyPart { column: "id".into(), value: v.into() }]).unwrap_or_default(),
+        enable_full_row_logging: enable,
+    };
+    let (fresh_cfg, fresh_rt) = (cfg.clone(), rt2);
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
+    let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
+    let run = |req: &Request, read_only: bool| rowhistory::run(&open(), req, read_only, &cfg.user, &stop, &env);
+    let ask = |table: &str, id: &str, enable: bool| {
+        let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
+        // The server's CDC reader stuck is a failure of this test only, said as such, not a hang that kills the suite.
+        assert!(!h.stalled, "el lector CDC del servidor no responde (historial de {table} {id}): {:?}", h.partial);
+        // A history that cannot be read at all says why, and that is not what these reads expect.
+        assert!(h.status != "unavailable" || table == "rh_raw" || h.reason.contains("syscdcv1"), "historial de {table} {id}: {h:?}");
+        h
+    };
+    let raw = ask("rh_raw", "1", true);
+    assert!(raw.status == "unavailable" && raw.reason.contains("RAW"), "{raw:?}");
+    let no_key = run(&request(&db, "rh_t", None, true), false).unwrap();
+    assert!(no_key.reason.contains("clave primaria"), "{no_key:?}");
+
+    let first = ask("rh_t", &id1, false);
+    if first.status == "unavailable" && first.reason.contains("syscdcv1") {
+        println!("Historial de la fila: el servidor no tiene syscdcv1 ({}): solo se comprueba que lo dice", first.reason);
+        return;
+    }
+    assert_eq!(first.status, "needsFullRowLogging", "{first:?}");
+    assert!(first.reason.contains("full row logging"), "{}", first.reason);
+    // The offer says what happens to the changes made before it, for this table.
+    assert!(first.notes.iter().any(|n| n.contains("se leen enteros")), "{:?}", first.notes);
+    let fix_offer = ask("rh_fix", &id1, false);
+    assert!(fix_offer.status == "needsFullRowLogging" && fix_offer.notes.iter().any(|n| n.contains("no aparecerán")), "{fix_offer:?}");
+    // A read-only connection does not change the server.
+    let ro = run(&request(&db, "rh_t", Some(&id1), true), true).unwrap();
+    assert!(ro.status == "unavailable" && ro.reason.contains("solo lectura"), "{ro:?}");
+
+    let t0 = Instant::now();
+    let h = ask("rh_t", &id1, true);
+    println!(
+        "Historial de la fila {} en {:?}: {:?}\n  rango {:?}\n  parcial {:?}\n  notas {:?}",
+        id1,
+        t0.elapsed(),
+        h.events.iter().map(|e| (e.op, &e.lsn, e.time, &e.user, &e.after)).collect::<Vec<_>>(),
+        h.range,
+        h.partial,
+        h.notes
+    );
+    assert_eq!(h.status, "ok", "{h:?}");
+    assert_eq!(h.columns, vec!["id", "qty", "precio", "momento", "nombre"], "fixed-length columns first, as CDC sends them");
+    assert_eq!(h.skipped, vec!["notas"], "TEXT is not captured");
+    let s = |v: &[&str]| v.iter().map(|x| if *x == "NULL" { None } else { Some(x.to_string()) }).collect::<Vec<_>>();
+    assert_eq!(h.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update", "update", "update"]);
+    assert_eq!(h.events[0].after, Some(s(&[&id1, "10", "1.50", "2024-03-15 10:20:30", "alfa"])));
+    assert_eq!(h.events[1].before, h.events[0].after);
+    assert_eq!(h.events[1].after, Some(s(&[&id1, "11", "1.50", "2024-03-15 10:20:30", "alfa"])));
+    assert_eq!(h.events[2].after, Some(s(&[&id1, "11", "1.75", "2024-03-15 10:20:30", "alfa-2"])));
+    assert_eq!(h.events[3].after, Some(s(&[&id1, "12", "1.75", "NULL", "alfa-2"])));
+    assert!(h.events.iter().all(|e| e.user.as_deref() == Some(cfg.user.as_str())), "the user of each change");
+    // Four statements in autocommit: four transactions, each told apart by its commit (the records' own number is a
+    // reused slot).
+    let txs: std::collections::HashSet<_> = h.events.iter().map(|e| e.tx.as_str()).collect();
+    assert_eq!(txs.len(), 4, "{:?}", h.events.iter().map(|e| &e.tx).collect::<Vec<_>>());
+    assert!(!h.cut_short);
+    // Inserted inside the logs on disk: complete, except for logs the server's reader does not give past a point
+    // (earlier runs read them at their tail), which are said and are not the logs with these changes.
+    assert!(h.partial.iter().all(|p| p.contains("no entrega el log")), "{:?}", h.partial);
+    assert!(h.notes.iter().any(|n| n.contains("full row logging")), "{:?}", h.notes);
+    let range = h.range.as_ref().expect("the log range");
+    assert!(range.first_log > 0 && range.current_log >= range.first_log, "{range:?}");
+    // Full row logging is off again: the next read asks for it once more.
+    assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging");
+
+    // A read that died with full row logging on leaves it on and its ledger entry behind (#211). A read-only
+    // connection reads, leaves the server as it is and says how to turn it off; a writable one turns it off.
+    {
+        let full = format!("{db}:{}.rh_t", cfg.user.trim());
+        let server = match try_rows(&mut *d, "SELECT DBSERVERNAME FROM systables WHERE tabid = 1").unwrap().first().and_then(|r| r.first()) {
+            Some(Cell::Text(s)) => s.trim().to_string(),
+            other => panic!("DBSERVERNAME: {other:?}"),
+        };
+        let ledger = std::env::temp_dir().join(format!("celer-rh-ledger-{}.txt", std::process::id()));
+        d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 1)"), 10).unwrap();
+        let left_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh, endpoint: &endpoint };
+        // An entry of another server with the same DBSERVERNAME, or an old one without the address (#202), is not
+        // this server's: full row logging set here (as a DBA would) stays on.
+        for other in [format!("other-host:9088\t{server}\t{full}\n"), format!("{server}\t{full}\n")] {
+            std::fs::write(&ledger, other).unwrap();
+            let rw = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
+            assert!(!rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")), "{rw:?}");
+            assert_ne!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "another server's entry leaves it on");
+        }
+        std::fs::write(&ledger, format!("{endpoint}\t{server}\t{full}\n")).unwrap();
+        let ro = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), false), true, &cfg.user, &stop, &left_env).unwrap();
+        assert_eq!(ro.status, "ok", "{ro:?}");
+        let left = ro.left_on.as_ref().expect("a read-only read says full row logging stays on, as a warning");
+        assert!(left.reason.contains("solo lectura") && left.command.contains("cdc_set_fullrowlogging") && left.command.contains(&full), "{left:?}");
+        assert!(!ro.notes.iter().any(|n| n.contains("cdc_set_fullrowlogging")), "not also as a note: {:?}", ro.notes);
+        assert_ne!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a read-only connection leaves full row logging on");
+        assert!(std::fs::read_to_string(&ledger).unwrap().contains(&full), "the entry stays for a writable read");
+        let rw = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), false), false, &cfg.user, &stop, &left_env).unwrap();
+        assert!(rw.notes.iter().any(|n| n.contains("se ha vuelto a desactivar")) && rw.left_on.is_none(), "{rw:?}");
+        assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "a writable read turns the left-over off");
+        assert!(!ledger.exists(), "and forgets it");
+    }
+
+    // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
+    // newest part of the log ready yet (measured; the history then says so and is partial). A DBA's log switch moves
+    // past both: done, and the read asked again, a few times (#206).
+    let mut ask_whole = |table: &str, id: &str| {
+        let mut h = ask(table, id, true);
+        for _ in 0..3 {
+            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
+                break;
+            }
+            switch_log();
+            h = ask(table, id, true);
+        }
+        h
+    };
+    let gone = ask_whole("rh_t", &id2);
+    assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"], "{gone:?}");
+    assert_eq!(gone.events[1].before, Some(s(&[&id2, "20", "2.50", "NULL", "beta"])));
+    let fix = ask_whole("rh_fix", &id1);
+    // The two updates are logged as partial records the CDC API does not send: the history must not pass as complete.
+    assert_eq!(fix.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert"], "{fix:?}");
+    assert!(fix.partial.iter().any(|p| p.contains("Faltan cambios") && p.contains("q, d")), "{:?}", fix.partial);
+    assert!(fix.partial.iter().any(|p| p.contains("longitud fija")), "{:?}", fix.partial);
+    // A row whose history is complete (with a DATETIME and a VARCHAR) is not flagged.
+    let whole = ask_whole("rh_t", &id3);
+    assert!(whole.events.len() == 1 && whole.partial.iter().all(|p| p.contains("no entrega el log")), "{whole:?}");
+    assert!(!whole.cut_short, "{whole:?}");
+    let moved = ask_whole("rh_t", &id4);
+    assert_eq!(moved.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"], "{moved:?}");
+    assert!(moved.partial.iter().all(|p| p.contains("no entrega el log")), "the key moved away is not a missing change: {:?}", moved.partial);
+    let moved_in = ask_whole("rh_t", &id5);
+    assert!(moved_in.partial.iter().any(|p| p.contains("clave primaria") && p.contains(&id4)), "{:?}", moved_in.partial);
+    assert!(!moved_in.partial.iter().any(|p| p.contains("Faltan cambios")), "{:?}", moved_in.partial);
+    // A key with no change in the logs: nothing invented, and said to be partial.
+    let none = ask_whole("rh_t", "99");
+    assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");
+    assert!(!none.cut_short && none.partial.iter().any(|p| p.contains("Ningún cambio")), "{none:?}");
+    // A read stopped before it read anything: partial, cut short, and it claims nothing about the row; full row
+    // logging goes off again all the same.
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let stopped = ask("rh_t", &id1, true);
+    stop.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(stopped.status == "ok" && stopped.cut_short && stopped.events.is_empty(), "{stopped:?}");
+    assert!(stopped.partial.iter().any(|p| p.contains("Lectura cancelada")), "{:?}", stopped.partial);
+    assert!(!stopped.partial.iter().any(|p| p.contains("Ningún cambio")), "{:?}", stopped.partial);
+    assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "full row logging is off again after a stopped read");
+
+    // Two reads of one table at once (two windows, #205): the second does not take the first's ledger entry for a
+    // left-over one, neither turns full row logging off under the other, and it is off once both have ended.
+    {
+        let ledger = std::env::temp_dir().join(format!("celer-rh-overlap-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&ledger);
+        let (other, mine) = std::thread::scope(|sc| {
+            let other = sc.spawn(|| {
+                let c2 = crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params).expect("segunda conexión para el historial");
+                let fresh2 = || crate::jdbc::JdbcConn::connect(&cfg, rt3.clone(), crate::jdbc::informix_params);
+                let env2 = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh2, endpoint: &endpoint };
+                rowhistory::run(&c2, &request(&db, "rh_t", Some(&id3), true), false, &cfg.user, &stop, &env2)
+            });
+            // Once the other read has noted the table (just before it turns full row logging on), this one starts.
+            for _ in 0..300 {
+                if ledger.exists() || other.is_finished() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let mine_env = rowhistory::Env { ledger: Some(&ledger), fresh: &fresh, endpoint: &endpoint };
+            let mine = rowhistory::run(&open(), &request(&db, "rh_t", Some(&id1), true), false, &cfg.user, &stop, &mine_env);
+            (other.join().expect("la otra lectura"), mine)
+        });
+        for h in [other.expect("historial de la otra lectura"), mine.expect("historial de esta lectura")] {
+            println!("Lecturas a la vez: {} cambios, notas {:?}", h.events.len(), h.notes);
+            assert_eq!(h.status, "ok", "{h:?}");
+            assert!(!h.notes.iter().any(|n| n.contains("se interrumpió")) && h.left_on.is_none(), "{:?} {:?}", h.notes, h.left_on);
+        }
+        assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "off once both reads have ended");
+        assert!(!ledger.exists(), "and the entry is forgotten");
+    }
+
+    // A database without log (creating it moves the connection there: the RAW table goes first).
+    d.execute("DROP TABLE rh_raw", 10).unwrap();
+    let _ = d.execute("CREATE DATABASE celer_nolog", 10);
+    let nolog = run(&request("celer_nolog", "x", Some("1"), true), false).unwrap();
+    assert!(nolog.status == "unavailable" && nolog.reason.contains("no tiene log"), "{nolog:?}");
+}
+
+/// «Historial de la fila» after fast recovery (#123): a table created, inserted into and updated after the last
+/// checkpoint, then the server killed (`docker kill -s KILL`) before the next one. Fast recovery replays the CREATE TABLE
+/// on start and stamps the partition's creation time with that moment (measured), so the row's real changes are older
+/// than it and cannot be told from those of a dropped table that had the same partnum (tables created and dropped
+/// first make that likely). The history shows none of them, says it is partial for that reason, never calls them a
+/// dropped table's nor says the row had no changes, and shows a change made after the restart. It kills the server, so
+/// it runs only against a container it may kill: CELER_INFORMIX_KILLABLE=1 with CELER_INFORMIX_CONTAINER (never the
+/// shared WSL engines of a normal `engines.sh test`).
+#[test]
+fn informix_jdbc_row_history_after_fast_recovery() {
+    use crate::rowhistory::{self, KeyPart, Request};
+    let Some((mut cfg, rt)) = informix_jdbc_cfg() else { return };
+    let (Ok(container), Ok("1")) = (std::env::var("CELER_INFORMIX_CONTAINER"), std::env::var("CELER_INFORMIX_KILLABLE").as_deref()) else {
+        println!("Historial tras recuperación rápida: sin CELER_INFORMIX_KILLABLE=1 no se mata el servidor; no se comprueba");
+        return;
+    };
+    let _guard = watchdog("historial tras recuperación rápida", 600);
+    informix_wait_startup_tasks(&cfg, &rt);
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
+    let db = d.current_database().unwrap();
+    if !try_rows(&mut *d, "SELECT 1 FROM sysmaster:sysdatabases WHERE name = 'syscdcv1'").is_ok_and(|r| !r.is_empty()) {
+        println!("Historial tras recuperación rápida: el servidor no tiene syscdcv1; no se comprueba");
+        return;
+    }
+    let full = format!("{db}:{}.rh_rec", cfg.user.trim());
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 0)"), 10);
+    d.execute("DROP TABLE IF EXISTS rh_rec", 10).unwrap();
+    let partnum = |d: &mut dyn Driver| -> i64 {
+        let rows = try_rows(d, "SELECT partnum FROM systables WHERE tabname = 'rh_rec'").unwrap();
+        rows.first().and_then(|r| r.first()).map(txt).and_then(|v| v.trim().parse().ok()).expect("partnum de rh_rec")
+    };
+    // Dropped tables with the same name and key whose partnum the new table may take: their changes stay in the log.
+    let mut dropped = Vec::new();
+    for n in 0..3 {
+        for sql in ["CREATE TABLE rh_rec (id INT PRIMARY KEY, v VARCHAR(20))".to_string(), format!("INSERT INTO rh_rec VALUES (1, 'borrada{n}')")] {
+            d.execute(&sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+        }
+        dropped.push(partnum(&mut *d));
+        d.execute("DROP TABLE rh_rec", 10).unwrap();
+    }
+    let docker = |args: &[&str]| Command::new("docker").args(args).status().is_ok_and(|s| s.success());
+    // A checkpoint, then the table: its creation is after the last checkpoint when the server dies.
+    assert!(docker(&["exec", &container, "bash", "-lc", "onmode -c"]), "onmode -c en {container}");
+    let created = |d: &mut dyn Driver| -> i64 {
+        let rows = try_rows(d, "SELECT p.created FROM sysmaster:sysptnhdr p, systables t WHERE t.tabname = 'rh_rec' AND p.partnum = t.partnum").unwrap();
+        rows.first().and_then(|r| r.first()).map(txt).and_then(|v| v.trim().parse().ok()).expect("sysptnhdr.created de rh_rec")
+    };
+    for sql in ["CREATE TABLE rh_rec (id INT PRIMARY KEY, v VARCHAR(20))", "INSERT INTO rh_rec VALUES (1, 'antes')", "UPDATE rh_rec SET v = 'despues' WHERE id = 1"] {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{sql}\n→ {e}"));
+    }
+    let before = created(&mut *d);
+    let ours = partnum(&mut *d);
+    println!("rh_rec: partnum {ours}; las tablas borradas antes tenían {dropped:?}");
+    drop(d);
+    // The container's address (the JDBC test connects to it directly) may change when it starts again.
+    let ip = || {
+        let out = Command::new("docker").args(["inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", &container]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let by_ip = cfg.host == ip();
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(docker(&["kill", "-s", "KILL", &container]), "docker kill {container}");
+    assert!(docker(&["start", &container]), "docker start {container}");
+    informix_wait_up(&container);
+    if by_ip {
+        cfg.host = ip();
+    }
+    informix_wait_startup_tasks(&cfg, &rt);
+    let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC tras arrancar");
+    let after = created(&mut *d);
+    println!("rh_rec: sysptnhdr.created {before} antes de matar el servidor, {after} después de la recuperación rápida");
+    assert!(after > before, "la recuperación rápida no reescribió la hora de creación ({before} → {after}): el caso no se reproduce");
+    assert_eq!(try_rows(&mut *d, "SELECT v FROM rh_rec WHERE id = 1").unwrap().first().and_then(|r| r.first()).map(txt).as_deref().map(str::trim), Some("despues"));
+
+    let (fresh_cfg, fresh_rt) = (cfg.clone(), rt.clone());
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
+    let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
+    let req = Request { database: db, owner: String::new(), table: "rh_rec".into(), key: vec![KeyPart { column: "id".into(), value: "1".into() }], enable_full_row_logging: true };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut admin_cfg = cfg.clone();
+    admin_cfg.database = "sysadmin".into();
+    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
+    // The reader may not have the newest part of the log ready yet: a DBA's log switch, and the read asked again.
+    let mut read = |what: &str| {
+        let mut h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
+        for _ in 0..3 {
+            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
+                break;
+            }
+            informix_switch_log(&mut admin);
+            h = rowhistory::run(&fresh().unwrap(), &req, false, &cfg.user, &stop, &env).unwrap();
+        }
+        println!(
+            "Historial tras recuperación rápida ({what}): {:?}\n  parcial {:?}\n  notas {:?}",
+            h.events.iter().map(|e| (e.op, e.time, &e.after)).collect::<Vec<_>>(),
+            h.partial,
+            h.notes
+        );
+        h
+    };
+    let recovered = read("tras arrancar");
+    // One more change, after the recovery: it is the table's, and shown.
+    let changed = d.execute("UPDATE rh_rec SET v = 'tras' WHERE id = 1", 10);
+    let later = changed.is_ok().then(|| read("tras un cambio posterior"));
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{full}', 0)"), 10);
+    let _ = d.execute("DROP TABLE rh_rec", 10);
+    changed.expect("UPDATE tras arrancar");
+    let later = later.unwrap();
+    let some = |v: &[&str]| Some(v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>());
+    for h in [&recovered, &later] {
+        assert_eq!(h.status, "ok", "{h:?}");
+        assert!(!h.stalled, "{:?}", h.partial);
+        assert_eq!(h.shown_from, Some(after), "{h:?}");
+        // Nothing from before the recovery: neither the row's own insert and update nor any dropped table's.
+        assert!(h.events.iter().all(|e| e.time >= after), "{h:?}");
+        assert!(h.events.iter().all(|e| e.after.as_ref().and_then(|a| a.get(1).cloned().flatten()).is_none_or(|v| !v.starts_with("borrada") && v != "antes" && v != "despues")), "{h:?}");
+        assert!(!h.events.iter().any(|e| e.op == "insert"), "{h:?}");
+        // The true reason it is partial, and not a false one.
+        assert!(h.partial.iter().any(|p| p.contains("al recuperarse de una parada brusca") && p.contains("no se muestran")), "{:?}", h.partial);
+        assert!(h.partial.iter().all(|p| p.contains("parada brusca") || p.contains("El servidor no lee el log en") || p.contains("no entrega el log")), "{:?}", h.partial);
+        assert!(!h.notes.iter().chain(&h.partial).any(|n| n.contains("Se descartaron") || n.contains("tabla borrada") || n.contains("Ningún cambio") || n.contains("ya existía")), "{h:?}");
+    }
+    assert!(recovered.events.is_empty(), "{recovered:?}");
+    assert_eq!(later.events.iter().map(|e| e.op).collect::<Vec<_>>(), ["update"], "{later:?}");
+    assert_eq!(later.events[0].after, some(&["1", "tras"]));
+}
+
+// ───────────────────────────────────────────────────────────────── test data generator (#172)
+//
+// A parent table and a child with a primary key, an identity, NOT NULL, unique, a foreign key, an enum or CHECK list, a
+// CHECK range, a date, a date-time, a decimal, a boolean, text and bytes, on every engine. The dialog's catalog
+// queries run first (dev/engine-sql.ts, stage "catalog"), then the values already in unique columns ("existing"), then
+// 10,000 generated rows go in as the import writes them, in one transaction; their count, their foreign keys, their
+// uniqueness, their lists and ranges and one row read back by its values are checked by SQL. Then a second run is
+// rolled back (Cancelar), and a third commits while another session holds a manual transaction open (a console's):
+// that one is left as it was.
+
+/// Every row of `sql`'s first result, or the error (catalog queries an old server refuses are not a failure).
+fn try_rows(d: &mut dyn Driver, sql: &str) -> anyhow::Result<Vec<Vec<Cell>>> {
+    let out = d.execute(sql, 5000)?;
+    let Some(first) = out.results.into_iter().find(|r| !r.columns.is_empty()) else { return Ok(vec![]) };
+    let mut rows = first.rows;
+    let mut more = first.has_more;
+    while more {
+        let f = d.fetch(5000)?;
+        rows.extend(f.rows);
+        more = f.has_more;
+    }
+    Ok(rows)
+}
+
+/// Where a driver's schema_foreign_keys reads the table's schema, and the table itself.
+struct TdTarget {
+    parent: ObjectRef,
+    child: ObjectRef,
+    /// A table of its own for the other session's open transaction.
+    other: String,
+    fk_path: Vec<String>,
+}
+
+/// The generator's statements for the child table: the catalog stage, its answers, the existing values, the inserts.
+fn testdata_run(d: &mut dyn Driver, kind: &str, t: &TdTarget, rows: usize, seed: u64) -> (Vec<Statement>, Vec<Statement>) {
+    let columns = d.table_columns(&t.child).unwrap();
+    let quoted: Vec<String> = columns.iter().map(|c| d.quote_ident(&c.name)).collect();
+    let qualified = d.qualified_name(&t.child);
+    let server_info = d.server_info().unwrap_or_default();
+    let fks: Vec<serde_json::Value> = d
+        .schema_foreign_keys(&t.fk_path)
+        .unwrap_or_else(|e| panic!("{kind}: claves foráneas: {e}"))
+        .into_iter()
+        .filter(|k| k.table.name.eq_ignore_ascii_case(&t.child.name))
+        .map(|k| {
+            let mut target = k.target.clone();
+            if target.database.is_empty() {
+                target.database = k.table.database.clone();
+            }
+            json!({
+                "name": k.name, "columns": k.columns, "target": target, "targetColumns": k.target_columns,
+                "targetQualified": d.qualified_name(&target),
+                "targetQuoted": k.target_columns.iter().map(|c| d.quote_ident(c)).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    assert_eq!(fks.len(), 1, "{kind}: la clave foránea de la tabla hija");
+    let table = json!({ "database": t.child.database, "schema": t.child.schema, "name": t.child.name, "qualified": qualified });
+    let shape = json!({ "kind": kind.split_whitespace().next().unwrap_or(kind), "testData": { "stage": "catalog", "serverInfo": server_info, "table": table, "columns": columns, "quoted": quoted, "fks": fks, "rows": rows, "seed": seed } });
+    testdata_stages(d, kind, shape)
+}
+
+/// The dialog's three steps for `shape` (stage "catalog"): the catalog queries and their answers, the values already
+/// in unique columns, then the inserts and their checks.
+fn testdata_stages(d: &mut dyn Driver, kind: &str, shape: serde_json::Value) -> (Vec<Statement>, Vec<Statement>) {
+    let (_, inserts, checks) = testdata_plan_stages(d, kind, shape);
+    (inserts, checks)
+}
+
+/// The same, with the plan (column=generator, … as dev/engine-sql.ts writes it) first.
+fn testdata_plan_stages(d: &mut dyn Driver, kind: &str, mut shape: serde_json::Value) -> (String, Vec<Statement>, Vec<Statement>) {
+    let answer = |d: &mut dyn Driver, asked: &[Statement]| -> Vec<serde_json::Value> {
+        asked
+            .iter()
+            .map(|st| match try_rows(d, &st.sql) {
+                Ok(rows) => serde_json::to_value(rows).unwrap(),
+                Err(e) if st.name.starts_with("catalog") => {
+                    println!("  ({kind}: sin «{}»: {e})", st.name);
+                    serde_json::Value::Null
+                }
+                Err(e) => panic!("{kind}: {}\n{}\n→ {e}", st.name, st.sql),
+            })
+            .collect()
+    };
+    let asked = generated(shape.clone());
+    let answers = answer(d, &asked);
+    shape["testData"]["answers"] = json!(answers);
+    shape["testData"]["stage"] = json!("existing");
+    let existing_asked = generated(shape.clone());
+    let existing = answer(d, &existing_asked);
+    shape["testData"]["existing"] = json!(existing);
+    shape["testData"]["stage"] = json!("insert");
+    let statements = generated(shape);
+    let plan = statements.iter().find(|st| st.name.starts_with("plan:")).map(|st| st.name.clone()).unwrap_or_default();
+    println!("  {kind} {plan}");
+    let (inserts, checks): (Vec<Statement>, Vec<Statement>) = statements.into_iter().filter(|st| !st.name.starts_with("plan:")).partition(|st| st.name == "testdata insert");
+    (plan, inserts, checks)
+}
+
+/// A unique integer key of `int_type` whose largest value is 5 below `top` (#196): the proposed sequence starts after
+/// it, so 300 rows run past the type and the dialog stops on it, while 5 fit and go in. With `top` None (SQLite keeps
+/// any integer in 8 bytes) the 300 go in.
+fn testdata_sequence_range(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, int_type: &str, top: Option<i64>) {
+    let qualified = d.qualified_name(obj);
+    let start = top.unwrap_or(32767) - 5;
+    let setup = [format!("CREATE TABLE {qualified} (id {int_type} NOT NULL PRIMARY KEY, nota VARCHAR(10))"), format!("INSERT INTO {qualified} (id, nota) VALUES ({start}, 'a')")];
+    let drop = format!("DROP TABLE {qualified}");
+    let plan = testdata_proposed(d, kind, obj, &setup, &[&drop], 300);
+    if let Some(top) = top {
+        assert!(plan.contains("‖ problemas:") && plan.contains(&format!("llega a {}", start + 300)) && plan.contains(&format!("máximo {top}")), "{kind}: {plan}");
+        let plan = testdata_proposed(d, kind, obj, &setup, &[], 5);
+        assert!(!plan.contains("‖ problemas:"), "{kind}: 5 filas caben: {plan}");
+        assert_eq!(scalar(d, &format!("SELECT MAX(id) FROM {qualified}")).trim(), top.to_string(), "{kind}");
+        d.execute(&drop, 10).ok();
+    } else {
+        assert!(!plan.contains("‖ problemas:"), "{kind}: {plan}");
+    }
+    println!("✓ {kind}: una secuencia que no cabe en {int_type} se detiene antes de insertar");
+}
+
+/// PostgreSQL domains (#199): a domain over varchar(4) and a NOT NULL domain with a CHECK (VALUE > 0 AND VALUE <= 50)
+/// are generated from their base type, keep the domain's NOT NULL and its CHECK (the server rejected the whole insert).
+fn testdata_pg_domains(d: &mut dyn Driver, kind: &str, obj: &ObjectRef) {
+    let qualified = d.qualified_name(obj);
+    let drop = [format!("DROP TABLE IF EXISTS {qualified}"), "DROP DOMAIN IF EXISTS celer_td_code".into(), "DROP DOMAIN IF EXISTS celer_td_pos".into()];
+    let drop: Vec<&str> = drop.iter().map(String::as_str).collect();
+    let setup = [
+        "CREATE DOMAIN celer_td_code AS VARCHAR(4)".to_string(),
+        "CREATE DOMAIN celer_td_pos AS INT NOT NULL CHECK (VALUE > 0 AND VALUE <= 50)".to_string(),
+        format!("CREATE TABLE {qualified} (id INT PRIMARY KEY, codigo celer_td_code, nombre celer_td_code NOT NULL, puntos celer_td_pos)"),
+    ];
+    let plan = testdata_proposed(d, kind, obj, &setup, &drop, 300);
+    assert!(plan.contains("puntos=integer [0..50]"), "{kind}: {plan}");
+    println!("✓ {kind}: columnas de dominio: 300 filas con su tipo base, NOT NULL y CHECK");
+}
+
+/// CHECKs with negative bounds (#200), which PostgreSQL stores as '-10'::integer and MySQL 8 as -(10): the ranges are
+/// read and the 300 rows keep them (the checks of dev/engine-sql.ts look at every value).
+fn testdata_negative_checks(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, drop: &str) {
+    let qualified = d.qualified_name(obj);
+    let setup = [format!("CREATE TABLE {qualified} (id INT NOT NULL PRIMARY KEY, x INT NOT NULL CHECK (x BETWEEN -10 AND 10), y DECIMAL(6,2) CHECK (y >= -5.5), z INT CHECK (z > -3 AND z < 4))")];
+    let plan = testdata_proposed(d, kind, obj, &setup, &[drop], 300);
+    assert!(plan.contains("x=integer [-10..10]") && plan.contains("z=integer [-3..4]") && plan.contains("[-5.5.."), "{kind}: {plan}");
+    println!("✓ {kind}: CHECK con límites negativos");
+}
+
+/// A table made by `setup` with the generators the dialog proposes: `rows` rows go in in one transaction, the checks
+/// hold, and the plan (column=generator, …) is returned for the caller's own assertions. `drop` runs before and after.
+fn testdata_proposed(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, setup: &[String], drop: &[&str], rows: usize) -> String {
+    for sql in drop {
+        d.execute(sql, 10).ok();
+    }
+    for sql in setup {
+        d.execute(sql, 10).unwrap_or_else(|e| panic!("{kind}: {sql}\n→ {e}"));
+    }
+    let columns = d.table_columns(obj).unwrap();
+    let quoted: Vec<String> = columns.iter().map(|c| d.quote_ident(&c.name)).collect();
+    let qualified = d.qualified_name(obj);
+    let table = json!({ "database": obj.database, "schema": obj.schema, "name": obj.name, "qualified": qualified });
+    let shape = json!({ "kind": kind.split_whitespace().next().unwrap_or(kind), "testData": {
+        "stage": "catalog", "serverInfo": d.server_info().unwrap_or_default(), "table": table, "columns": columns, "quoted": quoted,
+        "fks": [], "rows": rows, "seed": 178 } });
+    let (plan, inserts, checks) = testdata_plan_stages(d, kind, shape);
+    // The dialog stops on an error (‖ problemas: …): nothing to insert.
+    if !plan.contains("‖ problemas:") {
+        testdata_insert(d, kind, &inserts, true);
+        run_generated(d, &checks);
+    }
+    for sql in drop {
+        d.execute(sql, 10).ok();
+    }
+    plan
+}
+
+/// A table whose every column is left to the server (#194): the dialog's rows of defaults go in (Informix takes neither
+/// DEFAULT VALUES nor DEFAULT in VALUES: 0 in its SERIAL, or NULL in a nullable column without a default) and all
+/// three are there.
+fn testdata_defaults(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, ddl: &str, drop: &str) {
+    d.execute(drop, 10).ok();
+    d.execute(ddl, 10).unwrap_or_else(|e| panic!("{kind}: {ddl}\n→ {e}"));
+    let columns = d.table_columns(obj).unwrap();
+    let quoted: Vec<String> = columns.iter().map(|c| d.quote_ident(&c.name)).collect();
+    let qualified = d.qualified_name(obj);
+    let table = json!({ "database": obj.database, "schema": obj.schema, "name": obj.name, "qualified": qualified });
+    let shape = json!({ "kind": kind.split_whitespace().next().unwrap_or(kind), "testData": {
+        "stage": "insert", "serverInfo": d.server_info().unwrap_or_default(), "table": table, "columns": columns, "quoted": quoted,
+        "fks": [], "answers": [], "existing": [], "rows": 3, "seed": 194, "allSkip": true } });
+    let (inserts, checks): (Vec<Statement>, Vec<Statement>) = generated(shape).into_iter().filter(|st| !st.name.starts_with("plan:")).partition(|st| st.name == "testdata insert");
+    assert_eq!(inserts.len(), 3, "{kind}: una fila de valores por defecto por sentencia");
+    testdata_insert(d, kind, &inserts, true);
+    run_generated(d, &checks);
+    println!("✓ {kind}: filas solo con valores por defecto: {}", inserts[0].sql);
+    d.execute(drop, 10).ok();
+}
+
+/// A nullable unique column that already holds a NULL (#195): on SQL Server and Informix a second NULL breaks the key,
+/// so the dialog reads that one and generates no other; with NULL at 50 % the 200 rows go in on every engine (and the
+/// others, where NULLs never clash, still get NULLs).
+fn testdata_unique_null(d: &mut dyn Driver, kind: &str, obj: &ObjectRef, drop: &str) {
+    let qualified = d.qualified_name(obj);
+    d.execute(drop, 10).ok();
+    for sql in [
+        format!("CREATE TABLE {qualified} (id INT NOT NULL PRIMARY KEY, email VARCHAR(120) UNIQUE)"),
+        format!("INSERT INTO {qualified} (id, email) VALUES (1, NULL)"),
+        format!("INSERT INTO {qualified} (id, email) VALUES (2, 'a@b.es')"),
+    ] {
+        d.execute(&sql, 10).unwrap_or_else(|e| panic!("{kind}: {sql}\n→ {e}"));
+    }
+    let columns = d.table_columns(obj).unwrap();
+    let quoted: Vec<String> = columns.iter().map(|c| d.quote_ident(&c.name)).collect();
+    let table = json!({ "database": obj.database, "schema": obj.schema, "name": obj.name, "qualified": qualified });
+    let shape = json!({ "kind": kind.split_whitespace().next().unwrap_or(kind), "testData": {
+        "stage": "catalog", "serverInfo": d.server_info().unwrap_or_default(), "table": table, "columns": columns, "quoted": quoted,
+        "fks": [], "rows": 200, "seed": 195, "nullPct": 50 } });
+    let (inserts, checks) = testdata_stages(d, kind, shape);
+    testdata_insert(d, kind, &inserts, true);
+    run_generated(d, &checks);
+    let nulls: usize = scalar(d, &format!("SELECT COUNT(*) FROM {qualified} WHERE email IS NULL")).trim().parse().unwrap();
+    if kind.starts_with("mssql") || kind.starts_with("informix") {
+        assert_eq!(nulls, 1, "{kind}: la tabla conserva su único NULL y no se genera otro");
+    } else {
+        assert!(nulls > 1, "{kind}: aquí los NULL no chocan y se siguen generando ({nulls})");
+    }
+    println!("✓ {kind}: columna única con un NULL previo: 200 filas, {nulls} NULL en total");
+    d.execute(drop, 10).ok();
+}
+
+/// Runs the inserts in one transaction, as the dialog does (rolled back instead of committed when `commit` is false).
+fn testdata_insert(d: &mut dyn Driver, kind: &str, inserts: &[Statement], commit: bool) -> Duration {
+    testdata_try_insert(d, inserts, commit).unwrap_or_else(|e| panic!("{kind}: {e}"))
+}
+
+/// The same, with the failure as an error (after rolling back, as the dialog does).
+fn testdata_try_insert(d: &mut dyn Driver, inserts: &[Statement], commit: bool) -> Result<Duration, String> {
+    let t0 = Instant::now();
+    d.close_cursor().ok();
+    d.set_autocommit(false).unwrap();
+    for (i, st) in inserts.iter().enumerate() {
+        // The server's counts must reach the statement's rows, as the dialog checks (insertShortfall): a driver that
+        // turns a refused value into a warning inserts nothing and says so only there.
+        let failure = match d.execute(&st.sql, 1) {
+            Err(e) => Some(e.to_string()),
+            Ok(out) => {
+                let counts: Vec<i64> = out.results.iter().filter_map(|r| r.rows_affected).filter(|n| *n >= 0).collect();
+                let got: i64 = counts.iter().sum();
+                match st.rows {
+                    Some(want) if !counts.is_empty() && got < want as i64 => Some(format!("el servidor insertó {got} de {want} filas: {}", out.messages.join(" · "))),
+                    _ => None,
+                }
+            }
+        };
+        if let Some(e) = failure {
+            d.rollback().ok();
+            d.set_autocommit(true).ok();
+            return Err(format!("INSERT {} de {} falló: {e}\n{}", i + 1, inserts.len(), st.sql.chars().take(1500).collect::<String>()));
+        }
+    }
+    if commit {
+        d.commit().unwrap();
+    } else {
+        d.rollback().unwrap();
+    }
+    d.set_autocommit(true).unwrap();
+    Ok(t0.elapsed())
+}
+
+fn testdata_suite(d: &mut dyn Driver, open_other: &dyn Fn() -> Box<dyn Driver>, kind: &str, ddl: &[&str], t: &TdTarget, cleanup: &[&str]) {
+    println!("── datos de prueba: {kind} ({})", d.server_info().unwrap_or_default());
+    for sql in cleanup.iter().chain(ddl) {
+        if let Err(e) = d.execute(sql, 10) {
+            assert!(cleanup.contains(sql), "{kind}: {sql}\n→ {e}");
+        }
+    }
+    let parent = d.qualified_name(&t.parent);
+    for id in 1..=50 {
+        d.execute(&format!("INSERT INTO {parent} (id, nombre) VALUES ({id}, 'Padre {id}')"), 10).unwrap();
+    }
+    let child = d.qualified_name(&t.child);
+    let count = |d: &mut dyn Driver, table: &str| -> usize { scalar(d, &format!("SELECT COUNT(*) FROM {table}")).trim().parse().unwrap() };
+
+    // 10,000 rows, then every check.
+    let (inserts, checks) = testdata_run(d, kind, t, 10_000, 172);
+    let took = testdata_insert(d, kind, &inserts, true);
+    println!("✓ {kind}: 10.000 filas en {} sentencias, {:.1} s ({:.0} filas/s)", inserts.len(), took.as_secs_f64(), 10_000.0 / took.as_secs_f64().max(0.001));
+    run_generated(d, &checks);
+
+    // Cancelar: 500 more rows in a transaction that is rolled back; none stays.
+    let (inserts, _) = testdata_run(d, kind, t, 500, 173);
+    testdata_insert(d, kind, &inserts, false);
+    assert_eq!(count(d, &child), 10_000, "{kind}: Cancelar no deja ninguna fila");
+    println!("✓ {kind}: cancelado, todo deshecho");
+
+    // A console's manual transaction, open in its own session meanwhile, is not touched by the generator's commit.
+    let mut other = open_other();
+    other.set_autocommit(false).unwrap();
+    other.execute(&format!("INSERT INTO {} (id) VALUES (1)", t.other), 10).unwrap();
+    let (inserts, _) = testdata_run(d, kind, t, 200, 174);
+    if kind == "sqlite" {
+        // One writer per SQLite file: the console's pending write makes the generator give up (database is locked)
+        // and undo its own work; the console's transaction stays open with its row, for it to end.
+        let failed = testdata_try_insert(d, &inserts, true).expect_err("sqlite: el fichero está bloqueado por la consola");
+        assert!(failed.contains("locked"), "{failed}");
+        assert_eq!(count(d, &child), 10_000, "{kind}: nada a medias");
+        assert_eq!(count(other.as_mut(), &t.other), 1, "{kind}: la consola conserva su fila pendiente");
+    } else {
+        testdata_insert(d, kind, &inserts, true);
+        assert_eq!(count(d, &child), 10_200, "{kind}: los datos de prueba se guardan");
+    }
+    other.rollback().unwrap();
+    other.set_autocommit(true).unwrap();
+    assert_eq!(count(other.as_mut(), &t.other), 0, "{kind}: la transacción de la consola sigue siendo suya");
+    println!("✓ {kind}: la transacción abierta de otra sesión no se mezcla");
+    drop(other);
+    for sql in cleanup {
+        d.execute(sql, 10).ok();
+    }
+}
+
+fn td_obj(database: &str, schema: &str, name: &str) -> ObjectRef {
+    ObjectRef { database: database.into(), schema: schema.into(), name: name.into(), kind: "table".into() }
+}
+
+fn td_target(database: &str, schema: &str, fk_path: &[&str]) -> TdTarget {
+    TdTarget { parent: td_obj(database, schema, "celer_td_parent"), child: td_obj(database, schema, "celer_td_child"), other: "celer_td_other".into(), fk_path: fk_path.iter().map(|s| s.to_string()).collect() }
+}
+
+const TD_PG_DDL: &[&str] = &[
+    "CREATE TYPE celer_td_estado AS ENUM ('nuevo', 'enviado', 'entregado')",
+    "CREATE TABLE celer_td_parent (id INT PRIMARY KEY, nombre VARCHAR(60) NOT NULL)",
+    "CREATE TABLE celer_td_other (id INT)",
+    "CREATE TABLE celer_td_child (
+        id INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        codigo VARCHAR(12) NOT NULL UNIQUE,
+        nombre VARCHAR(40) NOT NULL,
+        apellidos VARCHAR(60),
+        email VARCHAR(120) UNIQUE,
+        parent_id INT NOT NULL REFERENCES celer_td_parent(id),
+        estado celer_td_estado NOT NULL,
+        prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+        puntos INT CHECK (puntos BETWEEN 0 AND 100),
+        alta DATE NOT NULL,
+        momento TIMESTAMP,
+        importe NUMERIC(10,2) NOT NULL CHECK (importe >= 0),
+        activo BOOLEAN NOT NULL,
+        notas TEXT,
+        foto BYTEA,
+        nif CHAR(9),
+        telefono VARCHAR(20),
+        ciudad VARCHAR(40),
+        cp VARCHAR(5))",
+];
+const TD_PG_CLEANUP: &[&str] = &["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other", "DROP TYPE IF EXISTS celer_td_estado"];
+
+#[test]
+fn testdata_postgres() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg.clone()).expect("conexión PostgreSQL");
+    let other = || Box::new(crate::postgres::PostgresDriver::connect(cfg.clone()).unwrap()) as Box<dyn Driver>;
+    testdata_suite(&mut d, &other, "postgres", TD_PG_DDL, &td_target("celer", "public", &["celer", "public"]), TD_PG_CLEANUP);
+    testdata_defaults(&mut d, "postgres", &td_obj("celer", "public", "celer_td_auto"), "CREATE TABLE celer_td_auto (id INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, n INT DEFAULT 3)", "DROP TABLE IF EXISTS celer_td_auto");
+    testdata_unique_null(&mut d, "postgres", &td_obj("celer", "public", "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
+    testdata_sequence_range(&mut d, "postgres", &td_obj("celer", "public", "celer_td_seq"), "SMALLINT", Some(32767));
+    testdata_pg_domains(&mut d, "postgres", &td_obj("celer", "public", "celer_td_domain"));
+    testdata_negative_checks(&mut d, "postgres", &td_obj("celer", "public", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+}
+
+/// 100,000 rows into PostgreSQL well under a minute (the issue's bar), in the dialog's batches.
+#[test]
+fn testdata_postgres_100k() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    let d: &mut dyn Driver = &mut d;
+    for sql in TD_PG_CLEANUP.iter().chain(TD_PG_DDL) {
+        d.execute(sql, 10).unwrap();
+    }
+    for id in 1..=50 {
+        d.execute(&format!("INSERT INTO celer_td_parent (id, nombre) VALUES ({id}, 'Padre {id}')"), 10).unwrap();
+    }
+    let t = td_target("celer", "public", &["celer", "public"]);
+    let t0 = Instant::now();
+    let (inserts, _) = testdata_run(d, "postgres", &t, 100_000, 1);
+    let generated_in = t0.elapsed();
+    let took = testdata_insert(d, "postgres", &inserts, true);
+    let total = t0.elapsed();
+    println!("✓ postgres: 100.000 filas generadas en {:.1} s e insertadas en {:.1} s ({:.0} filas/s)", generated_in.as_secs_f64(), took.as_secs_f64(), 100_000.0 / took.as_secs_f64());
+    assert_eq!(scalar(d, "SELECT COUNT(*) FROM celer_td_child"), "100000");
+    assert!(total < Duration::from_secs(45), "100.000 filas en {total:?}");
+    for sql in TD_PG_CLEANUP {
+        d.execute(sql, 10).unwrap();
+    }
+}
+
+/// MySQL, and MariaDB in the second run of dev/wsl/engines.sh (it runs the tests named "mysql").
+/// The MySQL / MariaDB tables of the test data suite (natively and through ODBC).
+const TD_MY_DDL: &[&str] = &[
+    "CREATE TABLE celer_td_parent (id INT PRIMARY KEY, nombre VARCHAR(60) NOT NULL) ENGINE=InnoDB",
+    "CREATE TABLE celer_td_other (id INT) ENGINE=InnoDB",
+    "CREATE TABLE celer_td_child (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        codigo VARCHAR(12) NOT NULL UNIQUE,
+        nombre VARCHAR(40) NOT NULL,
+        apellidos VARCHAR(60),
+        email VARCHAR(120) UNIQUE,
+        parent_id INT NOT NULL,
+        estado ENUM('nuevo', 'enviado', 'entregado') NOT NULL,
+        prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+        puntos INT CHECK (puntos BETWEEN 0 AND 100),
+        alta DATE NOT NULL,
+        momento DATETIME,
+        importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
+        activo BOOLEAN NOT NULL,
+        notas TEXT,
+        foto VARBINARY(32),
+        nif CHAR(9),
+        telefono VARCHAR(20),
+        ciudad VARCHAR(40),
+        cp VARCHAR(5),
+        CONSTRAINT fk_celer_td_parent FOREIGN KEY (parent_id) REFERENCES celer_td_parent(id)) ENGINE=InnoDB",
+];
+
+#[test]
+fn testdata_mysql() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg.clone()).expect("conexión MySQL / MariaDB");
+    let other = || Box::new(crate::mysql::MysqlDriver::connect(cfg.clone()).unwrap()) as Box<dyn Driver>;
+    let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+    testdata_suite(&mut d, &other, "mysql", TD_MY_DDL, &td_target(&db, &db, &[&db, &db]), &cleanup);
+    testdata_defaults(&mut d, "mysql", &td_obj(&db, &db, "celer_td_auto"), "CREATE TABLE celer_td_auto (id INT AUTO_INCREMENT PRIMARY KEY, n INT DEFAULT 3) ENGINE=InnoDB", "DROP TABLE IF EXISTS celer_td_auto");
+    testdata_unique_null(&mut d, "mysql", &td_obj(&db, &db, "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
+    d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
+    testdata_sequence_range(&mut d, "mysql", &td_obj(&db, &db, "celer_td_seq"), "TINYINT UNSIGNED", Some(255));
+    testdata_negative_checks(&mut d, "mysql", &td_obj(&db, &db, "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+}
+
+/// MySQL 8 marks a DEFAULT CURRENT_TIMESTAMP column DEFAULT_GENERATED in EXTRA (#178): it is a plain column, not
+/// identity (a data comparison's sync script updates it, the test data generator gives it values); auto_increment and
+/// VIRTUAL / STORED generated columns are still the server's. MariaDB runs it too (its EXTRA has no DEFAULT_GENERATED).
+#[test]
+fn mysql_default_generated_is_not_identity() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let kind = format!("mysql ({})", d.server_info().unwrap_or_default());
+    let obj = td_obj(&db, &db, "celer_td_defgen");
+    let setup = ["CREATE TABLE celer_td_defgen (id INT AUTO_INCREMENT PRIMARY KEY, k INT NOT NULL, \
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+        updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, \
+        v INT AS (k + 1) VIRTUAL, s INT AS (k + 2) STORED, note VARCHAR(10)) ENGINE=InnoDB"
+        .to_string()];
+    d.execute("DROP TABLE IF EXISTS celer_td_defgen", 10).ok();
+    d.execute(&setup[0], 10).unwrap();
+    let cols = d.table_columns(&obj).unwrap();
+    let identity = |name: &str| cols.iter().find(|c| c.name == name).unwrap().identity;
+    assert!(identity("id") && identity("v") && identity("s"), "{kind}: auto_increment y columnas generadas");
+    assert!(!identity("created_at") && !identity("updated_at"), "{kind}: DEFAULT CURRENT_TIMESTAMP no es identidad");
+    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &["DROP TABLE IF EXISTS celer_td_defgen"], 50);
+    assert!(!plan.contains("created_at=skip") && plan.contains("v=skip") && plan.contains("s=skip"), "{kind}: {plan}");
+    println!("✓ {kind}: DEFAULT CURRENT_TIMESTAMP recibe valores; las generadas, no");
+}
+
+/// Column types whose values the server checks beyond the type name, with the generators the dialog proposes: JSON
+/// (#179: on MariaDB a LONGTEXT with an implicit json_valid CHECK, which plain text broke), BIT(n) as integers of n
+/// bits and spatial columns left NULL (#198: text was rejected by both).
+#[test]
+fn testdata_mysql_types() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let kind = format!("mysql ({})", d.server_info().unwrap_or_default());
+    let obj = td_obj(&db, &db, "celer_td_types");
+    let setup = ["CREATE TABLE celer_td_types (id INT NOT NULL PRIMARY KEY, datos JSON NOT NULL, extra JSON, \
+        flags BIT(8) NOT NULL, tres BIT(3), zona GEOMETRY, sitio POINT) ENGINE=InnoDB"
+        .to_string()];
+    let drop = ["DROP TABLE IF EXISTS celer_td_types"];
+    d.execute(drop[0], 10).ok();
+    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &[], 200);
+    assert!(plan.contains("datos=json") && plan.contains("extra=json"), "{kind}: {plan}");
+    assert!(plan.contains("flags=integer") && plan.contains("tres=integer") && plan.contains("zona=null") && plan.contains("sitio=null"), "{kind}: {plan}");
+    assert_eq!(scalar(&mut d, "SELECT COUNT(*) FROM celer_td_types WHERE flags > 255 OR tres > 7").trim(), "0", "{kind}");
+    assert_ne!(scalar(&mut d, "SELECT COUNT(DISTINCT flags) FROM celer_td_types").trim(), "1", "{kind}: BIT(8) toma valores variados");
+    d.execute(drop[0], 10).unwrap();
+    println!("✓ {kind}: tipos con comprobación del servidor: 200 filas");
+}
+
+/// A table whose storage engine takes no transactions (#197: MyISAM; Aria on MariaDB): the dialog reads it and warns
+/// that rows written before a failure or a Cancelar stay; an InnoDB table does not. A failing insert in the dialog's
+/// transaction leaves the rows before it, which is what the warning says.
+#[test]
+fn testdata_mysql_non_transactional() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let db = cfg.database.clone();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let info = d.server_info().unwrap_or_default();
+    let kind = format!("mysql ({info})");
+    let obj = td_obj(&db, &db, "celer_td_myisam");
+    let drop = ["DROP TABLE IF EXISTS celer_td_myisam"];
+    let mut engines = vec!["MyISAM"];
+    if info.contains("MariaDB") {
+        engines.push("Aria");
+    }
+    for engine in engines {
+        let setup = [format!("CREATE TABLE celer_td_myisam (id INT NOT NULL PRIMARY KEY, nota VARCHAR(10)) ENGINE={engine}")];
+        let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &drop, 20);
+        assert!(plan.contains(&format!("‖ sin transacciones: {engine}")), "{kind}: {plan}");
+        // What the warning says: a failure inside the transaction leaves the rows before it.
+        d.execute(&setup[0], 10).unwrap();
+        let rows: Vec<Statement> = ["INSERT INTO celer_td_myisam VALUES (1, 'a')", "INSERT INTO celer_td_myisam VALUES (1, 'b')"].iter().map(|sql| Statement { name: "testdata insert".into(), sql: sql.to_string(), rows: None }).collect();
+        assert!(testdata_try_insert(&mut d, &rows, true).is_err());
+        assert_eq!(scalar(&mut d, "SELECT COUNT(*) FROM celer_td_myisam").trim(), "1", "{kind}: {engine} conserva la fila anterior al fallo");
+        d.execute(drop[0], 10).unwrap();
+    }
+    let setup = ["CREATE TABLE celer_td_myisam (id INT NOT NULL PRIMARY KEY, nota VARCHAR(10)) ENGINE=InnoDB".to_string()];
+    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &drop, 20);
+    assert!(!plan.contains("sin transacciones"), "{kind}: {plan}");
+    println!("✓ {kind}: las tablas sin transacciones se avisan");
+}
+
+#[test]
+fn testdata_mssql() {
+    let Some(mut master) = mssql("master") else { return };
+    master.execute("IF DB_ID('celer_test') IS NULL CREATE DATABASE celer_test", 10).unwrap();
+    drop(master);
+    let mut d = mssql("celer_test").unwrap();
+    let other = || Box::new(mssql("celer_test").unwrap()) as Box<dyn Driver>;
+    let ddl = [
+        "CREATE TABLE dbo.celer_td_parent (id INT PRIMARY KEY, nombre NVARCHAR(60) NOT NULL)",
+        "CREATE TABLE dbo.celer_td_other (id INT)",
+        "CREATE TABLE dbo.celer_td_child (
+            id INT IDENTITY PRIMARY KEY,
+            codigo NVARCHAR(12) NOT NULL UNIQUE,
+            nombre NVARCHAR(40) NOT NULL,
+            apellidos NVARCHAR(60),
+            email NVARCHAR(120) UNIQUE,
+            parent_id INT NOT NULL REFERENCES dbo.celer_td_parent(id),
+            estado NVARCHAR(10) NOT NULL CHECK (estado IN ('nuevo', 'enviado', 'entregado')),
+            prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+            puntos INT CHECK (puntos BETWEEN 0 AND 100),
+            alta DATE NOT NULL,
+            momento DATETIME,
+            importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
+            activo BIT NOT NULL,
+            notas NVARCHAR(MAX),
+            foto VARBINARY(32),
+            nif CHAR(9),
+            telefono VARCHAR(20),
+            ciudad NVARCHAR(40),
+            cp VARCHAR(5),
+            rv ROWVERSION)",
+    ];
+    let cleanup = [
+        "IF OBJECT_ID('dbo.celer_td_child') IS NOT NULL DROP TABLE dbo.celer_td_child",
+        "IF OBJECT_ID('dbo.celer_td_parent') IS NOT NULL DROP TABLE dbo.celer_td_parent",
+        "IF OBJECT_ID('dbo.celer_td_other') IS NOT NULL DROP TABLE dbo.celer_td_other",
+    ];
+    testdata_suite(&mut d, &other, "mssql", &ddl, &td_target("celer_test", "dbo", &["celer_test", "dbo"]), &cleanup);
+    testdata_defaults(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_auto"), "CREATE TABLE dbo.celer_td_auto (id INT IDENTITY PRIMARY KEY, n INT DEFAULT 3)", "IF OBJECT_ID('dbo.celer_td_auto') IS NOT NULL DROP TABLE dbo.celer_td_auto");
+    testdata_unique_null(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_unull"), "IF OBJECT_ID('dbo.celer_td_unull') IS NOT NULL DROP TABLE dbo.celer_td_unull");
+    d.execute("IF OBJECT_ID('dbo.celer_td_seq') IS NOT NULL DROP TABLE dbo.celer_td_seq", 10).ok();
+    testdata_sequence_range(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_seq"), "SMALLINT", Some(32767));
+    testdata_negative_checks(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_neg"), "IF OBJECT_ID('dbo.celer_td_neg') IS NOT NULL DROP TABLE dbo.celer_td_neg");
+    // JSON in NVARCHAR(MAX) behind ISJSON(…) = 1 / > 0 (#179): the JSON generator, which the CHECK takes.
+    // N'…' literals in a CHECK (#183): the list generator, whose values the CHECK takes.
+    let setup = ["CREATE TABLE dbo.celer_td_types (id INT NOT NULL PRIMARY KEY, datos NVARCHAR(MAX) NOT NULL CHECK (ISJSON(datos) = 1), extra NVARCHAR(MAX) CHECK (ISJSON(extra) > 0), b NVARCHAR(5) NOT NULL CHECK (b IN (N'x', N'y')))".to_string()];
+    let plan = testdata_proposed(&mut d, "mssql", &td_obj("celer_test", "dbo", "celer_td_types"), &setup, &["IF OBJECT_ID('dbo.celer_td_types') IS NOT NULL DROP TABLE dbo.celer_td_types"], 200);
+    assert!(plan.contains("datos=json") && plan.contains("extra=json") && plan.contains("b=list"), "mssql: {plan}");
+}
+
+#[test]
+fn testdata_sqlite() {
+    let dir = std::env::temp_dir().join(format!("celer-testdata-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("td.db");
+    let _ = std::fs::remove_file(&file);
+    let open = || {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.id = "testdata-sqlite".into();
+        cfg.file_path = file.to_string_lossy().into_owned();
+        crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite")
+    };
+    let mut d = open();
+    let other = || Box::new(open()) as Box<dyn Driver>;
+    let ddl = [
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE celer_td_parent (id INTEGER PRIMARY KEY, nombre TEXT NOT NULL)",
+        "CREATE TABLE celer_td_other (id INT)",
+        "CREATE TABLE celer_td_child (
+            id INTEGER PRIMARY KEY,
+            codigo VARCHAR(12) NOT NULL UNIQUE,
+            nombre VARCHAR(40) NOT NULL,
+            apellidos VARCHAR(60),
+            email VARCHAR(120) UNIQUE,
+            parent_id INTEGER NOT NULL REFERENCES celer_td_parent(id),
+            estado TEXT NOT NULL CHECK (estado IN ('nuevo', 'enviado', 'entregado')),
+            prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+            puntos INTEGER CHECK (puntos BETWEEN 0 AND 100),
+            alta DATE NOT NULL,
+            momento DATETIME,
+            importe NUMERIC(10,2) NOT NULL CHECK (importe >= 0),
+            activo BOOLEAN NOT NULL,
+            notas TEXT,
+            foto BLOB,
+            nif CHAR(9),
+            telefono VARCHAR(20),
+            ciudad VARCHAR(40),
+            cp VARCHAR(5))",
+    ];
+    let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+    testdata_suite(&mut d, &other, "sqlite", &ddl, &td_target("main", "main", &["main", "main"]), &cleanup);
+    testdata_defaults(&mut d, "sqlite", &td_obj("main", "main", "celer_td_auto"), "CREATE TABLE celer_td_auto (id INTEGER PRIMARY KEY, n INT DEFAULT 3)", "DROP TABLE IF EXISTS celer_td_auto");
+    testdata_unique_null(&mut d, "sqlite", &td_obj("main", "main", "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
+    testdata_sequence_range(&mut d, "sqlite", &td_obj("main", "main", "celer_td_seq"), "SMALLINT", None);
+    testdata_negative_checks(&mut d, "sqlite", &td_obj("main", "main", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+    // `INTEGER PRIMARY KEY DESC` is not the rowid alias (#201): the generator gives it values, which its NOT NULL needs.
+    let setup = ["CREATE TABLE celer_td_desc (x INTEGER PRIMARY KEY DESC NOT NULL, y TEXT)".to_string()];
+    let plan = testdata_proposed(&mut d, "sqlite", &td_obj("main", "main", "celer_td_desc"), &setup, &["DROP TABLE IF EXISTS celer_td_desc"], 300);
+    assert!(plan.contains("x=sequence"), "sqlite: {plan}");
+    // SQLite has the foreign keys checked only with the pragma: the generated rows hold anyway.
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// SQLite keys that are not the rowid alias (`INT NOT NULL PRIMARY KEY`, a composite key): the generator gives them
+/// values (they were taken for auto-filled, left out, and the insert failed on NOT NULL).
+#[test]
+fn testdata_sqlite_int_keys() {
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Sqlite;
+    cfg.id = "testdata-sqlite-keys".into();
+    cfg.file_path = ":memory:".into();
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite");
+    d.execute("CREATE TABLE celer_td_parent (id INTEGER PRIMARY KEY, nombre TEXT NOT NULL)", 10).unwrap();
+    d.execute("INSERT INTO celer_td_parent (id, nombre) VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')", 10).unwrap();
+    let children = [
+        ("celer_td_int", "CREATE TABLE celer_td_int (id INT NOT NULL PRIMARY KEY, parent_id INT NOT NULL REFERENCES celer_td_parent(id), codigo VARCHAR(12) NOT NULL)"),
+        ("celer_td_lines", "CREATE TABLE celer_td_lines (pedido_id INT NOT NULL REFERENCES celer_td_parent(id), linea INT NOT NULL, codigo VARCHAR(12) NOT NULL, PRIMARY KEY (pedido_id, linea))"),
+    ];
+    for (name, ddl) in children {
+        d.execute(ddl, 10).unwrap();
+        let mut t = td_target("main", "main", &["main", "main"]);
+        t.child = td_obj("main", "main", name);
+        assert!(d.table_columns(&t.child).unwrap().iter().all(|c| !c.identity), "{name}: no column is filled by SQLite");
+        let (inserts, checks) = testdata_run(&mut d, "sqlite", &t, 300, 172);
+        testdata_insert(&mut d, "sqlite", &inserts, true);
+        for st in &checks {
+            let got = try_rows(&mut d, &st.sql).unwrap_or_else(|e| panic!("{name}: {}\n{}\n→ {e}", st.name, st.sql));
+            assert_eq!(Some(got.len()), st.rows, "{name}: {}", st.name);
+        }
+    }
+}
+
+const TD_IFX_DDL: &[&str] = &[
+    "CREATE TABLE celer_td_parent (id INT NOT NULL PRIMARY KEY, nombre VARCHAR(60) NOT NULL)",
+    "CREATE TABLE celer_td_other (id INT)",
+    "CREATE TABLE celer_td_child (
+        id SERIAL NOT NULL PRIMARY KEY,
+        codigo VARCHAR(12) NOT NULL UNIQUE,
+        nombre VARCHAR(40) NOT NULL,
+        apellidos VARCHAR(60),
+        email VARCHAR(120) UNIQUE,
+        parent_id INT NOT NULL REFERENCES celer_td_parent(id),
+        estado VARCHAR(10) NOT NULL CHECK (estado IN ('nuevo', 'enviado', 'entregado')),
+        prioridad VARCHAR(10) NOT NULL CHECK (prioridad IN ('baja', 'media', 'alta')),
+        puntos INT CHECK (puntos BETWEEN 0 AND 100),
+        alta DATE NOT NULL,
+        momento DATETIME YEAR TO SECOND,
+        importe DECIMAL(10,2) NOT NULL CHECK (importe >= 0),
+        activo BOOLEAN NOT NULL,
+        notas LVARCHAR(500),
+        foto BYTE,
+        nif CHAR(9),
+        telefono VARCHAR(20),
+        ciudad VARCHAR(40),
+        cp VARCHAR(5))",
+];
+const TD_IFX_CLEANUP: &[&str] = &["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+
+fn testdata_informix_via(via: &str, cfg: ConnConfig, connect: &Connect) {
+    let mut d = connect(cfg.clone()).unwrap_or_else(|e| panic!("conexión Informix por {via}: {e}"));
+    let other = || connect(cfg.clone()).unwrap_or_else(|e| panic!("otra sesión Informix por {via}: {e}"));
+    let db = cfg.database.clone();
+    let owner = cfg.user.clone();
+    let kind = format!("informix ({via})");
+    testdata_suite(d.as_mut(), &other, &kind, TD_IFX_DDL, &td_target(&db, &owner, &[&db]), TD_IFX_CLEANUP);
+    // Informix has no DEFAULT VALUES: 0 in the SERIAL (BIGSERIAL too), or NULL in a nullable column without a default.
+    let auto = td_obj(&db, &owner, "celer_td_auto");
+    let drop = "DROP TABLE IF EXISTS celer_td_auto";
+    testdata_defaults(d.as_mut(), &kind, &auto, "CREATE TABLE celer_td_auto (n INT DEFAULT 3, id SERIAL NOT NULL PRIMARY KEY)", drop);
+    testdata_defaults(d.as_mut(), &kind, &auto, "CREATE TABLE celer_td_auto (id BIGSERIAL NOT NULL, n INT DEFAULT 3)", drop);
+    testdata_defaults(d.as_mut(), &kind, &auto, "CREATE TABLE celer_td_auto (n INT DEFAULT 3, notas VARCHAR(20))", drop);
+    testdata_unique_null(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
+    d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
+    testdata_sequence_range(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_seq"), "SMALLINT", Some(32767));
+    testdata_negative_checks(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+    // Multi-field INTERVALs (#182): the constant is written in the column's qualifier ('1:00' for HOUR TO MINUTE…).
+    let setup = ["CREATE TABLE celer_td_intv (id SERIAL NOT NULL PRIMARY KEY, a INTERVAL HOUR TO MINUTE, b INTERVAL DAY TO SECOND NOT NULL, \
+        c INTERVAL YEAR TO MONTH, d INTERVAL DAY(3) TO DAY, e INTERVAL MINUTE TO FRACTION(3), f INTERVAL YEAR(5) TO YEAR, g INTERVAL HOUR TO SECOND)".to_string()];
+    let plan = testdata_proposed(d.as_mut(), &kind, &td_obj(&db, &owner, "celer_td_intv"), &setup, &["DROP TABLE IF EXISTS celer_td_intv"], 50);
+    assert!(!plan.contains("‖ problemas:"), "{kind}: {plan}");
+    println!("✓ {kind}: columnas INTERVAL de varios campos: 50 filas");
+}
+
+#[test]
+fn testdata_informix() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    testdata_informix_via("DRDA", cfg, &drda_connect(lib));
+}
+
+#[test]
+fn testdata_informix_jdbc() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    testdata_informix_via("JDBC", cfg, &jdbc_connect(rt));
+}
+
+/// Generic ODBC (CELER_ODBC_TEST: PostgreSQL through psqlODBC in dev/wsl/engines.sh): the dialect is the engine
+/// the driver reports, the catalog is read as that engine's.
+#[test]
+fn testdata_odbc() {
+    let Ok(conn_str) = std::env::var("CELER_ODBC_TEST") else { return };
+    let open = || {
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: conn_str.clone(), ..Default::default() };
+        Box::new(crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC")) as Box<dyn Driver>
+    };
+    let mut d = open();
+    let db = d.current_database().unwrap_or_default();
+    testdata_suite(d.as_mut(), &open, "odbc", TD_PG_DDL, &td_target(db.trim(), "public", &[]), TD_PG_CLEANUP);
+    testdata_defaults(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_auto"), "CREATE TABLE celer_td_auto (id INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, n INT DEFAULT 3)", "DROP TABLE IF EXISTS celer_td_auto");
+    testdata_unique_null(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_unull"), "DROP TABLE IF EXISTS celer_td_unull");
+    d.execute("DROP TABLE IF EXISTS celer_td_seq", 10).ok();
+    testdata_sequence_range(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_seq"), "SMALLINT", Some(32767));
+    testdata_pg_domains(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_domain"));
+    testdata_negative_checks(d.as_mut(), "odbc", &td_obj(db.trim(), "public", "celer_td_neg"), "DROP TABLE IF EXISTS celer_td_neg");
+}
+
+/// Generic ODBC to MariaDB (CELER_ODBC_MYSQL_TEST: MariaDB Connector/ODBC in dev/wsl/engines.sh), #181: the driver
+/// names an ENUM column only "enum", so its values come from information_schema; a value outside them would be turned
+/// by the driver into a warning with 0 rows inserted, and the suite's checks would find the rows missing.
+#[test]
+fn testdata_odbc_mysql() {
+    let Ok(conn_str) = std::env::var("CELER_ODBC_MYSQL_TEST") else { return };
+    let open = || {
+        let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: conn_str.clone(), ..Default::default() };
+        Box::new(crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC")) as Box<dyn Driver>
+    };
+    let mut d = open();
+    let db = d.current_database().unwrap_or_default();
+    let db = db.trim();
+    let cleanup = ["DROP TABLE IF EXISTS celer_td_child", "DROP TABLE IF EXISTS celer_td_parent", "DROP TABLE IF EXISTS celer_td_other"];
+    testdata_suite(d.as_mut(), &open, "odbc", TD_MY_DDL, &td_target(db, "", &[]), &cleanup);
+}
+
