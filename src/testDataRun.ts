@@ -337,7 +337,7 @@ function finishRun(inserted: boolean) {
 export function cancelTestData() {
   if (testData.running) {
     cancelRequested = true;
-    setTestData("phase", "Cancelando…");
+    setTestData("phase", "Cancelando");
     // A statement that is running stops now, not when it ends.
     if (runningSession) void api().cancel(runningSession).catch(() => {});
     return;
