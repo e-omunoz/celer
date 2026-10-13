@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data on a generic ODBC engine Celer does not recognise** (#203): opening the dialog on a child table read
+  every key of the parent table into memory (the query had no row limit for that engine). At most the usual sample
+  is read now, on every engine, and the rest of the result is discarded.
 - **Test data over generic ODBC to MySQL / MariaDB ENUM columns** (#181): the ODBC driver names an ENUM column only
   `enum`, so it got values outside its list; MariaDB Connector/ODBC turned the refusal into a warning with no rows
   inserted, and the dialog said the rows were in. The ENUM and SET values are now read from the catalog, and an

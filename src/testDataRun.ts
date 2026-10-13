@@ -29,7 +29,7 @@ import {
   type TableModel,
 } from "./testData";
 import { splitSql } from "./sql";
-import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, statsSql } from "./testDataSql";
+import { catalogQueries, effectiveDialect, existingValuesSql, parentKeysSql, readCatalog, readRows, statsSql } from "./testDataSql";
 import type { Cell, ObjectRef } from "./types";
 import type { SheetCell } from "./importFormats";
 
@@ -89,19 +89,16 @@ let cancelRequested = false;
 let runningSession: string | null = null;
 let openSeq = 0;
 
-/** Every row of a query's first result. */
-async function rowsOf(sessionId: string, sql: string): Promise<Cell[][]> {
-  const out = await api().execute(sessionId, sql, 5000);
-  const first = out.results.find((r) => r.columns.length);
-  if (!first) return [];
-  const rows = [...first.rows];
-  let more = first.hasMore;
-  while (more) {
-    const next = await api().fetch(sessionId, 5000);
-    rows.push(...next.rows);
-    more = next.hasMore;
-  }
-  return rows;
+/** The rows of a query on the side session, at most `maxRows` (readRows). */
+function rowsOf(sessionId: string, sql: string, maxRows = Infinity): Promise<Cell[][]> {
+  return readRows(
+    {
+      execute: (n) => api().execute(sessionId, sql, n),
+      fetch: (n) => api().fetch(sessionId, n),
+      closeCursor: () => api().closeCursor(sessionId),
+    },
+    maxRows,
+  );
 }
 
 const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -143,7 +140,7 @@ export async function openTestData(connId: string, obj: ObjectRef, returnTo: Tes
       const target = { ...fk.target, database: fk.target.database || fk.table.database };
       const targetSql = await api().objectSql(session, target).catch(() => null);
       const targetQuoted = await api().quoteIdents(session, fk.targetColumns);
-      const rows = targetSql ? await rowsOf(session, parentKeysSql(dialect, targetSql.qualified, targetQuoted, PARENT_SAMPLE)).catch(() => [] as Cell[][]) : [];
+      const rows = targetSql ? await rowsOf(session, parentKeysSql(dialect, targetSql.qualified, targetQuoted, PARENT_SAMPLE), PARENT_SAMPLE).catch(() => [] as Cell[][]) : [];
       fks.push({ name: fk.name, columns: fk.columns, target, targetColumns: fk.targetColumns, rows });
     }
     const numeric = statsColumns(columns, dialect);
@@ -154,7 +151,7 @@ export async function openTestData(connId: string, obj: ObjectRef, returnTo: Tes
     const toRead = existingToRead(model);
     if (toRead.length) {
       const existingValues: Record<string, Cell[]> = {};
-      for (const c of toRead) existingValues[c.name] = (await rowsOf(session, existingValuesSql(dialect, info.qualified, c.quoted, EXISTING_SAMPLE)).catch(() => [] as Cell[][])).map((r) => r[0]);
+      for (const c of toRead) existingValues[c.name] = (await rowsOf(session, existingValuesSql(dialect, info.qualified, c.quoted, EXISTING_SAMPLE), EXISTING_SAMPLE).catch(() => [] as Cell[][])).map((r) => r[0]);
       model = buildModel({ ...input, existingValues });
     }
     if (seq !== openSeq) return;

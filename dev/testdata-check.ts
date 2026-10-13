@@ -33,7 +33,7 @@ import {
   type ModelInput,
   type TableModel,
 } from "../src/testData.ts";
-import { catalogQueries, checkClauses, domainCheck, effectiveDialect, enumValues, existingValuesSql, intervalLiteral, parentKeysSql, readCatalog, readChecks, statsSql, typeInfo } from "../src/testDataSql.ts";
+import { catalogQueries, checkClauses, domainCheck, effectiveDialect, enumValues, existingValuesSql, intervalLiteral, parentKeysSql, readCatalog, readChecks, readRows, statsSql, typeInfo } from "../src/testDataSql.ts";
 import { codeOnly, splitSql } from "../src/sql.ts";
 import type { DbKind, TableColumn } from "../src/types.ts";
 import type { SheetCell } from "../src/importFormats.ts";
@@ -747,4 +747,30 @@ assert.equal(normName("Código Postal"), "codigo_postal");
   assert.ok(ms < 15_000, `100,000 rows took ${ms} ms`);
 }
 
+// The keys of a parent table (or a column's values) stop at the sample: a generic ODBC engine Celer does not know has
+// no row limit in the SQL, so the cursor is left unread and closed instead of loading the whole table (#203).
+{
+  const table = Array.from({ length: 12_345 }, (_, i) => [i] as (number | null)[]);
+  const source = () => {
+    const log = { at: 0, fetched: [] as number[], closed: false };
+    const take = (n: number) => {
+      const rows = table.slice(log.at, log.at + n);
+      log.at += rows.length;
+      log.fetched.push(rows.length);
+      return { rows, hasMore: log.at < table.length };
+    };
+    return { log, src: { execute: async (n: number) => ({ results: [{ columns: [{}], ...take(n) }] }), fetch: async (n: number) => take(n), closeCursor: async () => void (log.closed = true) } };
+  };
+  let s = source();
+  assert.equal((await readRows(s.src, 7_000)).length, 7_000);
+  assert.deepEqual(s.log.fetched, [5000, 2000], "never more than the limit is fetched");
+  assert.equal(s.log.closed, true, "the rest of the cursor is discarded");
+  s = source();
+  assert.equal((await readRows(s.src)).length, 12_345, "no limit: every row");
+  assert.equal(s.log.closed, false);
+  s = source();
+  assert.equal((await readRows(s.src, 12_345)).length, 12_345);
+  assert.equal(s.log.closed, false, "the limit reached with the last row: nothing left to close");
+  assert.deepEqual(await readRows({ execute: async () => ({ results: [{ columns: [], rows: [], hasMore: false }] }), fetch: async () => ({ rows: [], hasMore: false }), closeCursor: async () => {} }, 5), []);
+}
 console.log("testdata-check: all good");

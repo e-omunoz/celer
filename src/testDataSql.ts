@@ -343,6 +343,32 @@ export function existingValuesSql(dialect: DbKind, qualified: string, quoted: st
 
 // ---------------------------------------------------------------- reading the catalog's answers
 
+/** How a side session's answers are read (api().execute / fetch / closeCursor on a session). */
+export interface RowSource {
+  execute(fetch: number): Promise<{ results: { columns: unknown[]; rows: Cell[][]; hasMore: boolean }[] }>;
+  fetch(n: number): Promise<{ rows: Cell[][]; hasMore: boolean }>;
+  closeCursor(): Promise<void>;
+}
+
+/**
+ * The rows of a query, at most `maxRows`: the rest is never fetched and its cursor is closed. A generic ODBC engine
+ * Celer does not know has no row limit in parentKeysSql / existingValuesSql, so the limit holds here for every dialect.
+ */
+export async function readRows(src: RowSource, maxRows = Infinity, page = 5000): Promise<Cell[][]> {
+  const out = await src.execute(Math.max(1, Math.min(page, maxRows)));
+  const first = out.results.find((r) => r.columns.length);
+  if (!first) return [];
+  const rows = first.rows.slice(0, maxRows);
+  let more = first.hasMore;
+  while (more && rows.length < maxRows) {
+    const next = await src.fetch(Math.min(page, maxRows - rows.length));
+    rows.push(...next.rows.slice(0, maxRows - rows.length));
+    more = next.hasMore;
+  }
+  if (more) await src.closeCursor().catch(() => {});
+  return rows;
+}
+
 export interface CatalogFacts {
   /** Unique keys and indexes (the primary key too), as column names, each once. */
   uniques: string[][];
