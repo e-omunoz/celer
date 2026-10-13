@@ -55,6 +55,22 @@ assert.equal(typeInfo(col("a", "datetime2", "date"), "mssql").family, "datetime"
 assert.equal(typeInfo(col("a", "int4", "other"), "odbc").family, "int", "ODBC names: int4");
 assert.equal(typeInfo(col("a", "bytea", "other"), "odbc").family, "binary");
 assert.deepEqual(typeInfo(col("a", "varbinary(32)", "binary"), "mssql"), { family: "binary", maxLength: 32, fixed: false });
+// MySQL BIT(n): an integer of n bits; BIT / BIT(1): a boolean. Spatial types: no value Celer can write (#198).
+assert.deepEqual(typeInfo(col("a", "bit(8)", "number"), "mysql"), { family: "int", min: "0", max: "255" });
+assert.equal(typeInfo(col("a", "bit(64)", "number"), "mysql").max, "18446744073709551615");
+assert.equal(typeInfo(col("a", "bit(1)", "bool"), "mysql").family, "bool");
+assert.ok(typeInfo(col("a", "geometry", "other"), "mysql").noLiteral);
+assert.ok(typeInfo(col("a", "point", "other"), "mysql").noLiteral);
+{
+  const columns = [col("id", "int", "number", { nullable: false, primaryKey: true }), col("flags", "bit(8)", "number"), col("zona", "polygon", "other"), col("sitio", "point", "other", { nullable: false })];
+  const model = buildModel({ dialect: "mysql", qualified: "t", table: "t", columns, quoted: columns.map((c) => c.name), catalog: { uniques: [], checks: [], enums: {} }, fks: [] });
+  const settings = inferSettings(model);
+  assert.equal(settings[1].kind, "integer");
+  assert.ok(Number(settings[1].max) <= 255, settings[1].max);
+  assert.equal(settings[2].kind, "null", "a nullable spatial column: NULL");
+  assert.ok(problems(model, settings, 5).some((p) => p.error && p.column === 3), "a NOT NULL spatial column without a default stops the dialog");
+  assert.ok(problems(model, [settings[0], settings[1], { ...settings[2], kind: "text" }, settings[3]], 5).some((p) => p.error && p.column === 2 && /espaciales/.test(p.text)));
+}
 assert.deepEqual(enumValues("enum('nuevo','it''s','b\\'c')"), ["nuevo", "it's", "b'c"]);
 assert.equal(enumValues("varchar(10)"), null);
 assert.equal(effectiveDialect("odbc", "PostgreSQL 17.2"), "postgres");

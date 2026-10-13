@@ -91,6 +91,9 @@ All notable changes to Celer are documented here. The format follows
   MySQL/MariaDB, SQL Server, SQLite), not as the text "0x…".
 
 ### Fixed
+- **Test data on MySQL / MariaDB BIT(n) and spatial columns** (#198): a `BIT(8)` column now gets integers that fit in
+  its bits (0 to 255) instead of text the server rejected, and a `GEOMETRY`, `POINT`, `POLYGON`… column is left NULL
+  (or stops the dialog when it is required), since Celer does not generate spatial values.
 - **Test data and import on MyISAM / Aria tables** (#197): these MySQL and MariaDB engines take no transactions, so
   the rows written before a failure or a cancel stay in the table, yet the message said nothing had been inserted.
   Both dialogs now warn before inserting into such a table, and afterwards say that rows may remain (at least how

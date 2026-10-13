@@ -72,6 +72,12 @@ export function typeInfo(col: Pick<TableColumn, "typeName" | "kind">, dialect: D
   };
   if (dialect === "informix" && /^(byte|text|blob|clob)$/.test(word)) return { family: word === "text" || word === "clob" ? "text" : "binary", noLiteral: `Informix no admite valores literales en columnas ${word.toUpperCase()}` };
   if (/^(bool|boolean|bit)$/.test(word) && (word !== "bit" || dialect === "mssql" || !n || n === 1)) return { family: "bool" };
+  // MySQL / MariaDB BIT(n): an integer of n bits (written as a number, 0 … 2^n - 1).
+  if (word === "bit" && dialect === "mysql" && n && n > 1 && n <= 64) return { family: "int", min: "0", max: (2n ** BigInt(n) - 1n).toString() };
+  // MySQL / MariaDB spatial types take only geometry values (ST_GeomFromText…), never a plain literal.
+  if (dialect === "mysql" && /^(geometry|point|linestring|polygon|multipoint|multilinestring|multipolygon|geometrycollection|geomcollection)$/.test(word)) {
+    return { family: "other", noLiteral: `Celer no genera valores espaciales (${word.toUpperCase()})` };
+  }
   if (/^tinyint$/.test(word) && col.kind === "bool") return { family: "bool" };
   if (/^(tinyint|int1)$/.test(word)) return intRange("tinyint");
   if (/^(smallint|int2|smallserial|serial2)$/.test(word)) return intRange("smallint");

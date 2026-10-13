@@ -3600,7 +3600,8 @@ fn mysql_default_generated_is_not_identity() {
 }
 
 /// Column types whose values the server checks beyond the type name, with the generators the dialog proposes: JSON
-/// (#179: on MariaDB a LONGTEXT with an implicit json_valid CHECK, which plain text broke).
+/// (#179: on MariaDB a LONGTEXT with an implicit json_valid CHECK, which plain text broke), BIT(n) as integers of n
+/// bits and spatial columns left NULL (#198: text was rejected by both).
 #[test]
 fn testdata_mysql_types() {
     let Some(cfg) = mysql_cfg() else { return };
@@ -3608,9 +3609,17 @@ fn testdata_mysql_types() {
     let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
     let kind = format!("mysql ({})", d.server_info().unwrap_or_default());
     let obj = td_obj(&db, &db, "celer_td_types");
-    let setup = ["CREATE TABLE celer_td_types (id INT NOT NULL PRIMARY KEY, datos JSON NOT NULL, extra JSON) ENGINE=InnoDB".to_string()];
-    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &["DROP TABLE IF EXISTS celer_td_types"], 200);
+    let setup = ["CREATE TABLE celer_td_types (id INT NOT NULL PRIMARY KEY, datos JSON NOT NULL, extra JSON, \
+        flags BIT(8) NOT NULL, tres BIT(3), zona GEOMETRY, sitio POINT) ENGINE=InnoDB"
+        .to_string()];
+    let drop = ["DROP TABLE IF EXISTS celer_td_types"];
+    d.execute(drop[0], 10).ok();
+    let plan = testdata_proposed(&mut d, &kind, &obj, &setup, &[], 200);
     assert!(plan.contains("datos=json") && plan.contains("extra=json"), "{kind}: {plan}");
+    assert!(plan.contains("flags=integer") && plan.contains("tres=integer") && plan.contains("zona=null") && plan.contains("sitio=null"), "{kind}: {plan}");
+    assert_eq!(scalar(&mut d, "SELECT COUNT(*) FROM celer_td_types WHERE flags > 255 OR tres > 7").trim(), "0", "{kind}");
+    assert_ne!(scalar(&mut d, "SELECT COUNT(DISTINCT flags) FROM celer_td_types").trim(), "1", "{kind}: BIT(8) toma valores variados");
+    d.execute(drop[0], 10).unwrap();
     println!("✓ {kind}: tipos con comprobación del servidor: 200 filas");
 }
 
