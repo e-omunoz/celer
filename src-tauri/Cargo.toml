@@ -26,20 +26,20 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tiberius = { version = "0.13", default-features = false, features = ["tds73", "winauth", "native-tls", "chrono", "sql-browser-tokio"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 libloading = "0.9"
-parking_lot = "0.12"
+parking_lot = "0.13"
 anyhow = "1"
 # Native credential stores: Windows Credential Manager, macOS Keychain, Linux Secret Service (keyutils fallback).
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 uuid = { version = "1", features = ["v4"] }
 # constant_memory: Excel exports stream rows to a temp file instead of keeping the workbook in RAM (src/export.rs)
-rust_xlsxwriter = { version = "0.99", default-features = false, features = ["constant_memory"] }
+rust_xlsxwriter = { version = "0.102", default-features = false, features = ["constant_memory"] }
 ureq = "3"
 sha2 = "0.11"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 dirs = "7"
 # Servidor MCP: patrón de columnas sensibles (src/mcp.rs)
 regex = { version = "1", default-features = false, features = ["std", "unicode-case", "unicode-perl"] }
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 tar = "0.4.46"
 # PostgreSQL (sync client over tokio-postgres) — owned by src/postgres.rs
@@ -48,15 +48,15 @@ postgres-native-tls = "0.5"
 native-tls = "0.2"
 rust_decimal = { version = "1", features = ["db-postgres"] }
 # MySQL / MariaDB — owned by src/mysql.rs
-mysql = { version = "26", default-features = false, features = ["minimal-rust", "native-tls"] }
-calamine = { version = "0.36.1", features = ["dates"] }
+mysql = { version = "28", default-features = false, features = ["minimal-rust", "native-tls"] }
+calamine = { version = "0.37.0", features = ["dates"] }
 # SSH tunnels (src/ssh.rs): pure Rust, ring for the crypto (no C toolchain beyond what ring needs)
-russh = { version = "0.64", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
 # Connection export with passwords (src/secrets.rs): Argon2id + AES-256-GCM, the versions russh already brings
 argon2 = "0.6"
 aes-gcm = "0.11"
-base64 = "0.22"
-getrandom = "0.3"
+base64 = "0.23"
+getrandom = "0.4"
 # A second launch raises the running Celer instead of writing its files from a stale copy (src/lib.rs run)
 tauri-plugin-single-instance = "2"
 # Desktop notification when a long query ends while Celer is in the background (Ajustes › Avisos, src/lib.rs)
@@ -70,7 +70,7 @@ tiberius = { path = "vendor/tiberius" }
 # Proxy of the system's Internet settings for driver downloads (src/drivers.rs)
 winreg = "0.56"
 # The mouse button and Esc while a tab is dragged out of the windows (src/windows.rs, drag_keys); already in the tree through tao
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.dev]
 debug = "line-tables-only"
