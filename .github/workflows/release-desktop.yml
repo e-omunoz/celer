@@ -70,7 +70,7 @@ jobs:
           targets: ${{ matrix.label == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       # Release builds embed the JDBC bridge, compiled with javac (src-tauri/build.rs).
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
