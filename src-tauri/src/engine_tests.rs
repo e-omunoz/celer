@@ -3207,8 +3207,8 @@ fn informix_jdbc_row_history() {
     // (after), as a DBA would do both.
     let mut admin_cfg = cfg.clone();
     admin_cfg.database = "sysadmin".into();
-    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
-    let mut switch_log = || informix_switch_log(&mut admin);
+    let admin = std::cell::RefCell::new(crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC"));
+    let switch_log = || informix_switch_log(&mut *admin.borrow_mut());
     // Dropping a table and creating another reuses its partition number, and the CDC API fails on the log records of
     // the dropped one (-83800) when a read covers them, which leaves its server-side reader stuck for the next run
     // (measured). So the old table is dropped, the log switched, and only then the new one created: the read starts
@@ -3267,9 +3267,20 @@ fn informix_jdbc_row_history() {
     let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
     let run = |req: &Request, read_only: bool| rowhistory::run(&open(), req, read_only, &cfg.user, &stop, &env);
     let ask = |table: &str, id: &str, enable: bool| {
-        let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
-        // The server's CDC reader stuck is a failure of this test only, said as such, not a hang that kills the suite.
-        assert!(!h.stalled, "el lector CDC del servidor no responde (historial de {table} {id}): {:?}", h.partial);
+        // A reader that stops answering is moved on as a DBA would, with a log switch, and the read asked again (#216):
+        // the shared server is never restarted. Still stuck after that, it is a failure of this test only, said as
+        // such with every attempt, not a hang that kills the suite.
+        let mut tried = Vec::new();
+        let h = loop {
+            let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
+            if !h.stalled {
+                break h;
+            }
+            tried.push(h.partial);
+            assert!(tried.len() < READER_PROBE_ROUNDS, "el lector CDC del servidor no responde (historial de {table} {id}), ni tras cambiar de log: {tried:?}");
+            println!("Informix: el lector CDC no responde (historial de {table} {id}: {:?}); se cambia de log y se lee otra vez", tried.last());
+            switch_log();
+        };
         // A history that cannot be read at all says why, and that is not what these reads expect.
         assert!(h.status != "unavailable" || table == "rh_raw" || h.reason.contains("syscdcv1"), "historial de {table} {id}: {h:?}");
         h
@@ -3376,7 +3387,7 @@ fn informix_jdbc_row_history() {
     // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
     // newest part of the log ready yet (measured; the history then says so and is partial). A DBA's log switch moves
     // past both: done, and the read asked again, a few times (#206).
-    let mut ask_whole = |table: &str, id: &str| {
+    let ask_whole = |table: &str, id: &str| {
         let mut h = ask(table, id, true);
         for _ in 0..3 {
             if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
