@@ -362,7 +362,8 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
             _ => {}
         },
         Sink::Xlsx { wb, row, widths } => {
-            let ws = wb.add_worksheet_with_constant_memory();
+            // Fails when the temp file that holds the streamed rows cannot be created (constant_memory).
+            let ws = wb.add_worksheet_with_constant_memory()?;
             let bold = rust_xlsxwriter::Format::new().set_bold();
             for (i, c) in cols.iter().enumerate() {
                 ws.write_string_with_format(0, i as u16, &c.name, &bold)?;

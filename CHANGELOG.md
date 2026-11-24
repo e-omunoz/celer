@@ -6,6 +6,13 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Dependencies** (#224): the Dependabot updates of November land together: `actions/setup-java` 6, the npm group
+  (13 packages, `@anthropic-ai/sdk` 1.3 among them) and the cargo group (22 crates: `rust_xlsxwriter` 0.102, `mysql`
+  28, `rusqlite` 0.41, `zip` 9, `calamine` 0.37, `russh` 0.65, `base64` 0.23, `getrandom` 0.4, `parking_lot` 0.13,
+  `windows-sys` 0.61…). An Excel export that cannot create its temporary file now fails with the reason (the crate
+  used to panic there).
+
 ## [2.4.0] - 2026-10-14
 
 ### Added

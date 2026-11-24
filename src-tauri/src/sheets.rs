@@ -440,7 +440,7 @@ mod tests {
     fn a_big_sheet_reports_progress_and_can_be_cancelled() {
         let path = std::env::temp_dir().join(format!("celer-sheet-big-{}.xlsx", std::process::id()));
         let mut book = rust_xlsxwriter::Workbook::new();
-        let ws = book.add_worksheet_with_constant_memory();
+        let ws = book.add_worksheet_with_constant_memory().unwrap();
         ws.write_string(0, 0, "n").unwrap();
         ws.write_string(0, 1, "texto").unwrap();
         for r in 1..=100_000u32 {
