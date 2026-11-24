@@ -3327,6 +3327,16 @@ fn informix_jdbc_row_history() {
     assert!(h.notes.iter().any(|n| n.contains("full row logging")), "{:?}", h.notes);
     let range = h.range.as_ref().expect("the log range");
     assert!(range.first_log > 0 && range.current_log >= range.first_log, "{range:?}");
+    // Why it starts there (#217): a table created after logs still on disk names the last one filled before it.
+    assert!(range.oldest_log <= range.first_log, "{range:?}");
+    match range.start_reason {
+        rowhistory::StartReason::CreatedAfter => {
+            assert!(range.created_after_log.is_some_and(|m| m >= range.oldest_log && m < range.first_log), "{range:?}");
+            assert!(h.notes.iter().any(|n| n.contains("La tabla se creó después de llenarse el log")), "{:?}", h.notes);
+        }
+        rowhistory::StartReason::OldestOnDisk => assert!(range.created_after_log.is_none(), "{range:?}"),
+        rowhistory::StartReason::CreationReplayed => panic!("no fast recovery here: {range:?}"),
+    }
     // Full row logging is off again: the next read asks for it once more.
     assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging");
 
@@ -3570,6 +3580,13 @@ fn informix_jdbc_row_history_after_fast_recovery() {
         assert!(h.partial.iter().any(|p| p.contains("al recuperarse de una parada brusca") && p.contains("no se muestran")), "{:?}", h.partial);
         assert!(h.partial.iter().all(|p| p.contains("parada brusca") || p.contains("El servidor no lee el log en") || p.contains("no entrega el log")), "{:?}", h.partial);
         assert!(!h.notes.iter().chain(&h.partial).any(|n| n.contains("Se descartaron") || n.contains("tabla borrada") || n.contains("Ningún cambio") || n.contains("ya existía")), "{h:?}");
+        // The range line's reason (#217): logs on disk skipped because of the rewritten creation time are said so.
+        let range = h.range.as_ref().expect("the log range");
+        println!("Historial tras recuperación rápida: rango {range:?}");
+        assert_ne!(range.start_reason, rowhistory::StartReason::CreatedAfter, "{range:?}");
+        if range.start_reason == rowhistory::StartReason::CreationReplayed {
+            assert!(range.oldest_log < range.first_log && h.notes.iter().any(|n| n.contains("recuperación rápida")), "{range:?} {:?}", h.notes);
+        }
     }
     assert!(recovered.events.is_empty(), "{recovered:?}");
     assert_eq!(later.events.iter().map(|e| e.op).collect::<Vec<_>>(), ["update"], "{later:?}");
