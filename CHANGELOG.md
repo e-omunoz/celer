@@ -14,6 +14,11 @@ All notable changes to Celer are documented here. The format follows
   used to panic there).
 
 ### Fixed
+- **Row history: the range line says why the read starts where it does** (#217): «Lo anterior ya no está en los logs»
+  only when the read starts at the oldest log on disk; a table created after log M says the read starts after it and
+  that the older logs are still on disk without its changes, and after Informix's fast recovery the line says the
+  creation time was rewritten. The core reports the reason as data (`startReason`); the texts of a read cut short are
+  unchanged.
 - **Engine tests no longer restart the shared Informix server** (#216): when the CDC reader probe of
   `informix_jdbc_row_history` does not read a short history whole, the test switches the logical log and retries (three
   rounds), then fails naming each probe's log and result. Only a container the run owns (`CELER_INFORMIX_KILLABLE=1`
