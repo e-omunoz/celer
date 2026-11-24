@@ -57,17 +57,22 @@
 
 ## Next — from the open issues
 
-Delivered in the latest sprint (2.4, integrated in one PR, see [STATUS.md](../STATUS.md)): look and feel (theme
-editor #107, tear-off outline and ghost card for dragged tabs #108, consistent motion, styles and F6 between panels
-#110); simplify (the approved reorganisation of menus, toolbars, dialogs and settings, with keyboard submenus #111);
-drivers (Informix point-in-time row history from the logical logs #123); working tools (test data generator on every
-engine #172); and the fixes from the sprint's macro review.
+Released in 2.4.0: theme editor (#107), tear-off outline and ghost card for dragged tabs (#108), consistent motion,
+styles and F6 between panels (#110), the reorganised menus, toolbars, dialogs and settings (#111), Informix row
+history from the logical logs (#123) and the test data generator on every engine (#172).
+
+The 2.5.0 sprint (integrated in one PR, see [STATUS.md](../STATUS.md)): results (multiple selection in the grid
+#218); consoles (completion that puts the named tables' columns first #219, «Salida» newest first #225); a fix for the
+mouse pointer after native dialogs (#220); drivers (Informix row history says why its read starts where it does #217,
+and its engine test no longer restarts the shared server #216); dependencies (the Dependabot bumps #224); docs
+(#226); and the fixes from the sprint's macro review (#227).
 
 Next sprints, from what is still open (refreshed at the end of each sprint):
 
 - **Drivers** — Oracle and IBM Db2, the generic connection form and capability flags (Phase 2)
+- **Informix row history** — fast-recovery restamps after a further restart, same-second drop and re-create (#215)
 - **Platform** — code signing for the Windows builds (Phase 6)
-- **Docs** — keep STATUS and this roadmap refreshed at the end of each sprint (#121)
+- **Docs** — keep STATUS and this roadmap refreshed at the end of each sprint
 
 ## Phase 4 — Tier 2 drivers (analytics and cloud)
 - [ ] DuckDB (including CSV / Parquet / JSON files)
