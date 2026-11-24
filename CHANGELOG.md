@@ -22,6 +22,10 @@ All notable changes to Celer are documented here. The format follows
 - Supr on a selection that mixes rows already marked for deletion with unmarked ones now marks them all; only a
   selection of rows that are all marked is restored (before, each row was flipped).
 
+### Fixed
+- Loading the next page of a console result (the button or scrolling to the end) no longer drops the grid's
+  selection: the selected cell or picked rows stay selected.
+
 ## [2.4.0] - 2026-10-14
 
 ### Added

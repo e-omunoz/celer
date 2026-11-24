@@ -1762,7 +1762,10 @@ export function DataGrid(props: GridProps) {
   createEffect(
     on(
       () => [props.resetKey, props.columns] as const,
-      () => {
+      ([key, columns], previous) => {
+        // `on` runs on every notification, not only on a change: a console's next page replaces its result object, which
+        // re-reads the same key and columns. That is more rows of the same result, so the selection and scroll stay.
+        if (previous && previous[0] === key && previous[1] === columns) return;
         setLocalSort(null);
         setPicked(null);
         setAnchor(null);
