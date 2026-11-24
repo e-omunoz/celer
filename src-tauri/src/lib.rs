@@ -1855,6 +1855,66 @@ fn update_install(app: tauri::AppHandle, path: String, relaunch: bool) -> CmdRes
     Ok(())
 }
 
+// ───────────── Native open/save dialogs and the pointer (#220) ─────────────
+//
+// The dialog plugin shows the system's file dialog on a thread of its own, owned by the Celer window: Windows then
+// joins that thread's input state with the window's, and the window's is already joined with WebView2's (its child
+// window, in another process). The pointer's display counter is part of that shared state. WebView2 hides the
+// pointer while the user types (Windows' «Ocultar el puntero mientras se escribe», on by default) by taking the
+// counter below zero, and shows it again only when it sees the mouse move over the page. A dialog opened from the
+// keyboard (the palette, Intro on a menu row, a shortcut) or right after typing inherits the hidden pointer: the
+// mouse moves over the dialog, not the page, so nothing shows it again, and the pointer stays invisible over the
+// dialog and, after it, over the app until it crosses the page. Two sync commands (they run on the main thread, the
+// window's) bracket every native dialog in `api.ts`.
+
+/// Shows the pointer of the main thread's input state: the shared counter raised back to zero, never above, so
+/// WebView2's own hide and show stay balanced, and a visible pointer is left as it was.
+#[cfg(windows)]
+fn show_pointer() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::ShowCursor;
+    // ShowCursor returns the counter after the change: up from wherever it was until it reaches zero, and the one
+    // step up from zero or more undone.
+    unsafe {
+        let mut count = ShowCursor(1);
+        let mut steps = 1;
+        while count < 0 && steps < 64 {
+            count = ShowCursor(1);
+            steps += 1;
+        }
+        if count > 0 {
+            ShowCursor(0);
+        }
+    }
+}
+
+/// Before a native dialog: the pointer is shown, as the arrow, so the dialog has a visible pointer from the start.
+#[tauri::command]
+fn pointer_before_dialog() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{LoadCursorW, SetCursor, IDC_ARROW};
+        show_pointer();
+        unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_ARROW)) };
+    }
+}
+
+/// After the dialog (a file chosen or cancelled): shown again (WebView2 may have hidden it meanwhile), then put back
+/// where it is, which the system delivers as a mouse move, so WebView2 sees it over the page again and gives it the
+/// shape of what is under it (text, a splitter, a link) instead of leaving the dialog's or none.
+#[tauri::command]
+fn pointer_after_dialog() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+        show_pointer();
+        let mut at = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut at) != 0 {
+            SetCursorPos(at.x, at.y);
+        }
+    }
+}
+
 // ───────────── MCP (asistentes de IA externos) ─────────────
 
 #[tauri::command]
@@ -2053,6 +2113,8 @@ pub fn run() {
         })
         .on_window_event(windows::on_event)
         .invoke_handler(tauri::generate_handler![
+            pointer_before_dialog,
+            pointer_after_dialog,
             list_connections,
             connections_problem,
             save_connection,

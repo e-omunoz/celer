@@ -223,6 +223,20 @@ const LOGGED_BY_CORE = new Set([
 
 let failedCall: ((cmd: string, err: unknown) => void) | null = null;
 
+/**
+ * Every native open/save dialog goes through here (#220): the core shows the pointer before it (WebView2 may have
+ * hidden it while the user typed, and the dialog shares that state) and refreshes it after, so it is visible over
+ * the dialog and has the right shape over the page again. Neither step can keep the dialog from opening.
+ */
+async function nativeDialog<T>(show: () => Promise<T>): Promise<T> {
+  await invoke("pointer_before_dialog").catch(() => undefined);
+  try {
+    return await show();
+  } finally {
+    void invoke("pointer_after_dialog").catch(() => undefined);
+  }
+}
+
 /** Called with every call to the core that fails and the core did not log itself. */
 export function onFailedCall(cb: (cmd: string, err: unknown) => void) {
   failedCall = cb;
@@ -342,7 +356,7 @@ function tauriBackend(): Backend {
         return scripted;
       }
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const picked = await save({ filters, defaultPath: defaultName });
+      const picked = await nativeDialog(() => save({ filters, defaultPath: defaultName }));
       return picked ?? null;
     },
     pickOpenPath: async (filters) => {
@@ -354,12 +368,12 @@ function tauriBackend(): Backend {
         return scripted;
       }
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const picked = await open({ multiple: false, directory: false, filters });
+      const picked = await nativeDialog(() => open({ multiple: false, directory: false, filters }));
       return typeof picked === "string" ? picked : null;
     },
     pickOpenPaths: async (filters) => {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const picked = await open({ multiple: true, directory: false, filters });
+      const picked = await nativeDialog(() => open({ multiple: true, directory: false, filters }));
       return Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
     },
     onExportProgress: async (cb) => {

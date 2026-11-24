@@ -6,6 +6,14 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **The pointer no longer disappears in the file dialogs on Windows** (#220): with Windows' *Ocultar el puntero
+  mientras se escribe* on (the default), a native open/save dialog opened from the keyboard or right after typing
+  (*Importar conexiones › Fichero de Celer…* from the palette, *Nuevo* or the explorer's ⋯ menu, opening a script,
+  exporting connections or results, importing data, themes and settings) inherited the pointer WebView2 had hidden,
+  so it was invisible over the dialog and, after choosing or cancelling, over the app until it crossed the page.
+  Every native dialog now shows the pointer before it opens and gives it its shape back over the page after it.
+
 ## [2.4.0] - 2026-10-14
 
 ### Added
