@@ -231,6 +231,9 @@ Rollback o Cancelar; si hay cambios sin guardar en una tabla o una exportación 
   Ctrl+Mayús+S guarda como.
 - **Mensajes del servidor** en la pestaña *Salida*: los `NOTICE` de PostgreSQL, los avisos de MySQL y, en SQL Server,
   `PRINT` y `RAISERROR` de gravedad 10 o menor (también `WITH NOWAIT` desde un procedimiento), en orden, como en SSMS.
+- **Salida, lo más reciente arriba**: cada ejecución añade su línea arriba del todo, marcada como *última*, y la vista
+  vuelve arriba al llegar una nueva. «✦ Corregir con IA» aparece en esa última línea cuando es un error. *copiar*
+  copia el SQL de una línea y *copiar todo* la salida entera en el orden en que se ve. Se guardan las 200 últimas.
 ### Resultados
 
 Los resultados llegan por páginas desde un cursor abierto: aunque la consulta devuelva millones de filas, solo se traen

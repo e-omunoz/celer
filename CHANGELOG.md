@@ -14,6 +14,9 @@ All notable changes to Celer are documented here. The format follows
   recognised with aliases, quoted names, `schema.table`, `db.dbo.table` and Informix `db[@server]:owner.table`, only
   in the statement under the caret, ignoring strings and comments; inside a subquery its own tables come first, then
   the outer query's. With no table named yet (`SELECT |`) nothing changes.
+- **Salida shows the newest run at the top** (#225): each run's line goes to the top, marked *última*, and the view
+  returns to it; «✦ Corregir con IA» stays on the latest entry when it is an error. New *copiar todo* copies the whole
+  log in the order shown. The 200-entry cap still drops the oldest.
 
 ## [2.4.0] - 2026-10-14
 
