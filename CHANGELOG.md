@@ -13,6 +13,12 @@ All notable changes to Celer are documented here. The format follows
   `windows-sys` 0.61…). An Excel export that cannot create its temporary file now fails with the reason (the crate
   used to panic there).
 
+### Fixed
+- **Engine tests no longer restart the shared Informix server** (#216): when the CDC reader probe of
+  `informix_jdbc_row_history` does not read a short history whole, the test switches the logical log and retries (three
+  rounds), then fails naming each probe's log and result. Only a container the run owns (`CELER_INFORMIX_KILLABLE=1`
+  with `CELER_INFORMIX_CONTAINER`, as in `engines.yml`) may still be restarted.
+
 ## [2.4.0] - 2026-10-14
 
 ### Added

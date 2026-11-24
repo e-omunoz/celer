@@ -3080,6 +3080,12 @@ fn informix_wait_startup_tasks(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) {
 /// Whether the server's CDC reader reads a short history whole: one row inserted into a new table, in a log of its own,
 /// read back (with full row logging on only for the read) as one insert and nothing partial. Err: what came back.
 fn informix_cdc_reader_works(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) -> Result<(), String> {
+    informix_cdc_short_read(cfg, rt, "rh_probe", true)
+}
+
+/// The probe's read; without `switch_after` its changes stay in the current log, so the read meets that log's tail and
+/// leaves the server's reader stopped there, as an earlier read can (CELER_INFORMIX_STALE_READER, #216).
+fn informix_cdc_short_read(cfg: &ConnConfig, rt: &crate::jdbc::Runtime, table: &str, switch_after: bool) -> Result<(), String> {
     use crate::rowhistory::{self, KeyPart, Request};
     let mut d = jdbc_connect(rt.clone())(cfg.clone()).map_err(|e| e.to_string())?;
     let mut admin_cfg = cfg.clone();
@@ -3089,12 +3095,19 @@ fn informix_cdc_reader_works(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) -> Res
     if !try_rows(&mut *d, "SELECT 1 FROM sysmaster:sysdatabases WHERE name = 'syscdcv1'").is_ok_and(|r| !r.is_empty()) {
         return Ok(()); // nothing to read with: the test says so itself
     }
-    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.rh_probe', 0)", cfg.user), 10);
-    d.execute("DROP TABLE IF EXISTS rh_probe", 10).map_err(|e| e.to_string())?;
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.{table}', 0)", cfg.user), 10);
+    d.execute(&format!("DROP TABLE IF EXISTS {table}"), 10).map_err(|e| e.to_string())?;
     informix_switch_log(&mut admin);
-    d.execute("CREATE TABLE rh_probe (id INT PRIMARY KEY, v VARCHAR(10))", 10).map_err(|e| e.to_string())?;
-    d.execute("INSERT INTO rh_probe VALUES (1, 'a')", 10).map_err(|e| e.to_string())?;
-    informix_switch_log(&mut admin);
+    // The log the probe's changes go into, for the failure message.
+    let log = try_rows(&mut *d, "SELECT MAX(uniqid) FROM sysmaster:syslogfil")
+        .ok()
+        .and_then(|r| r.first().and_then(|r| r.first()).map(txt))
+        .map_or_else(|| "?".to_string(), |v| v.trim().to_string());
+    d.execute(&format!("CREATE TABLE {table} (id INT PRIMARY KEY, v VARCHAR(10))"), 10).map_err(|e| e.to_string())?;
+    d.execute(&format!("INSERT INTO {table} VALUES (1, 'a')"), 10).map_err(|e| e.to_string())?;
+    if switch_after {
+        informix_switch_log(&mut admin);
+    }
     let conn = crate::jdbc::JdbcConn::connect(cfg, rt.clone(), crate::jdbc::informix_params).map_err(|e| e.to_string())?;
     let (fresh_cfg, fresh_rt) = (cfg.clone(), rt.clone());
     let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
@@ -3103,18 +3116,69 @@ fn informix_cdc_reader_works(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) -> Res
     let req = Request {
         database: db,
         owner: String::new(),
-        table: "rh_probe".into(),
+        table: table.into(),
         key: vec![KeyPart { column: "id".into(), value: "1".into() }],
         enable_full_row_logging: true,
     };
     let h = rowhistory::run(&conn, &req, false, &cfg.user, &std::sync::atomic::AtomicBool::new(false), &env).map_err(|e| e.to_string())?;
     drop(conn);
-    let _ = d.execute("DROP TABLE rh_probe", 10);
+    let _ = d.execute(&format!("DROP TABLE {table}"), 10);
     let ops: Vec<&str> = h.events.iter().map(|e| e.op).collect();
     if h.status == "ok" && ops == ["insert"] && h.partial.is_empty() && !h.stalled {
         Ok(())
     } else {
-        Err(format!("{} {ops:?} {:?}", h.status, h.partial))
+        Err(format!("log {log}: {} {ops:?} {:?}", h.status, h.partial))
+    }
+}
+
+/// Rounds of the reader probe on a shared server before the test gives up (each one in logs of its own).
+const READER_PROBE_ROUNDS: usize = 3;
+
+/// Makes sure the server's CDC reader reads a short history whole before the history test relies on it (#216). A
+/// reader left at an earlier read's stop point is moved on as a DBA would: a log switch, and the probe again in a log
+/// of its own, a bounded number of times. The server is restarted only when the run owns it (CELER_INFORMIX_KILLABLE=1
+/// with CELER_INFORMIX_CONTAINER, CI's own container): never the shared WSL engines, where app slots and other runs use
+/// it. A reader that still fails ends the test with every probe's log and result, never a silent pass.
+fn informix_reader_ready(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) {
+    let killable = std::env::var("CELER_INFORMIX_KILLABLE").as_deref() == Ok("1");
+    let container = std::env::var("CELER_INFORMIX_CONTAINER").ok().filter(|_| killable);
+    if std::env::var("CELER_INFORMIX_STALE_READER").as_deref() == Ok("1") {
+        // A run that checks this recovery: the reader is left at the current log's tail first.
+        let left = informix_cdc_short_read(cfg, rt, "rh_stale", false);
+        println!("Informix: lector CDC dejado al final del log actual a propósito ({left:?})");
+    }
+    let mut tried = Vec::new();
+    for round in 1..=READER_PROBE_ROUNDS {
+        match informix_cdc_reader_works(cfg, rt) {
+            Ok(()) => {
+                if round > 1 {
+                    println!("Informix: el lector CDC lee entero tras {} cambios de log ({tried:?})", round - 1);
+                }
+                return;
+            }
+            Err(why) => {
+                println!("Informix: el lector CDC no lee entero un historial corto ({why}); se cambia de log y se prueba otra vez");
+                tried.push(why);
+                let mut admin_cfg = cfg.clone();
+                admin_cfg.database = "sysadmin".into();
+                if let Ok(mut admin) = crate::jdbc::connect(admin_cfg, rt.clone()) {
+                    informix_switch_log(&mut admin);
+                }
+            }
+        }
+    }
+    let Some(container) = container else {
+        panic!(
+            "el lector CDC del servidor no lee entero un historial corto tras {READER_PROBE_ROUNDS} intentos, cada uno en un log nuevo: {tried:?}. \
+             El servidor es compartido: no se reinicia (solo con CELER_INFORMIX_KILLABLE=1 y CELER_INFORMIX_CONTAINER)"
+        );
+    };
+    println!("Informix: el lector CDC sigue sin leer entero ({tried:?}); se reinicia {container}, que es de esta ejecución");
+    informix_restart(&container);
+    informix_wait_startup_tasks(cfg, rt);
+    if let Err(why) = informix_cdc_reader_works(cfg, rt) {
+        tried.push(why);
+        panic!("el lector CDC del servidor no lee entero un historial corto ni tras reiniciar {container}: {tried:?}");
     }
 }
 
@@ -3129,17 +3193,11 @@ fn informix_jdbc_row_history() {
     let _guard = watchdog("historial de la fila", 540);
     // The server's CDC reader keeps what earlier reads left (it stops for good where a read met the tail of a log, and
     // after errors on the records of dropped tables: measured), which the app reports as partial. A test needs a
-    // reader that works, and the first read after a restart is reliable: a short history is read first, and only a
-    // reader that does not give it whole has the server restarted, since others may be using it (#206). Either way the
+    // reader that works: a short history is read first, and a reader that does not give it whole is moved on with log
+    // switches; only a server the run owns is ever restarted (#206, #216, `informix_reader_ready`). Either way the
     // server's own start-up tasks go first (see `informix_wait_startup_tasks`).
     informix_wait_startup_tasks(&cfg, &rt);
-    if let Ok(container) = std::env::var("CELER_INFORMIX_CONTAINER") {
-        if let Err(why) = informix_cdc_reader_works(&cfg, &rt) {
-            println!("El lector CDC del servidor no lee entero un historial corto ({why}): se reinicia {container}");
-            informix_restart(&container);
-            informix_wait_startup_tasks(&cfg, &rt);
-        }
-    }
+    informix_reader_ready(&cfg, &rt);
     let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
     let db = d.current_database().unwrap();
     // A run cut short (the watchdog) may have left full row logging on, which forbids the DROP.

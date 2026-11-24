@@ -122,6 +122,9 @@ jobs:
           CELER_NODE: node
           # Reconnection tests end sessions with onmode -z when the SQL admin API is not there.
           CELER_INFORMIX_CONTAINER: ifx
+          # The container is this run's own: the row history tests may restart it (a CDC reader that stays stuck after
+          # log switches) and kill it (fast recovery, #123). Never set for the shared WSL engines (#216).
+          CELER_INFORMIX_KILLABLE: "1"
           CELER_ENGINE_OUT: ${{ github.workspace }}
         run: cargo test --lib engine_tests -- --skip informix_speed --nocapture --test-threads=1
 
