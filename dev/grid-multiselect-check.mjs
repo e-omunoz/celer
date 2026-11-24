@@ -154,7 +154,8 @@ for (const [index, name] of ENGINES.entries()) {
     // The header menu of the first column: «Orden descendente».
     const head = await grid();
     await gridMenu({ x: head.x + 60, y: head.y + 12 });
-    await js(`await menuPath(/^Orden descendente/); await sleep(400);`);
+    // The grid takes the focus back (a closed context menu leaves it on the page: a separate, older behaviour).
+    await js(`await menuPath(/^Orden descendente/); await sleep(400); pane().querySelector('.grid').focus();`);
     text = await copied();
     check("a sort ends the picked rows (one cell left)", text.split("\n").length === 1, text);
 
@@ -174,6 +175,9 @@ for (const [index, name] of ENGINES.entries()) {
     check("rows 5 and 5000 stay selected across scrolling and loading", text === `${rowOf(5)}\n${rowOf(5000)}`, { text, want: `${rowOf(5)}\n${rowOf(5000)}` });
 
     // ------------------------------------------------ a table tab: Supr marks exactly the selected rows; saving deletes them by key
+    // A small query read to its end first: SQLite keeps the cross join's read cursor open while it is partly fetched,
+    // and every write from another tab then fails with «database is locked» (a separate, older behaviour).
+    await js(`await runSql("SELECT id FROM ${table} ORDER BY id");`);
     await js(`
       setSql("SELECT * FROM ${table}");
       const v = view(); v.focus(); v.dispatch({ selection: { anchor: 16 } });
