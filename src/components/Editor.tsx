@@ -37,7 +37,7 @@ import { splitSql } from "../sql";
 import { unfilteredWrites, type Snippet } from "../snippets";
 import { compatibility, guessEngines } from "../engineCompat";
 import { SCOPE_LABELS, variableAt, variableLiteral, type ResolvedVar } from "../variables";
-import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
+import { expectAt, findTable, identifierAt, rankOptions, referencedTables, splitQualified, tablesInScope, type TableRef } from "../sqlContext";
 import type { CompletionTable, DbKind, KeywordCase } from "../types";
 
 const language = new Compartment();
@@ -310,7 +310,8 @@ function catalogSource(get: () => { tables: CompletionTable[]; defaultSchema?: s
     if (/String|Comment|QuotedIdentifier/.test(node.name)) return null;
     const text = ctx.state.doc.toString();
     const stmt = statementAround(text, ctx.pos, dialect);
-    const refs = referencedTables(stmt.text, tables, defaultSchema);
+    // Only the statement under the caret counts, and inside it the query (or subquery) the caret is in.
+    const refs = tablesInScope(stmt.text, word.from - stmt.start, tables, defaultSchema);
     const before = text.slice(stmt.start, word.from);
     const cols = (ref: TableRef, boost: number): Completion[] =>
       ref.table.columns.map((col) => ({ label: col, type: "property", detail: ref.alias, boost, apply: quoteIfNeeded(col) }));
@@ -346,15 +347,25 @@ function catalogSource(get: () => { tables: CompletionTable[]; defaultSchema?: s
       };
     }
 
-    const options: Completion[] = [];
+    // After "${" the variables' list answers alone.
+    if (ctx.state.sliceDoc(word.from - 2, word.from) === "${") return null;
+    // The statement names tables: their columns only (the caret's subquery first, then the query around it), then
+    // the aliases, then the catalog's table names (to add a JOIN). Ordered here (filter: false) so that they come
+    // before keywords and functions whatever the case typed; the lang-sql keywords follow below them.
     if (refs.length) {
-      refs.forEach((ref, i) => options.push(...cols(ref, 8 - Math.min(i, 3))));
-      refs.forEach((ref) => ref.alias !== ref.table.name && options.push({ label: ref.alias, type: "variable", detail: ref.table.name, boost: 5 }));
-    } else {
-      // No FROM yet (e.g. "SELECT |"): every column of the catalog when it is a reasonable list.
-      const total = tables.reduce((n, t) => n + t.columns.length, 0);
-      if (total <= 3000) tables.forEach((t) => options.push(...cols({ table: t, alias: t.name }, 2)));
+      const grouped: { option: Completion; group: number }[] = [];
+      refs.forEach((ref, i) => cols(ref, 8 - Math.min(i, 3)).forEach((option) => grouped.push({ option, group: 0 })));
+      refs.forEach((ref) => ref.alias !== ref.table.name && grouped.push({ option: { label: ref.alias, type: "variable", detail: ref.table.name, boost: 5 }, group: 0 }));
+      tables.forEach((t) => grouped.push({ option: tableOption(t, 1), group: 1 }));
+      const ranked = rankOptions(grouped, word.text);
+      if (!ranked.length) return null;
+      const matched = new Map(ranked.map((r) => [r.option, r.from < r.to ? [r.from, r.to] : []]));
+      return { from: word.from, options: ranked.map((r) => r.option), filter: false, getMatch: (c) => matched.get(c) ?? [] };
     }
+    // No table named yet (e.g. "SELECT |"): every column of the catalog when it is a reasonable list.
+    const options: Completion[] = [];
+    const total = tables.reduce((n, t) => n + t.columns.length, 0);
+    if (total <= 3000) tables.forEach((t) => options.push(...cols({ table: t, alias: t.name }, 2)));
     tables.forEach((t) => options.push(tableOption(t, 1)));
     return { from: word.from, options, validFor: /^[\w$]*$/ };
   };

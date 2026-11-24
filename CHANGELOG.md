@@ -6,6 +6,15 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Completion offers the query's columns first** (#219): with tables named in `FROM`/`JOIN`/`UPDATE`/`INTO`, the list
+  in `WHERE`, `AND`/`OR`, `ON`, `GROUP BY`, `ORDER BY`, `HAVING`, `SET`, the `SELECT` list and `INSERT INTO t (…)`
+  shows only those tables' columns (alias as detail), above keywords, functions and table names whatever the case
+  typed (`WHERE c` puts the `c…` columns above `CASE`/`CAST`), also when the `FROM` comes after the caret. Tables are
+  recognised with aliases, quoted names, `schema.table`, `db.dbo.table` and Informix `db[@server]:owner.table`, only
+  in the statement under the caret, ignoring strings and comments; inside a subquery its own tables come first, then
+  the outer query's. With no table named yet (`SELECT |`) nothing changes.
+
 ## [2.4.0] - 2026-10-14
 
 ### Added
