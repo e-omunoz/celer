@@ -818,6 +818,13 @@ export function createDemoBackend(): Backend {
       download(filename.split(/[\\/]/).pop() || filename, body, "text/plain");
       return result.rows.length;
     },
+    async exportGridRows(columns, rows, _quoted, _engine, options) {
+      const format = options.format === "xlsx" ? "csv" : options.format;
+      const body = resultToText({ columns, rows, hasMore: false, rowsAffected: null }, format, options.tableName || "tabla", options.delimiter);
+      const filename = options.path || `export.${format === "markdown" ? "md" : format}`;
+      download(filename.split(/[\\/]/).pop() || filename, body, "text/plain");
+      return rows.length;
+    },
     async addHistory(entry) {
       const all = readJson<HistoryEntry[]>("celer.history", []);
       all.push(entry);

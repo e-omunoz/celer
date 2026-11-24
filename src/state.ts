@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { asRaw, raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
+import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, quoteIdentFor, splitSql, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -3007,11 +3007,16 @@ export function revertTableChange(tabId: string, row: number, col: number | null
 export function deleteTableRows(tabId: string, rows: number[]) {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "table") return;
+  // A multiple selection can be thousands of rows: looked up in a set, not the list.
+  const picked = new Set(rows);
   const existing = rows.filter((row) => row < tab.rows.length);
-  const inserts = tab.inserts.filter((_, offset) => !rows.includes(tab.rows.length + offset));
+  const inserts = tab.inserts.filter((_, offset) => !picked.has(tab.rows.length + offset));
   const deleted = new Set(tab.deleted);
+  // Supr marks every selected row; only when all of them were marked already does it take the marks off again
+  // (a selection mixing both is deleted whole, not flipped row by row).
+  const restore = existing.length > 0 && existing.every((row) => deleted.has(row));
   for (const row of existing) {
-    if (deleted.has(row)) deleted.delete(row);
+    if (restore) deleted.delete(row);
     else deleted.add(row);
   }
   patchTab(tab.id, { deleted: [...deleted], inserts });
@@ -3493,6 +3498,11 @@ export interface ExportSource {
   tableName: string;
   /** The grid's column order (headers dragged): the file follows what is on screen. */
   columnOrder?: ColumnOrder;
+  /**
+   * «Exportar selección…»: the grid's selected rows and columns, in screen order, written as they are instead of
+   * running `sql` again (empty then).
+   */
+  rows?: { columns: ColumnInfo[]; rows: Cell[][] };
 }
 
 /**
@@ -3579,6 +3589,24 @@ export function startTableExport(tabId: string) {
   openExport({ connId: tab.connId, database: tab.obj.database || tab.database, sql, label: where ? `${tab.obj.name} (filtrada)` : tab.obj.name, tableName: tab.qualified, columnOrder: gridColumnOrders.get(tab.id) });
 }
 
+/**
+ * «Exportar selección…» in a tab's grid (#218): exactly the rows selected, which need not be next to each other, with
+ * the selected columns, in screen order, as the grid holds them (no query runs again).
+ */
+export function startSelectionExport(tabId: string, data: { columns: ColumnInfo[]; rows: Cell[][] }) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab?.connId || !data.rows.length || !data.columns.length) return;
+  const count = `${data.rows.length.toLocaleString()} ${data.rows.length === 1 ? "fila" : "filas"}`;
+  if (tab.kind === "table") {
+    openExport({ connId: tab.connId, database: tab.obj.database || tab.database, sql: "", label: `${tab.obj.name} (selección de ${count})`, tableName: tab.qualified, rows: data });
+    return;
+  }
+  // INSERT statements name the table the query reads, as the export of the whole result does.
+  const sql = (tab.kind === "sql" && tab.resultsSql) || "";
+  const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
+  openExport({ connId: tab.connId, database: tab.database, sql: "", label: `resultado (selección de ${count})`, tableName: from, rows: data });
+}
+
 /** Export a whole table or view from the explorer. */
 export async function startObjectExport(connId: string, obj: ObjectRef) {
   const opened = await openSessionFor(connId).catch((err) => {
@@ -3613,7 +3641,7 @@ export async function runExport() {
   const started = performance.now();
   try {
     const opts = state.exportOpts;
-    const rows = await api().exportQuery(source.connId, source.database, source.sql, exportId, {
+    const options = {
       format,
       path: path || `${base}.${ext}`,
       delimiter: format === "tsv" ? "\t" : opts.delimiter,
@@ -3623,7 +3651,13 @@ export async function runExport() {
       nullText: opts.nullText,
       sqlBatch: opts.sqlBatch,
       columnOrder: source.columnOrder ?? null,
-    });
+    };
+    // A selection is written from the rows the grid holds (already in screen order); anything else reads the query again.
+    const picked = source.rows;
+    const engine = kindOf(source.connId);
+    const rows = picked
+      ? await api().exportGridRows(picked.columns, picked.rows, picked.columns.map((col) => quoteIdentFor(col.name, engine)), engine, { ...options, columnOrder: null })
+      : await api().exportQuery(source.connId, source.database, source.sql, exportId, options);
     setState({ exportRows: rows, exportRunning: false, exportOpen: false, exportId: "" });
     const target = path;
     notify(`Exportadas ${rows.toLocaleString()} filas en ${formatMs(performance.now() - started)}`, "success", target || undefined, target && isTauri() ? { label: "Mostrar en la carpeta", run: () => void revealPath(target) } : undefined);
