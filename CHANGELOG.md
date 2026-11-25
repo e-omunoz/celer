@@ -41,6 +41,8 @@ All notable changes to Celer are documented here. The format follows
   a connection with no default database (and every ODBC session) starts in the connection's own database (#233).
 - «Probar conexión» on SQL Server with a database that does not exist says so, instead of the wrong-password hint
   (#240).
+- «Probar conexión» on Informix (DRDA and JDBC) with a database that does not exist marks «Inicio de sesión» as OK
+  and «Base de datos» as failed, with the database hint also over DRDA (#241).
 - Loading the next page of a console result (the button or scrolling to the end) no longer drops the grid's
   selection: the selected cell or picked rows stay selected.
 

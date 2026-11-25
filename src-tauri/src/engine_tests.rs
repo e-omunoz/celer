@@ -2885,6 +2885,40 @@ fn pool_sessions_start_in_the_default_database() {
     }
 }
 
+/// «Probar conexión» with a database that does not exist: the login step is OK, the database step fails, and the
+/// hint says the database does not exist (#71, #240 SQL Server, #241 Informix DRDA and JDBC).
+#[test]
+fn probe_a_missing_database_on_every_engine() {
+    let mut cases: Vec<(&str, ConnConfig, Connector)> = Vec::new();
+    let mut add = |name: &'static str, mut cfg: ConnConfig, open: Arc<dyn Fn(ConnConfig) -> anyhow::Result<Box<dyn Driver>> + Send + Sync>| {
+        cfg.database = "celer_no_such_db".into();
+        let c = cfg.clone();
+        cases.push((name, cfg, Arc::new(move || open(c.clone()))));
+    };
+    if let Some(cfg) = pg_cfg() {
+        add("PostgreSQL", cfg, Arc::new(|c| Ok(Box::new(crate::postgres::PostgresDriver::connect(c)?) as Box<dyn Driver>)));
+    }
+    if let Some(cfg) = mysql_cfg() {
+        add("MySQL/MariaDB", cfg, Arc::new(|c| Ok(Box::new(crate::mysql::MysqlDriver::connect(c)?) as Box<dyn Driver>)));
+    }
+    if let Some(cfg) = mssql_cfg("master") {
+        add("SQL Server", cfg, Arc::new(|c| Ok(Box::new(crate::mssql::MssqlDriver::connect(c)?) as Box<dyn Driver>)));
+    }
+    if let Some((cfg, lib)) = informix_cfg() {
+        add("Informix DRDA", cfg, Arc::new(move |c| Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(c, lib.clone())?) as Box<dyn Driver>)));
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        add("Informix JDBC", cfg, Arc::new(move |c| Ok(Box::new(crate::jdbc::connect(c, rt.clone())?) as Box<dyn Driver>)));
+    }
+    for (name, cfg, connect) in cases {
+        let report = crate::probe::run(&cfg, connect, "", None);
+        let steps: Vec<(&str, &str)> = report.steps.iter().map(|s| (s.id, s.status)).filter(|(id, _)| matches!(*id, "login" | "database")).collect();
+        eprintln!("{name}: {steps:?} · {} · {}", report.hint, report.error.replace('\n', " · "));
+        assert_eq!(steps, [("login", "ok"), ("database", "failed")], "{name}: {}", report.error);
+        assert!(report.hint.starts_with("La base de datos no existe"), "{name}: {}", report.hint);
+    }
+}
+
 /// Kill and requery on PostgreSQL and MySQL/MariaDB (SQL Server and Informix: mssql_reconnects,
 /// informix_reconnects): a session the server ended while idle answers its next query on a new connection, in the
 /// same database; ended mid-use (no check before), the read is not repeated (an administrator stopped it on purpose)

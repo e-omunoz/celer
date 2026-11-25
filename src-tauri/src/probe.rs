@@ -127,12 +127,14 @@ pub fn run(cfg: &ConnConfig, connector: Connector, route: &str, tunnel: Option<&
 }
 
 /// The connect error says the login was accepted but the database does not exist or cannot be opened
-/// (PostgreSQL 3D000, MySQL 1049, SQL Server 4060).
+/// (PostgreSQL 3D000, MySQL 1049, SQL Server 4060, Informix -329 and DRDA SQL30061N).
 fn missing_database(error: &str) -> bool {
     let m = error.to_lowercase();
-    ["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database"].iter().any(|w| m.contains(w))
-        || (m.contains("database") && m.contains("does not exist"))
+    MISSING_DATABASE.iter().any(|w| m.contains(w)) || (m.contains("database") && m.contains("does not exist"))
 }
+
+const MISSING_DATABASE: [&str; 9] =
+    ["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database", "-329", "database not found", "sql30061n"];
 
 /// La consulta más barata de cada motor (ODBC genérico: ninguna vale para todos).
 fn probe_sql(cfg: &ConnConfig) -> Option<&'static str> {
@@ -476,7 +478,7 @@ pub fn explain(cfg: &ConnConfig, error: &str) -> String {
         return "PostgreSQL no tiene una regla en pg_hba.conf para este equipo, usuario y base (o exige TLS): pide que la añadan o cambia el cifrado.".into();
     }
     // Before the credentials: SQL Server's 4060 also says "Login failed" although the login was accepted.
-    if has(&["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database", "-329", "database not found"]) || (m.contains("database") && m.contains("does not exist")) {
+    if has(&MISSING_DATABASE) || (m.contains("database") && m.contains("does not exist")) {
         return "La base de datos no existe o el usuario no puede abrirla: revisa el nombre (o déjalo vacío para usar la predeterminada).".into();
     }
     if has(&["28p01", "password authentication failed", "(1045)", "error 1045", "access denied for user", "login failed", "msg 18456", "-951", "-952", "sql30082n", "usuario o contraseña"]) {
@@ -639,7 +641,10 @@ mod tests {
     fn a_missing_database_fails_the_database_step() {
         let mut c = cfg(DbKind::Odbc);
         c.user = "app".into();
-        for error in ["db error: FATAL: database \"no_such_db\" does not exist", "ERROR 1049 (42000): Unknown database 'no_such_db'", "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login."] {
+        for error in ["db error: FATAL: database \"no_such_db\" does not exist", "ERROR 1049 (42000): Unknown database 'no_such_db'", "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login.",
+            // #241: Informix over JDBC (-329) and over DRDA (SQL30061N).
+            "La base de datos no existe o el usuario no tiene permiso para abrirla.\n\n[IX000] Database not found or no system permission. (-329)",
+            "[08004] [IBM][CLI Driver] SQL30061N  The database alias or database name \"CELER_NO_SUCH_DB\" was not found at the remote node.  SQLSTATE=08004"] {
             let text = error.to_string();
             let connector: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("{text}") });
             let r = run(&c, connector, "", None);
