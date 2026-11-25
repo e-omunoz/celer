@@ -39,12 +39,12 @@ await js(`
 await key("l", 10); // Ctrl+Shift+L
 await js(`await until(() => pane()?.querySelector('.cm-content')); pane().querySelector('.cm-content').focus();`);
 
-async function typeAndList(text) {
+async function typeAndList(text, count = 6) {
   await key("a", 2);
   await app.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
   for (const ch of text) await app.send("Input.insertText", { text: ch });
   await sleep(450);
-  const list = await js(`return [...document.querySelectorAll('.cm-tooltip-autocomplete li')].slice(0, 6).map((li) => li.querySelector('.cm-completionLabel')?.textContent + (li.querySelector('.cm-completionDetail') ? ' (' + li.querySelector('.cm-completionDetail').textContent + ')' : ''));`);
+  const list = await js(`return [...document.querySelectorAll('.cm-tooltip-autocomplete li')].slice(0, ${count}).map((li) => li.querySelector('.cm-completionLabel')?.textContent + (li.querySelector('.cm-completionDetail') ? ' (' + li.querySelector('.cm-completionDetail').textContent + ')' : ''));`);
   await key("Escape");
   return list;
 }
@@ -55,6 +55,17 @@ l = await typeAndList("SELECT * FROM events WHERE ki");
 check("unqualified columns of the FROM table", l[0]?.startsWith("kind"), JSON.stringify(l));
 l = await typeAndList("SELECT * FROM events e JOIN customers c ON c.id = e.customer_id WHERE c.fir");
 check("alias. → that table's columns", l[0]?.startsWith("first_name"), JSON.stringify(l));
+// #219: the query's columns first (alias as detail), ahead of keywords/functions and table names, whatever the case.
+for (const typed of ["c", "C"]) {
+  l = await typeAndList(`SELECT * FROM events e JOIN customers c ON c.id = e.customer_id WHERE ${typed}`, 40);
+  const firstCol = l.findIndex((x) => /^(customer_id \(e\)|country \(c\))$/.test(x));
+  const firstOther = l.findIndex((x) => /^(CASE|CAST|case|cast|customers)\b/.test(x));
+  check(`WHERE ${typed}: the query's columns above CASE/CAST and table names`, firstCol >= 0 && (firstOther < 0 || firstCol < firstOther), JSON.stringify(l.slice(0, 8)));
+}
+l = await typeAndList("SELECT * FROM customers ORDER BY cou", 40);
+check("ORDER BY: the named table's columns", l[0]?.startsWith("country"), JSON.stringify(l.slice(0, 8)));
+l = await typeAndList("SELECT * FROM customers WHERE kin", 40);
+check("other tables' columns are not offered", !l.some((x) => /^kind \(/.test(x)), JSON.stringify(l.slice(0, 8)));
 l = await typeAndList("SELECT cou");
 check("SELECT before FROM → catalog columns", l.some((x) => x.startsWith("country")), JSON.stringify(l));
 l = await typeAndList("SELECT * FROM sales.");

@@ -19,6 +19,16 @@ All notable changes to Celer are documented here. The format follows
   included) from what the grid holds, without running the query again.
 
 ### Changed
+- **Completion offers the query's columns first** (#219): with tables named in `FROM`/`JOIN`/`UPDATE`/`INTO`, the list
+  in `WHERE`, `AND`/`OR`, `ON`, `GROUP BY`, `ORDER BY`, `HAVING`, `SET`, the `SELECT` list and `INSERT INTO t (…)`
+  shows only those tables' columns (alias as detail), above keywords, functions and table names whatever the case
+  typed (`WHERE c` puts the `c…` columns above `CASE`/`CAST`), also when the `FROM` comes after the caret. Tables are
+  recognised with aliases, quoted names, `schema.table`, `db.dbo.table` and Informix `db[@server]:owner.table`, only
+  in the statement under the caret, ignoring strings and comments; inside a subquery its own tables come first, then
+  the outer query's. With no table named yet (`SELECT |`) nothing changes.
+- **Salida shows the newest run at the top** (#225): each run's line goes to the top, marked *última*, and the view
+  returns to it; «✦ Corregir con IA» stays on the latest entry when it is an error. New *copiar todo* copies the whole
+  log in the order shown. The 200-entry cap still drops the oldest.
 - Supr on a selection that mixes rows already marked for deletion with unmarked ones now marks them all; only a
   selection of rows that are all marked is restored (before, each row was flipped).
 

@@ -140,6 +140,7 @@ import { followDragGhost, ghostCard, previewLines } from "../dnd";
 import { hintOnce, hintReady } from "../hints";
 import { insertionGap, reorderTarget, windowName } from "../windowModel";
 import { openFkLookup } from "../fkLookup";
+import { outputRows, outputText } from "../outputLog";
 import { FilterChips, FilterEditor, newFilter, type FilterDraft } from "./TableFilters";
 import { EnvChip, EnvStrip, TxIndicator, TxTabBadge } from "./ConsoleSafety";
 import { envOf } from "../environment";
@@ -778,9 +779,17 @@ function SqlPane(props: { tab: SqlTab }) {
 
 function OutputLog(props: { tab: SqlTab }) {
   let host: HTMLDivElement | undefined;
-  onMount(() => host && (host.scrollTop = host.scrollHeight));
+  // Newest first: the run just made is the top line. A new entry brings the view back up to it.
+  const rows = createMemo(() => outputRows(props.tab.output));
+  createEffect(on(() => props.tab.output[props.tab.output.length - 1], () => host && (host.scrollTop = 0), { defer: true }));
   return (
     <div class="output" ref={host}>
+      <Show when={props.tab.output.length}>
+        <div class="out-head">
+          <span class="muted small">Lo más reciente arriba</span>
+          <button type="button" class="link small" onClick={() => void copyText(outputText(props.tab.output), "Salida copiada")}>copiar todo</button>
+        </div>
+      </Show>
       <Show when={!props.tab.output.length}>
         <div class="output-empty">
           {/* Waiting for you to run something: at his laptop. */}
@@ -792,16 +801,17 @@ function OutputLog(props: { tab: SqlTab }) {
           </p>
         </div>
       </Show>
-      <For each={props.tab.output}>
-        {(entry) => (
-          <div class="out-entry" classList={{ error: !entry.ok }}>
+      <For each={rows()}>
+        {({ entry, latest, fixable }) => (
+          <div class="out-entry" classList={{ error: !entry.ok, latest }}>
             <span class="out-icon">{entry.ok ? <CircleCheck size={14} /> : <CircleAlert size={14} />}</span>
             <div class="out-body">
               <div class="out-meta">
                 <time>{new Date(entry.at).toLocaleTimeString()}</time>
+                <Show when={latest}><span class="out-latest">última</span></Show>
                 <code title={entry.sql}>{entry.sql.replace(/\s+/g, " ").slice(0, 220)}</code>
                 <button type="button" class="link small" onClick={() => void copyText(entry.sql, "SQL copiado")}>copiar</button>
-                <Show when={!entry.ok && entry === props.tab.output[props.tab.output.length - 1]}>
+                <Show when={fixable}>
                   <button type="button" class="link small ai-link" onClick={() => void askAi("fix")}>✦ Corregir con IA</button>
                 </Show>
               </div>

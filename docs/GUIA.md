@@ -204,8 +204,13 @@ Rollback o Cancelar; si hay cambios sin guardar en una tabla o una exportación 
 | Ctrl+Alt+L | Formatea el SQL |
 | Ctrl+clic, F4, Ctrl+B | Abre la tabla bajo el cursor |
 
-- **Autocompletado**: tablas después de `FROM`/`JOIN`, columnas de las tablas de la sentencia en el resto, y
-  `alias.` o `esquema.` acotan la lista.
+- **Autocompletado**: tablas después de `FROM`/`JOIN`, y `alias.` o `esquema.` acotan la lista. En `WHERE`, `AND`/`OR`,
+  `ON`, `GROUP BY`, `ORDER BY`, `HAVING`, `SET`, la lista del `SELECT` o las columnas de un `INSERT INTO t (…)`, salen
+  primero solo las columnas de las tablas que nombra la sentencia (con su alias al lado), por encima de palabras clave,
+  funciones y nombres de tabla (estos detrás, para añadir un `JOIN`); vale aunque el `FROM` esté después del cursor.
+  Se reconocen alias, nombres entre comillas, `esquema.tabla`, `bd.dbo.tabla` y el `bd:propietario.tabla` de
+  Informix; cuenta solo la sentencia bajo el cursor y, dentro de una subconsulta, sus tablas primero y luego las de
+  fuera. Sin ninguna tabla todavía (`SELECT |`) se ofrecen las columnas de todo el catálogo.
 - **Plantillas**: escribe `sel`, `selw`, `ins`, `upd`, `cte`… y pulsa Tab; los campos enlazados se rellenan a la vez.
   Las tuyas se crean en *Ajustes › Plantillas*, donde puedes indicar su motor (o dejar que Celer lo detecte); las de
   otro motor salen en las sugerencias marcadas *otro motor* y al final.
@@ -226,7 +231,9 @@ Rollback o Cancelar; si hay cambios sin guardar en una tabla o una exportación 
   Ctrl+Mayús+S guarda como.
 - **Mensajes del servidor** en la pestaña *Salida*: los `NOTICE` de PostgreSQL, los avisos de MySQL y, en SQL Server,
   `PRINT` y `RAISERROR` de gravedad 10 o menor (también `WITH NOWAIT` desde un procedimiento), en orden, como en SSMS.
-
+- **Salida, lo más reciente arriba**: cada ejecución añade su línea arriba del todo, marcada como *última*, y la vista
+  vuelve arriba al llegar una nueva. «✦ Corregir con IA» aparece en esa última línea cuando es un error. *copiar*
+  copia el SQL de una línea y *copiar todo* la salida entera en el orden en que se ve. Se guardan las 200 últimas.
 ### Resultados
 
 Los resultados llegan por páginas desde un cursor abierto: aunque la consulta devuelva millones de filas, solo se traen

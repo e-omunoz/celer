@@ -44,16 +44,11 @@ import { envOf, normalizeEnvironment } from "./environment";
 import { NO_TX, countStatements, reminderDue, txAfterRun, txDuration, txReminderText, txThresholds } from "./txWatch";
 import { gibDisplayName, gibShownIn, gibTint, normalizeGibPrefs, type GibPlace, type GibPrefs } from "./gib/prefs";
 import type { ColumnOrder } from "./columnOrder";
+import { appendOutput, type OutputEntry } from "./outputLog";
+
+export type { OutputEntry } from "./outputLog";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "variables" | "ai";
-
-export interface OutputEntry {
-  at: number;
-  sql: string;
-  ok: boolean;
-  text: string;
-  elapsedMs: number | null;
-}
 
 export interface SqlTab {
   id: string;
@@ -1921,7 +1916,7 @@ async function remember(tab: SqlTab, sql: string, ok: boolean, elapsedMs: number
 function pushOutput(tabId: string, entry: OutputEntry) {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "sql") return;
-  patchTab(tabId, { output: [...tab.output.slice(-199), entry] });
+  patchTab(tabId, { output: appendOutput(tab.output, entry) });
 }
 
 export function describeResults(results: ResultSet[], elapsedMs: number) {
