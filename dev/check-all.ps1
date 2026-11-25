@@ -66,6 +66,9 @@ Step "server activity" { & $node dev\activity-check.mjs "$env:TEMP\celer-activit
 Step "editor completion and navigation" { & $node dev\editor-check.mjs }
 Step "pinned result compare" { & $node dev\result-compare-check.mjs }
 Step "typed Excel import" { & $node dev\import-typed-check.mjs }
+# Multiple selection (#218) on the local engines this data folder has; the whole matrix needs a slot with one
+# connection per engine (run-desktop.ps1 -Slot n, dev/devdata-connections.mjs).
+Step "grid multiple selection (PostgreSQL, MariaDB, SQLite)" { & $node dev\grid-multiselect-check.mjs --engines "Postgres local,MariaDB local,Tienda (SQLite)" }
 Restart-App
 # Tabs are told apart by title, so this one starts from an empty workspace.
 Step "several windows" { & $node dev\windows-check.mjs "Postgres local" }
