@@ -1528,6 +1528,151 @@ fn library_informix_jdbc() {
     library_suite(d.as_mut(), "informix", None);
 }
 
+// ───────────────────────────────────────────────────────────────── «Exportar selección» with long binaries (#230)
+
+/// A binary value over the grid's 4 KB preview: the grid holds it cut with "…", «Exportar selección» refuses it
+/// instead of writing the cut text, and the export of the query writes it whole. `create` makes celer_grid_bin
+/// (id, v) and `insert` puts row 1 in it, of `bytes` bytes when the test knows how many (at least 64 KB otherwise).
+/// `whole`: false skips the check of the query's export, for a driver that cannot read whole values yet.
+fn grid_binary_suite(d: &mut dyn Driver, engine: DbKind, create: &str, insert: &str, bytes: Option<usize>, whole: bool) {
+    let _ = d.execute("DROP TABLE celer_grid_bin", 10);
+    d.execute(create, 10).unwrap();
+    d.execute(insert, 10).unwrap();
+    let (cols, rows) = all_rows(d, "SELECT id, v FROM celer_grid_bin");
+    println!("{engine:?} grid: {:?} {}…", cols[1].kind, &txt(&rows[0][1])[..12]);
+    assert!(matches!(&rows[0][1], Cell::Text(s) if s.starts_with("0x") && s.ends_with('…')), "the grid's preview is cut");
+    let dir = std::env::temp_dir();
+    let quoted = vec![d.quote_ident("id"), d.quote_ident("v")];
+    for format in ["sql", "csv", "json"] {
+        let path = dir.join(format!("celer-grid-bin-{engine:?}-{}.{format}", std::process::id())).to_string_lossy().into_owned();
+        let o = crate::export::ExportOptions { format: format.into(), path: path.clone(), ..Default::default() };
+        let e = crate::export::export_grid(cols.clone(), &rows, &quoted, &o, engine).unwrap_err().to_string();
+        assert!(e.contains("binarios recortados"), "{format}: {e}");
+        assert!(!std::path::Path::new(&path).exists(), "{format}: nothing written");
+    }
+    // The export of the query has the whole value.
+    let path = dir.join(format!("celer-grid-bin-{engine:?}-{}.csv", std::process::id())).to_string_lossy().into_owned();
+    let o = crate::export::ExportOptions { path: path.clone(), header: false, bom: false, ..Default::default() };
+    crate::export::export(d, "SELECT v FROM celer_grid_bin", &o, engine, &|_| {}, &|| false).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let chars = text.trim_end().len();
+    match bytes {
+        _ if !whole => println!("NOT TESTED: {engine:?} exports binaries cut to {chars} chars"),
+        Some(n) => assert_eq!(chars, 2 + 2 * n, "whole value"),
+        None => assert!(chars > 2 + 2 * 65536 && !text.contains('…'), "whole value: {chars} chars"),
+    }
+    d.execute("DROP TABLE celer_grid_bin", 10).unwrap();
+    println!("✓ {engine:?}: «Exportar selección» refuses a cut binary; the query's export has {chars} chars");
+}
+
+#[test]
+fn grid_binary_postgres() {
+    let Some(s) = spec("CELER_PG_TEST") else { return };
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Postgres;
+    cfg.encryption = "off".into();
+    cfg.host = get(&s, "host");
+    cfg.port = get(&s, "port").parse().ok();
+    cfg.user = get(&s, "user");
+    cfg.password = Some(get(&s, "password"));
+    cfg.database = get(&s, "dbname");
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    grid_binary_suite(&mut d, DbKind::Postgres, "CREATE TABLE celer_grid_bin (id INT, v BYTEA)", "INSERT INTO celer_grid_bin VALUES (1, decode(repeat('ab', 5000), 'hex'))", Some(5000), true);
+}
+
+/// MySQL, and MariaDB in the second run of dev/wsl/engines.sh.
+#[test]
+fn grid_binary_mysql() {
+    let Ok(url) = std::env::var("CELER_MYSQL_TEST") else { return };
+    let rest = url.trim().trim_start_matches("mysql://");
+    let (auth, hostdb) = rest.rsplit_once('@').expect("mysql://user:pass@host:port/db");
+    let (user, pass) = auth.split_once(':').unwrap_or((auth, ""));
+    let (hostport, db) = hostdb.split_once('/').unwrap_or((hostdb, ""));
+    let (host, port) = hostport.split_once(':').unwrap_or((hostport, "3306"));
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Mysql;
+    cfg.host = host.into();
+    cfg.port = port.parse().ok();
+    cfg.user = user.into();
+    cfg.password = Some(pass.into());
+    cfg.database = db.into();
+    cfg.encryption = "login".into();
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    println!("{}", d.server_info().unwrap_or_default());
+    grid_binary_suite(&mut d, DbKind::Mysql, "CREATE TABLE celer_grid_bin (id INT, v BLOB)", "INSERT INTO celer_grid_bin VALUES (1, UNHEX(REPEAT('AB', 5000)))", Some(5000), true);
+}
+
+#[test]
+fn grid_binary_sqlite() {
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Sqlite;
+    cfg.file_path = ":memory:".into();
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite en memoria");
+    grid_binary_suite(&mut d, DbKind::Sqlite, "CREATE TABLE celer_grid_bin (id INT, v BLOB)", "INSERT INTO celer_grid_bin VALUES (1, randomblob(5000))", Some(5000), true);
+}
+
+#[test]
+fn grid_binary_mssql() {
+    let Some(mut master) = mssql("master") else { return };
+    master.execute("IF DB_ID('celer_test') IS NULL CREATE DATABASE celer_test", 10).unwrap();
+    drop(master);
+    let mut d = mssql("celer_test").unwrap();
+    grid_binary_suite(&mut d, DbKind::Mssql, "CREATE TABLE celer_grid_bin (id INT, v VARBINARY(MAX))", "INSERT INTO celer_grid_bin VALUES (1, CONVERT(VARBINARY(MAX), REPLICATE(CAST('x' AS VARCHAR(MAX)), 5000)))", Some(5000), true);
+}
+
+/// Informix has no binary literal: the value is a file of the server's (/etc/services, hundreds of KB, so an ODBC
+/// read takes several pieces) read into a smart large object.
+const IFX_GRID_BIN: (&str, &str) = (
+    "CREATE TABLE celer_grid_bin (id INT, v BLOB)",
+    "INSERT INTO celer_grid_bin VALUES (1, FILETOBLOB('/etc/services', 'server'))",
+);
+
+/// A BLOB needs an sbspace, which a fresh Informix container lacks (onspaces -c -S sbspace … adds one).
+fn ifx_has_sbspace(d: &mut dyn Driver) -> bool {
+    let has = scalar(d, "SELECT COUNT(*) FROM sysmaster:sysdbspaces WHERE is_sbspace = 1") != "0";
+    if !has {
+        println!("NOT TESTED: the server has no sbspace for a BLOB");
+    }
+    has
+}
+
+#[test]
+fn grid_binary_informix() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let mut d = drda_connect(lib)(cfg).expect("conexión Informix por DRDA");
+    if ifx_has_sbspace(d.as_mut()) {
+        // IBM's CLI hands a BLOB over as hex text without 0x (kind Other), not as a binary: nothing to refuse.
+        let _ = d.execute("DROP TABLE celer_grid_bin", 10);
+        d.execute(IFX_GRID_BIN.0, 10).unwrap();
+        d.execute(IFX_GRID_BIN.1, 10).unwrap();
+        let (cols, rows) = all_rows(d.as_mut(), "SELECT id, v FROM celer_grid_bin");
+        println!("NOT TESTED: DRDA reads a BLOB as {:?} text {}…", cols[1].kind, &txt(&rows[0][1])[..12]);
+        d.execute("DROP TABLE celer_grid_bin", 10).unwrap();
+    }
+}
+
+#[test]
+fn grid_binary_informix_jdbc() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt)(cfg).expect("conexión Informix por JDBC");
+    if ifx_has_sbspace(d.as_mut()) {
+        // The bridge sends the grid's preview (BINARY_LIMIT in CelerBridge.java), also to an export.
+        grid_binary_suite(d.as_mut(), DbKind::Informix, IFX_GRID_BIN.0, IFX_GRID_BIN.1, None, false);
+    }
+}
+
+/// Generic ODBC (psqlODBC to the PostgreSQL test server in engines.sh).
+#[test]
+fn grid_binary_odbc() {
+    let Ok(conn_str) = std::env::var("CELER_ODBC_TEST") else { return };
+    let mut cfg = ConnConfig::default();
+    cfg.kind = DbKind::Odbc;
+    cfg.odbc_conn_str = conn_str;
+    let mut d = crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().to_string()).expect("conexión ODBC");
+    grid_binary_suite(&mut d, DbKind::Odbc, "CREATE TABLE celer_grid_bin (id INT, v BYTEA)", "INSERT INTO celer_grid_bin VALUES (1, decode(repeat('ab', 5000), 'hex'))", Some(5000), true);
+}
+
 // ───────────────────────────────────────────────────────────────── migration assistant (#102)
 
 /// A data folder of its own (its known_hosts starts empty) with the Informix drivers of the environment in its

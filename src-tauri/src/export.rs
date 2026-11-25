@@ -213,10 +213,19 @@ fn open_sink(cols: &mut [ColumnInfo], o: &ExportOptions, out_path: &str) -> Resu
 
 /// Rows the grid already holds (a selection: rows that need not be next to each other, in screen order) written as
 /// a file with the same formats and options as an export of the query. `quoted` are the column names quoted for
-/// the engine (SQL INSERT). Binary values are the grid's (a long one is its preview, cut with "…").
+/// the engine (SQL INSERT). Binary values are the grid's, so a selection holding a long one (its preview, cut with
+/// "…") is refused: written, it would be text in a binary column (SQL) or a cut value (the other formats) (#230).
 pub fn export_grid(mut cols: Vec<ColumnInfo>, rows: &[Vec<Cell>], quoted: &[String], o: &ExportOptions, engine: DbKind) -> Result<u64> {
     if quoted.len() != cols.len() || rows.iter().any(|r| r.len() != cols.len()) {
         bail!("Las filas a exportar no casan con sus columnas");
+    }
+    // By its shape, not the column's kind: SQLite gives an expression or an untyped column holding a blob `Other`.
+    let cut = |c: &Cell| {
+        matches!(c, Cell::Text(s) if s.strip_prefix("0x").and_then(|h| h.strip_suffix('…'))
+            .is_some_and(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))))
+    };
+    if rows.iter().flatten().any(cut) {
+        bail!("La selección tiene valores binarios recortados (más de 4 KB): exporta el resultado completo para tenerlos enteros");
     }
     let partial = format!("{}.partial", o.path);
     let written = (|| -> Result<u64> {
@@ -710,6 +719,37 @@ mod tests {
         let o = ExportOptions { path: path("bad"), ..ExportOptions::default() };
         assert!(export_grid(cols.clone(), &[vec![Cell::Int(1)]], &quoted, &o, DbKind::Sqlite).is_err());
         assert!(!std::path::Path::new(&o.path).exists());
+    }
+
+    #[test]
+    fn grid_selection_refuses_cut_binary_values() {
+        // A blob over the grid's 4 KB preview comes back as "0x…" cut with "…" (#230).
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        d.execute("CREATE TABLE b (id INTEGER, v BLOB); INSERT INTO b VALUES (1, zeroblob(5000)), (2, x'CAFE')", 10).unwrap();
+        let out = d.execute("SELECT id, v FROM b ORDER BY id", 10).unwrap();
+        let (cols, rows) = (out.results[0].columns.clone(), out.results[0].rows.clone());
+        assert_eq!(cols[1].kind, ColKind::Binary);
+        // Text that only looks alike is exported.
+        let o = ExportOptions { format: "csv".into(), path: std::env::temp_dir().join(format!("celer-grid-txt-{}.csv", std::process::id())).to_string_lossy().into_owned(), ..ExportOptions::default() };
+        assert!(export_grid(cols.clone(), &[vec![Cell::Int(3), Cell::Text("0x…".into())], vec![Cell::Int(4), Cell::Text("0xmore…".into())]], &["a".into(), "b".into()], &o, DbKind::Sqlite).is_ok());
+        let _ = std::fs::remove_file(&o.path);
+        let quoted = vec!["\"id\"".to_string(), "\"v\"".to_string()];
+        let dir = std::env::temp_dir();
+        for format in ["sql", "csv", "json"] {
+            let o = ExportOptions { format: format.into(), path: dir.join(format!("celer-grid-cut-{}.{format}", std::process::id())).to_string_lossy().into_owned(), bom: false, ..ExportOptions::default() };
+            let e = export_grid(cols.clone(), &rows, &quoted, &o, DbKind::Sqlite).unwrap_err().to_string();
+            assert!(e.contains("binarios recortados"), "{e}");
+            assert!(!std::path::Path::new(&o.path).exists() && !std::path::Path::new(&format!("{}.partial", o.path)).exists());
+        }
+        // A short binary value is whole in the grid: written as the engine's binary literal.
+        let o = ExportOptions { format: "sql".into(), path: dir.join(format!("celer-grid-bin-{}.sql", std::process::id())).to_string_lossy().into_owned(), ..ExportOptions::default() };
+        assert_eq!(export_grid(cols.clone(), &rows[1..], &quoted, &o, DbKind::Sqlite).unwrap(), 1);
+        let text = std::fs::read_to_string(&o.path).unwrap();
+        let _ = std::fs::remove_file(&o.path);
+        assert!(text.contains("VALUES (2, X'CAFE')"), "{text}");
     }
 
     #[test]

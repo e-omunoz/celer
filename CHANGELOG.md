@@ -49,6 +49,10 @@ All notable changes to Celer are documented here. The format follows
   values (with `;` inside) into the right fields, instead of filling the server with the raw text (#243).
 - Loading the next page of a console result (the button or scrolling to the end) no longer drops the grid's
   selection: the selected cell or picked rows stay selected.
+- «Exportar selección…» with a binary value over 4 KB in the selected rows stops with a message to export the whole
+  result, instead of writing the grid's cut `0x…` preview (text in the binary column of an SQL INSERT, or a cut value
+  in CSV/JSON). Exporting a query on SQL Server or over ODBC now writes binary values over 4 KB
+  whole instead of cut to the first 4 KB (#230).
 
 ## [2.4.0] - 2026-10-14
 

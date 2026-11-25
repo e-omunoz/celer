@@ -234,7 +234,7 @@ async fn open_connection(cfg: &ConnConfig, database: &str) -> Result<Idle> {
             .await
     }
     .await;
-    let row: Vec<Cell> = facts.ok().and_then(|rows| rows.into_iter().next()).map(row_to_cells).unwrap_or_default();
+    let row: Vec<Cell> = facts.ok().and_then(|rows| rows.into_iter().next()).map(|r| row_to_cells(r, false)).unwrap_or_default();
     let cell = |i: usize| row.get(i).map(cell_str).unwrap_or_default();
     let version = cell(2);
     let engine = Engine::detect(row.get(1).map(cell_i64).unwrap_or(0), &version);
@@ -797,8 +797,10 @@ impl MssqlDriver {
         let (leave, count) = (abandon.clone(), drained.clone());
         let (tx, rx) = mpsc::channel(1024);
         let (dtx, drx) = oneshot::channel();
+        // The rows are converted on the runtime's threads: they get the export's whole binary values from here.
+        let full_binary = crate::model::full_binary();
         rt().spawn(async move {
-            let done = run_query(client, sql, dml, tx, token, leave, count).await;
+            let done = run_query(client, sql, dml, tx, token, leave, count, full_binary).await;
             let _ = dtx.send(done);
         });
         self.cursor = Some(Cursor {
@@ -915,7 +917,7 @@ impl MssqlDriver {
             let r: std::result::Result<Vec<Vec<Cell>>, tiberius::error::Error> = async {
                 let stream = client.simple_query(sql).await?;
                 let rows = stream.into_first_result().await?;
-                Ok(rows.into_iter().map(row_to_cells).collect())
+                Ok(rows.into_iter().map(|r| row_to_cells(r, false)).collect())
             }
             .await;
             (r, client)
@@ -1641,9 +1643,10 @@ async fn run_query(
     token: CancellationToken,
     abandon: CancellationToken,
     drained: Arc<AtomicU64>,
+    full_binary: bool,
 ) -> Finished {
     let outcome = {
-        let work = stream_query(&mut client, sql, dml, &tx, &abandon, &drained);
+        let work = stream_query(&mut client, sql, dml, &tx, &abandon, &drained, full_binary);
         tokio::select! {
             biased;
             o = work => Some(o),
@@ -1687,6 +1690,7 @@ async fn stream_query(
     tx: &mpsc::Sender<Item>,
     abandon: &CancellationToken,
     drained: &AtomicU64,
+    full_binary: bool,
 ) -> Outcome {
     if dml {
         return match client.execute(sql, &[]).await {
@@ -1733,7 +1737,7 @@ async fn stream_query(
                 let cols = m.columns().iter().map(column_info).collect();
                 tx.send(Item::Meta(cols)).await.is_ok()
             }
-            Ok(Some(QueryItem::Row(r))) => tx.send(Item::Row(row_to_cells(r))).await.is_ok(),
+            Ok(Some(QueryItem::Row(r))) => tx.send(Item::Row(row_to_cells(r, full_binary))).await.is_ok(),
             Ok(Some(QueryItem::Info(m))) => match info_text(&m) {
                 Some(text) => tx.send(Item::Info(text)).await.is_ok(),
                 None => true,
@@ -1902,15 +1906,21 @@ fn convert(cd: ColumnData<'static>) -> Cell {
     }
 }
 
-fn row_to_cells(r: tiberius::Row) -> Vec<Cell> {
+/// `full_binary`: whole binary values (an export), set on this runtime thread only while the row is converted.
+fn row_to_cells(r: tiberius::Row, full_binary: bool) -> Vec<Cell> {
     let money: Vec<bool> = r.columns().iter().map(|c| matches!(c.column_type(), ColumnType::Money | ColumnType::Money4)).collect();
-    r.into_iter()
+    let was = crate::model::full_binary();
+    crate::model::set_full_binary(full_binary);
+    let cells = r
+        .into_iter()
         .zip(money)
         .map(|(cd, money)| match cd {
             ColumnData::F64(Some(v)) if money => Cell::Text(money_text(v)),
             cd => convert(cd),
         })
-        .collect()
+        .collect();
+    crate::model::set_full_binary(was);
+    cells
 }
 
 /// money / smallmoney as SQL Server shows it: exact, with its 4 decimals ("12.5000"). tiberius hands the value over

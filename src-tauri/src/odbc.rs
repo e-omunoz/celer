@@ -870,29 +870,37 @@ impl Stmt {
                     }))
                 }
                 SQL_C_BINARY => {
-                    let mut buf = vec![0u8; BINARY_PREVIEW + 1];
-                    let mut ind: isize = 0;
-                    let rc = (self.api.get_data)(
-                        self.h,
-                        col,
-                        SQL_C_BINARY,
-                        buf.as_mut_ptr() as *mut c_void,
-                        buf.len() as isize,
-                        &mut ind,
-                    );
-                    if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO && rc != SQL_NO_DATA {
-                        bail!(self.api.diag(SQL_HANDLE_STMT, self.h));
+                    // The grid's preview (one byte more says it is cut); an export reads the whole value in pieces.
+                    let full = crate::model::full_binary();
+                    let mut out: Vec<u8> = Vec::new();
+                    let mut buf = vec![0u8; if full { 64 * 1024 } else { BINARY_PREVIEW + 1 }];
+                    loop {
+                        let mut ind: isize = 0;
+                        let rc = (self.api.get_data)(
+                            self.h,
+                            col,
+                            SQL_C_BINARY,
+                            buf.as_mut_ptr() as *mut c_void,
+                            buf.len() as isize,
+                            &mut ind,
+                        );
+                        if rc == SQL_NO_DATA {
+                            break;
+                        }
+                        if rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO {
+                            bail!(self.api.diag(SQL_HANDLE_STMT, self.h));
+                        }
+                        let ind = self.api.len(ind);
+                        if ind == SQL_NULL_DATA {
+                            return Ok(Cell::Null);
+                        }
+                        let more = ind == SQL_NO_TOTAL || ind as usize > buf.len();
+                        out.extend_from_slice(&buf[..if more { buf.len() } else { ind as usize }]);
+                        if !full || !more || rc == SQL_SUCCESS {
+                            break;
+                        }
                     }
-                    let ind = self.api.len(ind);
-                    if ind == SQL_NULL_DATA {
-                        return Ok(Cell::Null);
-                    }
-                    let n = if ind == SQL_NO_TOTAL || ind as usize > buf.len() {
-                        buf.len()
-                    } else {
-                        ind as usize
-                    };
-                    Ok(Cell::hex(&buf[..n], BINARY_PREVIEW))
+                    Ok(Cell::hex(&out, BINARY_PREVIEW))
                 }
                 _ => {
                     let mut buf = [0u8; 8];
