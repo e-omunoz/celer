@@ -91,6 +91,15 @@ All notable changes to Celer are documented here. The format follows
   rounds, with a growing pause), then fails naming each probe's log and result; a history read whose reader stopped at
   the current log's tail is asked again after a log switch too. Only a container the run owns (`CELER_INFORMIX_KILLABLE=1`
   with `CELER_INFORMIX_CONTAINER`, as in `engines.yml`) may still be restarted.
+- **The pointer no longer disappears in the file dialogs on Windows** (#220): the system's open/save dialog shares
+  the pointer's visibility with the Celer window and WebView2, and WebView2 runtimes that hide the pointer while
+  typing (Windows' *Ocultar el puntero mientras se escribe*) and fail to show it again left it hidden, so it was
+  invisible over the dialog (*Importar conexiones › Fichero de Celer…* from *Nuevo*, the explorer's ⋯ menu or the
+  palette, opening a script, exporting connections or results, importing data, themes and settings) and over the
+  app after choosing or cancelling. Every native dialog now shows the pointer before it opens and gives it its
+  shape back over the page after it.
+- **An ODBC connection imported without passwords asks for its password** (#220): when the user is in the
+  connection string (`UID=…`) rather than the *Usuario* field, connecting no longer fails the login without asking.
 
 ## [2.4.0] - 2026-10-14
 
