@@ -37,7 +37,7 @@ import { splitSql } from "../sql";
 import { unfilteredWrites, type Snippet } from "../snippets";
 import { compatibility, guessEngines } from "../engineCompat";
 import { SCOPE_LABELS, variableAt, variableLiteral, type ResolvedVar } from "../variables";
-import { expectAt, findTable, identifierAt, referencedTables, splitOptions, splitQualified, tablesInScope, type TableRef } from "../sqlContext";
+import { expectAt, findTable, identifierAt, isConnectiveKeyword, referencedTables, splitOptions, splitQualified, tablesInScope, type TableRef } from "../sqlContext";
 import type { CompletionTable, DbKind, KeywordCase } from "../types";
 
 const language = new Compartment();
@@ -371,9 +371,12 @@ function catalogSource(get: () => { tables: CompletionTable[]; defaultSchema?: s
       tables.forEach((t) => grouped.push({ option: tableOption(t, 1), group: 1 }));
       const { first, rest } = splitOptions(grouped, word.text);
       const matched = new Map(first.map((r) => [r.option, r.from < r.to ? [r.from, r.to] : []]));
+      // After a whole keyword (OR, NOT, IN) the columns go under it even when its case differs from what was typed
+      // ("or" against OR costs the keyword 200 in the editor's ranking, "orders" only 100): lower their boost by 200.
+      const demote = isConnectiveKeyword(word.text);
       return {
         main: first.length ? { from: word.from, options: first.map((r) => r.option), filter: false, getMatch: (c) => matched.get(c) ?? [] } : null,
-        extra: rest.length ? { from: word.from, options: rest } : null,
+        extra: rest.length ? { from: word.from, options: demote ? rest.map((o) => ({ ...o, boost: (o.boost ?? 0) - 200 })) : rest } : null,
       };
     }
     // No table named yet (e.g. "SELECT |"): every column of the catalog when it is a reasonable list.

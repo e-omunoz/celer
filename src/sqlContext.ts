@@ -203,13 +203,27 @@ export function rankOptions<T extends { label: string }>(options: { option: T; g
 }
 
 /**
+ * The keywords that are typed whole between a statement's columns (WHERE a = 1 OR …, x NOT IN …, AS, ASC). When the
+ * word typed is one of them, a column starting with it (notas, orders) must not go above the keyword: Enter after
+ * "or" keeps OR. A curated list rather than the dialect's: PostgreSQL's has id, name, type, value…
+ */
+const CONNECTIVE_KEYWORDS = new Set(
+  "and or not in is as on by like ilike between null exists any all some asc desc case when then else end from where join inner left right full outer cross using union except intersect select distinct set values into limit offset having group order with update delete insert"
+    .split(" "),
+);
+
+export const isConnectiveKeyword = (word: string) => CONNECTIVE_KEYWORDS.has(word.toLowerCase());
+
+/**
  * Splits the completion options in two: `first`, the group-0 options (the query's columns and aliases) that match
  * what was typed at its start or at a word start, ranked to go above keywords; and `rest`, everything else (group-0
  * options matching only in the middle, and the other groups), left to the editor's own fuzzy ranking, where a
- * keyword starting with what was typed (AND, OR) beats them.
+ * keyword starting with what was typed (AND, OR) beats them. When what was typed is a whole connective keyword
+ * (OR, NOT, IN), nothing goes in `first`: every match is left to the editor's ranking, below the keyword.
  */
 export function splitOptions<T extends { label: string }>(options: { option: T; group: number }[], typed: string): { first: { option: T; from: number; to: number }[]; rest: T[] } {
-  const strong = (o: { option: T; group: number }) => o.group === 0 && (matchTier(o.option.label, typed)?.tier ?? 3) <= 2;
+  const keyword = isConnectiveKeyword(typed);
+  const strong = (o: { option: T; group: number }) => !keyword && o.group === 0 && (matchTier(o.option.label, typed)?.tier ?? 3) <= 2;
   return {
     first: rankOptions(options.filter(strong), typed),
     rest: options.filter((o) => !strong(o) && (o.group !== 0 || matchTier(o.option.label, typed))).map((o) => o.option),

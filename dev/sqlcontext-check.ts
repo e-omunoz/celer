@@ -1,6 +1,6 @@
 // Quick checks for src/sqlContext.ts: node --experimental-strip-types dev/sqlcontext-check.ts
 import assert from "node:assert/strict";
-import { expectAt, findTable, identifierAt, maskSql, matchTier, rankOptions, referencedTables, splitOptions, tablesInScope } from "../src/sqlContext.ts";
+import { expectAt, findTable, identifierAt, isConnectiveKeyword, maskSql, matchTier, rankOptions, referencedTables, splitOptions, tablesInScope } from "../src/sqlContext.ts";
 
 const tables = [
   { schema: "public", name: "customers", columns: ["id", "first_name", "country"] },
@@ -99,7 +99,13 @@ const split = (typed: string) => {
 };
 assert.deepEqual(split("AN"), { first: ["an_code"], rest: ["quantity", "plans"] });
 assert.deepEqual(split("an"), { first: ["an_code"], rest: ["quantity", "plans"] });
-assert.deepEqual(split("OR"), { first: ["orders"], rest: ["plans"] });
+// A whole keyword typed (OR, NOT, IN): no column goes above it, not even one starting with it (#228).
+assert.deepEqual(split("OR"), { first: [], rest: ["orders", "plans"] });
+assert.deepEqual(split("or"), { first: [], rest: ["orders", "plans"] });
+assert.deepEqual(split("ord"), { first: ["orders"], rest: ["plans"] });
+assert.equal(isConnectiveKeyword("Not"), true);
+assert.equal(isConnectiveKeyword("id"), false);
+assert.equal(isConnectiveKeyword("nota"), false);
 assert.deepEqual(split("code"), { first: ["an_code"], rest: ["plans"] });
 assert.deepEqual(split(""), { first: ["id", "quantity", "an_code", "orders"], rest: ["plans"] });
 console.log("sqlContext: all checks passed");
