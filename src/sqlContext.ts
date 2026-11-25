@@ -201,3 +201,17 @@ export function rankOptions<T extends { label: string }>(options: { option: T; g
     .sort((a, b) => a.group - b.group || a.match!.tier - b.match!.tier || a.index - b.index)
     .map((o) => ({ option: o.option, from: o.match!.from, to: o.match!.to }));
 }
+
+/**
+ * Splits the completion options in two: `first`, the group-0 options (the query's columns and aliases) that match
+ * what was typed at its start or at a word start, ranked to go above keywords; and `rest`, everything else (group-0
+ * options matching only in the middle, and the other groups), left to the editor's own fuzzy ranking, where a
+ * keyword starting with what was typed (AND, OR) beats them.
+ */
+export function splitOptions<T extends { label: string }>(options: { option: T; group: number }[], typed: string): { first: { option: T; from: number; to: number }[]; rest: T[] } {
+  const strong = (o: { option: T; group: number }) => o.group === 0 && (matchTier(o.option.label, typed)?.tier ?? 3) <= 2;
+  return {
+    first: rankOptions(options.filter(strong), typed),
+    rest: options.filter((o) => !strong(o) && (o.group !== 0 || matchTier(o.option.label, typed))).map((o) => o.option),
+  };
+}

@@ -1,6 +1,6 @@
 // Quick checks for src/sqlContext.ts: node --experimental-strip-types dev/sqlcontext-check.ts
 import assert from "node:assert/strict";
-import { expectAt, findTable, identifierAt, maskSql, matchTier, rankOptions, referencedTables, tablesInScope } from "../src/sqlContext.ts";
+import { expectAt, findTable, identifierAt, maskSql, matchTier, rankOptions, referencedTables, splitOptions, tablesInScope } from "../src/sqlContext.ts";
 
 const tables = [
   { schema: "public", name: "customers", columns: ["id", "first_name", "country"] },
@@ -90,4 +90,16 @@ assert.equal(order("x").length, 0);
 assert.deepEqual(matchTier("cliente_id", "ID"), { tier: 2, from: 8, to: 10 });
 assert.deepEqual(matchTier("ClienteId", "id"), { tier: 2, from: 7, to: 9 });
 assert.equal(matchTier("nombre", "o"), null);
+
+// Split (#228): only columns matching at the start or at a word start go above keywords; "AN" must not put
+// quantity (a match in the middle) or a table name before AND.
+const split = (typed: string) => {
+  const s = splitOptions([{ option: { label: "id" }, group: 0 }, { option: { label: "quantity" }, group: 0 }, { option: { label: "an_code" }, group: 0 }, { option: { label: "orders" }, group: 0 }, { option: { label: "plans" }, group: 1 }], typed);
+  return { first: s.first.map((r) => r.option.label), rest: s.rest.map((o) => o.label) };
+};
+assert.deepEqual(split("AN"), { first: ["an_code"], rest: ["quantity", "plans"] });
+assert.deepEqual(split("an"), { first: ["an_code"], rest: ["quantity", "plans"] });
+assert.deepEqual(split("OR"), { first: ["orders"], rest: ["plans"] });
+assert.deepEqual(split("code"), { first: ["an_code"], rest: ["plans"] });
+assert.deepEqual(split(""), { first: ["id", "quantity", "an_code", "orders"], rest: ["plans"] });
 console.log("sqlContext: all checks passed");
