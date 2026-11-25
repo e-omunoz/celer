@@ -3312,8 +3312,25 @@ fn informix_jdbc_row_history() {
     let ro = run(&request(&db, "rh_t", Some(&id1), true), true).unwrap();
     assert!(ro.status == "unavailable" && ro.reason.contains("solo lectura"), "{ro:?}");
 
+    // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
+    // newest part of the log ready yet (measured; the history then says so and is partial). A DBA's log switch moves
+    // past both: done, and the read asked again, a few times (#206). The first full read too: a stop at the current
+    // log's tail is not the wall of another log the assertions below accept (#216).
+    let ask_whole = |table: &str, id: &str| {
+        let mut h = ask(table, id, true);
+        for _ in 0..3 {
+            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
+                break;
+            }
+            println!("Informix: el lector CDC se detuvo antes del final (historial de {table} {id}: {:?}); se cambia de log y se lee otra vez", h.partial);
+            switch_log();
+            h = ask(table, id, true);
+        }
+        h
+    };
+
     let t0 = Instant::now();
-    let h = ask("rh_t", &id1, true);
+    let h = ask_whole("rh_t", &id1);
     println!(
         "Historial de la fila {} en {:?}: {:?}\n  rango {:?}\n  parcial {:?}\n  notas {:?}",
         id1,
@@ -3393,20 +3410,6 @@ fn informix_jdbc_row_history() {
         assert!(!ledger.exists(), "and forgets it");
     }
 
-    // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
-    // newest part of the log ready yet (measured; the history then says so and is partial). A DBA's log switch moves
-    // past both: done, and the read asked again, a few times (#206).
-    let ask_whole = |table: &str, id: &str| {
-        let mut h = ask(table, id, true);
-        for _ in 0..3 {
-            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
-                break;
-            }
-            switch_log();
-            h = ask(table, id, true);
-        }
-        h
-    };
     let gone = ask_whole("rh_t", &id2);
     assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"], "{gone:?}");
     assert_eq!(gone.events[1].before, Some(s(&[&id2, "20", "2.50", "NULL", "beta"])));
