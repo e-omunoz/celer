@@ -2988,6 +2988,92 @@ fn mid_result_error_odbc() {
     assert_mid_result_error("ODBC (later page)", DbKind::Odbc, &mut d, "SELECT 10 / (n - 7001) AS q FROM generate_series(1, 8000) n", "SELECT 1");
 }
 
+// ───────────────────────────────────────────────────────────────── Excel export of dates (#224)
+
+/// A DATE, a timestamp and a time of day exported to .xlsx land as Excel dates (not text), which the .xlsx import
+/// reads back as the same values.
+fn assert_xlsx_dates(engine: &str, kind: DbKind, d: &mut dyn Driver, sql: &str) {
+    use crate::sheets::SheetCell;
+    let path = std::env::temp_dir().join(format!("celer-xlsx-dates-{}-{}.xlsx", engine.replace(['/', ' '], "_"), std::process::id()));
+    let o = crate::export::ExportOptions { format: "xlsx".into(), path: path.to_string_lossy().into(), ..Default::default() };
+    crate::export::export(d, sql, &o, kind, &|_| {}, &|| false).unwrap_or_else(|e| panic!("{engine}: {e}"));
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    use calamine::Reader;
+    let mut book: calamine::Xlsx<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(bytes)).unwrap();
+    let range = book.worksheet_range_at(0).unwrap().unwrap();
+    let row: Vec<&calamine::Data> = range.rows().nth(1).unwrap().iter().collect();
+    assert!(row.iter().all(|c| matches!(c, calamine::Data::DateTime(_))), "{engine}: {row:?}");
+    let typed: Vec<SheetCell> = row.iter().map(|c| crate::sheets::typed(c)).collect();
+    assert_eq!(
+        typed,
+        [SheetCell::Date { d: "2024-03-15".into() }, SheetCell::Date { d: "2024-03-15 10:20:30".into() }, SheetCell::Time { t: "06:30:00".into() }],
+        "{engine}"
+    );
+    eprintln!("{engine}: fechas de Excel {typed:?}");
+}
+
+#[test]
+fn xlsx_dates_postgres() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    assert_xlsx_dates("PostgreSQL", DbKind::Postgres, &mut d, "SELECT DATE '2024-03-15' AS d, TIMESTAMP '2024-03-15 10:20:30' AS ts, TIME '06:30:00' AS tm");
+}
+
+/// MySQL, and MariaDB in the second run of dev/wsl/engines.sh (it runs the tests named "mysql").
+#[test]
+fn xlsx_dates_mysql() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let engine = if d.server_info().unwrap_or_default().contains("MariaDB") { "MariaDB" } else { "MySQL" };
+    assert_xlsx_dates(engine, DbKind::Mysql, &mut d, "SELECT CAST('2024-03-15' AS DATE) AS d, CAST('2024-03-15 10:20:30' AS DATETIME) AS ts, CAST('06:30:00' AS TIME) AS tm");
+}
+
+#[test]
+fn xlsx_dates_mssql() {
+    let Some(mut d) = mssql("tempdb") else { return };
+    assert_xlsx_dates(
+        "SQL Server",
+        DbKind::Mssql,
+        &mut d,
+        "SELECT CAST('2024-03-15' AS date) AS d, CAST('2024-03-15T10:20:30' AS datetime2(0)) AS ts, CAST('06:30:00' AS time(0)) AS tm",
+    );
+}
+
+const INFORMIX_XLSX_DATES: &str = "SELECT MDY(3, 15, 2024) AS d, DATETIME(2024-03-15 10:20:30) YEAR TO SECOND AS ts, \
+    DATETIME(06:30:00) HOUR TO SECOND AS tm FROM systables WHERE tabid = 1";
+
+#[test]
+fn xlsx_dates_informix() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let mut d = drda_connect(lib)(cfg).expect("conexión Informix DRDA");
+    assert_xlsx_dates("Informix DRDA", DbKind::Informix, d.as_mut(), INFORMIX_XLSX_DATES);
+}
+
+#[test]
+fn xlsx_dates_informix_jdbc() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt)(cfg).expect("conexión Informix JDBC");
+    assert_xlsx_dates("Informix JDBC", DbKind::Informix, d.as_mut(), INFORMIX_XLSX_DATES);
+}
+
+#[test]
+fn xlsx_dates_sqlite() {
+    let cfg = ConnConfig { kind: DbKind::Sqlite, file_path: ":memory:".into(), ..Default::default() };
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite en memoria");
+    d.execute("CREATE TABLE t (d DATE, ts DATETIME, tm TIME); INSERT INTO t VALUES ('2024-03-15', '2024-03-15 10:20:30', '06:30:00')", 10).unwrap();
+    assert_xlsx_dates("SQLite", DbKind::Sqlite, &mut d, "SELECT * FROM t");
+}
+
+/// Generic ODBC (PostgreSQL through psqlODBC on the WSL engines).
+#[test]
+fn xlsx_dates_odbc() {
+    let Ok(s) = std::env::var("CELER_ODBC_TEST") else { return };
+    let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: s, ..Default::default() };
+    let mut d = crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().into()).expect("conexión ODBC");
+    assert_xlsx_dates("ODBC", DbKind::Odbc, &mut d, "SELECT DATE '2024-03-15' AS d, TIMESTAMP '2024-03-15 10:20:30' AS ts, TIME '06:30:00' AS tm");
+}
+
 // ───────────────────────────────────────────────────────────────── Informix types over DRDA and JDBC (#160)
 
 /// What each Informix driver returns for the types where DRDA and JDBC differ (documented in docs/DRIVERS.md,
