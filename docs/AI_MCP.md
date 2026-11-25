@@ -41,8 +41,12 @@ transaction (PostgreSQL / MySQL) or `PRAGMA query_only` (SQLite) and are rolled 
 connection, hard cap 5000), queries time out, and columns matching the sensitive-name pattern are returned as
 `[oculto]`. A query that names a protected column (also of another database on MySQL / SQL Server) is refused, and so
 is one that reads a table with protected columns through a whole row (`SELECT t FROM users t`, `row_to_json(t)`),
-column alias lists (`WITH s(a, b) AS …`, `AS u(a, b)`) or `UNION` / `INTERSECT` / `EXCEPT`. Masking is best-effort:
-it works on names, so a view or function that renames a protected column is not caught; give assistants an account
+column alias lists (`WITH s(a, b) AS …`, `AS u(a, b)`), `UNION` / `INTERSECT` / `EXCEPT` or SQL Server's
+`FOR JSON` / `FOR XML`. PostgreSQL's `query_to_xml`, `table_to_xml`, `schema_to_xml`, `database_to_xml`,
+`cursor_to_xml` and their `*_xmlschema` variants are refused on any database with protected columns, since the table or
+query they read is a string. A text value that holds serialised rows (JSON keys, XML elements or attributes) named like
+a protected column is also returned as `[oculto]`. Masking is best-effort: it works on names, so a view or function
+that renames a protected column, or splits a serialised row across values, is not caught; give assistants an account
 without access to secrets when that matters. Every call is written to `mcp-audit.jsonl` (the SQL without its comments)
 and shown in the settings.
 
