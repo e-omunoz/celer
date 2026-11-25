@@ -491,10 +491,8 @@ fn reorder_connections(window: tauri::WebviewWindow, state: State<'_, Arc<AppSta
 
 #[tauri::command]
 fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, id: String) -> CmdResult<()> {
-    for s in state.sessions.remove_for_conn(&id) {
-        s.cancel();
-    }
-    forget_free(&id);
+    // As Desconectar: the connections its sessions free on closing are closed too, not left pooled (#242).
+    close_sessions(&state, &id);
     // Hasta cerrar Celer, en memoria: «Deshacer» la devuelve con la conexión.
     let accounts = std::iter::once(id.clone()).chain(SshConfig::ACCOUNTS.iter().map(|a| ssh_account(&id, a)));
     for account in accounts {
@@ -744,14 +742,20 @@ fn close_session(state: State<'_, Arc<AppState>>, session_id: String) {
 /// returns how many there were.
 #[tauri::command]
 fn close_connection_sessions(state: State<'_, Arc<AppState>>, conn_id: String) -> usize {
-    let closed = state.sessions.remove_for_conn(&conn_id);
+    let closed = close_sessions(&state, &conn_id);
+    sqlite::forget_memory(&conn_id);
+    closed
+}
+
+/// Closes every session of a connection (Desconectar, deleting it) and the free connections they leave behind.
+fn close_sessions(state: &AppState, conn_id: &str) -> usize {
+    let closed = state.sessions.remove_for_conn(conn_id);
     for h in &closed {
         h.cancel();
     }
-    sqlite::forget_memory(&conn_id);
     // Las sesiones se cierran en sus hilos (y dejan su conexión libre si pueden): las libres se cierran un poco
     // después, cuando ya han llegado.
-    let id = conn_id.clone();
+    let id = conn_id.to_string();
     std::thread::spawn(move || {
         forget_free(&id);
         std::thread::sleep(std::time::Duration::from_millis(1500));
