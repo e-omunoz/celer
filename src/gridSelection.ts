@@ -71,16 +71,6 @@ export function rowList(ranges: RowRanges): number[] {
   return rows;
 }
 
-/** `ranges` without the rows from `count` on (rows that are no longer there). */
-export function clampRows(ranges: RowRanges, count: number): RowRanges {
-  const out: [number, number][] = [];
-  for (const [a, b] of ranges) {
-    if (a >= count) break;
-    out.push([a, Math.min(b, count - 1)]);
-  }
-  return out;
-}
-
 export interface RowClickMods {
   /** Ctrl+click (Cmd+click on macOS): add or remove the row, keeping the rest. */
   toggle: boolean;

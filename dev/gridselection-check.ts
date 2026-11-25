@@ -1,6 +1,6 @@
 // Checks for src/gridSelection.ts (the result grid's multiple selection, #218): node --experimental-strip-types dev/gridselection-check.ts
 import assert from "node:assert/strict";
-import { addRows, clampRows, clickRows, hasRow, normalizeRows, rowCount, rowList, rowRange, toggleRow, type RowRanges } from "../src/gridSelection.ts";
+import { addRows, clickRows, hasRow, normalizeRows, rowCount, rowList, rowRange, toggleRow, type RowRanges } from "../src/gridSelection.ts";
 
 // Normalised: sorted, merged when overlapping or touching, reversed ranges turned round.
 assert.deepEqual(normalizeRows([[5, 5], [1, 2], [3, 3], [9, 7]]), [[1, 3], [5, 5], [7, 9]]);
@@ -53,9 +53,5 @@ const allButOne = toggleRow(rowRange(0, 999_999), 500_000);
 assert.equal(allButOne.length, 2);
 assert.equal(rowCount(allButOne), 999_999);
 assert.ok(!hasRow(allButOne, 500_000) && hasRow(allButOne, 499_999) && hasRow(allButOne, 999_999));
-
-// Rows that went away (fewer rows than before) are dropped.
-assert.deepEqual(clampRows([[2, 2], [5, 8], [12, 14]], 7), [[2, 2], [5, 6]]);
-assert.deepEqual(clampRows([[2, 2]], 0), []);
 
 console.log("gridselection-check: ok");
