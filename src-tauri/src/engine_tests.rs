@@ -1693,12 +1693,19 @@ fn sample_store(name: &str) -> crate::store::Store {
     crate::store::Store::new(dir)
 }
 
+/// The migration samples (dev/fixtures/migrate) name the engines of dev/wsl/compose.yml by their ports there; they
+/// only connect where that environment is the one under test (CELER_PG_TEST on its port 15432, as engines.sh sets
+/// it), not against the local servers of dev/testdb-*.ps1.
+fn compose_engines() -> bool {
+    spec("CELER_PG_TEST").is_some_and(|s| get(&s, "port") == "15432")
+}
+
 /// The connections the migration assistant makes of the DBeaver and DbVisualizer samples (dev/fixtures/migrate, one
 /// per engine of dev/wsl/compose.yml, printed by dev/migrate-sample.ts) open as imported, through lib.rs `prepare`,
 /// and answer a query. ODBC needs the DSN CelerPG (a PostgreSQL ODBC data source); without it, it is skipped.
 #[test]
 fn migrated_connections_connect() {
-    if spec("CELER_PG_TEST").is_none() {
+    if !compose_engines() {
         return;
     }
     let node = std::env::var("CELER_NODE").unwrap_or_else(|_| "node".into());
@@ -1763,7 +1770,7 @@ fn migrated_connections_connect() {
 /// fresh data folder without any password typed.
 #[test]
 fn migrated_passwords_connect_after_export_and_import() {
-    if spec("CELER_PG_TEST").is_none() {
+    if !compose_engines() {
         return;
     }
     let node = std::env::var("CELER_NODE").unwrap_or_else(|_| "node".into());
