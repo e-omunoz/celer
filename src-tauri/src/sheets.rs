@@ -284,11 +284,15 @@ pub fn typed(cell: &Data) -> SheetCell {
         Data::Float(f) => SheetCell::Float(*f),
         Data::Bool(b) => SheetCell::Bool(*b),
         Data::DateTime(d) if d.is_duration() || (0.0..1.0).contains(&d.as_f64()) => {
-            let secs = (d.as_f64() * 86_400.0).round() as i64;
-            SheetCell::Time { t: format!("{:02}:{:02}:{:02}", secs / 3600, secs % 3600 / 60, secs % 60) }
+            let ms = (d.as_f64() * 86_400_000.0).round() as i64;
+            let secs = ms / 1000;
+            let t = format!("{:02}:{:02}:{:02}", secs / 3600, secs % 3600 / 60, secs % 60);
+            // Milliseconds only when there are some (a time Celer exported from a TIME(3) column).
+            SheetCell::Time { t: if ms % 1000 == 0 { t } else { format!("{t}.{:03}", ms % 1000) } }
         }
         Data::DateTime(d) => match d.as_datetime() {
             Some(dt) if dt.time() == chrono::NaiveTime::MIN => SheetCell::Date { d: dt.date().format("%Y-%m-%d").to_string() },
+            Some(dt) if chrono::Timelike::nanosecond(&dt) != 0 => SheetCell::Date { d: dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string() },
             Some(dt) => SheetCell::Date { d: dt.format("%Y-%m-%d %H:%M:%S").to_string() },
             None => SheetCell::Float(d.as_f64()),
         },

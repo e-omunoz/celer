@@ -14,6 +14,10 @@ All notable changes to Celer are documented here. The format follows
   used to panic there).
 
 ### Fixed
+- **Excel export writes dates as dates** (#224): DATE, DATETIME/TIMESTAMP and TIME columns land as Excel dates with a
+  `yyyy-mm-dd` / `yyyy-mm-dd hh:mm:ss` / `hh:mm:ss` format (milliseconds kept), so they sort, filter and compute in
+  Excel; a value Excel cannot hold exactly (a time zone, more than milliseconds, before March 1900) stays text. Importing
+  such a sheet keeps the milliseconds.
 - **Row history: the range line says why the read starts where it does** (#217): «Lo anterior ya no está en los logs»
   only when the read starts at the oldest log on disk; a table created after log M says the read starts after it and
   that the older logs are still on disk without its changes, and after Informix's fast recovery the line says the

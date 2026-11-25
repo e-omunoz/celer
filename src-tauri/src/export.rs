@@ -85,7 +85,73 @@ enum Sink {
         /// Widest text per column in the header and the first rows, for the column widths (`autofit` needs the
         /// whole sheet in memory, and the sheet is written row by row).
         widths: Vec<usize>,
+        /// Number formats of the date and time cells, by `DateFmt`.
+        date_formats: Vec<rust_xlsxwriter::Format>,
     },
+}
+
+/// What a date or time cell shows in Excel; the index into `Sink::Xlsx::date_formats`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DateFmt {
+    Date,
+    DateTime,
+    DateTimeMs,
+    Time,
+    TimeMs,
+}
+
+const DATE_FORMATS: [&str; 5] = ["yyyy-mm-dd", "yyyy-mm-dd hh:mm:ss", "yyyy-mm-dd hh:mm:ss.000", "hh:mm:ss", "hh:mm:ss.000"];
+
+/// A date, date-time or time of day as the engines print it (`2024-03-15`, `2024-03-15 10:20[:30[.123]]`, with a
+/// space or a `T`, or `10:20:30`) as an Excel serial number and its format. None for anything Excel cannot hold
+/// exactly, which stays text: a time zone, BC or infinity, an interval, more than milliseconds, a day before
+/// 1900-03-01 (Excel's 1900 calendar has a 29 February that never was).
+fn excel_datetime(s: &str) -> Option<(f64, DateFmt)> {
+    use chrono::{NaiveDate, NaiveTime, Timelike};
+    let (date, time) = match s.split_once([' ', 'T']) {
+        Some((d, t)) => (Some(d), Some(t)),
+        None if s.contains(':') => (None, Some(s)),
+        None => (Some(s), None),
+    };
+    let day = match date {
+        Some(d) => {
+            if d.len() != 10 {
+                return None;
+            }
+            let d = NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()?;
+            let n = d.signed_duration_since(NaiveDate::from_ymd_opt(1899, 12, 30)?).num_days();
+            if n < 61 {
+                return None;
+            }
+            n as f64
+        }
+        None => 0.0,
+    };
+    let Some(t) = time else {
+        return Some((day, DateFmt::Date));
+    };
+    let (hms, frac) = t.split_once('.').unwrap_or((t, ""));
+    let hms = match hms.len() {
+        8 => NaiveTime::parse_from_str(hms, "%H:%M:%S").ok()?,
+        5 => NaiveTime::parse_from_str(hms, "%H:%M").ok()?,
+        _ => return None,
+    };
+    if !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let frac = frac.trim_end_matches('0');
+    if frac.len() > 3 {
+        return None;
+    }
+    let ms = if frac.is_empty() { 0 } else { frac.parse::<u32>().ok()? * 10u32.pow(3 - frac.len() as u32) };
+    let secs = hms.num_seconds_from_midnight() as f64 + ms as f64 / 1000.0;
+    let fmt = match (date.is_some(), ms > 0) {
+        (true, false) => DateFmt::DateTime,
+        (true, true) => DateFmt::DateTimeMs,
+        (false, false) => DateFmt::Time,
+        (false, true) => DateFmt::TimeMs,
+    };
+    Some((day + secs / 86_400.0, fmt))
 }
 
 /// Rows measured for the Excel column widths.
@@ -152,6 +218,7 @@ fn export_rows(
             wb: rust_xlsxwriter::Workbook::new(),
             row: 0,
             widths: vec![0; cols.len()],
+            date_formats: DATE_FORMATS.iter().map(|f| rust_xlsxwriter::Format::new().set_num_format(*f)).collect(),
         },
         _ => {
             let mut w = BufWriter::with_capacity(1 << 20, File::create(out_path)?);
@@ -361,7 +428,7 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
             }
             _ => {}
         },
-        Sink::Xlsx { wb, row, widths } => {
+        Sink::Xlsx { wb, row, widths, .. } => {
             // Fails when the temp file that holds the streamed rows cannot be created (constant_memory).
             let ws = wb.add_worksheet_with_constant_memory()?;
             let bold = rust_xlsxwriter::Format::new().set_bold();
@@ -467,7 +534,7 @@ fn write_row(
             }
             _ => {}
         },
-        Sink::Xlsx { wb, row, widths } => {
+        Sink::Xlsx { wb, row, widths, date_formats } => {
             // Said at the first row too many, before reading the rest of the result.
             if *row > XLSX_MAX_ROWS {
                 bail!("Excel admite como máximo {XLSX_MAX_ROWS} filas: exporta a CSV o filtra la consulta");
@@ -495,6 +562,13 @@ fn write_row(
                         if cols[i].kind == ColKind::Number {
                             if let Ok(v) = s.parse::<f64>() {
                                 ws.write_number(*row, col, v)?;
+                                continue;
+                            }
+                        }
+                        // Dates as Excel dates (sortable, filterable, usable in formulas), not text.
+                        if cols[i].kind == ColKind::Date {
+                            if let Some((v, f)) = excel_datetime(s) {
+                                ws.write_number_with_format(*row, col, v, &date_formats[f as usize])?;
                                 continue;
                             }
                         }
@@ -663,6 +737,71 @@ mod tests {
         let range = book.worksheet_range_at(0).unwrap().unwrap();
         let cells: Vec<String> = range.rows().flatten().map(|c| c.to_string()).collect();
         assert_eq!(cells, ["a", "b", "1", "x", "2", ""]);
+    }
+
+    #[test]
+    fn excel_dates_from_engine_text() {
+        assert_eq!(excel_datetime("2024-03-15"), Some((45366.0, DateFmt::Date)));
+        assert_eq!(excel_datetime("1900-03-01"), Some((61.0, DateFmt::Date)));
+        assert_eq!(excel_datetime("2024-03-15 12:00:00"), Some((45366.5, DateFmt::DateTime)));
+        assert_eq!(excel_datetime("2024-03-15T12:00"), Some((45366.5, DateFmt::DateTime)));
+        assert_eq!(excel_datetime("2024-03-15 12:00:00.000000"), Some((45366.5, DateFmt::DateTime)));
+        assert_eq!(excel_datetime("2024-03-15 00:00:00.5").map(|x| x.1), Some(DateFmt::DateTimeMs));
+        assert_eq!(excel_datetime("06:00:00"), Some((0.25, DateFmt::Time)));
+        assert_eq!(excel_datetime("06:00:00.250").map(|x| x.1), Some(DateFmt::TimeMs));
+        // Left as text: what Excel cannot hold exactly.
+        for s in [
+            "2024-03-15 10:20:30+01",
+            "2024-03-15 10:20:30.123456",
+            "1900-02-28",
+            "0044-03-15 BC",
+            "infinity",
+            "838:59:59",
+            "-10:00:00",
+            "1 10:00:00",
+            "12345-01-01",
+            "2024-3-5",
+            "",
+        ] {
+            assert_eq!(excel_datetime(s), None, "{s}");
+        }
+    }
+
+    /// Date columns land as Excel dates, which the import reads back as the same values.
+    #[test]
+    fn xlsx_export_types_dates() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        d.execute(
+            "CREATE TABLE t (d DATE, ts DATETIME, ms DATETIME, tm TIME, tz DATETIME); \
+             INSERT INTO t VALUES ('2024-03-15', '2024-03-15 10:20:30', '2024-03-15 10:20:30.125', '06:30:00', '2024-03-15 10:20:30+01')",
+            10,
+        )
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-dates-{}.xlsx", std::process::id()));
+        let o = ExportOptions { format: "xlsx".into(), path: path.to_string_lossy().into_owned(), ..ExportOptions::default() };
+        export(&mut d, "SELECT * FROM t", &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        use calamine::Reader;
+        let mut book: calamine::Xlsx<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(bytes)).unwrap();
+        let range = book.worksheet_range_at(0).unwrap().unwrap();
+        let row: Vec<&calamine::Data> = range.rows().nth(1).unwrap().iter().collect();
+        assert!(row[..4].iter().all(|c| matches!(c, calamine::Data::DateTime(_))), "{row:?}");
+        let typed: Vec<crate::sheets::SheetCell> = row.iter().map(|c| crate::sheets::typed(c)).collect();
+        use crate::sheets::SheetCell;
+        assert_eq!(
+            typed,
+            [
+                SheetCell::Date { d: "2024-03-15".into() },
+                SheetCell::Date { d: "2024-03-15 10:20:30".into() },
+                SheetCell::Date { d: "2024-03-15 10:20:30.125".into() },
+                SheetCell::Time { t: "06:30:00".into() },
+                SheetCell::Text("2024-03-15 10:20:30+01".into()),
+            ]
+        );
     }
 
     /// Past Excel's row limit the export stops at the first row too many, without reading the rest.
