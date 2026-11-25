@@ -475,11 +475,12 @@ pub fn explain(cfg: &ConnConfig, error: &str) -> String {
     if has(&["no pg_hba.conf entry"]) {
         return "PostgreSQL no tiene una regla en pg_hba.conf para este equipo, usuario y base (o exige TLS): pide que la añadan o cambia el cifrado.".into();
     }
-    if has(&["28p01", "password authentication failed", "(1045)", "error 1045", "access denied for user", "login failed", "msg 18456", "-951", "-952", "sql30082n", "usuario o contraseña"]) {
-        return "Usuario o contraseña incorrectos, o el usuario no puede entrar desde este equipo. Revísalos (en SQL Server, también que el servidor admita la autenticación de SQL Server).".into();
-    }
+    // Before the credentials: SQL Server's 4060 also says "Login failed" although the login was accepted.
     if has(&["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database", "-329", "database not found"]) || (m.contains("database") && m.contains("does not exist")) {
         return "La base de datos no existe o el usuario no puede abrirla: revisa el nombre (o déjalo vacío para usar la predeterminada).".into();
+    }
+    if has(&["28p01", "password authentication failed", "(1045)", "error 1045", "access denied for user", "login failed", "msg 18456", "-951", "-952", "sql30082n", "usuario o contraseña"]) {
+        return "Usuario o contraseña incorrectos, o el usuario no puede entrar desde este equipo. Revísalos (en SQL Server, también que el servidor admita la autenticación de SQL Server).".into();
     }
     if has(&["certificate", "certificado", "ssl", "tls", "handshake"]) {
         return "Falló el cifrado: si el servidor usa un certificado autofirmado, marca «Confiar en el certificado»; si no admite TLS, cambia el cifrado a «Preferido» o «Desactivado».".into();
@@ -590,6 +591,8 @@ mod tests {
         let ms = cfg(DbKind::Mssql);
         assert!(explain(&ms, "Msg 18456, nivel 14, línea 1: Login failed for user 'sa'.").starts_with("Usuario o contraseña"));
         assert!(explain(&ms, "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login.").starts_with("La base de datos"));
+        // #240: SQL Server adds "Login failed" to a missing database, although the login was accepted.
+        assert!(explain(&ms, "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login. The login failed.").starts_with("La base de datos"));
         let my = cfg(DbKind::Mysql);
         assert!(explain(&my, "ERROR 1045 (28000): Access denied for user 'root'@'10.0.0.1'").starts_with("Usuario o contraseña"));
         let ifx = cfg(DbKind::Informix);
