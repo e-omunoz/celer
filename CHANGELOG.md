@@ -37,6 +37,8 @@ All notable changes to Celer are documented here. The format follows
 ### Fixed
 - Informix over JDBC: when «Detener» has to cut and reopen the connection, the error now says that the open
   transaction and the session's SET went with it, instead of later statements autocommitting in silence (#229).
+- A console that switched to another database no longer leaves its connection to the next session: a new console of
+  a connection with no default database (and every ODBC session) starts in the connection's own database (#233).
 - Loading the next page of a console result (the button or scrolling to the end) no longer drops the grid's
   selection: the selected cell or picked rows stay selected.
 

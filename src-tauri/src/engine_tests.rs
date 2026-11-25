@@ -2831,6 +2831,60 @@ fn odbc_silent_cut() {
     stateful_silent_cut("ODBC", &mut g, "SET application_name = 'celer-143'", "SELECT 1", &proxy);
 }
 
+/// #233: a session that moved to another database (the console's picker, USE, DATABASE) does not hand its
+/// connection to the pool: the next session with no database of its own starts where the connection starts.
+fn pool_keeps_the_default_database(engine: &str, kind: DbKind, connect: &Connector, other: &str) {
+    let key = format!("engine-test-pool-home-{engine}");
+    let mut a = guarded(kind, connect, &key, "");
+    let home = a.current_database().unwrap_or_else(|e| panic!("{engine}: {e}"));
+    if let Err(e) = a.use_database(other) {
+        eprintln!("{engine} #233: no puede cambiar de base ({e}); sin prueba");
+        return;
+    }
+    assert!(a.current_database().unwrap().trim().eq_ignore_ascii_case(other), "{engine}: en {other}");
+    drop(a);
+    let mut b = guarded(kind, connect, &key, "");
+    let now = b.current_database().unwrap();
+    eprintln!("{engine} #233: sesion nueva tras cambiar de base: {now:?} (la de la conexion: {home:?}, reutilizada: {})", b.reused);
+    assert_eq!(now.trim(), home.trim(), "{engine}: la sesion nueva empieza en la base de la conexion");
+    drop(b);
+    // Without a switch the connection is still handed on.
+    let mut c = guarded(kind, connect, &key, "");
+    assert!(c.reused, "{engine}: la conexion libre se reutiliza");
+    assert_eq!(c.current_database().unwrap().trim(), home.trim());
+    drop(c);
+    crate::guard::pool_forget(&format!("engine-test-{key}"));
+}
+
+#[test]
+fn pool_sessions_start_in_the_default_database() {
+    if let Some(mut cfg) = pg_cfg() {
+        cfg.database.clear();
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::postgres::PostgresDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+        pool_keeps_the_default_database("PostgreSQL", DbKind::Postgres, &connect, "postgres");
+    }
+    if let Some(mut cfg) = mysql_cfg() {
+        cfg.database.clear();
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::mysql::MysqlDriver::connect(cfg.clone())?) as Box<dyn Driver>) });
+        pool_keeps_the_default_database("MySQL/MariaDB", DbKind::Mysql, &connect, "shop");
+    }
+    if let Some((cfg, lib)) = informix_cfg() {
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+        pool_keeps_the_default_database("Informix DRDA", DbKind::Informix, &connect, "sysmaster");
+    }
+    if let Some((cfg, rt)) = informix_jdbc_cfg() {
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::jdbc::connect(cfg.clone(), rt.clone())?) as Box<dyn Driver>) });
+        pool_keeps_the_default_database("Informix JDBC", DbKind::Informix, &connect, "sysmaster");
+    }
+    if let (Ok(conn), Ok(lib)) = (std::env::var("CELER_ODBC_TEST"), std::env::var("CELER_ODBC_LIB")) {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Odbc;
+        cfg.odbc_conn_str = conn;
+        let connect: Connector = Arc::new(move || -> anyhow::Result<Box<dyn Driver>> { Ok(Box::new(crate::odbc_driver::OdbcDriver::connect(cfg.clone(), lib.clone())?) as Box<dyn Driver>) });
+        pool_keeps_the_default_database("ODBC", DbKind::Odbc, &connect, "postgres");
+    }
+}
+
 /// Kill and requery on PostgreSQL and MySQL/MariaDB (SQL Server and Informix: mssql_reconnects,
 /// informix_reconnects): a session the server ended while idle answers its next query on a new connection, in the
 /// same database; ended mid-use (no check before), the read is not repeated (an administrator stopped it on purpose)

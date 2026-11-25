@@ -430,6 +430,8 @@ pub struct Guarded {
     key: String,
     home: String,
     database: String,
+    /// The database the session opened in: its connection is handed on only while it is still there (#233).
+    opened: String,
     autocommit: bool,
     in_tx: bool,
     /// BEGIN sin COMMIT en un motor cuyo driver no sigue la transacción en modo automático (Informix, ODBC).
@@ -500,6 +502,7 @@ impl Guarded {
             owner: o.owner,
             key: o.key,
             home: o.database,
+            opened: database.clone(),
             database,
             autocommit: o.autocommit,
             in_tx: false,
@@ -1050,6 +1053,7 @@ impl Drop for Guarded {
             || self.temp
             || self.settings
             || self.pending_loss.is_some()
+            || !self.database.eq_ignore_ascii_case(&self.opened)
             || d.broken()
             || !d.session_state().is_empty()
         {
@@ -1567,5 +1571,27 @@ mod tests {
         assert!(pool_forget("owner-pool-test") >= 1, "disconnecting closes the free ones");
         let g = Guarded::open(connector(&server), opts(DbKind::Postgres, key)).unwrap();
         assert!(!g.reused);
+    }
+
+    /// #233: a session that moved to another database does not hand its connection on: the next session of the
+    /// connection, with no database of its own, starts in the connection's default one.
+    #[test]
+    fn a_connection_moved_to_another_database_is_not_reused() {
+        let server = Arc::new(Server::default());
+        let key = "pool-test-moved";
+        let mut g = Guarded::open(connector(&server), Opts { database: String::new(), ..opts(DbKind::Mysql, key) }).unwrap();
+        g.execute("USE shop", 10).unwrap();
+        drop(g);
+        let mut g = Guarded::open(connector(&server), Opts { database: String::new(), ..opts(DbKind::Mysql, key) }).unwrap();
+        assert!(!g.reused, "the free connection was in another database");
+        assert_eq!(g.current_database().unwrap(), "app");
+        // Back where it opened, it is handed on again.
+        g.execute("USE shop", 10).unwrap();
+        g.execute("USE app", 10).unwrap();
+        drop(g);
+        let g = Guarded::open(connector(&server), Opts { database: String::new(), ..opts(DbKind::Mysql, key) }).unwrap();
+        assert!(g.reused);
+        drop(g);
+        pool_forget("owner-pool-test-moved");
     }
 }
