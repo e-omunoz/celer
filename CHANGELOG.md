@@ -38,6 +38,8 @@ All notable changes to Celer are documented here. The format follows
 - Export to SQL INSERT: «Tabla de destino» keeps the table's quotes (`"Ventas 2024"`, `` `order` ``,
   `public."Clientes"`) and takes the query's own FROM, not one inside parentheses (`extract(year FROM fecha)`), a
   string or a comment, both in «Exportar…» and «Exportar selección…» (#238).
+- «Exportar selección…» to SQL INSERT quotes the column names with the connection's driver, as the export of the whole
+  result does: over ODBC to MySQL/MariaDB it writes `` `id` `` instead of `"id"`, which those servers rejected (#239).
 - Salida: the «ÚLTIMA» tag on the newest entry is readable in the light themes (4.6:1 or more, it was about 3:1 in
   Celer Claro, Sand and Alto contraste claro) (#237).
 - «Exportar selección…»: the dialog says «la fila seleccionada» for one row and names the columns actually written

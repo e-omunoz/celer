@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { asRaw, raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, codeOnly, exportStatement, firstKeyword, fromTableOf, formatSql, rowsLabel, isMutating, needsProductionConfirm, quoteIdentFor, splitSql, statementAt, wherePosition } from "./sql";
+import { cellText, codeOnly, exportStatement, firstKeyword, fromTableOf, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -3657,7 +3657,7 @@ export async function runExport() {
     const picked = source.rows;
     const engine = kindOf(source.connId);
     const rows = picked
-      ? await api().exportGridRows(picked.columns, picked.rows, picked.columns.map((col) => quoteIdentFor(col.name, engine)), engine, { ...options, columnOrder: null })
+      ? await api().exportGridRows(picked.columns, picked.rows, await selectionColumnNames(source.connId, source.database, picked.columns, format), engine, { ...options, columnOrder: null })
       : await api().exportQuery(source.connId, source.database, source.sql, exportId, options);
     setState({ exportRows: rows, exportRunning: false, exportOpen: false, exportId: "" });
     const target = path;
@@ -3669,6 +3669,22 @@ export async function runExport() {
     setState({ exportRunning: false, exportId: "" });
     if (cancelled) notify("Exportación cancelada", "warning");
     else notify("La exportación falló", "error", errorText(err));
+  }
+}
+
+/**
+ * Column names of a selection export's INSERT statements, quoted by the connection's driver as the export of the
+ * whole result does: over ODBC the quote character is the one the driver reports, not the UI's guess per kind (#239).
+ * Only the SQL format writes them, so the other formats need no session.
+ */
+async function selectionColumnNames(connId: string, database: string | undefined, columns: ColumnInfo[], format: string): Promise<string[]> {
+  if (format !== "sql") return columns.map((col) => col.name);
+  const opened = await openSessionFor(connId, database);
+  if (!opened) throw new Error("No se pudo conectar para nombrar las columnas de las sentencias INSERT");
+  try {
+    return await api().quoteIdents(opened.sessionId, columns.map((col) => col.name));
+  } finally {
+    void api().closeSession(opened.sessionId).catch(() => {});
   }
 }
 
