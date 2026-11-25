@@ -35,6 +35,8 @@ All notable changes to Celer are documented here. The format follows
   selection of rows that are all marked is restored (before, each row was flipped).
 
 ### Fixed
+- Salida: the «ÚLTIMA» tag on the newest entry is readable in the light themes (4.6:1 or more, it was about 3:1 in
+  Celer Claro, Sand and Alto contraste claro) (#237).
 - «Exportar selección…»: the dialog says «la fila seleccionada» for one row and names the columns actually written
   (all of the grid's, or only the selected ones) instead of «las 1 filas» with the grid's columns (#236).
 - Pending changes bar: Gib in the status bar no longer covers the right end of «Revisar y guardar» and swallows

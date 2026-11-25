@@ -854,7 +854,7 @@ kbd {
 .out-head { position: sticky; top: -6px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 14px; margin-top: -6px; background: var(--surface); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 .out-entry.latest { box-shadow: inset 2px 0 0 var(--accent); }
 .out-entry.latest.error { box-shadow: inset 2px 0 0 var(--danger); }
-.out-latest { flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+.out-latest { flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent-text); }
 .out-entry.error .out-latest { color: var(--danger); }
 .output-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px; color: var(--text-muted); text-align: center; line-height: 2; }
 .output-empty p { margin: 0; }
