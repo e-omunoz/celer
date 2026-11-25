@@ -3074,9 +3074,11 @@ fn probe_a_missing_database_on_every_engine() {
 
 /// Kill and requery on PostgreSQL and MySQL/MariaDB (SQL Server and Informix: mssql_reconnects,
 /// informix_reconnects): a session the server ended while idle answers its next query on a new connection, in the
-/// same database; ended mid-use (no check before), the read is not repeated (an administrator stopped it on purpose)
-/// and the one after works.
-fn kill_and_requery(engine: &str, kind: DbKind, connect: &Connector, database: &str, id_sql: &str, current_db: &str, kill: &mut dyn FnMut(&str)) {
+/// same database; ended while a read runs, the read is not repeated (an administrator stopped it on purpose) and the
+/// one after works. The kill comes while the statement runs, as it does when someone stops a query: a session ended
+/// between two statements leaves its FATAL/KILL notice unread, and Windows throws that away with the reset the next
+/// write gets, so the guard sees an ordinary cut there (and rightly runs the new read again).
+fn kill_and_requery(engine: &str, kind: DbKind, connect: &Connector, database: &str, id_sql: &str, current_db: &str, sleep_sql: &str, kill: &mut (dyn FnMut(&str) + Send)) {
     let mut g = guarded(kind, connect, "", database);
     let id = scalar(&mut g, id_sql);
     kill(&id);
@@ -3089,9 +3091,17 @@ fn kill_and_requery(engine: &str, kind: DbKind, connect: &Connector, database: &
     assert!(t0.elapsed() < Duration::from_secs(2), "{engine}");
     assert_eq!(scalar(&mut g, current_db).trim(), database, "{engine}: misma base");
     let id = scalar(&mut g, id_sql);
-    kill(&id);
-    let e = g.execute(id_sql, 10).unwrap_err().to_string();
+    let t0 = Instant::now();
+    let e = std::thread::scope(|s| {
+        s.spawn(|| {
+            std::thread::sleep(Duration::from_millis(700));
+            kill(&id);
+        });
+        g.execute(sleep_sql, 10).unwrap_err().to_string()
+    });
+    eprintln!("{engine} #97: sesión terminada mientras corría la sentencia → {:?}; {e}", t0.elapsed());
     assert!(e.starts_with("CONN_RESET:"), "{engine}: {e}");
+    assert!(t0.elapsed() < Duration::from_secs(5), "{engine}: la sentencia no se repite");
     assert_ne!(scalar(&mut g, id_sql), id, "{engine}: la siguiente, en otra conexión");
 }
 
@@ -3104,7 +3114,7 @@ fn pg_kill_and_requery() {
         admin.execute(&format!("SELECT pg_terminate_backend({pid})"), 10).unwrap();
         std::thread::sleep(Duration::from_millis(300));
     };
-    kill_and_requery("PostgreSQL", DbKind::Postgres, &connect, "celer", "SELECT pg_backend_pid()::text", "SELECT current_database()", &mut kill);
+    kill_and_requery("PostgreSQL", DbKind::Postgres, &connect, "celer", "SELECT pg_backend_pid()::text", "SELECT current_database()", "SELECT pg_sleep(6)", &mut kill);
 }
 
 #[test]
@@ -3116,7 +3126,7 @@ fn mysql_kill_and_requery() {
         admin.execute(&format!("KILL {id}"), 10).unwrap();
         std::thread::sleep(Duration::from_millis(300));
     };
-    kill_and_requery("MySQL/MariaDB", DbKind::Mysql, &connect, "shop", "SELECT CONNECTION_ID()", "SELECT DATABASE()", &mut kill);
+    kill_and_requery("MySQL/MariaDB", DbKind::Mysql, &connect, "shop", "SELECT CONNECTION_ID()", "SELECT DATABASE()", "SELECT SLEEP(6)", &mut kill);
 }
 
 /// Closing a console with a result still open (a big SELECT read in part) drops its ODBC statement before the
