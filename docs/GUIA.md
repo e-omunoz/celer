@@ -323,7 +323,10 @@ Doble clic en una tabla del explorador la abre.
   lógicos del servidor, del más reciente al más antiguo, con la hora del commit, la transacción (por la posición de su
   commit en el log: los cambios con la misma son de la misma transacción), el usuario y cada columna antes → después.
   *Ver la fila en este momento* enseña la fila entera tras ese cambio y *Todas las columnas* lo hace en todos. Arriba se
-  ve qué logs se leyeron. Se lee con la API CDC de Informix, así que:
+  ve qué logs se leyeron y por qué la lectura empieza donde empieza: en el log más antiguo que queda en disco (y solo
+  entonces dice «Lo anterior ya no está en los logs»), después de los logs que se llenaron antes de crearse la tabla
+  (siguen en disco, pero no tienen cambios suyos) o, tras una recuperación rápida de Informix, después de los que se
+  llenaron antes de la hora de creación que esta reescribió. Se lee con la API CDC de Informix, así que:
   - Hace falta la conexión por **JDBC**: por DRDA o por el Client SDK el diálogo dice «No se puede reconstruir» y por
     qué. También hacen falta una base de datos **con log**, una tabla que no sea RAW y con **clave primaria**, la base
     `syscdcv1` (un administrador la crea una vez con `dbaccess - $INFORMIXDIR/etc/syscdcv1.sql`) y un usuario que

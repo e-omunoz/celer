@@ -3273,6 +3273,92 @@ fn mid_result_error_odbc() {
     assert_mid_result_error("ODBC (later page)", DbKind::Odbc, &mut d, "SELECT 10 / (n - 7001) AS q FROM generate_series(1, 8000) n", "SELECT 1");
 }
 
+// ───────────────────────────────────────────────────────────────── Excel export of dates (#224)
+
+/// A DATE, a timestamp and a time of day exported to .xlsx land as Excel dates (not text), which the .xlsx import
+/// reads back as the same values.
+fn assert_xlsx_dates(engine: &str, kind: DbKind, d: &mut dyn Driver, sql: &str) {
+    use crate::sheets::SheetCell;
+    let path = std::env::temp_dir().join(format!("celer-xlsx-dates-{}-{}.xlsx", engine.replace(['/', ' '], "_"), std::process::id()));
+    let o = crate::export::ExportOptions { format: "xlsx".into(), path: path.to_string_lossy().into(), ..Default::default() };
+    crate::export::export(d, sql, &o, kind, &|_| {}, &|| false).unwrap_or_else(|e| panic!("{engine}: {e}"));
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    use calamine::Reader;
+    let mut book: calamine::Xlsx<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(bytes)).unwrap();
+    let range = book.worksheet_range_at(0).unwrap().unwrap();
+    let row: Vec<&calamine::Data> = range.rows().nth(1).unwrap().iter().collect();
+    assert!(row.iter().all(|c| matches!(c, calamine::Data::DateTime(_))), "{engine}: {row:?}");
+    let typed: Vec<SheetCell> = row.iter().map(|c| crate::sheets::typed(c)).collect();
+    assert_eq!(
+        typed,
+        [SheetCell::Date { d: "2024-03-15".into() }, SheetCell::Date { d: "2024-03-15 10:20:30".into() }, SheetCell::Time { t: "06:30:00".into() }],
+        "{engine}"
+    );
+    eprintln!("{engine}: fechas de Excel {typed:?}");
+}
+
+#[test]
+fn xlsx_dates_postgres() {
+    let Some(cfg) = pg_cfg() else { return };
+    let mut d = crate::postgres::PostgresDriver::connect(cfg).expect("conexión PostgreSQL");
+    assert_xlsx_dates("PostgreSQL", DbKind::Postgres, &mut d, "SELECT DATE '2024-03-15' AS d, TIMESTAMP '2024-03-15 10:20:30' AS ts, TIME '06:30:00' AS tm");
+}
+
+/// MySQL, and MariaDB in the second run of dev/wsl/engines.sh (it runs the tests named "mysql").
+#[test]
+fn xlsx_dates_mysql() {
+    let Some(cfg) = mysql_cfg() else { return };
+    let mut d = crate::mysql::MysqlDriver::connect(cfg).expect("conexión MySQL / MariaDB");
+    let engine = if d.server_info().unwrap_or_default().contains("MariaDB") { "MariaDB" } else { "MySQL" };
+    assert_xlsx_dates(engine, DbKind::Mysql, &mut d, "SELECT CAST('2024-03-15' AS DATE) AS d, CAST('2024-03-15 10:20:30' AS DATETIME) AS ts, CAST('06:30:00' AS TIME) AS tm");
+}
+
+#[test]
+fn xlsx_dates_mssql() {
+    let Some(mut d) = mssql("tempdb") else { return };
+    assert_xlsx_dates(
+        "SQL Server",
+        DbKind::Mssql,
+        &mut d,
+        "SELECT CAST('2024-03-15' AS date) AS d, CAST('2024-03-15T10:20:30' AS datetime2(0)) AS ts, CAST('06:30:00' AS time(0)) AS tm",
+    );
+}
+
+const INFORMIX_XLSX_DATES: &str = "SELECT MDY(3, 15, 2024) AS d, DATETIME(2024-03-15 10:20:30) YEAR TO SECOND AS ts, \
+    DATETIME(06:30:00) HOUR TO SECOND AS tm FROM systables WHERE tabid = 1";
+
+#[test]
+fn xlsx_dates_informix() {
+    let Some((cfg, lib)) = informix_cfg() else { return };
+    let mut d = drda_connect(lib)(cfg).expect("conexión Informix DRDA");
+    assert_xlsx_dates("Informix DRDA", DbKind::Informix, d.as_mut(), INFORMIX_XLSX_DATES);
+}
+
+#[test]
+fn xlsx_dates_informix_jdbc() {
+    let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
+    let mut d = jdbc_connect(rt)(cfg).expect("conexión Informix JDBC");
+    assert_xlsx_dates("Informix JDBC", DbKind::Informix, d.as_mut(), INFORMIX_XLSX_DATES);
+}
+
+#[test]
+fn xlsx_dates_sqlite() {
+    let cfg = ConnConfig { kind: DbKind::Sqlite, file_path: ":memory:".into(), ..Default::default() };
+    let mut d = crate::sqlite::SqliteDriver::connect(cfg).expect("SQLite en memoria");
+    d.execute("CREATE TABLE t (d DATE, ts DATETIME, tm TIME); INSERT INTO t VALUES ('2024-03-15', '2024-03-15 10:20:30', '06:30:00')", 10).unwrap();
+    assert_xlsx_dates("SQLite", DbKind::Sqlite, &mut d, "SELECT * FROM t");
+}
+
+/// Generic ODBC (PostgreSQL through psqlODBC on the WSL engines).
+#[test]
+fn xlsx_dates_odbc() {
+    let Ok(s) = std::env::var("CELER_ODBC_TEST") else { return };
+    let cfg = ConnConfig { kind: DbKind::Odbc, odbc_conn_str: s, ..Default::default() };
+    let mut d = crate::odbc_driver::OdbcDriver::connect(cfg, crate::odbc::system_manager().into()).expect("conexión ODBC");
+    assert_xlsx_dates("ODBC", DbKind::Odbc, &mut d, "SELECT DATE '2024-03-15' AS d, TIMESTAMP '2024-03-15 10:20:30' AS ts, TIME '06:30:00' AS tm");
+}
+
 // ───────────────────────────────────────────────────────────────── Informix types over DRDA and JDBC (#160)
 
 /// What each Informix driver returns for the types where DRDA and JDBC differ (documented in docs/DRIVERS.md,
@@ -3312,6 +3398,59 @@ fn informix_switch_log(admin: &mut dyn Driver) {
         || std::env::var("CELER_INFORMIX_CONTAINER")
             .is_ok_and(|c| Command::new("docker").args(["exec", c.as_str(), "bash", "-lc", "onmode -l"]).status().is_ok_and(|s| s.success()));
     assert!(switched, "no se pudo cambiar de log lógico (sysadmin:task ni onmode en el contenedor)");
+}
+
+/// The server sessions of the connections this run opened for history reads (#216): once their read has returned,
+/// none of them should still hold a CDC session.
+static OWN_CDC_SIDS: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+
+/// A connection for a history read, its server session noted (see `informix_end_abandoned_cdc`).
+fn own_cdc_conn(c: crate::jdbc::JdbcConn) -> crate::jdbc::JdbcConn {
+    use crate::odbc_driver::Link;
+    if let Some(sid) = c.query_all("SELECT DBINFO('sessionid') FROM systables WHERE tabid = 1").ok().and_then(|r| r.first().and_then(|r| r.first()).map(txt)) {
+        if let Ok(sid) = sid.trim().parse() {
+            OWN_CDC_SIDS.lock().unwrap().push(sid);
+        }
+    }
+    c
+}
+
+/// A session older than this that still holds a CDC session is abandoned: no read of the app lasts that long
+/// (rowhistory's MAX_READ, 120 s, then the close and full row logging off), and each read opens its own connection.
+const CDC_ABANDONED_AFTER: i64 = 240;
+
+/// The SQL sessions that hold a CDC session on the server (`onstat -g cdc` in the container); empty without one.
+fn informix_cdc_holders() -> Vec<i64> {
+    let Ok(container) = std::env::var("CELER_INFORMIX_CONTAINER") else { return Vec::new() };
+    let Ok(out) = Command::new("docker").args(["exec", container.as_str(), "bash", "-lc", "onstat -g cdc"]).output() else { return Vec::new() };
+    String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.trim().strip_prefix("Associated SQL session id:")).filter_map(|v| v.trim().parse().ok()).collect()
+}
+
+/// Ends, as a DBA would (`onmode -z`), the sessions left holding a CDC session by reads whose close the server never
+/// answered: the server's CDC reader stays stuck behind them, and a log switch alone does not move it (#216). Only
+/// this run's own read connections, once their read returned, and sessions of anyone older than any read lasts
+/// (`CDC_ABANDONED_AFTER`): a read still running elsewhere (an app slot, another run) is never touched. What it ended.
+fn informix_end_abandoned_cdc(admin: &mut dyn Driver) -> Vec<i64> {
+    let holders = informix_cdc_holders();
+    if holders.is_empty() {
+        return Vec::new();
+    }
+    let list = holders.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ");
+    let old: Vec<i64> = try_rows(admin, &format!("SELECT sid FROM sysmaster:syssessions WHERE sid IN ({list}) AND connected < DBINFO('utc_current') - {CDC_ABANDONED_AFTER}"))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| r.first().map(txt).and_then(|v| v.trim().parse().ok()))
+        .collect();
+    let own = OWN_CDC_SIDS.lock().unwrap().clone();
+    let ended: Vec<i64> = holders
+        .into_iter()
+        .filter(|sid| own.contains(sid) || old.contains(sid))
+        .filter(|sid| admin.execute(&format!("EXECUTE FUNCTION task('onmode', 'z', '{sid}')"), 10).is_ok())
+        .collect();
+    if !ended.is_empty() {
+        println!("Informix: sesiones que seguían con una sesión CDC abandonada, terminadas con onmode -z: {ended:?}");
+    }
+    ended
 }
 
 /// Restarts the Informix container and waits for it to answer again.
@@ -3365,6 +3504,12 @@ fn informix_wait_startup_tasks(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) {
 /// Whether the server's CDC reader reads a short history whole: one row inserted into a new table, in a log of its own,
 /// read back (with full row logging on only for the read) as one insert and nothing partial. Err: what came back.
 fn informix_cdc_reader_works(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) -> Result<(), String> {
+    informix_cdc_short_read(cfg, rt, "rh_probe", true)
+}
+
+/// The probe's read; without `switch_after` its changes stay in the current log, so the read meets that log's tail and
+/// leaves the server's reader stopped there, as an earlier read can (CELER_INFORMIX_STALE_READER, #216).
+fn informix_cdc_short_read(cfg: &ConnConfig, rt: &crate::jdbc::Runtime, table: &str, switch_after: bool) -> Result<(), String> {
     use crate::rowhistory::{self, KeyPart, Request};
     let mut d = jdbc_connect(rt.clone())(cfg.clone()).map_err(|e| e.to_string())?;
     let mut admin_cfg = cfg.clone();
@@ -3374,32 +3519,112 @@ fn informix_cdc_reader_works(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) -> Res
     if !try_rows(&mut *d, "SELECT 1 FROM sysmaster:sysdatabases WHERE name = 'syscdcv1'").is_ok_and(|r| !r.is_empty()) {
         return Ok(()); // nothing to read with: the test says so itself
     }
-    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.rh_probe', 0)", cfg.user), 10);
-    d.execute("DROP TABLE IF EXISTS rh_probe", 10).map_err(|e| e.to_string())?;
+    let _ = d.execute(&format!("EXECUTE FUNCTION syscdcv1:informix.cdc_set_fullrowlogging('{db}:{}.{table}', 0)", cfg.user), 10);
+    d.execute(&format!("DROP TABLE IF EXISTS {table}"), 10).map_err(|e| e.to_string())?;
     informix_switch_log(&mut admin);
-    d.execute("CREATE TABLE rh_probe (id INT PRIMARY KEY, v VARCHAR(10))", 10).map_err(|e| e.to_string())?;
-    d.execute("INSERT INTO rh_probe VALUES (1, 'a')", 10).map_err(|e| e.to_string())?;
-    informix_switch_log(&mut admin);
-    let conn = crate::jdbc::JdbcConn::connect(cfg, rt.clone(), crate::jdbc::informix_params).map_err(|e| e.to_string())?;
+    // The log the probe's changes go into, for the failure message.
+    let log = try_rows(&mut *d, "SELECT MAX(uniqid) FROM sysmaster:syslogfil")
+        .ok()
+        .and_then(|r| r.first().and_then(|r| r.first()).map(txt))
+        .map_or_else(|| "?".to_string(), |v| v.trim().to_string());
+    d.execute(&format!("CREATE TABLE {table} (id INT PRIMARY KEY, v VARCHAR(10))"), 10).map_err(|e| e.to_string())?;
+    d.execute(&format!("INSERT INTO {table} VALUES (1, 'a')"), 10).map_err(|e| e.to_string())?;
+    if switch_after {
+        informix_switch_log(&mut admin);
+    }
+    let conn = own_cdc_conn(crate::jdbc::JdbcConn::connect(cfg, rt.clone(), crate::jdbc::informix_params).map_err(|e| e.to_string())?);
     let (fresh_cfg, fresh_rt) = (cfg.clone(), rt.clone());
-    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params).map(own_cdc_conn);
     let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
     let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
     let req = Request {
         database: db,
         owner: String::new(),
-        table: "rh_probe".into(),
+        table: table.into(),
         key: vec![KeyPart { column: "id".into(), value: "1".into() }],
         enable_full_row_logging: true,
     };
     let h = rowhistory::run(&conn, &req, false, &cfg.user, &std::sync::atomic::AtomicBool::new(false), &env).map_err(|e| e.to_string())?;
     drop(conn);
-    let _ = d.execute("DROP TABLE rh_probe", 10);
+    let _ = d.execute(&format!("DROP TABLE {table}"), 10);
     let ops: Vec<&str> = h.events.iter().map(|e| e.op).collect();
-    if h.status == "ok" && ops == ["insert"] && h.partial.is_empty() && !h.stalled {
+    // The insert read whole, and at most the newest part of the current log (after it) not handed over yet: the
+    // reader works; the history reads below wait for that part themselves.
+    let tail_only = h.partial.iter().all(|p| p.contains("todavía no están disponibles"));
+    if h.status == "ok" && ops == ["insert"] && tail_only && !h.stalled {
         Ok(())
     } else {
-        Err(format!("{} {ops:?} {:?}", h.status, h.partial))
+        Err(format!("log {log}: {} {ops:?} {:?}", h.status, h.partial))
+    }
+}
+
+/// Rounds of the reader probe on a shared server before the test gives up (each one in logs of its own), and the pause
+/// before the next one, longer each time: a reader held by another read (an app slot, another run) gets time to let go.
+const READER_PROBE_ROUNDS: usize = 5;
+const READER_PROBE_PAUSE: Duration = Duration::from_secs(15);
+
+/// Makes sure the server's CDC reader reads a short history whole before the history test relies on it (#216). A
+/// reader left at an earlier read's stop point is moved on as a DBA would: a log switch, and the probe again in a log
+/// of its own, a bounded number of times. The server is restarted only when the run owns it (CELER_INFORMIX_KILLABLE=1
+/// with CELER_INFORMIX_CONTAINER, CI's own container): never the shared WSL engines, where app slots and other runs use
+/// it. A reader that still fails ends the test with every probe's log and result, never a silent pass.
+fn informix_reader_ready(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) {
+    let killable = std::env::var("CELER_INFORMIX_KILLABLE").as_deref() == Ok("1");
+    let container = std::env::var("CELER_INFORMIX_CONTAINER").ok().filter(|_| killable);
+    // What an earlier run (or an app read) abandoned is ended first: the reader would stay stuck behind it.
+    {
+        let mut admin_cfg = cfg.clone();
+        admin_cfg.database = "sysadmin".into();
+        if let Ok(mut admin) = crate::jdbc::connect(admin_cfg, rt.clone()) {
+            informix_end_abandoned_cdc(&mut admin);
+        }
+    }
+    if std::env::var("CELER_INFORMIX_STALE_READER").as_deref() == Ok("1") {
+        // A run that checks this recovery: the reader is left at the current log's tail first.
+        let left = informix_cdc_short_read(cfg, rt, "rh_stale", false);
+        println!("Informix: lector CDC dejado al final del log actual a propósito ({left:?})");
+    }
+    let mut tried = Vec::new();
+    for round in 1..=READER_PROBE_ROUNDS {
+        match informix_cdc_reader_works(cfg, rt) {
+            Ok(()) => {
+                if round > 1 {
+                    println!("Informix: el lector CDC lee entero tras {} cambios de log ({tried:?})", round - 1);
+                }
+                return;
+            }
+            Err(why) => {
+                println!("Informix: el lector CDC no lee entero un historial corto ({why}); se cambia de log y se prueba otra vez");
+                tried.push(why);
+                let mut admin_cfg = cfg.clone();
+                admin_cfg.database = "sysadmin".into();
+                if let Ok(mut admin) = crate::jdbc::connect(admin_cfg, rt.clone()) {
+                    // The reader stays stuck behind a session that still holds a CDC session nobody reads (#216).
+                    let ended = informix_end_abandoned_cdc(&mut admin);
+                    if !ended.is_empty() {
+                        tried.push(format!("sesiones CDC abandonadas terminadas: {ended:?}"));
+                    }
+                    informix_switch_log(&mut admin);
+                }
+                if round < READER_PROBE_ROUNDS {
+                    std::thread::sleep(READER_PROBE_PAUSE * round as u32);
+                }
+            }
+        }
+    }
+    let Some(container) = container else {
+        panic!(
+            "el lector CDC del servidor no lee entero un historial corto tras {READER_PROBE_ROUNDS} intentos, cada uno en un log nuevo: {tried:?}; \
+             sesiones SQL con una sesión CDC ahora: {:?}. El servidor es compartido: no se reinicia (solo con CELER_INFORMIX_KILLABLE=1 y CELER_INFORMIX_CONTAINER)",
+            informix_cdc_holders()
+        );
+    };
+    println!("Informix: el lector CDC sigue sin leer entero ({tried:?}); se reinicia {container}, que es de esta ejecución");
+    informix_restart(&container);
+    informix_wait_startup_tasks(cfg, rt);
+    if let Err(why) = informix_cdc_reader_works(cfg, rt) {
+        tried.push(why);
+        panic!("el lector CDC del servidor no lee entero un historial corto ni tras reiniciar {container}: {tried:?}");
     }
 }
 
@@ -3411,20 +3636,15 @@ fn informix_jdbc_row_history() {
     use crate::rowhistory::{self, KeyPart, Request};
     use std::sync::atomic::AtomicBool;
     let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
-    let _guard = watchdog("historial de la fila", 540);
+    // The probe's rounds on a busy shared server (up to about seven minutes) and the test itself.
+    let _guard = watchdog("historial de la fila", 1020);
     // The server's CDC reader keeps what earlier reads left (it stops for good where a read met the tail of a log, and
     // after errors on the records of dropped tables: measured), which the app reports as partial. A test needs a
-    // reader that works, and the first read after a restart is reliable: a short history is read first, and only a
-    // reader that does not give it whole has the server restarted, since others may be using it (#206). Either way the
+    // reader that works: a short history is read first, and a reader that does not give it whole is moved on with log
+    // switches; only a server the run owns is ever restarted (#206, #216, `informix_reader_ready`). Either way the
     // server's own start-up tasks go first (see `informix_wait_startup_tasks`).
     informix_wait_startup_tasks(&cfg, &rt);
-    if let Ok(container) = std::env::var("CELER_INFORMIX_CONTAINER") {
-        if let Err(why) = informix_cdc_reader_works(&cfg, &rt) {
-            println!("El lector CDC del servidor no lee entero un historial corto ({why}): se reinicia {container}");
-            informix_restart(&container);
-            informix_wait_startup_tasks(&cfg, &rt);
-        }
-    }
+    informix_reader_ready(&cfg, &rt);
     let mut d = jdbc_connect(rt.clone())(cfg.clone()).expect("conexión Informix por JDBC");
     let db = d.current_database().unwrap();
     // A run cut short (the watchdog) may have left full row logging on, which forbids the DROP.
@@ -3434,8 +3654,8 @@ fn informix_jdbc_row_history() {
     // (after), as a DBA would do both.
     let mut admin_cfg = cfg.clone();
     admin_cfg.database = "sysadmin".into();
-    let mut admin = crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC");
-    let mut switch_log = || informix_switch_log(&mut admin);
+    let admin = std::cell::RefCell::new(crate::jdbc::connect(admin_cfg, rt.clone()).expect("conexión a sysadmin por JDBC"));
+    let switch_log = || informix_switch_log(&mut *admin.borrow_mut());
     // Dropping a table and creating another reuses its partition number, and the CDC API fails on the log records of
     // the dropped one (-83800) when a read covers them, which leaves its server-side reader stuck for the next run
     // (measured). So the old table is dropped, the log switched, and only then the new one created: the read starts
@@ -3479,9 +3699,9 @@ fn informix_jdbc_row_history() {
     let rt3 = rt.clone();
     // Each read opens its own connection, as the app's do (rowhistory::read): a CDC session the server never closed
     // (a cdc_deactivatesess it did not answer) stays on its connection, and another session there is refused (-83715).
-    let open = || crate::jdbc::JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).expect("conexión para el historial");
+    let open = || own_cdc_conn(crate::jdbc::JdbcConn::connect(&cfg, rt.clone(), crate::jdbc::informix_params).expect("conexión para el historial"));
     let stop = AtomicBool::new(false);
-    let request = |database: &str, table: &str, id: Option<&str>, enable: bool| Request {
+    let request =|database: &str, table: &str, id: Option<&str>, enable: bool| Request {
         database: database.into(),
         owner: String::new(),
         table: table.into(),
@@ -3489,16 +3709,43 @@ fn informix_jdbc_row_history() {
         enable_full_row_logging: enable,
     };
     let (fresh_cfg, fresh_rt) = (cfg.clone(), rt2);
-    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params);
+    let fresh = move || crate::jdbc::JdbcConn::connect(&fresh_cfg, fresh_rt.clone(), crate::jdbc::informix_params).map(own_cdc_conn);
     let endpoint = format!("{}:{}", cfg.host, cfg.port.unwrap_or(9088)).to_lowercase();
     let env = rowhistory::Env { ledger: None, fresh: &fresh, endpoint: &endpoint };
     let run = |req: &Request, read_only: bool| rowhistory::run(&open(), req, read_only, &cfg.user, &stop, &env);
     let ask = |table: &str, id: &str, enable: bool| {
-        let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
-        // The server's CDC reader stuck is a failure of this test only, said as such, not a hang that kills the suite.
-        assert!(!h.stalled, "el lector CDC del servidor no responde (historial de {table} {id}): {:?}", h.partial);
+        // A reader that stops answering is moved on as a DBA would, with a log switch, and the read asked again (#216):
+        // the shared server is never restarted. Still stuck after that, it is a failure of this test only, said as
+        // such with every attempt, not a hang that kills the suite.
+        let mut tried = Vec::new();
+        let h = loop {
+            let h = run(&request(&db, table, Some(id), enable), false).unwrap_or_else(|e| panic!("historial de {table} {id}: {e}"));
+            if !h.stalled {
+                break h;
+            }
+            tried.push(h.partial);
+            assert!(tried.len() < READER_PROBE_ROUNDS, "el lector CDC del servidor no responde (historial de {table} {id}), ni tras cambiar de log: {tried:?}");
+            println!("Informix: el lector CDC no responde (historial de {table} {id}: {:?}); se cambia de log y se lee otra vez", tried.last());
+            informix_end_abandoned_cdc(&mut *admin.borrow_mut());
+            switch_log();
+            std::thread::sleep(READER_PROBE_PAUSE * tried.len() as u32);
+        };
         // A history that cannot be read at all says why, and that is not what these reads expect.
         assert!(h.status != "unavailable" || table == "rh_raw" || h.reason.contains("syscdcv1"), "historial de {table} {id}: {h:?}");
+        // Full row logging the server would not let the read turn off (its capture still winding down on a busy
+        // reader) is said as left on, with the command: run as a DBA would, so the next read starts from the state it
+        // expects. Not for the stopped read, whose own turning off is what is checked (#216).
+        if let (Some(left), false) = (&h.left_on, stop.load(std::sync::atomic::Ordering::Relaxed)) {
+            println!("Informix: full row logging quedó activado tras el historial de {table} {id} ({}); se desactiva: {}", left.reason, left.command);
+            let off = (0..15).any(|_| {
+                let ok = try_rows(&mut *admin.borrow_mut(), &left.command).is_ok_and(|r| r.first().and_then(|r| r.first()).map(txt).is_some_and(|v| v.trim() == "0"));
+                if !ok {
+                    std::thread::sleep(Duration::from_secs(4));
+                }
+                ok
+            });
+            assert!(off, "full row logging sigue activado en {table} tras un minuto: {left:?}");
+        }
         h
     };
     let raw = ask("rh_raw", "1", true);
@@ -3521,8 +3768,25 @@ fn informix_jdbc_row_history() {
     let ro = run(&request(&db, "rh_t", Some(&id1), true), true).unwrap();
     assert!(ro.status == "unavailable" && ro.reason.contains("solo lectura"), "{ro:?}");
 
+    // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
+    // newest part of the log ready yet (measured; the history then says so and is partial). A DBA's log switch moves
+    // past both: done, and the read asked again, a few times (#206). The first full read too: a stop at the current
+    // log's tail is not the wall of another log the assertions below accept (#216).
+    let ask_whole = |table: &str, id: &str| {
+        let mut h = ask(table, id, true);
+        for _ in 0..3 {
+            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
+                break;
+            }
+            println!("Informix: el lector CDC se detuvo antes del final (historial de {table} {id}: {:?}); se cambia de log y se lee otra vez", h.partial);
+            switch_log();
+            h = ask(table, id, true);
+        }
+        h
+    };
+
     let t0 = Instant::now();
-    let h = ask("rh_t", &id1, true);
+    let h = ask_whole("rh_t", &id1);
     println!(
         "Historial de la fila {} en {:?}: {:?}\n  rango {:?}\n  parcial {:?}\n  notas {:?}",
         id1,
@@ -3547,13 +3811,25 @@ fn informix_jdbc_row_history() {
     // reused slot).
     let txs: std::collections::HashSet<_> = h.events.iter().map(|e| e.tx.as_str()).collect();
     assert_eq!(txs.len(), 4, "{:?}", h.events.iter().map(|e| &e.tx).collect::<Vec<_>>());
-    assert!(!h.cut_short);
+    // Cut short only by walls the shared server's reader left in logs without these changes (said as such, #216).
+    let walled = |h: &rowhistory::History| h.cut_short && !h.partial.is_empty() && h.partial.iter().all(|p| p.contains("no entrega el log"));
+    assert!(!h.cut_short || walled(&h), "{:?}", h.partial);
     // Inserted inside the logs on disk: complete, except for logs the server's reader does not give past a point
     // (earlier runs read them at their tail), which are said and are not the logs with these changes.
     assert!(h.partial.iter().all(|p| p.contains("no entrega el log")), "{:?}", h.partial);
     assert!(h.notes.iter().any(|n| n.contains("full row logging")), "{:?}", h.notes);
     let range = h.range.as_ref().expect("the log range");
     assert!(range.first_log > 0 && range.current_log >= range.first_log, "{range:?}");
+    // Why it starts there (#217): a table created after logs still on disk names the last one filled before it.
+    assert!(range.oldest_log <= range.first_log, "{range:?}");
+    match range.start_reason {
+        rowhistory::StartReason::CreatedAfter => {
+            assert!(range.created_after_log.is_some_and(|m| m >= range.oldest_log && m < range.first_log), "{range:?}");
+            assert!(h.notes.iter().any(|n| n.contains("La tabla se creó después de llenarse el log")), "{:?}", h.notes);
+        }
+        rowhistory::StartReason::OldestOnDisk => assert!(range.created_after_log.is_none(), "{range:?}"),
+        rowhistory::StartReason::CreationReplayed => panic!("no fast recovery here: {range:?}"),
+    }
     // Full row logging is off again: the next read asks for it once more.
     assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging");
 
@@ -3590,20 +3866,6 @@ fn informix_jdbc_row_history() {
         assert!(!ledger.exists(), "and forgets it");
     }
 
-    // The server's reader may stop at the tail of the current log after an earlier read met it there, or not have the
-    // newest part of the log ready yet (measured; the history then says so and is partial). A DBA's log switch moves
-    // past both: done, and the read asked again, a few times (#206).
-    let mut ask_whole = |table: &str, id: &str| {
-        let mut h = ask(table, id, true);
-        for _ in 0..3 {
-            if !h.partial.iter().any(|p| p.contains("se detuvo en la posición") || p.contains("todavía no están disponibles")) {
-                break;
-            }
-            switch_log();
-            h = ask(table, id, true);
-        }
-        h
-    };
     let gone = ask_whole("rh_t", &id2);
     assert_eq!(gone.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "delete"], "{gone:?}");
     assert_eq!(gone.events[1].before, Some(s(&[&id2, "20", "2.50", "NULL", "beta"])));
@@ -3615,7 +3877,7 @@ fn informix_jdbc_row_history() {
     // A row whose history is complete (with a DATETIME and a VARCHAR) is not flagged.
     let whole = ask_whole("rh_t", &id3);
     assert!(whole.events.len() == 1 && whole.partial.iter().all(|p| p.contains("no entrega el log")), "{whole:?}");
-    assert!(!whole.cut_short, "{whole:?}");
+    assert!(!whole.cut_short || walled(&whole), "{whole:?}");
     let moved = ask_whole("rh_t", &id4);
     assert_eq!(moved.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"], "{moved:?}");
     assert!(moved.partial.iter().all(|p| p.contains("no entrega el log")), "the key moved away is not a missing change: {:?}", moved.partial);
@@ -3625,16 +3887,18 @@ fn informix_jdbc_row_history() {
     // A key with no change in the logs: nothing invented, and said to be partial.
     let none = ask_whole("rh_t", "99");
     assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");
-    assert!(!none.cut_short && none.partial.iter().any(|p| p.contains("Ningún cambio")), "{none:?}");
+    // Behind a wall it cannot say there was none: cut short, and no «Ningún cambio».
+    assert!(if walled(&none) { !none.partial.iter().any(|p| p.contains("Ningún cambio")) } else { !none.cut_short && none.partial.iter().any(|p| p.contains("Ningún cambio")) }, "{none:?}");
     // A read stopped before it read anything: partial, cut short, and it claims nothing about the row; full row
-    // logging goes off again all the same.
+    // logging goes off again all the same. It is off before it (`ask` saw to that).
+    assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "full row logging is off before the stopped read");
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let stopped = ask("rh_t", &id1, true);
     stop.store(false, std::sync::atomic::Ordering::Relaxed);
     assert!(stopped.status == "ok" && stopped.cut_short && stopped.events.is_empty(), "{stopped:?}");
     assert!(stopped.partial.iter().any(|p| p.contains("Lectura cancelada")), "{:?}", stopped.partial);
     assert!(!stopped.partial.iter().any(|p| p.contains("Ningún cambio")), "{:?}", stopped.partial);
-    assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "full row logging is off again after a stopped read");
+    assert_eq!(ask("rh_t", &id1, false).status, "needsFullRowLogging", "full row logging is off again after a stopped read: {:?}", stopped.left_on);
 
     // Two reads of one table at once (two windows, #205): the second does not take the first's ledger entry for a
     // left-over one, neither turns full row logging off under the other, and it is off once both have ended.
@@ -3797,6 +4061,13 @@ fn informix_jdbc_row_history_after_fast_recovery() {
         assert!(h.partial.iter().any(|p| p.contains("al recuperarse de una parada brusca") && p.contains("no se muestran")), "{:?}", h.partial);
         assert!(h.partial.iter().all(|p| p.contains("parada brusca") || p.contains("El servidor no lee el log en") || p.contains("no entrega el log")), "{:?}", h.partial);
         assert!(!h.notes.iter().chain(&h.partial).any(|n| n.contains("Se descartaron") || n.contains("tabla borrada") || n.contains("Ningún cambio") || n.contains("ya existía")), "{h:?}");
+        // The range line's reason (#217): logs on disk skipped because of the rewritten creation time are said so.
+        let range = h.range.as_ref().expect("the log range");
+        println!("Historial tras recuperación rápida: rango {range:?}");
+        assert_ne!(range.start_reason, rowhistory::StartReason::CreatedAfter, "{range:?}");
+        if range.start_reason == rowhistory::StartReason::CreationReplayed {
+            assert!(range.oldest_log < range.first_log && h.notes.iter().any(|n| n.contains("recuperación rápida")), "{range:?} {:?}", h.notes);
+        }
     }
     assert!(recovered.events.is_empty(), "{recovered:?}");
     assert_eq!(later.events.iter().map(|e| e.op).collect::<Vec<_>>(), ["update"], "{later:?}");

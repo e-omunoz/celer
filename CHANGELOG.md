@@ -34,6 +34,11 @@ All notable changes to Celer are documented here. The format follows
   log in the order shown. The 200-entry cap still drops the oldest.
 - Supr on a selection that mixes rows already marked for deletion with unmarked ones now marks them all; only a
   selection of rows that are all marked is restored (before, each row was flipped).
+- **Dependencies** (#224): the Dependabot updates of November land together: `actions/setup-java` 6, the npm group
+  (13 packages, `@anthropic-ai/sdk` 1.3 among them) and the cargo group (22 crates: `rust_xlsxwriter` 0.102, `mysql`
+  28, `rusqlite` 0.41, `zip` 9, `calamine` 0.37, `russh` 0.65, `base64` 0.23, `getrandom` 0.4, `parking_lot` 0.13,
+  `windows-sys` 0.61…). An Excel export that cannot create its temporary file now fails with the reason (the crate
+  used to panic there).
 
 ### Fixed
 - MCP: protected columns no longer reach an assistant through rows the server serialises: SQL Server's `FOR JSON` /
@@ -72,6 +77,20 @@ All notable changes to Celer are documented here. The format follows
   result, instead of writing the grid's cut `0x…` preview (text in the binary column of an SQL INSERT, or a cut value
   in CSV/JSON). Exporting a query on SQL Server or over ODBC now writes binary values over 4 KB
   whole instead of cut to the first 4 KB (#230).
+- **Excel export writes dates as dates** (#224): DATE, DATETIME/TIMESTAMP and TIME columns land as Excel dates with a
+  `yyyy-mm-dd` / `yyyy-mm-dd hh:mm:ss` / `hh:mm:ss` format (milliseconds kept), so they sort, filter and compute in
+  Excel; a value Excel cannot hold exactly (a time zone, more than milliseconds, before March 1900) stays text. Importing
+  such a sheet keeps the milliseconds.
+- **Row history: the range line says why the read starts where it does** (#217): «Lo anterior ya no está en los logs»
+  only when the read starts at the oldest log on disk; a table created after log M says the read starts after it and
+  that the older logs are still on disk without its changes, and after Informix's fast recovery the line says the
+  creation time was rewritten. The core reports the reason as data (`startReason`); the texts of a read cut short are
+  unchanged.
+- **Engine tests no longer restart the shared Informix server** (#216): when the CDC reader probe of
+  `informix_jdbc_row_history` does not read a short history whole, the test switches the logical log and retries (five
+  rounds, with a growing pause), then fails naming each probe's log and result; a history read whose reader stopped at
+  the current log's tail is asked again after a log switch too. Only a container the run owns (`CELER_INFORMIX_KILLABLE=1`
+  with `CELER_INFORMIX_CONTAINER`, as in `engines.yml`) may still be restarted.
 
 ## [2.4.0] - 2026-10-14
 

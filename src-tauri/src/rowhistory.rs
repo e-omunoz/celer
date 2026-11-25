@@ -116,6 +116,36 @@ pub struct LogRange {
     pub read_until: String,
     /// When the read was done (Unix seconds).
     pub read_at: i64,
+    /// Why the read starts at `first_log` (see `start_reason`), which the dialog words.
+    pub start_reason: StartReason,
+    /// The oldest log still on disk (`first_log` or older).
+    pub oldest_log: i64,
+    /// For `StartReason::CreatedAfter`: the last log that filled before the table was created.
+    pub created_after_log: Option<i64>,
+}
+
+/// Why a read starts at the log it starts at.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StartReason {
+    /// At the oldest log on disk (or the first one not reused while the read began): anything older is gone.
+    #[default]
+    OldestOnDisk,
+    /// After older logs that are still on disk: they filled before the table was created, so they hold none of its changes.
+    CreatedAfter,
+    /// After older logs on disk that filled before the creation time Informix's fast recovery wrote (see `creation_replayed`).
+    CreationReplayed,
+}
+
+/// Why the read starts at `from`: `used` are the logs on disk (uniqid, flags, filltime), oldest first, and the first
+/// `older` of them filled before the table's creation time. With the last log that filled before it, for `CreatedAfter`.
+fn start_reason(used: &[(i64, i64, i64)], older: usize, from: i64, replayed: bool) -> (StartReason, Option<i64>) {
+    let skipped = older > 0 && used.first().is_some_and(|l| l.0 != from);
+    match (skipped, replayed) {
+        (false, _) => (StartReason::OldestOnDisk, None),
+        (true, true) => (StartReason::CreationReplayed, None),
+        (true, false) => (StartReason::CreatedAfter, used.get(older - 1).map(|l| l.0)),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1769,6 +1799,7 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
         }
         h.stalled = stalled;
         h.skipped = skipped.clone();
+        let (reason, after_log) = start_reason(&used, older, from, replayed);
         h.range = Some(LogRange {
             first_log: from,
             first_log_filled: used.iter().find(|l| l.0 == from).filter(|l| l.1 & 2 == 0 && l.2 > 0).map(|l| l.2),
@@ -1776,17 +1807,20 @@ pub fn run(conn: &JdbcConn, req: &Request, read_only: bool, user: &str, stop: &A
             from_lsn: Lsn(from as u32, 0).to_string(),
             read_until: last.to_string(),
             read_at: asked_at,
+            start_reason: reason,
+            oldest_log: first_log,
+            created_after_log: after_log,
         });
         for (at, resume, why) in skipped_from.iter().filter(|_| !replayed) {
             h.notes.push(format!(
                 "Antes de crearse la tabla, el log tiene registros de tablas borradas que usaban su número de partición, y el servidor no los lee ({why}, en {at}): la lectura siguió en {resume}, la primera posición legible, que queda antes de cualquier cambio de esta tabla."
             ));
         }
-        if older > 0 && from != first_log && replayed {
+        if reason == StartReason::CreationReplayed {
             h.notes.push(format!(
                 "La lectura empieza en el log {from}: los anteriores se llenaron antes de la hora de creación que escribió la recuperación rápida."
             ));
-        } else if older > 0 && from != first_log {
+        } else if reason == StartReason::CreatedAfter {
             h.notes.push(format!(
                 "La tabla se creó después de llenarse el log {}: la lectura empieza en el log {from}, porque los anteriores no tienen cambios suyos.",
                 used[older - 1].0
@@ -2553,5 +2587,26 @@ mod tests {
         }
         assert!(ident("celer").is_ok() && ident("x; DROP").is_err() && ident("").is_err());
         assert_eq!(lit("o'brien"), "'o''brien'");
+    }
+
+    #[test]
+    fn why_the_read_starts_where_it_does() {
+        // Logs 60..=64 on disk (uniqid, flags: 1 used / 2 current, filltime); 64 is the current one.
+        let used = [(60, 1, 1000), (61, 1, 2000), (62, 1, 3000), (63, 1, 4000), (64, 3, 0)];
+        let older = |created: i64| used.iter().take_while(|(_, f, fill)| f & 2 == 0 && *fill > 0 && *fill < created).count();
+        // A table created after log 62 filled: the read starts at 63, and 60..62 are still there (#217).
+        assert_eq!(older(3500), 3);
+        assert_eq!(start_reason(&used, older(3500), 63, false), (StartReason::CreatedAfter, Some(62)));
+        // The same start after fast recovery rewrote the creation time.
+        assert_eq!(start_reason(&used, older(3500), 63, true), (StartReason::CreationReplayed, None));
+        // A table older than the oldest log on disk: only then is what came before gone.
+        assert_eq!(start_reason(&used, older(500), 60, false), (StartReason::OldestOnDisk, None));
+        assert_eq!(start_reason(&used, older(500), 60, true), (StartReason::OldestOnDisk, None));
+        // Older logs reused while the read began move the start without any skipped on purpose.
+        assert_eq!(start_reason(&used, older(500), 61, false), (StartReason::OldestOnDisk, None));
+        // Serialised as the dialog reads it.
+        assert_eq!(serde_json::to_string(&StartReason::CreatedAfter).unwrap(), "\"createdAfter\"");
+        assert_eq!(serde_json::to_string(&StartReason::CreationReplayed).unwrap(), "\"creationReplayed\"");
+        assert_eq!(serde_json::to_string(&StartReason::OldestOnDisk).unwrap(), "\"oldestOnDisk\"");
     }
 }
