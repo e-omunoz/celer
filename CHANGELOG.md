@@ -7,12 +7,15 @@ All notable changes to Celer are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- **The pointer no longer disappears in the file dialogs on Windows** (#220): with Windows' *Ocultar el puntero
-  mientras se escribe* on (the default), a native open/save dialog opened from the keyboard or right after typing
-  (*Importar conexiones › Fichero de Celer…* from the palette, *Nuevo* or the explorer's ⋯ menu, opening a script,
-  exporting connections or results, importing data, themes and settings) inherited the pointer WebView2 had hidden,
-  so it was invisible over the dialog and, after choosing or cancelling, over the app until it crossed the page.
-  Every native dialog now shows the pointer before it opens and gives it its shape back over the page after it.
+- **The pointer no longer disappears in the file dialogs on Windows** (#220): the system's open/save dialog shares
+  the pointer's visibility with the Celer window and WebView2, and WebView2 runtimes that hide the pointer while
+  typing (Windows' *Ocultar el puntero mientras se escribe*) and fail to show it again left it hidden, so it was
+  invisible over the dialog (*Importar conexiones › Fichero de Celer…* from *Nuevo*, the explorer's ⋯ menu or the
+  palette, opening a script, exporting connections or results, importing data, themes and settings) and over the
+  app after choosing or cancelling. Every native dialog now shows the pointer before it opens and gives it its
+  shape back over the page after it.
+- **An ODBC connection imported without passwords asks for its password** (#220): when the user is in the
+  connection string (`UID=…`) rather than the *Usuario* field, connecting no longer fails the login without asking.
 
 ## [2.4.0] - 2026-10-14
 

@@ -24,6 +24,7 @@ import type {
   ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
+import { odbcNeedsPassword } from "./connTree";
 import { binaryKeysWritable, changeStatements, explainPrefix, paramNamesFor, selectLimit, upsertSql, whereOf } from "./sqlgen";
 import { bindParams, findParams, hasUnfilteredWrite, literalDialect, paramNames } from "./snippets";
 import { erNeighbourhood, erNeighbours, type ErEdge, type ErTable } from "./erLayout";
@@ -1272,11 +1273,6 @@ export function answerParams(answer: ParamAnswer | null) {
 export function answerPassword(value: string | null) {
   state.passwordAsk?.resolve(value);
   setState("passwordAsk", null);
-}
-
-/** ODBC takes its password from the connection string unless it names a user and carries none (an import). */
-function odbcNeedsPassword(conn: ConnSummary) {
-  return conn.kind === "odbc" && !!conn.user.trim() && !/\b(pwd|password)\s*=/i.test(`${conn.odbcConnStr};${conn.extra}`);
 }
 
 function needsPassword(conn: ConnSummary) {
