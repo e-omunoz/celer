@@ -22,7 +22,7 @@ reaches every server engine by its container name (`celer-pg:5432`, `celer-mysql
 `CELER_SSH_TEST` (engines.sh) runs the tunnel tests; `docker restart celer-sshd` drops every tunnel.
 
 Informix is shared: no test restarts or kills `celer-ifx`. `informix_jdbc_row_history` probes the server's CDC reader
-first and, when it does not read a short history whole, switches the logical log and retries (three rounds, then the
+first and, when it does not read a short history whole, switches the logical log and retries (five rounds with a growing pause, then the
 test fails naming each probe's log and result). Restarting (that test, as a last resort) and killing the server
 (`informix_jdbc_row_history_after_fast_recovery`) need `CELER_INFORMIX_KILLABLE=1` with `CELER_INFORMIX_CONTAINER`, a
 container the run owns: `engines.yml` sets both for its own; `engines.sh` never sets the first.

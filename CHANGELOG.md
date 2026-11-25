@@ -20,8 +20,8 @@ All notable changes to Celer are documented here. The format follows
   creation time was rewritten. The core reports the reason as data (`startReason`); the texts of a read cut short are
   unchanged.
 - **Engine tests no longer restart the shared Informix server** (#216): when the CDC reader probe of
-  `informix_jdbc_row_history` does not read a short history whole, the test switches the logical log and retries (three
-  rounds), then fails naming each probe's log and result. Only a container the run owns (`CELER_INFORMIX_KILLABLE=1`
+  `informix_jdbc_row_history` does not read a short history whole, the test switches the logical log and retries (five
+  rounds, with a growing pause), then fails naming each probe's log and result. Only a container the run owns (`CELER_INFORMIX_KILLABLE=1`
   with `CELER_INFORMIX_CONTAINER`, as in `engines.yml`) may still be restarted.
 
 ## [2.4.0] - 2026-10-14

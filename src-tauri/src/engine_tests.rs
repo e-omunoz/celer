@@ -3131,8 +3131,10 @@ fn informix_cdc_short_read(cfg: &ConnConfig, rt: &crate::jdbc::Runtime, table: &
     }
 }
 
-/// Rounds of the reader probe on a shared server before the test gives up (each one in logs of its own).
-const READER_PROBE_ROUNDS: usize = 3;
+/// Rounds of the reader probe on a shared server before the test gives up (each one in logs of its own), and the pause
+/// before the next one, longer each time: a reader held by another read (an app slot, another run) gets time to let go.
+const READER_PROBE_ROUNDS: usize = 5;
+const READER_PROBE_PAUSE: Duration = Duration::from_secs(15);
 
 /// Makes sure the server's CDC reader reads a short history whole before the history test relies on it (#216). A
 /// reader left at an earlier read's stop point is moved on as a DBA would: a log switch, and the probe again in a log
@@ -3164,6 +3166,9 @@ fn informix_reader_ready(cfg: &ConnConfig, rt: &crate::jdbc::Runtime) {
                 if let Ok(mut admin) = crate::jdbc::connect(admin_cfg, rt.clone()) {
                     informix_switch_log(&mut admin);
                 }
+                if round < READER_PROBE_ROUNDS {
+                    std::thread::sleep(READER_PROBE_PAUSE * round as u32);
+                }
             }
         }
     }
@@ -3190,7 +3195,8 @@ fn informix_jdbc_row_history() {
     use crate::rowhistory::{self, KeyPart, Request};
     use std::sync::atomic::AtomicBool;
     let Some((cfg, rt)) = informix_jdbc_cfg() else { return };
-    let _guard = watchdog("historial de la fila", 540);
+    // The probe's rounds on a busy shared server (up to about seven minutes) and the test itself.
+    let _guard = watchdog("historial de la fila", 1020);
     // The server's CDC reader keeps what earlier reads left (it stops for good where a read met the tail of a log, and
     // after errors on the records of dropped tables: measured), which the app reports as partial. A test needs a
     // reader that works: a short history is read first, and a reader that does not give it whole is moved on with log
@@ -3280,6 +3286,7 @@ fn informix_jdbc_row_history() {
             assert!(tried.len() < READER_PROBE_ROUNDS, "el lector CDC del servidor no responde (historial de {table} {id}), ni tras cambiar de log: {tried:?}");
             println!("Informix: el lector CDC no responde (historial de {table} {id}: {:?}); se cambia de log y se lee otra vez", tried.last());
             switch_log();
+            std::thread::sleep(READER_PROBE_PAUSE * tried.len() as u32);
         };
         // A history that cannot be read at all says why, and that is not what these reads expect.
         assert!(h.status != "unavailable" || table == "rh_raw" || h.reason.contains("syscdcv1"), "historial de {table} {id}: {h:?}");
