@@ -3338,7 +3338,9 @@ fn informix_jdbc_row_history() {
     // reused slot).
     let txs: std::collections::HashSet<_> = h.events.iter().map(|e| e.tx.as_str()).collect();
     assert_eq!(txs.len(), 4, "{:?}", h.events.iter().map(|e| &e.tx).collect::<Vec<_>>());
-    assert!(!h.cut_short);
+    // Cut short only by walls the shared server's reader left in logs without these changes (said as such, #216).
+    let walled = |h: &rowhistory::History| h.cut_short && !h.partial.is_empty() && h.partial.iter().all(|p| p.contains("no entrega el log"));
+    assert!(!h.cut_short || walled(&h), "{:?}", h.partial);
     // Inserted inside the logs on disk: complete, except for logs the server's reader does not give past a point
     // (earlier runs read them at their tail), which are said and are not the logs with these changes.
     assert!(h.partial.iter().all(|p| p.contains("no entrega el log")), "{:?}", h.partial);
@@ -3416,7 +3418,7 @@ fn informix_jdbc_row_history() {
     // A row whose history is complete (with a DATETIME and a VARCHAR) is not flagged.
     let whole = ask_whole("rh_t", &id3);
     assert!(whole.events.len() == 1 && whole.partial.iter().all(|p| p.contains("no entrega el log")), "{whole:?}");
-    assert!(!whole.cut_short, "{whole:?}");
+    assert!(!whole.cut_short || walled(&whole), "{whole:?}");
     let moved = ask_whole("rh_t", &id4);
     assert_eq!(moved.events.iter().map(|e| e.op).collect::<Vec<_>>(), vec!["insert", "update"], "{moved:?}");
     assert!(moved.partial.iter().all(|p| p.contains("no entrega el log")), "the key moved away is not a missing change: {:?}", moved.partial);
@@ -3426,7 +3428,8 @@ fn informix_jdbc_row_history() {
     // A key with no change in the logs: nothing invented, and said to be partial.
     let none = ask_whole("rh_t", "99");
     assert!(none.events.is_empty() && !none.partial.is_empty(), "{none:?}");
-    assert!(!none.cut_short && none.partial.iter().any(|p| p.contains("Ningún cambio")), "{none:?}");
+    // Behind a wall it cannot say there was none: cut short, and no «Ningún cambio».
+    assert!(if walled(&none) { !none.partial.iter().any(|p| p.contains("Ningún cambio")) } else { !none.cut_short && none.partial.iter().any(|p| p.contains("Ningún cambio")) }, "{none:?}");
     // A read stopped before it read anything: partial, cut short, and it claims nothing about the row; full row
     // logging goes off again all the same.
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
