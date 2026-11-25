@@ -11,7 +11,7 @@ A panel that generates, explains, fixes and optimises SQL with Claude (official 
 |---|---|
 | Models | Claude Opus 5.5 (default), Claude Sonnet 5.5, Claude Haiku 4.5 — Settings › IA y MCP |
 | Sent to the model | engine and database name, the schema (table and column **names**), the console SQL or selection, the last error |
-| Never sent | row data |
+| Never sent | row data: below the connection's «Lectura» AI level, the error loses its DETAIL / CONTEXT lines (`Detalle:`, `Contexto:`) and the row values that known messages quote (PostgreSQL's failing row, `Key (…)=(…)` and unconvertible values; MySQL/MariaDB `Duplicate entry '…'` and incorrect values; SQL Server's duplicate key value, conversion and truncated values) become «valor omitido». Other messages are sent as the server wrote them |
 | API key | stored in the OS credential store (Windows Credential Manager, service `Celer`), never in a file |
 | Safety | Opus/Sonnet requests opt into server-side fallback (`fallbacks: "default"`); refusals and API errors are shown in the panel |
 

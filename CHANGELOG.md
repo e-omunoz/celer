@@ -39,6 +39,10 @@ All notable changes to Celer are documented here. The format follows
 - MCP: protected columns no longer reach an assistant through rows the server serialises: SQL Server's `FOR JSON` /
   `FOR XML` over a table with protected columns and PostgreSQL's `table_to_xml` / `query_to_xml` family are refused,
   and a JSON or XML value keyed by a protected column comes back as `[oculto]` (#234).
+- In-app AI: «Corregir con IA» no longer sends row values inside the server error. Unless the connection's AI level is
+  «Lectura» or above, PostgreSQL's `Detalle:` / `Contexto:` lines (a whole failing row, a key's value) are left out and
+  the values quoted by duplicate-key and conversion errors (MySQL, MariaDB, SQL Server, PostgreSQL) become «valor
+  omitido»; the panel and Ajustes › IA say so (#235).
 - Export to SQL INSERT: «Tabla de destino» keeps the table's quotes (`"Ventas 2024"`, `` `order` ``,
   `public."Clientes"`) and takes the query's own FROM, not one inside parentheses (`extract(year FROM fecha)`), a
   string or a comment, both in «Exportar…» and «Exportar selección…» (#238).

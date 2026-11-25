@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { errorForAi, OMITTED } from "./aiError";
 import { api, errorText } from "./api";
 import { activeSql, connectionById, notify, openInspector, setState, state } from "./state";
 import { engineOf } from "./types";
@@ -84,7 +85,7 @@ async function variablesContext(): Promise<string> {
   return `<variables nota="\${nombre} es una variable de Celer: se sustituye por su valor al ejecutar">\n${lines.join("\n")}\n</variables>`;
 }
 
-function buildPrompt(action: AiAction, request: string, variables = ""): { system: string; user: string } {
+function buildPrompt(action: AiAction, request: string, variables = "", allowData = false): { system: string; user: string } {
   const tab = activeSql();
   const conn = connectionById(tab?.connId);
   const engine = conn ? engineOf(conn.kind).label : "SQL estándar";
@@ -102,7 +103,12 @@ function buildPrompt(action: AiAction, request: string, variables = ""): { syste
   const sql = tab?.selection.trim() || tab?.sql.trim() || "";
   if (sql && action !== "generate") parts.push(`<sql_actual>\n${sql.slice(0, 12_000)}\n</sql_actual>`);
   if (variables && action !== "generate") parts.push(variables);
-  if (action === "fix" && tab?.error) parts.push(`<error_del_servidor>\n${tab.error.slice(0, 4000)}\n</error_del_servidor>`);
+  if (action === "fix" && tab?.error) {
+    // Row values the error quotes stay on this machine unless the connection lets the AI read data.
+    const error = errorForAi(tab.error, allowData);
+    const note = error.redacted ? ` nota="Se han quitado los valores de filas que citaba el error (${OMITTED}) y sus líneas de detalle"` : "";
+    parts.push(`<error_del_servidor${note}>\n${error.text.slice(0, 4000)}\n</error_del_servidor>`);
+  }
   const task: Record<AiAction, string> = {
     ask: request,
     generate: `Escribe la consulta SQL para: ${request}`,
@@ -132,7 +138,7 @@ export async function askAi(action: AiAction, request = "") {
     setState("ai", "needsKey", true);
     return;
   }
-  const { system, user } = buildPrompt(action, request, await variablesContext());
+  const { system, user } = buildPrompt(action, request, await variablesContext(), await dataAllowed(activeSql()?.connId));
   const labels: Record<AiAction, string> = {
     ask: request,
     generate: `Generar SQL: ${request}`,
