@@ -35,7 +35,7 @@ jobs:
           - os: windows-latest
             label: windows
             cache: "src-tauri\ninstaller/src-tauri"
-          - os: macos-14
+          - os: macos-15
             label: macos
             cache: src-tauri
           - os: ubuntu-22.04
