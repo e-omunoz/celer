@@ -110,6 +110,7 @@ import {
   countTable,
   reloadTableSafe,
   rerunActive,
+  startSelectionExport,
   startTableExport,
   setTableSort,
   upsertTableFilter,
@@ -762,6 +763,7 @@ function SqlPane(props: { tab: SqlTab }) {
               dialect={kindOf(props.tab.connId)}
               onNeedMore={() => !pinned() && !filtering() && void fetchMore(props.tab.id)}
               onExport={exportShown}
+              onExportRows={(data) => startSelectionExport(props.tab.id, data)}
               rowHistory={{ blocked: resultHistoryBlocked(props.tab.connId), open: () => {} }}
               onActivate={() => openInspector("value")}
               onColumnOrder={(order) => setGridColumnOrder(props.tab.id, order)}
@@ -1017,6 +1019,7 @@ function TablePane(props: { tab: TableTab }) {
             onSortChange={(sort) => setTableSort(props.tab.id, sort)}
             onFilter={(quick) => upsertTableFilter(props.tab.id, { ...newFilter(props.tab, props.tab.gridCols[quick.col]?.name, quick.op, quick.value), enabled: true })}
             onExport={() => startTableExport(props.tab.id)}
+            onExportRows={(data) => startSelectionExport(props.tab.id, data)}
             rowHistory={{
               blocked: tableHistoryBlocked(props.tab),
               rowBlocked: (row) => (row >= props.tab.rows.length ? "Fila nueva: todavía no está en la base de datos" : null),

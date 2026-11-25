@@ -19,7 +19,7 @@ import type {
   SshHostKeyInfo,
   TableColumn,
 } from "./types";
-import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, McpStatus, UpdateInfo, WslInfo } from "./types";
+import type { Cell, ColumnInfo, DbKind, InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, McpStatus, UpdateInfo, WslInfo } from "./types";
 import type { MigrationSource } from "./migrate";
 import type { ImportedSecrets, SecretRequest } from "./connTree";
 import type { ErrorEntry } from "./errorLogText";
@@ -81,6 +81,8 @@ export interface Backend {
   objectSql(sessionId: string, obj: ObjectRef): Promise<{ qualified: string; select: string }>;
   quoteIdents(sessionId: string, names: string[]): Promise<string[]>;
   exportQuery(connId: string, database: string, sql: string, exportId: string, options: ExportOptions): Promise<number>;
+  /** «Exportar selección…»: rows the grid holds, written with the same formats; `quoted` are the names for SQL INSERT. */
+  exportGridRows(columns: ColumnInfo[], rows: Cell[][], quoted: string[], engine: DbKind, options: ExportOptions): Promise<number>;
   /**
    * «Historial de la fila»: the row's past values from Informix's logical logs (CDC API), on a connection of its own.
    * `historyId` is what `cancel` takes to stop it. Engines without it answer "unavailable" with the reason.
@@ -278,6 +280,7 @@ function tauriBackend(): Backend {
     quoteIdents: (sessionId, names) => invoke("quote_idents", { sessionId: sessionId, names }),
     exportQuery: (connId, database, sql, exportId, options) =>
       invoke("export_query", { connId: connId, database, sql, exportId: exportId, options }),
+  exportGridRows: (columns, rows, quoted, engine, options) => invoke("export_grid_rows", { columns, rows, quoted, engine, options }),
     rowHistory: (connId, password, historyId, request) => invoke("row_history", { connId, password: password ?? null, historyId, request }),
     addHistory: (entry) => invoke("add_history", { entry }),
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),

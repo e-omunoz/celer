@@ -139,36 +139,15 @@ fn export_rows(
     if let Some(order) = &order {
         cols = order.iter().map(|&i| cols[i].clone()).collect();
     }
-    // JSON: one key per column, so columns that share a name (a join's two `id`) become id, id_2…
-    if o.format == "json" {
-        let keys = unique_names(cols.iter().map(|c| c.name.as_str()));
-        for (c, key) in cols.iter_mut().zip(keys) {
-            c.name = key;
-        }
-    }
     let mut has_more = first.has_more;
-    let mut sink = match o.format.as_str() {
-        "xlsx" => Sink::Xlsx {
-            wb: rust_xlsxwriter::Workbook::new(),
-            row: 0,
-            widths: vec![0; cols.len()],
-        },
-        _ => {
-            let mut w = BufWriter::with_capacity(1 << 20, File::create(out_path)?);
-            if o.bom && matches!(o.format.as_str(), "csv" | "tsv") {
-                w.write_all("\u{feff}".as_bytes())?;
-            }
-            Sink::Text { w, first: true, batch: 0 }
-        }
-    };
     let sql_cols = cols
         .iter()
         .map(|c| d.quote_ident(&c.name))
         .collect::<Vec<_>>()
         .join(", ");
+    let mut sink = open_sink(&mut cols, o, out_path)?;
     // XML: one element per column, named after it when the name is a valid XML name.
     let xml_tags = cols.iter().map(|c| xml_name(&c.name)).collect::<Vec<_>>();
-    write_header(&mut sink, &cols, o)?;
     let mut total = 0u64;
     let mut rows = first.rows;
     // A row in the grid's column order (reused from row to row).
@@ -201,6 +180,64 @@ fn export_rows(
         has_more = f.has_more;
     }
     let _ = d.close_cursor();
+    close_sink(sink, o, out_path)?;
+    Ok(total)
+}
+
+/// The file's sink, with the header written. JSON: one key per column, so columns that share a name (a join's two
+/// `id`) become id, id_2… in `cols`.
+fn open_sink(cols: &mut [ColumnInfo], o: &ExportOptions, out_path: &str) -> Result<Sink> {
+    if o.format == "json" {
+        let keys = unique_names(cols.iter().map(|c| c.name.as_str()));
+        for (c, key) in cols.iter_mut().zip(keys) {
+            c.name = key;
+        }
+    }
+    let mut sink = match o.format.as_str() {
+        "xlsx" => Sink::Xlsx {
+            wb: rust_xlsxwriter::Workbook::new(),
+            row: 0,
+            widths: vec![0; cols.len()],
+        },
+        _ => {
+            let mut w = BufWriter::with_capacity(1 << 20, File::create(out_path)?);
+            if o.bom && matches!(o.format.as_str(), "csv" | "tsv") {
+                w.write_all("\u{feff}".as_bytes())?;
+            }
+            Sink::Text { w, first: true, batch: 0 }
+        }
+    };
+    write_header(&mut sink, cols, o)?;
+    Ok(sink)
+}
+
+/// Rows the grid already holds (a selection: rows that need not be next to each other, in screen order) written as
+/// a file with the same formats and options as an export of the query. `quoted` are the column names quoted for
+/// the engine (SQL INSERT). Binary values are the grid's (a long one is its preview, cut with "…").
+pub fn export_grid(mut cols: Vec<ColumnInfo>, rows: &[Vec<Cell>], quoted: &[String], o: &ExportOptions, engine: DbKind) -> Result<u64> {
+    if quoted.len() != cols.len() || rows.iter().any(|r| r.len() != cols.len()) {
+        bail!("Las filas a exportar no casan con sus columnas");
+    }
+    let partial = format!("{}.partial", o.path);
+    let written = (|| -> Result<u64> {
+        let sql_cols = quoted.join(", ");
+        let mut sink = open_sink(&mut cols, o, &partial)?;
+        let xml_tags = cols.iter().map(|c| xml_name(&c.name)).collect::<Vec<_>>();
+        for r in rows {
+            write_row(&mut sink, &cols, r, o, &sql_cols, &xml_tags, engine)?;
+        }
+        close_sink(sink, o, &partial)?;
+        std::fs::rename(&partial, &o.path)?;
+        Ok(rows.len() as u64)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    written
+}
+
+/// Ends the file: closing tags, the last multi-row INSERT, the Excel column widths.
+fn close_sink(sink: Sink, o: &ExportOptions, out_path: &str) -> Result<()> {
     match sink {
         Sink::Text { mut w, batch, .. } => {
             match o.format.as_str() {
@@ -220,7 +257,7 @@ fn export_rows(
             wb.save(out_path)?;
         }
     }
-    Ok(total)
+    Ok(())
 }
 
 fn csv_field(s: &str, delim: &str) -> String {
@@ -641,6 +678,38 @@ mod tests {
         export(&mut d, "SELECT 7", &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "7\r\n");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn grid_selection_exports_exactly_its_rows() {
+        // Rows 2, 5 and 9 of a grid, as the UI sends them (JSON), in screen order.
+        let cols: Vec<ColumnInfo> = serde_json::from_str(r#"[{"name":"id","typeName":"int","kind":"number"},{"name":"name","typeName":"text","kind":"text"},{"name":"id","typeName":"int","kind":"number"}]"#).unwrap();
+        let rows: Vec<Vec<Cell>> = serde_json::from_str(r#"[[9,"O'Hara",1.5],[2,null,true],[5,"x;y","12345678901234567890"]]"#).unwrap();
+        assert!(matches!(rows[0][2], Cell::Num(_)) && matches!(rows[1][2], Cell::Bool(true)) && matches!(rows[1][1], Cell::Null));
+        let quoted = vec!["[id]".to_string(), "[name]".to_string(), "[id]".to_string()];
+        let dir = std::env::temp_dir();
+        let path = |ext: &str| dir.join(format!("celer-grid-{}.{ext}", std::process::id())).to_string_lossy().into_owned();
+        let run = |format: &str, engine: DbKind| {
+            let o = ExportOptions { format: format.into(), path: path(format), bom: false, ..ExportOptions::default() };
+            assert_eq!(export_grid(cols.clone(), &rows, &quoted, &o, engine).unwrap(), 3);
+            assert!(!std::path::Path::new(&format!("{}.partial", o.path)).exists());
+            let text = if format == "xlsx" { String::new() } else { std::fs::read_to_string(&o.path).unwrap() };
+            let _ = std::fs::remove_file(&o.path);
+            text
+        };
+        assert_eq!(run("csv", DbKind::Postgres), "id;name;id\r\n9;O'Hara;1.5\r\n2;;true\r\n5;\"x;y\";12345678901234567890\r\n");
+        assert_eq!(
+            run("sql", DbKind::Mssql),
+            "INSERT INTO tabla ([id], [name], [id]) VALUES (9, N'O''Hara', 1.5);\nINSERT INTO tabla ([id], [name], [id]) VALUES (2, NULL, 1);\nINSERT INTO tabla ([id], [name], [id]) VALUES (5, N'x;y', 12345678901234567890);\n"
+        );
+        let json: serde_json::Value = serde_json::from_str(&run("json", DbKind::Sqlite)).unwrap();
+        assert_eq!(json[0]["id_2"], 1.5);
+        assert_eq!(json[2]["id"], 5);
+        run("xlsx", DbKind::Sqlite);
+        // Rows that do not fit the columns are refused, and nothing is written.
+        let o = ExportOptions { path: path("bad"), ..ExportOptions::default() };
+        assert!(export_grid(cols.clone(), &[vec![Cell::Int(1)]], &quoted, &o, DbKind::Sqlite).is_err());
+        assert!(!std::path::Path::new(&o.path).exists());
     }
 
     #[test]

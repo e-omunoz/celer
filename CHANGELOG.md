@@ -6,6 +6,26 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Multiple selection in the results grid** (#218): Ctrl+click (Cmd+click on macOS) on a row number or any cell
+  adds that row to the selection or takes it out, keeping the rest, so rows 2, 5 and 9 (or 5 and 5000, with pages
+  loaded in between) can be selected together and are highlighted. Shift+click selects the rows from the last one
+  clicked, Ctrl+Shift+click adds that range; a plain click, an arrow key or Esc go back to the single selection, and
+  sorting, filtering or running again clear it. Copies (Ctrl+C, Ctrl+Shift+C, every *Copiar como* format), Supr in a
+  table tab (pending until saved, then deleted by key) and the new *Exportar selección…* take exactly the selected
+  rows, in screen order; the status bar shows how many rows are selected and its statistics cover only them. Ctrl+click
+  on a foreign-key value still opens the referenced row.
+- **Exportar selección…** in the grid's menu writes the selected rows and columns (every export format, Excel
+  included) from what the grid holds, without running the query again.
+
+### Changed
+- Supr on a selection that mixes rows already marked for deletion with unmarked ones now marks them all; only a
+  selection of rows that are all marked is restored (before, each row was flipped).
+
+### Fixed
+- Loading the next page of a console result (the button or scrolling to the end) no longer drops the grid's
+  selection: the selected cell or picked rows stay selected.
+
 ## [2.4.0] - 2026-10-14
 
 ### Added

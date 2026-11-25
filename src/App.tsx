@@ -262,6 +262,7 @@ function StatusBar() {
       <span class="spacer" />
       <Show when={stats()}>
         <span class="st-item stats" title="Agregados de la selección">
+          <Show when={stats()!.rows > 1}>{stats()!.rows.toLocaleString()} filas · </Show>
           {stats()!.cells.toLocaleString()} celdas
           <Show when={stats()!.numeric}>
             <span> · Σ {fmt(stats()!.sum)}</span>

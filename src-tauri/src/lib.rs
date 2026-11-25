@@ -1002,6 +1002,21 @@ async fn export_query(
     res.map_err(err)
 }
 
+/// «Exportar selección…»: rows the grid holds (a multiple selection, in screen order) written as a file, with the
+/// same formats and options as `export_query`. `engine` writes the SQL literals; `quoted` are the column names.
+#[tauri::command]
+async fn export_grid_rows(
+    columns: Vec<ColumnInfo>,
+    rows: Vec<Vec<Cell>>,
+    quoted: Vec<String>,
+    engine: DbKind,
+    options: export::ExportOptions,
+) -> CmdResult<u64> {
+    tokio::task::spawn_blocking(move || export::export_grid(columns, &rows, &quoted, &options, engine).map_err(err))
+        .await
+        .map_err(err)?
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_export(
     app: &tauri::AppHandle,
@@ -2093,6 +2108,7 @@ pub fn run() {
             object_sql,
             quote_idents,
             export_query,
+            export_grid_rows,
             row_history,
             add_history,
             get_history,

@@ -250,6 +250,20 @@ las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
     iguales, así que se pueden comparar resultados de dos motores distintos.
   - Se comparan las filas cargadas (hasta 200.000 por lado). Si un lado tiene más, se avisa y se ofrece *Cargar todo*;
     un resultado fijado antes de cargar todas sus páginas se queda con las que tenía.
+- **Seleccionar varias filas**: Ctrl+clic (⌘+clic en macOS) en el número de una fila o en cualquiera de sus celdas la
+  añade a la selección o la quita, sin tocar las demás: las filas 2, 5 y 9 pueden estar seleccionadas a la vez, aunque
+  estén lejos (la 5 y la 5000) y entre medias se carguen más páginas. Mayús+clic selecciona las filas desde la última
+  en la que hiciste clic y Ctrl+Mayús+clic añade ese rango a lo que ya había. Un clic normal, una flecha o Esc vuelven
+  a la selección de siempre (una celda o un rectángulo).
+  - Copiar (Ctrl+C, Ctrl+Mayús+C y todos los formatos de *Copiar como ›*), *Supr* en una tabla y *Exportar selección…*
+    toman exactamente esas filas, en el orden de la pantalla. La barra de estado dice cuántas filas hay seleccionadas y
+    sus agregados (Σ, media, mínimo, máximo, distintos) son solo de ellas.
+  - Ordenar, filtrar o volver a ejecutar quita la selección múltiple, como pasa con la normal.
+  - En una columna de clave foránea, Ctrl+clic en el valor sigue abriendo la fila referenciada: para seleccionar esa
+    fila, haz Ctrl+clic en su número o en otra de sus celdas.
+- **Exportar selección…** (menú de la rejilla) escribe solo las filas y columnas seleccionadas, en CSV, TSV, Excel,
+  JSON, SQL, Markdown, HTML o XML, tal como están cargadas en la rejilla (no vuelve a ejecutar la consulta; un binario
+  largo sale con su vista previa).
 - **Copiar**: el menú de una celda tiene *Copiar* (Ctrl+C), *Copiar con cabeceras* (Ctrl+Mayús+C) y *Copiar como ›*
   (CSV, JSON, Markdown, XML, SQL INSERT, lista IN y WHERE, con los literales del motor de la conexión); **Exportar** a
   disco en streaming. En una tabla, *Filtrar ›* añade el filtro por el valor de la celda (por este valor, excluirlo,
@@ -277,7 +291,9 @@ Doble clic en una tabla del explorador la abre.
   - Los booleanos se cambian con `t`, `f` o la barra espaciadora.
   - Las fechas tienen un calendario.
   - Las claves foráneas ofrecen las filas de la tabla referenciada, que puedes buscar por nombre.
-  - Alt+Insert añade una fila, Supr borra las seleccionadas y Ctrl+Mayús+N pone NULL.
+  - Alt+Insert añade una fila, Supr borra las seleccionadas (también varias sueltas, elegidas con Ctrl+clic: se marcan
+    todas y, al guardar, cada una se borra por su clave; Supr sobre filas ya marcadas las restaura) y Ctrl+Mayús+N pone
+    NULL.
 - **Guardar** (Ctrl+Intro) enseña el SQL antes de ejecutarlo todo en una transacción; si algo falla, no se guarda
   nada. Cada cambio pendiente se puede deshacer por celda o por fila.
 - **Claves foráneas**: las columnas FK llevan ↗ en la cabecera. Ctrl+clic en un valor abre la fila referenciada.

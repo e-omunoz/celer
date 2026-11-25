@@ -23,10 +23,21 @@ export function ExportDialog() {
   const format = () => state.exportFormat;
   return (
     <Dialog title={`Exportar ${state.exportSource?.label ?? "datos"}`} class="export-dialog" onClose={() => !state.exportRunning && setState("exportOpen", false)}>
-      <p class="dialog-lead">
-        Las filas se leen del servidor y se escriben en streaming: no se cargan en memoria, aunque sean millones.
-        <Show when={state.exportSource?.columnOrder}> Las columnas salen en el orden en que las tienes en la rejilla.</Show>
-      </p>
+      <Show
+        when={state.exportSource?.rows}
+        fallback={
+          <p class="dialog-lead">
+            Las filas se leen del servidor y se escriben en streaming: no se cargan en memoria, aunque sean millones.
+            <Show when={state.exportSource?.columnOrder}> Las columnas salen en el orden en que las tienes en la rejilla.</Show>
+          </p>
+        }
+      >
+        {(picked) => (
+          <p class="dialog-lead">
+            Se exportan las {picked().rows.length.toLocaleString()} filas seleccionadas, en el orden y con las columnas que ves en la rejilla, tal como están cargadas (sin volver a ejecutar la consulta).
+          </p>
+        )}
+      </Show>
       <div class="format-grid">
         <For each={FORMATS}>
           {([id, label, hint]) => (
@@ -89,10 +100,12 @@ export function ExportDialog() {
           <input value={state.exportPath} placeholder={`export.${format() === "markdown" ? "md" : format()}`} onInput={(event) => setState("exportPath", event.currentTarget.value)} />
         </label>
       </Show>
-      <details class="export-sql">
-        <summary>Consulta que se exportará</summary>
-        <pre>{state.exportSource?.sql}</pre>
-      </details>
+      <Show when={!state.exportSource?.rows}>
+        <details class="export-sql">
+          <summary>Consulta que se exportará</summary>
+          <pre>{state.exportSource?.sql}</pre>
+        </details>
+      </Show>
       <Show when={state.exportRunning}>
         <div class="export-progress">
           <LoaderCircle size={15} class="spin" />
