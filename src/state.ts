@@ -3596,8 +3596,14 @@ export function startSelectionExport(tabId: string, data: { columns: ColumnInfo[
     openExport({ connId: tab.connId, database: tab.obj.database || tab.database, sql: "", label: `${tab.obj.name} (selección de ${count})`, tableName: tab.qualified, rows: data });
     return;
   }
-  // INSERT statements name the table the query reads, as the export of the whole result does.
-  const sql = (tab.kind === "sql" && tab.resultsSql) || "";
+  // INSERT statements name the table the query reads, as the export of the whole result does: in a script, the
+  // statement of the result shown.
+  let sql = "";
+  if (tab.kind === "sql" && tab.resultsSql) {
+    const grids = tab.results.filter((result) => result.columns.length);
+    const shown = tab.results[tab.activeResult];
+    sql = exportStatement(tab.resultsSql, kindOf(tab.connId), grids.indexOf(shown), grids.length) ?? tab.resultsSql;
+  }
   const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
   openExport({ connId: tab.connId, database: tab.database, sql: "", label: `resultado (selección de ${count})`, tableName: from, rows: data });
 }
