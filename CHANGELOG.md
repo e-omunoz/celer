@@ -35,6 +35,8 @@ All notable changes to Celer are documented here. The format follows
   selection of rows that are all marked is restored (before, each row was flipped).
 
 ### Fixed
+- Pending changes bar: Gib in the status bar no longer covers the right end of «Revisar y guardar» and swallows
+  clicks there; the bar keeps its buttons clear of him while he is shown (#231).
 - Informix over JDBC: when «Detener» has to cut and reopen the connection, the error now says that the open
   transaction and the session's SET went with it, instead of later statements autocommitting in silence (#229).
 - A console that switched to another database no longer leaves its connection to the next session: a new console of

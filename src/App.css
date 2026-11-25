@@ -1850,6 +1850,9 @@ table.meta td.fk-action .btn { display: inline-flex; align-items: center; gap: 4
 .companion { position: relative; width: 56px; height: 26px; flex: none; margin-left: 4px; margin-right: 12px; opacity: 0; }
 .companion.landed { opacity: 1; }
 .companion > .gib { position: absolute; left: 5px; bottom: 0; z-index: 40; }
+/* He stands about 28px above the bar, over the window's bottom-right corner: the changes bar keeps its buttons clear
+   of him (64px of companion from the edge, plus the bar's own 12px), so «Revisar y guardar» stays whole and clickable. */
+.app:has(> .statusbar .companion) .changes-bar { padding-right: 76px; }
 .tip {
   position: absolute; right: 8px; bottom: 46px; width: 290px; text-align: left; white-space: normal;
   background: var(--popover); color: var(--text); border: 1px solid var(--border);
