@@ -98,8 +98,71 @@ function splitProps(text: string, separator: string): [string, string][] {
     .filter(([key]) => key.length > 0);
 }
 
+/**
+ * mssql-jdbc's "k=v;k={v;with;braces}" → decoded [key, value] pairs: a value in braces may hold ";" and writes "}" as
+ * "}}". Keys and plain values are decoded as `splitProps` does; a braced value is taken as it is.
+ */
+function splitBracedProps(text: string): [string, string][] {
+  const out: [string, string][] = [];
+  let i = 0;
+  while (i < text.length) {
+    const eq = text.indexOf("=", i);
+    const semi = text.indexOf(";", i);
+    if (eq < 0 || (semi >= 0 && semi < eq)) {
+      if (semi < 0) break;
+      i = semi + 1;
+      continue;
+    }
+    const key = safeDecode(text.slice(i, eq).trim());
+    let j = eq + 1;
+    while (text[j] === " ") j++;
+    let value = "";
+    if (text[j] === "{") {
+      for (j++; j < text.length; j++) {
+        if (text[j] === "}") {
+          if (text[j + 1] !== "}") break;
+          j++;
+        }
+        value += text[j];
+      }
+      const next = text.indexOf(";", j);
+      i = next < 0 ? text.length : next + 1;
+    } else {
+      const next = text.indexOf(";", eq);
+      value = safeDecode(text.slice(eq + 1, next < 0 ? text.length : next).trim());
+      i = next < 0 ? text.length : next + 1;
+    }
+    if (key) out.push([key, value]);
+  }
+  return out;
+}
+
+/**
+ * Connector/J's and MariaDB's other ways of writing a host: "address=(host=h)(port=3306)(type=…)" and
+ * "(host=h,port=3306)". The host, port and user they give; null when the text is neither.
+ */
+function addressHost(text: string): { host?: string; port?: number; user?: string } | null {
+  const pairs: [string, string][] = [];
+  const address = /^address=((?:\([^()]*\))+)$/i.exec(text);
+  const keyValue = /^\(([^()]*)\)$/.exec(text);
+  if (address) {
+    for (const m of address[1].matchAll(/\(([^()=]*)=([^()]*)\)/g)) pairs.push([m[1].trim().toLowerCase(), m[2].trim()]);
+  } else if (keyValue) {
+    for (const part of keyValue[1].split(",")) {
+      const at = part.indexOf("=");
+      if (at > 0) pairs.push([part.slice(0, at).trim().toLowerCase(), part.slice(at + 1).trim()]);
+    }
+  } else {
+    return null;
+  }
+  const get = (key: string) => pairs.find(([k]) => k === key)?.[1];
+  const port = get("port");
+  if (!get("host") || (port !== undefined && !/^\d+$/.test(port))) return null;
+  return { host: get("host"), port: port ? Number(port) : undefined, user: get("user") };
+}
+
 /** "//user:pass@h1:5432,h2/db?x=1" → the first host and port, the credentials, the path and the query. */
-function splitAuthorityUrl(info: JdbcInfo, rest: string): { path: string; query: string } {
+function splitAuthorityUrl(info: JdbcInfo, rest: string): { path: string; query: string } | null {
   let body = rest;
   let query = "";
   const q = body.indexOf("?");
@@ -121,12 +184,19 @@ function splitAuthorityUrl(info: JdbcInfo, rest: string): { path: string; query:
     if (user) info.user = safeDecode(user);
     if (colon >= 0) info.password = true;
   }
-  const hosts = authority.split(",").map((h) => h.trim()).filter(Boolean);
+  // Commas inside "(host=h,port=1)" do not separate hosts.
+  const hosts = (authority.match(/(?:\([^()]*\)|[^,(])+/g) ?? []).map((h) => h.trim()).filter(Boolean);
   const first = hosts[0] ?? "";
-  const match = /^\[([^\]]+)\](?::(\d+))?$/.exec(first) ?? /^([^:]*)(?::(\d+))?$/.exec(first);
-  if (match) {
-    if (match[1]) info.host = match[1];
-    if (match[2]) info.port = Number(match[2]);
+  if (first.includes("(") || first.includes("=")) {
+    const address = addressHost(first);
+    if (!address) return null;
+    info.host = address.host;
+    if (address.port !== undefined) info.port = address.port;
+    if (address.user && !info.user) info.user = address.user;
+  } else {
+    const match = /^\[([^\]]+)\](?::(\d+))?$/.exec(first) ?? /^([^:]*)(?::(\d+))?$/.exec(first);
+    if (match?.[1]) info.host = match[1];
+    if (match?.[2]) info.port = Number(match[2]);
   }
   info.otherHosts = hosts.slice(1);
   return { path, query };
@@ -175,7 +245,7 @@ export function parseJdbc(url: string): JdbcInfo | null {
     if (mssql) {
       // A server part Celer cannot read is not taken for localhost: the URL is not understood.
       if (!setServer(mssql[1])) return null;
-      props = splitProps(mssql[2], ";");
+      props = splitBracedProps(mssql[2]);
     } else {
       const j = jtds!;
       if (j[1]) info.host = j[1];
@@ -256,7 +326,10 @@ export function parseJdbc(url: string): JdbcInfo | null {
   const pg = /^jdbc:postgresql:(.*)$/i.exec(u);
   if (pg) {
     const info = make("postgres");
-    const { path, query } = splitAuthorityUrl(info, pg[1]);
+    const split = splitAuthorityUrl(info, pg[1]);
+    // A host written in a way Celer does not read is not guessed: the URL is not understood.
+    if (!split) return null;
+    const { path, query } = split;
     if (path) info.database = safeDecode(path.replace(/\/$/, ""));
     const extra: string[] = [];
     for (const [key, value] of splitProps(query, "&")) {
@@ -300,7 +373,10 @@ export function parseJdbc(url: string): JdbcInfo | null {
   const my = /^jdbc:(mysql|mariadb)(?:\+srv)?(?::[\w-]+)?:(\/\/.*)$/i.exec(u);
   if (my) {
     const info = make("mysql");
-    const { path, query } = splitAuthorityUrl(info, my[2]);
+    const split = splitAuthorityUrl(info, my[2]);
+    // A host written in a way Celer does not read is not guessed: the URL is not understood.
+    if (!split) return null;
+    const { path, query } = split;
     if (path) info.database = safeDecode(path.replace(/\/$/, ""));
     const extra: string[] = [];
     const ms = (value: string) => Math.max(1, Math.ceil(Number(value) / 1000));

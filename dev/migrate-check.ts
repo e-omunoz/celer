@@ -121,6 +121,18 @@ assert.equal(parseJdbc("jdbc:mariadb://h/x?socketTimeout=1500")?.params, "read_t
 // sessionVariables split outside quotes, the quotes dropped (Celer quotes the value); spaces in currentSchema escaped (#161).
 assert.equal(parseJdbc("jdbc:mysql://h/x?sessionVariables=sql_mode='ANSI_QUOTES,NO_ZERO_DATE',wait_timeout=60,a=\"x\"")?.params, "sql_mode=ANSI_QUOTES,NO_ZERO_DATE;wait_timeout=60;a=x");
 assert.equal(parseJdbc("jdbc:postgresql://h/x?currentSchema=ventas,%20public")?.params, "options=-c search_path=ventas,\\ public");
+// Connector/J's address=(host=…)(port=…) and (host=…,port=…) hosts, and mssql-jdbc's {…}-quoted values (#243).
+const addr = parseJdbc("jdbc:mysql://address=(host=h1)(port=3310)(type=master)/db");
+assert.deepEqual([addr?.host, addr?.port, addr?.database, addr?.otherHosts], ["h1", 3310, "db", []]);
+const addrUser = parseJdbc("jdbc:mariadb://address=(host=h1)(port=3310)(user=app),address=(host=h2)(port=3311)/db?useSSL=true");
+assert.deepEqual([addrUser?.host, addrUser?.port, addrUser?.user, addrUser?.otherHosts, addrUser?.encryption], ["h1", 3310, "app", ["address=(host=h2)(port=3311)"], "required"]);
+const kv = parseJdbc("jdbc:mysql://(host=h3,port=3312,user=u),h4:3306/shop");
+assert.deepEqual([kv?.host, kv?.port, kv?.user, kv?.database, kv?.otherHosts], ["h3", 3312, "u", "shop", ["h4:3306"]]);
+assert.equal(parseJdbc("jdbc:mysql://address=(port=3310)/db"), null, "no host: not understood, never the raw text");
+assert.equal(parseJdbc("jdbc:mysql://address=(host=h)(port=x)/db"), null);
+const braces = parseJdbc("jdbc:sqlserver://sql01:1433;databaseName={ventas;2024};user={a}}b};password={p;w};encrypt=true");
+assert.deepEqual([braces?.host, braces?.port, braces?.database, braces?.user, braces?.password, braces?.encryption, braces?.ignored], ["sql01", 1433, "ventas;2024", "a}b", true, "required", []]);
+assert.equal(parseJdbc("jdbc:sqlserver://s;databaseName=crm")?.database, "crm");
 const pgSsl = byName(edge, "PG SSL");
 assert.deepEqual([pgSsl.cfg.encryption, pgSsl.cfg.trustCert], ["required", false]);
 const plain = byName(edge, "Sin cifrado");

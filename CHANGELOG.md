@@ -45,6 +45,8 @@ All notable changes to Celer are documented here. The format follows
   and «Base de datos» as failed, with the database hint also over DRDA (#241).
 - Deleting a connection with open consoles closes their connections on the server, as «Desconectar» does, instead of
   leaving them logged in for up to 5 minutes (#242).
+- «URL JDBC» reads Connector/J's `address=(host=…)(port=…)` and `(host=…,port=…)` hosts and mssql-jdbc's `{…}`-quoted
+  values (with `;` inside) into the right fields, instead of filling the server with the raw text (#243).
 - Loading the next page of a console result (the button or scrolling to the end) no longer drops the grid's
   selection: the selected cell or picked rows stay selected.
 
