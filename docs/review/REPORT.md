@@ -288,3 +288,82 @@ Not fixed, outside these issues: with the Teal or Green accent, accent-coloured 
 - Unchanged since v2.3.0, not re-audited: cursors and paging at 1M rows, cancel during fetch, script splitting, DDL reconstruction, export round trips, SQL Server/Informix cancel/KILL/GO/TLS/named instances/DRDA ACR/bridge framing, connection UI (state dots, test step display, per-engine fields, import submenu), grid/explorer/editor performance, export/import flows, library, AI assistant, updates dialog, quit-and-restore.
 - Load-induced result discarded: one informix_jdbc_engine failure (-244 lock held by another auditor's concurrent run) passed when rerun alone under the flock; one core-rust run with Informix tests run in parallel was discarded and rerun clean.
 - Leftovers: s1_td_j (full row logging possibly left on) and s1_td_v in celerdemo on Informix could not be dropped (server in quiescent mode, -27002).
+
+
+# Macro review 2.5 (2026-11-25)
+
+Mode `full`, all areas, base `origin/main`, branch `feat/integration-2.5.0`. Tracking issue #227 (Sprint 2.5.0). Focus: the 2.5 changes since v2.4.0 (grid multi-row selection #218, completion ranking #219, Salida newest-first #225, «Exportar selección…»).
+
+**18 issues filed** (3 high, 5 medium, 10 low) from 21 auditor findings; **18 fixed**, 0 deferred, 0 open. Final verification: green, no failures, no regressions.
+
+## Counts by area and severity
+
+| Area | High | Medium | Low | Total | Fixed |
+|---|---|---|---|---|---|
+| security | 0 | 2 | 0 | 2 | 2 |
+| ui-visual | 0 | 1 | 2 | 3 | 3 |
+| ui-functional | 1 | 1 | 1 | 3 | 3 |
+| drivers-open | 0 | 0 | 1 | 1 | 1 |
+| drivers-enterprise | 0 | 0 | 0 | 0 | 0 |
+| connections | 1 | 1 | 4 | 6 | 6 |
+| core-rust | 1 | 0 | 0 | 1 | 1 |
+| frontend-state | 0 | 0 | 0 | 0 | 0 |
+| release | 0 | 0 | 2 | 2 | 2 |
+| **Total** | **3** | **5** | **10** | **18** | **18** |
+
+Three issues were filed by two auditors each and are counted once, under the area and severity listed first: #228 (ui-functional high; frontend-state medium), #230 (core-rust high; drivers-open medium) and #238 (ui-functional low; drivers-open low). Each was fixed by both areas in turn, as the table below shows.
+
+## Issues
+
+| Issue | Severity | Area | Title | Status |
+|---|---|---|---|---|
+| #228 | high | ui-functional / frontend-state | Completion: query columns and catalog tables that only contain the typed letters rank above the keyword being typed (AND/OR/NOT), so Enter replaces the keyword | fixed a6b4141, 49dd53c |
+| #229 | high | connections | Informix JDBC: after Detener resets the bridge connection, an open BEGIN WORK and session SETs are lost silently; later statements autocommit and COMMIT reports success | fixed 54705ad |
+| #230 | high | core-rust / drivers-open | «Exportar selección» writes binary values over 4 KB as the grid's cut «0x…» preview (text in the binary column, or a failure on SQL Server) | fixed dd2c640 |
+| #231 | medium | ui-visual | Gib in the status bar overlaps the right end of «Revisar y guardar» and swallows clicks there | fixed c60f5e8 |
+| #232 | medium | ui-functional | Table tab: Supr on picked new rows leaves the selection on positions now held by an unpicked new row | fixed d100f7c |
+| #233 | medium | connections | Generic pool: a session that switched database pools its connection under the home database, so the next session starts in the other database | fixed e3101e9, 12a7021 |
+| #234 | medium | security | MCP column masking bypassed by SQL Server FOR JSON / FOR XML and PostgreSQL *_to_xml functions | fixed e433343 |
+| #235 | medium | security | «Corregir con IA» sends the server error unfiltered; PostgreSQL DETAIL and duplicate-key messages carry row values | fixed 81ad4ae |
+| #236 | low | ui-visual | Export selection dialog lead always plural («las 1 filas») and says the grid's columns are exported | fixed d6fa75c |
+| #237 | low | ui-visual | Salida's «ÚLTIMA» tag uses --accent for text, below AA in the light themes | fixed 3e1a962 |
+| #238 | low | ui-functional / drivers-open | «Exportar selección…» takes «Tabla de destino» from the script's first FROM and strips its quotes | fixed 094b6b9, 52dc498 |
+| #239 | low | drivers-open | Selection export quotes INSERT column names with the UI's per-kind rule, not the ODBC driver's quote character | fixed 57c328a |
+| #240 | low | connections | Probar conexión on SQL Server with a missing database (Msg 4060) shows the wrong-password hint | fixed 6dda24d |
+| #241 | low | connections | Probar conexión on Informix with a missing database marks «Inicio de sesión» failed; DRDA (SQL30061N) shows no hint | fixed 1e03d2a |
+| #242 | low | connections | Deleting a connection with open sessions leaves their connections pooled and logged in for up to 5 minutes | fixed 096b99b |
+| #243 | low | connections | JDBC URL paste: Connector/J address=(host=…)(port=…) and mssql-jdbc {…}-quoted values parsed into the wrong fields | fixed 494af4b |
+| #244 | low | release | check-all.ps1 neither runs grid-multiselect-check.mjs nor lists it as left out | fixed 35b380c |
+| #245 | low | release | README.md / README.es.md still require Node.js 20+ | fixed 347192d |
+
+Seen during the fixes, not filed:
+- Informix JDBC: the query export of a binary value is still cut to 4097 bytes, because CelerBridge.java's BINARY_LIMIT sends only the preview even during an export. Fixing it needs a bridge protocol change.
+- Informix (DRDA and JDBC): a SQL export with «Filas por INSERT» > 1 writes multi-row `VALUES (...),(...)`, which Informix rejects. Same writer for the full export and the selection export; worth its own issue.
+- Completion: typing `in` still preselects the user template `ins` above IN (snippet source, prefix-boosted, unchanged since before #219).
+- Browser preview: after switching to Resultado 2 a screenshot still highlighted the Resultado 1 tab while the grid showed the second result. Possibly a timing artefact; not investigated.
+- Exporting a selection gets no exportId, so Cancelar cannot stop a long one. Not reproduced.
+
+## Checks run
+
+- Full engine suite `dev\wsl.ps1 test`: **ALL ENGINES PASS** after the connections (494af4b, then `-Filter pool_sessions` at 12a7021), core-rust and security (e433343: 296 passed, 0 failed, 1 ignored; mcp 21 ok) fixes, on PostgreSQL 17, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Informix DRDA, Informix JDBC, SQLite and ODBC (psqlODBC); engine_tests at 73 ok after core-rust. The only failure on the way was the new #233 check on psqlODBC (the driver ignores a catalog switch), fixed in the check in 12a7021.
+- `cargo test --lib` on Windows without engines: 287 passed, 1 ignored (connections); 296 passed (core-rust); mcp::tests 20/20 (security).
+- Fast checks in every area: all dev/*-check.ts (new aierror-check; extended sqlcontext-check, export-check, migrate-check), `npx tsc --noEmit -p .`, `npx tsc --noEmit -p installer`, `npm run build`: pass.
+- New or extended tests: guard tests a_connection_the_driver_replaced_is_not_lost_in_silence (#229) and a_connection_moved_to_another_database_is_not_reused (#233); engine checks pool_sessions_start_in_the_default_database (#233) and probe_a_missing_database_on_every_engine (#240, #241); export::tests::grid_selection_refuses_cut_binary_values and engine_tests::grid_binary_* on every engine (#230); jsonrpc_postgres and app_tools_on_engine bypass probes (#234); splitOptions and keyword cases in sqlcontext-check (#228); selectionExportLead and fromTableOf in export-check (#236, #238); address= and {…} cases in migrate-check (#243).
+- Before/after reproductions: #229 on Informix JDBC (SESSION_LOST naming the transaction and SETs, COMMIT WORK now fails); #230 on every engine, which also found and fixed the query export cut at 4 KB on SQL Server and ODBC; #234 on PostgreSQL (table_to_xml returned the hash in clear); #235 server error texts captured with each engine's client (PostgreSQL, MySQL, SQL Server); #242 server session counts in the desktop app on PostgreSQL, MySQL, MariaDB, SQL Server, Informix DRDA, Informix JDBC and ODBC SQL Server, back to baseline after the fix; #233 on ODBC with the Windows {SQL Server} driver.
+- Desktop app (Windows debug build, CDP): #242 on 7 connections; #238/#239 selection export round trip on PostgreSQL, MySQL, MariaDB, SQL Server, ODBC (SQL Server) and SQLite; #244's new step (grid-multiselect-check.mjs) on PostgreSQL, MariaDB and SQLite.
+- Browser preview (celer-web, demo SQLite): before/after for #228 (both areas), #231 (hit tests across the button), #232, #236, #237 (contrast 3.12/2.89 to 4.64-4.79 in the light themes), #238, #243 and the #235 privacy text.
+- #239 ODBC to MariaDB: odbc-mariadb in WSL, SQLGetInfo(SQL_IDENTIFIER_QUOTE_CHAR) returns a backtick.
+
+## Not checked
+
+- Engines per fix: #228, #232, #236, #237 and #231 are client-side and were checked against the demo SQLite backend only; no engine is reported as tested for them. #238/#239 on Informix: names correct, but the file does not run back because of the multi-row VALUES batching (see above). #230 on Informix DRDA: not tested (IBM CLI returns a BLOB as hex text, no preview to refuse); Informix JDBC whole-export check marked NOT TESTED (bridge limit). #234 not probed on Informix or ODBC; MySQL, MariaDB and SQLite have no equivalent one-line dump. #235 MariaDB message format assumed to match MySQL's; ODBC not checked. #240/#241: ODBC and SQLite do not apply. #233: SQLite has no pool; SQL Server native has its own pool.
+- Desktop app: «Corregir con IA» (#235) and the #230 refusal message not driven in the app. #228, #231, #232, #236, #237 checked in the browser preview only. During the audit the app and browser pane were reserved for the UI auditors, so drivers, connections, core-rust, frontend-state, security and release audits did not drive the UI (state dots during a killed server, wrong-password prompt, connect-cancel, per-engine form fields).
+- Reconnection: shared Docker engines were not killed or restarted during the audit; server-restart and wake-from-sleep covered by reading guard.rs/connWatch.ts and the guard unit tests.
+- ui-functional beyond the 2.5 changes: palette shortcuts, keymap focus conflicts, several windows and restore, library, AI assistant, updates dialog, import and full explorer flows not walked. Picked rows clearing after save/F5/filter checked on PostgreSQL only (post-save also on all 8 engines). Selection export with pending edits or deletions, and very large selections (IPC JSON size), not examined live.
+- ui-visual: full theme matrix with OS light/dark, comfortable density, 1920x1080 and 125 %/150 % scaling only for new elements; installer UI, splash, several windows, update dialog, E-R, plan and compare not revisited. Grid multi-row painting seen on SQLite only.
+- frontend-state: grid multi-select painting and scroll FPS, perf-probe.mjs, 1M x 300 grid, 10k-object explorer and 5 MB script not measured in the app. Completion over a large catalog measured in node only (about 8.5 ms per keystroke at 20k tables, 50 ms at 100k; no validFor, so it runs on every keystroke).
+- drivers: 1M-row memory, streaming and cancel-during-fetch not re-measured (paths unchanged since v2.4.0; silent_cut, kill_and_requery and mid_result_error passed on every engine). Selection export of Informix DATETIME/INTERVAL/BYTE and SQL Server datetimeoffset/uniqueidentifier/varbinary checked by reading the code only. Windows ODBC beyond the SQL Server driver, 32/64-bit mismatch, Azure SQL / Synapse / Fabric, Windows authentication and named instances not tested. Informix brace comments are not masked by sqlContext.maskSql (not proven to matter). During the audit one engine_tests::informix_jdbc_row_history failure (CDC reader, outside this area) was seen; the later full runs passed.
+- core-rust: `cargo clippy --all-targets` 29 lib and 67 test warnings, all style or intentional. One audit run was built without the JDBC bridge jar. Store, update flow, capabilities, migrations and threads on exit only spot-checked. macOS/Linux code paths not run.
+- Security: CSP still null and the updater checksum from the same release (known hardening items). `npm audit --omit=dev`: one moderate advisory in seroval (solid-js SSR, not in the built bundle). `cargo audit` not installed. CSV formula injection not filed (design choice). MCP probes ran on a debug build from 14 Oct, not rebuilt at HEAD during the audit.
+- Release gate 5: no Release run on this branch yet, so no 2.5.0 Windows/macOS/Linux packages, installer run or .exe version info; the cargo bumps from issue/rust-core-deps (mysql 28, zip 9, rusqlite 0.41, windows-sys 0.61) are not packaged on macOS or Linux. Portable startup and runtime-deps-check.mjs not run. v2.4.0 assets checked by digest only. issue/rust-core-deps and issue/import-pointer were reviewed as diffs, not as merged code; they conflict in CHANGELOG.md and dev/run-desktop.ps1, and windows-sys must be unified at 0.61.
+- macOS and Linux desktop: no machine available.
