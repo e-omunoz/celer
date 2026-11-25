@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { asRaw, raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, quoteIdentFor, splitSql, statementAt, wherePosition } from "./sql";
+import { cellText, codeOnly, exportStatement, firstKeyword, fromTableOf, formatSql, rowsLabel, isMutating, needsProductionConfirm, quoteIdentFor, splitSql, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -3568,7 +3568,7 @@ export async function startExport(sqlOverride?: string) {
     notify("Solo se exporta una consulta de lectura", "warning", "La exportación vuelve a ejecutar la consulta. Selecciona la SELECT que quieres exportar: las demás sentencias del script no se repiten.");
     return;
   }
-  const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
+  const from = fromTableOf(sql, kind) ?? "resultado";
   openExport({ connId: tab.connId!, database: tab.database, sql: sql.replace(/;\s*$/, ""), label: "el resultado de la consulta", tableName: from, columnOrder: gridColumnOrders.get(tab.id) });
 }
 
@@ -3604,7 +3604,7 @@ export function startSelectionExport(tabId: string, data: { columns: ColumnInfo[
     const shown = tab.results[tab.activeResult];
     sql = exportStatement(tab.resultsSql, kindOf(tab.connId), grids.indexOf(shown), grids.length) ?? tab.resultsSql;
   }
-  const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
+  const from = fromTableOf(sql, kindOf(tab.connId)) ?? "resultado";
   openExport({ connId: tab.connId, database: tab.database, sql: "", label: `resultado (selección de ${count})`, tableName: from, rows: data });
 }
 

@@ -174,6 +174,27 @@ export function exportStatement(sql: string, dialect: string | undefined, gridIn
   return reads.length === gridCount ? reads[gridIndex] ?? null : null;
 }
 
+/**
+ * The table a statement reads, as written after its top-level FROM, quotes kept (`public."Ventas 2024"`, `` `order` ``),
+ * for the INSERT statements of an export. A FROM inside parentheses (`extract(year FROM fecha)`, a subquery), a string
+ * or a comment does not count. Null when the FROM is not followed by a name (a subquery, or none).
+ */
+export function fromTableOf(sql: string, dialect?: string): string | null {
+  const code = codeOnly(sql, dialect);
+  let depth = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[Ff]/.test(c) && /^from\b/i.test(code.slice(i, i + 5)) && !/[\w$]/.test(code[i - 1] ?? " ")) {
+      const part = String.raw`(?:"(?:[^"]|"")*"|\x60(?:[^\x60]|\x60\x60)*\x60|\[[^\]]*\]|[\w$#@]+)`;
+      const name = new RegExp(String.raw`^from\s+(${part}(?:\s*\.\s*${part})*)`, "i").exec(sql.slice(i))?.[1];
+      return name ? name.replace(/\s*\.\s*/g, ".") : null;
+    }
+  }
+  return null;
+}
+
 /** "1 fila", "2 filas", "500+ filas" (localised thousands). */
 export function rowsLabel(n: number, more = false, word = "fila") {
   return `${n.toLocaleString()}${more ? "+" : ""} ${n === 1 && !more ? word : `${word}s`}`;
