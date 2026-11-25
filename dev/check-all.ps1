@@ -41,7 +41,8 @@ Get-ChildItem dev\*-check.ts | Sort-Object Name | ForEach-Object {
 }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "menus, settings and theme editor (preview)" { & $node dev\layout-check.mjs } }
-if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
+# One test at a time, as dev/wsl/engines.sh runs them: the live tests share the test databases.
+if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet -- --test-threads=1; Pop-Location } }
 
 # The MCP settings start from their defaults (the e2e checks them): one left enabled by an earlier manual test is
 # kept as mcp.json.prev, not deleted.
