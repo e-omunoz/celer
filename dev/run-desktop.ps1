@@ -30,9 +30,10 @@ if (-not $env:JAVA_HOME) { Write-Warning "JAVA_HOME is not set: this build will 
 
 # Git on Windows when there is one; otherwise WSL's (this machine drives the Windows checkout from WSL), with the
 # paths translated (C:\x -> /mnt/c/x).
-$winGit = Get-Command git -ErrorAction SilentlyContinue
+# The application itself: PowerShell names are case-insensitive, so `& git` inside the function below would call it.
+$winGit = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 function Git([string]$dir) {
-  if ($winGit) { & git -C $dir @args }
+  if ($winGit) { & $winGit.Source -C $dir @args }
   else {
     $tr = { param($p) if ($p -match '^([A-Za-z]):\\(.*)$') { "/mnt/$($Matches[1].ToLower())/$($Matches[2] -replace '\\', '/')" } else { $p } }
     & wsl.exe -e git -C (& $tr $dir) @($args | ForEach-Object { & $tr $_ })
