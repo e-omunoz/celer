@@ -908,8 +908,8 @@ fn informix_jdbc_sessions() {
     if let Some(proxied) = spec("CELER_INFORMIX_JDBC_TEST").map(|s| get(&s, "proxied")).filter(|h| !h.is_empty()) {
         slow_cfg.host = proxied;
     }
-    let connect = jdbc_connect(rt);
-    let mut a = connect(slow_cfg).expect("sesión A");
+    let connect = jdbc_connect(rt.clone());
+    let mut a = connect(slow_cfg.clone()).expect("sesión A");
     let mut b = connect(cfg).expect("sesión B");
     let _guard = watchdog("dos sesiones JDBC", 180);
     a.execute("DROP TABLE IF EXISTS jtx; CREATE TABLE jtx (n INT)", 1).unwrap();
@@ -951,6 +951,33 @@ fn informix_jdbc_sessions() {
     a.rollback().ok();
     assert_eq!(scalar(a.as_mut(), "SELECT COUNT(*) FROM jtx"), "0");
     a.set_autocommit(true).unwrap();
+    drop(a);
+
+    // The same under the guard, in Automático with BEGIN WORK and a SET (#229): when the bridge has to cut the
+    // connection, the cancel says what went with it, and a later COMMIT has no transaction to report as saved.
+    let connector: Connector = std::sync::Arc::new(move || Ok(Box::new(crate::jdbc::connect(slow_cfg.clone(), rt.clone())?) as Box<dyn Driver>));
+    let mut g = guarded(DbKind::Informix, &connector, "", "");
+    g.execute("SET LOCK MODE TO WAIT 7; BEGIN WORK; INSERT INTO jtx VALUES (10)", 1).unwrap();
+    let cancel = g.canceller();
+    let worker = std::thread::spawn(move || {
+        let r = g.execute("SELECT COUNT(*) FROM systables a, systables b, systables c, systables d, systables e", 10).map(|_| ());
+        (g, r)
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    cancel();
+    let (mut g, r) = worker.join().unwrap();
+    let err = r.expect_err("la consulta lenta debía cancelarse").to_string();
+    println!("JDBC cancelar con la sesión vigilada: {}", err.replace('\n', " · "));
+    if err.contains("se reabre la conexión") {
+        assert!(err.starts_with("SESSION_LOST:") && err.contains("transacción") && err.contains("SET"), "{err}");
+        assert!(g.session_state().is_empty(), "the state went with the old connection");
+        g.execute("INSERT INTO jtx VALUES (100)", 1).unwrap();
+        assert!(g.execute("COMMIT WORK", 1).is_err(), "no transaction is open to commit");
+        assert_eq!(scalar(&mut g, "SELECT COUNT(*) FROM jtx"), "1", "only the row inserted after the loss");
+    } else {
+        g.execute("ROLLBACK WORK", 1).unwrap();
+    }
+    g.execute("DROP TABLE jtx", 1).unwrap();
 }
 
 fn informix_suite(via: &str, cfg: ConnConfig, connect: &Connect) {
