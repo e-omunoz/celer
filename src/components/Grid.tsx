@@ -11,7 +11,7 @@ import { gibShows, copyText, openMenu, reducedMotion, rowHeight, setState, state
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
 import { parseCsv, pastedValue } from "../importFormats";
-import { clampRows, clickRows, hasRow, rowCount, rowList, type RowRanges } from "../gridSelection";
+import { clickRows, hasRow, rowCount, rowList, type RowRanges } from "../gridSelection";
 import { isToggleClick } from "../treeSelect";
 
 const HEAD_H = 30;
@@ -1807,8 +1807,8 @@ export function DataGrid(props: GridProps) {
   );
 
   // Picked rows are screen positions: another order puts other rows there, so a sort ends them (the cell clicked last
-  // stays selected), as a filter or a new result does. More rows (loading the next page) keep them; rows that went
-  // away (a new row taken out) leave the selection.
+  // stays selected), as a filter or a new result does. More rows (loading the next page) keep them; fewer rows (new
+  // rows taken out) end them too: the rows after the ones that went move up into the picked positions.
   createEffect(
     on(
       sort,
@@ -1820,13 +1820,14 @@ export function DataGrid(props: GridProps) {
       { defer: true },
     ),
   );
+  let shownRows = 0;
   createEffect(
     on(ordered, (order) => {
-      const rows = untrack(picked);
-      if (!rows?.length || rows[rows.length - 1][1] < order.length) return;
-      const kept = clampRows(rows, order.length);
-      setPicked(kept.length ? kept : null);
-      if (!kept.length) setAnchor(null);
+      const shrank = order.length < shownRows;
+      shownRows = order.length;
+      if (!shrank || !picked()) return;
+      setPicked(null);
+      setAnchor(focus());
     }),
   );
 
