@@ -3497,7 +3497,7 @@ export interface ExportSource {
    * «Exportar selección…»: the grid's selected rows and columns, in screen order, written as they are instead of
    * running `sql` again (empty then).
    */
-  rows?: { columns: ColumnInfo[]; rows: Cell[][] };
+  rows?: { columns: ColumnInfo[]; rows: Cell[][]; /** The grid's column count: the dialog says whether all were picked. */ gridColumns: number };
 }
 
 /**
@@ -3588,7 +3588,7 @@ export function startTableExport(tabId: string) {
  * «Exportar selección…» in a tab's grid (#218): exactly the rows selected, which need not be next to each other, with
  * the selected columns, in screen order, as the grid holds them (no query runs again).
  */
-export function startSelectionExport(tabId: string, data: { columns: ColumnInfo[]; rows: Cell[][] }) {
+export function startSelectionExport(tabId: string, data: { columns: ColumnInfo[]; rows: Cell[][]; gridColumns: number }) {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab?.connId || !data.rows.length || !data.columns.length) return;
   const count = `${data.rows.length.toLocaleString()} ${data.rows.length === 1 ? "fila" : "filas"}`;

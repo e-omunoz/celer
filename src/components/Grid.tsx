@@ -70,7 +70,7 @@ export interface GridProps {
   onSortChange?: (sort: { col: number; dir: 1 | -1 } | null) => void;
   onExport?: () => void;
   /** «Exportar selección…»: the selected rows and columns, in screen order, as the grid holds them. */
-  onExportRows?: (data: { columns: ColumnInfo[]; rows: Cell[][] }) => void;
+  onExportRows?: (data: { columns: ColumnInfo[]; rows: Cell[][]; gridColumns: number }) => void;
   /**
    * «Historial de la fila» in the row menu: `blocked` disables it with the reason (engine, protocol, no key), and
    * `rowBlocked` for one row (a new one); `open` gets the row's index in `rows`.
@@ -1386,7 +1386,7 @@ export function DataGrid(props: GridProps) {
     if (!sel() || !props.onExportRows) return;
     const data = raw(props.rows);
     const cols = selectedCols();
-    props.onExportRows({ columns: cols.map((c) => props.columns[c]), rows: selectedRows().map((source) => cols.map((c) => data[source]?.[c] ?? null)) });
+    props.onExportRows({ columns: cols.map((c) => props.columns[c]), rows: selectedRows().map((source) => cols.map((c) => data[source]?.[c] ?? null)), gridColumns: props.columns.length });
   }
 
   function quickFilter(mode: "eq" | "ne" | "null" | "not-null" | "contains") {

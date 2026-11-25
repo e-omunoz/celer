@@ -511,6 +511,22 @@ export function uniqueNames(names: string[]): string[] {
   });
 }
 
+/**
+ * The «Exportar selección…» dialog's lead: what is written, in the singular for one row, and which columns: all of the
+ * grid's when the selection spans it, otherwise only the selected ones (always in the grid's order).
+ */
+export function selectionExportLead(rows: number, columns: number, gridColumns: number): string {
+  const what = rows === 1 ? "Se exporta la fila seleccionada" : `Se exportan las ${rows.toLocaleString()} filas seleccionadas`;
+  const cols =
+    columns >= gridColumns
+      ? "con todas las columnas de la rejilla, en su orden"
+      : columns === 1
+        ? "con la columna seleccionada"
+        : `con las ${columns.toLocaleString()} columnas seleccionadas, en el orden de la rejilla`;
+  const loaded = rows === 1 ? "tal como está cargada" : "tal como están cargadas";
+  return `${what}, ${cols}, ${loaded} (sin volver a ejecutar la consulta).`;
+}
+
 export function resultToText(result: ResultSet, format: "csv" | "tsv" | "json" | "sql" | "markdown" | "html" | "xml", table = "resultado", delimiterOverride?: string): string {
   const delimiter = format === "tsv" ? "\t" : delimiterOverride ?? ",";
   if (format === "xml") {

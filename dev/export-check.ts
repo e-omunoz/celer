@@ -1,7 +1,7 @@
 // Checks for what a console export reads and writes (src/sql.ts exportStatement, uniqueNames):
 //   node --experimental-strip-types dev/export-check.ts
 import assert from "node:assert/strict";
-import { exportStatement, isReadOnly, resultToText, uniqueNames } from "../src/sql.ts";
+import { exportStatement, isReadOnly, resultToText, selectionExportLead, uniqueNames } from "../src/sql.ts";
 import type { ColumnInfo } from "../src/types.ts";
 
 // A script: only the SELECT behind the result on show, never its writes.
@@ -34,4 +34,8 @@ const joined = resultToText(
 );
 assert.deepEqual(JSON.parse(joined), [{ id: 1, id_2: 2 }]);
 
+// «Exportar selección…» lead (#236): singular for one row, and only the selected columns unless they are all.
+assert.equal(selectionExportLead(1, 4, 4), "Se exporta la fila seleccionada, con todas las columnas de la rejilla, en su orden, tal como está cargada (sin volver a ejecutar la consulta).");
+assert.equal(selectionExportLead(1, 1, 4), "Se exporta la fila seleccionada, con la columna seleccionada, tal como está cargada (sin volver a ejecutar la consulta).");
+assert.ok(selectionExportLead(3, 2, 4).startsWith("Se exportan las 3 filas seleccionadas, con las 2 columnas seleccionadas, en el orden de la rejilla, tal como están cargadas"));
 console.log("export-check: ok");

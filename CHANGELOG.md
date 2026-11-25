@@ -35,6 +35,8 @@ All notable changes to Celer are documented here. The format follows
   selection of rows that are all marked is restored (before, each row was flipped).
 
 ### Fixed
+- «Exportar selección…»: the dialog says «la fila seleccionada» for one row and names the columns actually written
+  (all of the grid's, or only the selected ones) instead of «las 1 filas» with the grid's columns (#236).
 - Pending changes bar: Gib in the status bar no longer covers the right end of «Revisar y guardar» and swallows
   clicks there; the bar keeps its buttons clear of him while he is shown (#231).
 - Informix over JDBC: when «Detener» has to cut and reopen the connection, the error now says that the open

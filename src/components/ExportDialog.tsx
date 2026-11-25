@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-solid";
 import { For, Show } from "solid-js";
 import { isTauri } from "../api";
+import { selectionExportLead } from "../sql";
 import { cancelExport, runExport, setState, state, type ExportFormat } from "../state";
 import { Dialog } from "./Modals";
 
@@ -34,7 +35,7 @@ export function ExportDialog() {
       >
         {(picked) => (
           <p class="dialog-lead">
-            Se exportan las {picked().rows.length.toLocaleString()} filas seleccionadas, en el orden y con las columnas que ves en la rejilla, tal como están cargadas (sin volver a ejecutar la consulta).
+            {selectionExportLead(picked().rows.length, picked().columns.length, picked().gridColumns)}
           </p>
         )}
       </Show>
