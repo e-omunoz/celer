@@ -127,11 +127,22 @@ pub fn run(cfg: &ConnConfig, connector: Connector, route: &str, tunnel: Option<&
 }
 
 /// The connect error says the login was accepted but the database does not exist or cannot be opened
-/// (PostgreSQL 3D000, MySQL 1049, SQL Server 4060).
+/// (PostgreSQL 3D000, MySQL 1049, SQL Server 4060, Informix -329 and DRDA SQL30061N).
 fn missing_database(error: &str) -> bool {
     let m = error.to_lowercase();
-    ["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database"].iter().any(|w| m.contains(w))
-        || (m.contains("database") && m.contains("does not exist"))
+    MISSING_DATABASE.iter().any(|w| m.contains(w)) || informix_329(&m) || (m.contains("database") && m.contains("does not exist"))
+}
+
+const MISSING_DATABASE: [&str; 8] =
+    ["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database", "database not found", "sql30061n"];
+
+/// Informix -329 as a code of its own: not part of a longer number such as -3290 or 1-329.
+fn informix_329(m: &str) -> bool {
+    m.match_indices("-329").any(|(i, _)| {
+        let before = m[..i].chars().next_back();
+        let after = m[i + 4..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_digit()) && !after.is_some_and(|c| c.is_ascii_digit())
+    })
 }
 
 /// La consulta más barata de cada motor (ODBC genérico: ninguna vale para todos).
@@ -475,11 +486,12 @@ pub fn explain(cfg: &ConnConfig, error: &str) -> String {
     if has(&["no pg_hba.conf entry"]) {
         return "PostgreSQL no tiene una regla en pg_hba.conf para este equipo, usuario y base (o exige TLS): pide que la añadan o cambia el cifrado.".into();
     }
+    // Before the credentials: SQL Server's 4060 also says "Login failed" although the login was accepted.
+    if missing_database(&m) {
+        return "La base de datos no existe o el usuario no puede abrirla: revisa el nombre (o déjalo vacío para usar la predeterminada).".into();
+    }
     if has(&["28p01", "password authentication failed", "(1045)", "error 1045", "access denied for user", "login failed", "msg 18456", "-951", "-952", "sql30082n", "usuario o contraseña"]) {
         return "Usuario o contraseña incorrectos, o el usuario no puede entrar desde este equipo. Revísalos (en SQL Server, también que el servidor admita la autenticación de SQL Server).".into();
-    }
-    if has(&["3d000", "(1049)", "error 1049", "unknown database", "msg 4060", "cannot open database", "-329", "database not found"]) || (m.contains("database") && m.contains("does not exist")) {
-        return "La base de datos no existe o el usuario no puede abrirla: revisa el nombre (o déjalo vacío para usar la predeterminada).".into();
     }
     if has(&["certificate", "certificado", "ssl", "tls", "handshake"]) {
         return "Falló el cifrado: si el servidor usa un certificado autofirmado, marca «Confiar en el certificado»; si no admite TLS, cambia el cifrado a «Preferido» o «Desactivado».".into();
@@ -590,6 +602,8 @@ mod tests {
         let ms = cfg(DbKind::Mssql);
         assert!(explain(&ms, "Msg 18456, nivel 14, línea 1: Login failed for user 'sa'.").starts_with("Usuario o contraseña"));
         assert!(explain(&ms, "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login.").starts_with("La base de datos"));
+        // #240: SQL Server adds "Login failed" to a missing database, although the login was accepted.
+        assert!(explain(&ms, "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login. The login failed.").starts_with("La base de datos"));
         let my = cfg(DbKind::Mysql);
         assert!(explain(&my, "ERROR 1045 (28000): Access denied for user 'root'@'10.0.0.1'").starts_with("Usuario o contraseña"));
         let ifx = cfg(DbKind::Informix);
@@ -636,7 +650,11 @@ mod tests {
     fn a_missing_database_fails_the_database_step() {
         let mut c = cfg(DbKind::Odbc);
         c.user = "app".into();
-        for error in ["db error: FATAL: database \"no_such_db\" does not exist", "ERROR 1049 (42000): Unknown database 'no_such_db'", "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login."] {
+        for error in ["db error: FATAL: database \"no_such_db\" does not exist", "ERROR 1049 (42000): Unknown database 'no_such_db'", "Msg 4060, nivel 11, línea 1: Cannot open database \"x\" requested by the login.",
+            // #241: Informix over JDBC (-329) and over DRDA (SQL30061N).
+            "La base de datos no existe o el usuario no tiene permiso para abrirla.\n\n[IX000] Database not found or no system permission. (-329)",
+            "[08004] [IBM][CLI Driver] SQL30061N  The database alias or database name \"CELER_NO_SUCH_DB\" was not found at the remote node.  SQLSTATE=08004",
+            "[IX000] SQLCODE -329 en la conexión"] {
             let text = error.to_string();
             let connector: Connector = std::sync::Arc::new(move || -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("{text}") });
             let r = run(&c, connector, "", None);
@@ -647,6 +665,9 @@ mod tests {
         let connector: Connector = std::sync::Arc::new(|| -> anyhow::Result<Box<dyn crate::session::Driver>> { anyhow::bail!("password authentication failed for user \"app\"") });
         let r = run(&c, connector, "", None);
         assert_eq!(r.steps.iter().map(|s| (s.id, s.status)).collect::<Vec<_>>(), vec![("login", "failed")]);
+        // -329 only as a code of its own, not inside a longer number.
+        assert!(missing_database("(-329)") && missing_database("sqlcode -329.") && missing_database("-329"));
+        assert!(!missing_database("[IX000] error (-3290)") && !missing_database("port 1-3299") && !missing_database("id 12-329"));
     }
 
     #[test]

@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 /// Valor de una celda tal y como viaja a la interfaz.
 /// Los enteros fuera del rango seguro de JavaScript y los decimales viajan como texto
 /// para no perder precisión.
-#[derive(Debug, Clone, Serialize)]
+/// Deserialize: a selection the grid holds comes back to be exported (`export_grid_rows`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Cell {
     Null,
@@ -62,7 +63,7 @@ impl Cell {
 }
 
 /// Familia de tipo de una columna: decide alineación, formato y edición en la interfaz.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ColKind {
     Number,
@@ -73,7 +74,7 @@ pub enum ColKind {
     Other,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnInfo {
     pub name: String,
     #[serde(rename = "typeName")]

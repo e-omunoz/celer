@@ -40,7 +40,7 @@ seed() {
   docker exec -i celer-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_PASSWORD" -i /dev/stdin < dev/seed-mssql.sql
   docker exec celer-ifx bash -lc "echo 'CREATE DATABASE celer WITH LOG' | dbaccess sysmaster - 2>/dev/null || true"
   # The CDC API's database (row history, src-tauri/src/rowhistory.rs), as a DBA creates it once.
-  docker exec celer-ifx bash -lc "echo 'SELECT 1 FROM sysmaster:sysdatabases WHERE name = \"syscdcv1\"' | dbaccess sysmaster - 2>/dev/null | grep -q '1 row' || dbaccess - \$INFORMIXDIR/etc/syscdcv1.sql >/dev/null 2>&1"
+  docker exec celer-ifx bash -lc "echo 'SELECT 1 FROM sysmaster:sysdatabases WHERE name = \"syscdcv1\"' | dbaccess sysmaster - 2>&1 | grep -q '1 row' || dbaccess - \$INFORMIXDIR/etc/syscdcv1.sql >/dev/null 2>&1"
   docker exec -i celer-ifx bash -lc "dbaccess - -" < dev/seed-informix.sql
 }
 
@@ -71,6 +71,8 @@ engine_env() {
   done
   export CELER_JAVA="$(dirname "$(readlink -f "$(command -v java)")")/java"
   export CELER_JDBC_JARS="$D/jdbc/jdbc-15.0.1.4.jar:$D/jdbc/bson-3.8.0.jar"
+  # celer-ifx is shared (app slots, other checkouts): CELER_INFORMIX_KILLABLE stays unset, so no test restarts or kills it;
+  # a stuck CDC reader is moved on with log switches instead (#216).
   export CELER_REQUIRE_BRIDGE=1 CELER_NODE=node CELER_INFORMIX_CONTAINER=celer-ifx
   # SSH tunnels (engine_tests.rs ssh_tunnel_*): the bastion, and each engine as only the bastion sees it.
   export CELER_SSH_TEST="host=localhost port=2222 user=celer password=celer key=$D/ssh/id_ed25519 container=celer-sshd pg=celer-pg:5432 mysql=celer-mysql:3306 mariadb=celer-mariadb:3306 mssql=celer-mssql:1433 ifx=celer-ifx"

@@ -85,7 +85,73 @@ enum Sink {
         /// Widest text per column in the header and the first rows, for the column widths (`autofit` needs the
         /// whole sheet in memory, and the sheet is written row by row).
         widths: Vec<usize>,
+        /// Number formats of the date and time cells, by `DateFmt`.
+        date_formats: Vec<rust_xlsxwriter::Format>,
     },
+}
+
+/// What a date or time cell shows in Excel; the index into `Sink::Xlsx::date_formats`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DateFmt {
+    Date,
+    DateTime,
+    DateTimeMs,
+    Time,
+    TimeMs,
+}
+
+const DATE_FORMATS: [&str; 5] = ["yyyy-mm-dd", "yyyy-mm-dd hh:mm:ss", "yyyy-mm-dd hh:mm:ss.000", "hh:mm:ss", "hh:mm:ss.000"];
+
+/// A date, date-time or time of day as the engines print it (`2024-03-15`, `2024-03-15 10:20[:30[.123]]`, with a
+/// space or a `T`, or `10:20:30`) as an Excel serial number and its format. None for anything Excel cannot hold
+/// exactly, which stays text: a time zone, BC or infinity, an interval, more than milliseconds, a day before
+/// 1900-03-01 (Excel's 1900 calendar has a 29 February that never was).
+fn excel_datetime(s: &str) -> Option<(f64, DateFmt)> {
+    use chrono::{NaiveDate, NaiveTime, Timelike};
+    let (date, time) = match s.split_once([' ', 'T']) {
+        Some((d, t)) => (Some(d), Some(t)),
+        None if s.contains(':') => (None, Some(s)),
+        None => (Some(s), None),
+    };
+    let day = match date {
+        Some(d) => {
+            if d.len() != 10 {
+                return None;
+            }
+            let d = NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()?;
+            let n = d.signed_duration_since(NaiveDate::from_ymd_opt(1899, 12, 30)?).num_days();
+            if n < 61 {
+                return None;
+            }
+            n as f64
+        }
+        None => 0.0,
+    };
+    let Some(t) = time else {
+        return Some((day, DateFmt::Date));
+    };
+    let (hms, frac) = t.split_once('.').unwrap_or((t, ""));
+    let hms = match hms.len() {
+        8 => NaiveTime::parse_from_str(hms, "%H:%M:%S").ok()?,
+        5 => NaiveTime::parse_from_str(hms, "%H:%M").ok()?,
+        _ => return None,
+    };
+    if !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let frac = frac.trim_end_matches('0');
+    if frac.len() > 3 {
+        return None;
+    }
+    let ms = if frac.is_empty() { 0 } else { frac.parse::<u32>().ok()? * 10u32.pow(3 - frac.len() as u32) };
+    let secs = hms.num_seconds_from_midnight() as f64 + ms as f64 / 1000.0;
+    let fmt = match (date.is_some(), ms > 0) {
+        (true, false) => DateFmt::DateTime,
+        (true, true) => DateFmt::DateTimeMs,
+        (false, false) => DateFmt::Time,
+        (false, true) => DateFmt::TimeMs,
+    };
+    Some((day + secs / 86_400.0, fmt))
 }
 
 /// Rows measured for the Excel column widths.
@@ -139,36 +205,15 @@ fn export_rows(
     if let Some(order) = &order {
         cols = order.iter().map(|&i| cols[i].clone()).collect();
     }
-    // JSON: one key per column, so columns that share a name (a join's two `id`) become id, id_2…
-    if o.format == "json" {
-        let keys = unique_names(cols.iter().map(|c| c.name.as_str()));
-        for (c, key) in cols.iter_mut().zip(keys) {
-            c.name = key;
-        }
-    }
     let mut has_more = first.has_more;
-    let mut sink = match o.format.as_str() {
-        "xlsx" => Sink::Xlsx {
-            wb: rust_xlsxwriter::Workbook::new(),
-            row: 0,
-            widths: vec![0; cols.len()],
-        },
-        _ => {
-            let mut w = BufWriter::with_capacity(1 << 20, File::create(out_path)?);
-            if o.bom && matches!(o.format.as_str(), "csv" | "tsv") {
-                w.write_all("\u{feff}".as_bytes())?;
-            }
-            Sink::Text { w, first: true, batch: 0 }
-        }
-    };
     let sql_cols = cols
         .iter()
         .map(|c| d.quote_ident(&c.name))
         .collect::<Vec<_>>()
         .join(", ");
+    let mut sink = open_sink(&mut cols, o, out_path)?;
     // XML: one element per column, named after it when the name is a valid XML name.
     let xml_tags = cols.iter().map(|c| xml_name(&c.name)).collect::<Vec<_>>();
-    write_header(&mut sink, &cols, o)?;
     let mut total = 0u64;
     let mut rows = first.rows;
     // A row in the grid's column order (reused from row to row).
@@ -201,6 +246,74 @@ fn export_rows(
         has_more = f.has_more;
     }
     let _ = d.close_cursor();
+    close_sink(sink, o, out_path)?;
+    Ok(total)
+}
+
+/// The file's sink, with the header written. JSON: one key per column, so columns that share a name (a join's two
+/// `id`) become id, id_2… in `cols`.
+fn open_sink(cols: &mut [ColumnInfo], o: &ExportOptions, out_path: &str) -> Result<Sink> {
+    if o.format == "json" {
+        let keys = unique_names(cols.iter().map(|c| c.name.as_str()));
+        for (c, key) in cols.iter_mut().zip(keys) {
+            c.name = key;
+        }
+    }
+    let mut sink = match o.format.as_str() {
+        "xlsx" => Sink::Xlsx {
+            wb: rust_xlsxwriter::Workbook::new(),
+            row: 0,
+            widths: vec![0; cols.len()],
+            date_formats: DATE_FORMATS.iter().map(|f| rust_xlsxwriter::Format::new().set_num_format(*f)).collect(),
+        },
+        _ => {
+            let mut w = BufWriter::with_capacity(1 << 20, File::create(out_path)?);
+            if o.bom && matches!(o.format.as_str(), "csv" | "tsv") {
+                w.write_all("\u{feff}".as_bytes())?;
+            }
+            Sink::Text { w, first: true, batch: 0 }
+        }
+    };
+    write_header(&mut sink, cols, o)?;
+    Ok(sink)
+}
+
+/// Rows the grid already holds (a selection: rows that need not be next to each other, in screen order) written as
+/// a file with the same formats and options as an export of the query. `quoted` are the column names quoted for
+/// the engine (SQL INSERT). Binary values are the grid's, so a selection holding a long one (its preview, cut with
+/// "…") is refused: written, it would be text in a binary column (SQL) or a cut value (the other formats) (#230).
+pub fn export_grid(mut cols: Vec<ColumnInfo>, rows: &[Vec<Cell>], quoted: &[String], o: &ExportOptions, engine: DbKind) -> Result<u64> {
+    if quoted.len() != cols.len() || rows.iter().any(|r| r.len() != cols.len()) {
+        bail!("Las filas a exportar no casan con sus columnas");
+    }
+    // By its shape, not the column's kind: SQLite gives an expression or an untyped column holding a blob `Other`.
+    let cut = |c: &Cell| {
+        matches!(c, Cell::Text(s) if s.strip_prefix("0x").and_then(|h| h.strip_suffix('…'))
+            .is_some_and(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))))
+    };
+    if rows.iter().flatten().any(cut) {
+        bail!("La selección tiene valores binarios recortados (más de 4 KB): exporta el resultado completo para tenerlos enteros");
+    }
+    let partial = format!("{}.partial", o.path);
+    let written = (|| -> Result<u64> {
+        let sql_cols = quoted.join(", ");
+        let mut sink = open_sink(&mut cols, o, &partial)?;
+        let xml_tags = cols.iter().map(|c| xml_name(&c.name)).collect::<Vec<_>>();
+        for r in rows {
+            write_row(&mut sink, &cols, r, o, &sql_cols, &xml_tags, engine)?;
+        }
+        close_sink(sink, o, &partial)?;
+        std::fs::rename(&partial, &o.path)?;
+        Ok(rows.len() as u64)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    written
+}
+
+/// Ends the file: closing tags, the last multi-row INSERT, the Excel column widths.
+fn close_sink(sink: Sink, o: &ExportOptions, out_path: &str) -> Result<()> {
     match sink {
         Sink::Text { mut w, batch, .. } => {
             match o.format.as_str() {
@@ -220,7 +333,7 @@ fn export_rows(
             wb.save(out_path)?;
         }
     }
-    Ok(total)
+    Ok(())
 }
 
 fn csv_field(s: &str, delim: &str) -> String {
@@ -361,8 +474,9 @@ fn write_header(sink: &mut Sink, cols: &[ColumnInfo], o: &ExportOptions) -> Resu
             }
             _ => {}
         },
-        Sink::Xlsx { wb, row, widths } => {
-            let ws = wb.add_worksheet_with_constant_memory();
+        Sink::Xlsx { wb, row, widths, .. } => {
+            // Fails when the temp file that holds the streamed rows cannot be created (constant_memory).
+            let ws = wb.add_worksheet_with_constant_memory()?;
             let bold = rust_xlsxwriter::Format::new().set_bold();
             for (i, c) in cols.iter().enumerate() {
                 ws.write_string_with_format(0, i as u16, &c.name, &bold)?;
@@ -466,7 +580,7 @@ fn write_row(
             }
             _ => {}
         },
-        Sink::Xlsx { wb, row, widths } => {
+        Sink::Xlsx { wb, row, widths, date_formats } => {
             // Said at the first row too many, before reading the rest of the result.
             if *row > XLSX_MAX_ROWS {
                 bail!("Excel admite como máximo {XLSX_MAX_ROWS} filas: exporta a CSV o filtra la consulta");
@@ -494,6 +608,13 @@ fn write_row(
                         if cols[i].kind == ColKind::Number {
                             if let Ok(v) = s.parse::<f64>() {
                                 ws.write_number(*row, col, v)?;
+                                continue;
+                            }
+                        }
+                        // Dates as Excel dates (sortable, filterable, usable in formulas), not text.
+                        if cols[i].kind == ColKind::Date {
+                            if let Some((v, f)) = excel_datetime(s) {
+                                ws.write_number_with_format(*row, col, v, &date_formats[f as usize])?;
                                 continue;
                             }
                         }
@@ -644,6 +765,69 @@ mod tests {
     }
 
     #[test]
+    fn grid_selection_exports_exactly_its_rows() {
+        // Rows 2, 5 and 9 of a grid, as the UI sends them (JSON), in screen order.
+        let cols: Vec<ColumnInfo> = serde_json::from_str(r#"[{"name":"id","typeName":"int","kind":"number"},{"name":"name","typeName":"text","kind":"text"},{"name":"id","typeName":"int","kind":"number"}]"#).unwrap();
+        let rows: Vec<Vec<Cell>> = serde_json::from_str(r#"[[9,"O'Hara",1.5],[2,null,true],[5,"x;y","12345678901234567890"]]"#).unwrap();
+        assert!(matches!(rows[0][2], Cell::Num(_)) && matches!(rows[1][2], Cell::Bool(true)) && matches!(rows[1][1], Cell::Null));
+        let quoted = vec!["[id]".to_string(), "[name]".to_string(), "[id]".to_string()];
+        let dir = std::env::temp_dir();
+        let path = |ext: &str| dir.join(format!("celer-grid-{}.{ext}", std::process::id())).to_string_lossy().into_owned();
+        let run = |format: &str, engine: DbKind| {
+            let o = ExportOptions { format: format.into(), path: path(format), bom: false, ..ExportOptions::default() };
+            assert_eq!(export_grid(cols.clone(), &rows, &quoted, &o, engine).unwrap(), 3);
+            assert!(!std::path::Path::new(&format!("{}.partial", o.path)).exists());
+            let text = if format == "xlsx" { String::new() } else { std::fs::read_to_string(&o.path).unwrap() };
+            let _ = std::fs::remove_file(&o.path);
+            text
+        };
+        assert_eq!(run("csv", DbKind::Postgres), "id;name;id\r\n9;O'Hara;1.5\r\n2;;true\r\n5;\"x;y\";12345678901234567890\r\n");
+        assert_eq!(
+            run("sql", DbKind::Mssql),
+            "INSERT INTO tabla ([id], [name], [id]) VALUES (9, N'O''Hara', 1.5);\nINSERT INTO tabla ([id], [name], [id]) VALUES (2, NULL, 1);\nINSERT INTO tabla ([id], [name], [id]) VALUES (5, N'x;y', 12345678901234567890);\n"
+        );
+        let json: serde_json::Value = serde_json::from_str(&run("json", DbKind::Sqlite)).unwrap();
+        assert_eq!(json[0]["id_2"], 1.5);
+        assert_eq!(json[2]["id"], 5);
+        run("xlsx", DbKind::Sqlite);
+        // Rows that do not fit the columns are refused, and nothing is written.
+        let o = ExportOptions { path: path("bad"), ..ExportOptions::default() };
+        assert!(export_grid(cols.clone(), &[vec![Cell::Int(1)]], &quoted, &o, DbKind::Sqlite).is_err());
+        assert!(!std::path::Path::new(&o.path).exists());
+    }
+
+    #[test]
+    fn grid_selection_refuses_cut_binary_values() {
+        // A blob over the grid's 4 KB preview comes back as "0x…" cut with "…" (#230).
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        d.execute("CREATE TABLE b (id INTEGER, v BLOB); INSERT INTO b VALUES (1, zeroblob(5000)), (2, x'CAFE')", 10).unwrap();
+        let out = d.execute("SELECT id, v FROM b ORDER BY id", 10).unwrap();
+        let (cols, rows) = (out.results[0].columns.clone(), out.results[0].rows.clone());
+        assert_eq!(cols[1].kind, ColKind::Binary);
+        // Text that only looks alike is exported.
+        let o = ExportOptions { format: "csv".into(), path: std::env::temp_dir().join(format!("celer-grid-txt-{}.csv", std::process::id())).to_string_lossy().into_owned(), ..ExportOptions::default() };
+        assert!(export_grid(cols.clone(), &[vec![Cell::Int(3), Cell::Text("0x…".into())], vec![Cell::Int(4), Cell::Text("0xmore…".into())]], &["a".into(), "b".into()], &o, DbKind::Sqlite).is_ok());
+        let _ = std::fs::remove_file(&o.path);
+        let quoted = vec!["\"id\"".to_string(), "\"v\"".to_string()];
+        let dir = std::env::temp_dir();
+        for format in ["sql", "csv", "json"] {
+            let o = ExportOptions { format: format.into(), path: dir.join(format!("celer-grid-cut-{}.{format}", std::process::id())).to_string_lossy().into_owned(), bom: false, ..ExportOptions::default() };
+            let e = export_grid(cols.clone(), &rows, &quoted, &o, DbKind::Sqlite).unwrap_err().to_string();
+            assert!(e.contains("binarios recortados"), "{e}");
+            assert!(!std::path::Path::new(&o.path).exists() && !std::path::Path::new(&format!("{}.partial", o.path)).exists());
+        }
+        // A short binary value is whole in the grid: written as the engine's binary literal.
+        let o = ExportOptions { format: "sql".into(), path: dir.join(format!("celer-grid-bin-{}.sql", std::process::id())).to_string_lossy().into_owned(), ..ExportOptions::default() };
+        assert_eq!(export_grid(cols.clone(), &rows[1..], &quoted, &o, DbKind::Sqlite).unwrap(), 1);
+        let text = std::fs::read_to_string(&o.path).unwrap();
+        let _ = std::fs::remove_file(&o.path);
+        assert!(text.contains("VALUES (2, X'CAFE')"), "{text}");
+    }
+
+    #[test]
     fn xlsx_export_writes_the_workbook() {
         let mut cfg = ConnConfig::default();
         cfg.kind = DbKind::Sqlite;
@@ -662,6 +846,71 @@ mod tests {
         let range = book.worksheet_range_at(0).unwrap().unwrap();
         let cells: Vec<String> = range.rows().flatten().map(|c| c.to_string()).collect();
         assert_eq!(cells, ["a", "b", "1", "x", "2", ""]);
+    }
+
+    #[test]
+    fn excel_dates_from_engine_text() {
+        assert_eq!(excel_datetime("2024-03-15"), Some((45366.0, DateFmt::Date)));
+        assert_eq!(excel_datetime("1900-03-01"), Some((61.0, DateFmt::Date)));
+        assert_eq!(excel_datetime("2024-03-15 12:00:00"), Some((45366.5, DateFmt::DateTime)));
+        assert_eq!(excel_datetime("2024-03-15T12:00"), Some((45366.5, DateFmt::DateTime)));
+        assert_eq!(excel_datetime("2024-03-15 12:00:00.000000"), Some((45366.5, DateFmt::DateTime)));
+        assert_eq!(excel_datetime("2024-03-15 00:00:00.5").map(|x| x.1), Some(DateFmt::DateTimeMs));
+        assert_eq!(excel_datetime("06:00:00"), Some((0.25, DateFmt::Time)));
+        assert_eq!(excel_datetime("06:00:00.250").map(|x| x.1), Some(DateFmt::TimeMs));
+        // Left as text: what Excel cannot hold exactly.
+        for s in [
+            "2024-03-15 10:20:30+01",
+            "2024-03-15 10:20:30.123456",
+            "1900-02-28",
+            "0044-03-15 BC",
+            "infinity",
+            "838:59:59",
+            "-10:00:00",
+            "1 10:00:00",
+            "12345-01-01",
+            "2024-3-5",
+            "",
+        ] {
+            assert_eq!(excel_datetime(s), None, "{s}");
+        }
+    }
+
+    /// Date columns land as Excel dates, which the import reads back as the same values.
+    #[test]
+    fn xlsx_export_types_dates() {
+        let mut cfg = ConnConfig::default();
+        cfg.kind = DbKind::Sqlite;
+        cfg.file_path = ":memory:".into();
+        let mut d = crate::sqlite::SqliteDriver::connect(cfg).unwrap();
+        d.execute(
+            "CREATE TABLE t (d DATE, ts DATETIME, ms DATETIME, tm TIME, tz DATETIME); \
+             INSERT INTO t VALUES ('2024-03-15', '2024-03-15 10:20:30', '2024-03-15 10:20:30.125', '06:30:00', '2024-03-15 10:20:30+01')",
+            10,
+        )
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("celer-export-dates-{}.xlsx", std::process::id()));
+        let o = ExportOptions { format: "xlsx".into(), path: path.to_string_lossy().into_owned(), ..ExportOptions::default() };
+        export(&mut d, "SELECT * FROM t", &o, DbKind::Sqlite, &|_| {}, &|| false).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        use calamine::Reader;
+        let mut book: calamine::Xlsx<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(bytes)).unwrap();
+        let range = book.worksheet_range_at(0).unwrap().unwrap();
+        let row: Vec<&calamine::Data> = range.rows().nth(1).unwrap().iter().collect();
+        assert!(row[..4].iter().all(|c| matches!(c, calamine::Data::DateTime(_))), "{row:?}");
+        let typed: Vec<crate::sheets::SheetCell> = row.iter().map(|c| crate::sheets::typed(c)).collect();
+        use crate::sheets::SheetCell;
+        assert_eq!(
+            typed,
+            [
+                SheetCell::Date { d: "2024-03-15".into() },
+                SheetCell::Date { d: "2024-03-15 10:20:30".into() },
+                SheetCell::Date { d: "2024-03-15 10:20:30.125".into() },
+                SheetCell::Time { t: "06:30:00".into() },
+                SheetCell::Text("2024-03-15 10:20:30+01".into()),
+            ]
+        );
     }
 
     /// Past Excel's row limit the export stops at the first row too many, without reading the rest.

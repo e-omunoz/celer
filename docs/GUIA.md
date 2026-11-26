@@ -204,8 +204,13 @@ Rollback o Cancelar; si hay cambios sin guardar en una tabla o una exportación 
 | Ctrl+Alt+L | Formatea el SQL |
 | Ctrl+clic, F4, Ctrl+B | Abre la tabla bajo el cursor |
 
-- **Autocompletado**: tablas después de `FROM`/`JOIN`, columnas de las tablas de la sentencia en el resto, y
-  `alias.` o `esquema.` acotan la lista.
+- **Autocompletado**: tablas después de `FROM`/`JOIN`, y `alias.` o `esquema.` acotan la lista. En `WHERE`, `AND`/`OR`,
+  `ON`, `GROUP BY`, `ORDER BY`, `HAVING`, `SET`, la lista del `SELECT` o las columnas de un `INSERT INTO t (…)`, salen
+  primero solo las columnas de las tablas que nombra la sentencia (con su alias al lado), por encima de palabras clave,
+  funciones y nombres de tabla (estos detrás, para añadir un `JOIN`); vale aunque el `FROM` esté después del cursor.
+  Se reconocen alias, nombres entre comillas, `esquema.tabla`, `bd.dbo.tabla` y el `bd:propietario.tabla` de
+  Informix; cuenta solo la sentencia bajo el cursor y, dentro de una subconsulta, sus tablas primero y luego las de
+  fuera. Sin ninguna tabla todavía (`SELECT |`) se ofrecen las columnas de todo el catálogo.
 - **Plantillas**: escribe `sel`, `selw`, `ins`, `upd`, `cte`… y pulsa Tab; los campos enlazados se rellenan a la vez.
   Las tuyas se crean en *Ajustes › Plantillas*, donde puedes indicar su motor (o dejar que Celer lo detecte); las de
   otro motor salen en las sugerencias marcadas *otro motor* y al final.
@@ -226,7 +231,9 @@ Rollback o Cancelar; si hay cambios sin guardar en una tabla o una exportación 
   Ctrl+Mayús+S guarda como.
 - **Mensajes del servidor** en la pestaña *Salida*: los `NOTICE` de PostgreSQL, los avisos de MySQL y, en SQL Server,
   `PRINT` y `RAISERROR` de gravedad 10 o menor (también `WITH NOWAIT` desde un procedimiento), en orden, como en SSMS.
-
+- **Salida, lo más reciente arriba**: cada ejecución añade su línea arriba del todo, marcada como *última*, y la vista
+  vuelve arriba al llegar una nueva. «✦ Corregir con IA» aparece en esa última línea cuando es un error. *copiar*
+  copia el SQL de una línea y *copiar todo* la salida entera en el orden en que se ve. Se guardan las 200 últimas.
 ### Resultados
 
 Los resultados llegan por páginas desde un cursor abierto: aunque la consulta devuelva millones de filas, solo se traen
@@ -250,6 +257,20 @@ las que ves. *Cargar todo* lee el resto con progreso y se puede cancelar.
     iguales, así que se pueden comparar resultados de dos motores distintos.
   - Se comparan las filas cargadas (hasta 200.000 por lado). Si un lado tiene más, se avisa y se ofrece *Cargar todo*;
     un resultado fijado antes de cargar todas sus páginas se queda con las que tenía.
+- **Seleccionar varias filas**: Ctrl+clic (⌘+clic en macOS) en el número de una fila o en cualquiera de sus celdas la
+  añade a la selección o la quita, sin tocar las demás: las filas 2, 5 y 9 pueden estar seleccionadas a la vez, aunque
+  estén lejos (la 5 y la 5000) y entre medias se carguen más páginas. Mayús+clic selecciona las filas desde la última
+  en la que hiciste clic y Ctrl+Mayús+clic añade ese rango a lo que ya había. Un clic normal, una flecha o Esc vuelven
+  a la selección de siempre (una celda o un rectángulo).
+  - Copiar (Ctrl+C, Ctrl+Mayús+C y todos los formatos de *Copiar como ›*), *Supr* en una tabla y *Exportar selección…*
+    toman exactamente esas filas, en el orden de la pantalla. La barra de estado dice cuántas filas hay seleccionadas y
+    sus agregados (Σ, media, mínimo, máximo, distintos) son solo de ellas.
+  - Ordenar, filtrar o volver a ejecutar quita la selección múltiple, como pasa con la normal.
+  - En una columna de clave foránea, Ctrl+clic en el valor sigue abriendo la fila referenciada: para seleccionar esa
+    fila, haz Ctrl+clic en su número o en otra de sus celdas.
+- **Exportar selección…** (menú de la rejilla) escribe solo las filas y columnas seleccionadas, en CSV, TSV, Excel,
+  JSON, SQL, Markdown, HTML o XML, tal como están cargadas en la rejilla (no vuelve a ejecutar la consulta; un binario
+  largo sale con su vista previa).
 - **Copiar**: el menú de una celda tiene *Copiar* (Ctrl+C), *Copiar con cabeceras* (Ctrl+Mayús+C) y *Copiar como ›*
   (CSV, JSON, Markdown, XML, SQL INSERT, lista IN y WHERE, con los literales del motor de la conexión); **Exportar** a
   disco en streaming. En una tabla, *Filtrar ›* añade el filtro por el valor de la celda (por este valor, excluirlo,
@@ -277,7 +298,9 @@ Doble clic en una tabla del explorador la abre.
   - Los booleanos se cambian con `t`, `f` o la barra espaciadora.
   - Las fechas tienen un calendario.
   - Las claves foráneas ofrecen las filas de la tabla referenciada, que puedes buscar por nombre.
-  - Alt+Insert añade una fila, Supr borra las seleccionadas y Ctrl+Mayús+N pone NULL.
+  - Alt+Insert añade una fila, Supr borra las seleccionadas (también varias sueltas, elegidas con Ctrl+clic: se marcan
+    todas y, al guardar, cada una se borra por su clave; Supr sobre filas ya marcadas las restaura) y Ctrl+Mayús+N pone
+    NULL.
 - **Guardar** (Ctrl+Intro) enseña el SQL antes de ejecutarlo todo en una transacción; si algo falla, no se guarda
   nada. Cada cambio pendiente se puede deshacer por celda o por fila.
 - **Claves foráneas**: las columnas FK llevan ↗ en la cabecera. Ctrl+clic en un valor abre la fila referenciada.
@@ -300,7 +323,10 @@ Doble clic en una tabla del explorador la abre.
   lógicos del servidor, del más reciente al más antiguo, con la hora del commit, la transacción (por la posición de su
   commit en el log: los cambios con la misma son de la misma transacción), el usuario y cada columna antes → después.
   *Ver la fila en este momento* enseña la fila entera tras ese cambio y *Todas las columnas* lo hace en todos. Arriba se
-  ve qué logs se leyeron. Se lee con la API CDC de Informix, así que:
+  ve qué logs se leyeron y por qué la lectura empieza donde empieza: en el log más antiguo que queda en disco (y solo
+  entonces dice «Lo anterior ya no está en los logs»), después de los logs que se llenaron antes de crearse la tabla
+  (siguen en disco, pero no tienen cambios suyos) o, tras una recuperación rápida de Informix, después de los que se
+  llenaron antes de la hora de creación que esta reescribió. Se lee con la API CDC de Informix, así que:
   - Hace falta la conexión por **JDBC**: por DRDA o por el Client SDK el diálogo dice «No se puede reconstruir» y por
     qué. También hacen falta una base de datos **con log**, una tabla que no sea RAW y con **clave primaria**, la base
     `syscdcv1` (un administrador la crea una vez con `dbaccess - $INFORMIXDIR/etc/syscdcv1.sql`) y un usuario que

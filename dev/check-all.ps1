@@ -41,7 +41,8 @@ Get-ChildItem dev\*-check.ts | Sort-Object Name | ForEach-Object {
 }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "SQL Server plan reader" { & $node dev\plan-mssql-check.mjs } }
 if (Get-NetTCPConnection -State Listen -LocalPort 1420 -ErrorAction SilentlyContinue) { Step "menus, settings and theme editor (preview)" { & $node dev\layout-check.mjs } }
-if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet; Pop-Location } }
+# One test at a time, as dev/wsl/engines.sh runs them: the live tests share the test databases.
+if (-not $SkipRust) { Step "rust unit tests" { Push-Location src-tauri; cargo test --lib --quiet -- --test-threads=1; Pop-Location } }
 
 # The MCP settings start from their defaults (the e2e checks them): one left enabled by an earlier manual test is
 # kept as mcp.json.prev, not deleted.
@@ -66,6 +67,9 @@ Step "server activity" { & $node dev\activity-check.mjs "$env:TEMP\celer-activit
 Step "editor completion and navigation" { & $node dev\editor-check.mjs }
 Step "pinned result compare" { & $node dev\result-compare-check.mjs }
 Step "typed Excel import" { & $node dev\import-typed-check.mjs }
+# Multiple selection (#218) on the local engines this data folder has; the whole matrix needs a slot with one
+# connection per engine (run-desktop.ps1 -Slot n, dev/devdata-connections.mjs).
+Step "grid multiple selection (PostgreSQL, MariaDB, SQLite)" { & $node dev\grid-multiselect-check.mjs --engines "Postgres local,MariaDB local,Tienda (SQLite)" }
 Restart-App
 # Tabs are told apart by title, so this one starts from an empty workspace.
 Step "several windows" { & $node dev\windows-check.mjs "Postgres local" }

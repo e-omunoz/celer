@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { api, errorText, isTauri } from "./api";
 import { asRaw, raw } from "./raw";
 import { busy, endBusy, nextPaint, startBusy, updateBusy } from "./busy";
-import { cellText, codeOnly, exportStatement, firstKeyword, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
+import { cellText, codeOnly, exportStatement, firstKeyword, fromTableOf, formatSql, rowsLabel, isMutating, needsProductionConfirm, splitSql, statementAt, wherePosition } from "./sql";
 import type {
   Cell,
   ColumnInfo,
@@ -24,6 +24,7 @@ import type {
   ThemeName,
 } from "./types";
 import { defaultSettings, emptyConn, engineOf } from "./types";
+import { odbcNeedsPassword } from "./connTree";
 import { binaryKeysWritable, changeStatements, explainPrefix, paramNamesFor, selectLimit, upsertSql, whereOf } from "./sqlgen";
 import { bindParams, findParams, hasUnfilteredWrite, literalDialect, paramNames } from "./snippets";
 import { erNeighbourhood, erNeighbours, type ErEdge, type ErTable } from "./erLayout";
@@ -44,16 +45,11 @@ import { envOf, normalizeEnvironment } from "./environment";
 import { NO_TX, countStatements, reminderDue, txAfterRun, txDuration, txReminderText, txThresholds } from "./txWatch";
 import { gibDisplayName, gibShownIn, gibTint, normalizeGibPrefs, type GibPlace, type GibPrefs } from "./gib/prefs";
 import type { ColumnOrder } from "./columnOrder";
+import { appendOutput, type OutputEntry } from "./outputLog";
+
+export type { OutputEntry } from "./outputLog";
 
 export type InspectorMode = "value" | "record" | "history" | "library" | "variables" | "ai";
-
-export interface OutputEntry {
-  at: number;
-  sql: string;
-  ok: boolean;
-  text: string;
-  elapsedMs: number | null;
-}
 
 export interface SqlTab {
   id: string;
@@ -1274,11 +1270,6 @@ export function answerPassword(value: string | null) {
   setState("passwordAsk", null);
 }
 
-/** ODBC takes its password from the connection string unless it names a user and carries none (an import). */
-function odbcNeedsPassword(conn: ConnSummary) {
-  return conn.kind === "odbc" && !!conn.user.trim() && !/\b(pwd|password)\s*=/i.test(`${conn.odbcConnStr};${conn.extra}`);
-}
-
 function needsPassword(conn: ConnSummary) {
   const network = conn.kind !== "sqlite" && (conn.kind !== "odbc" || odbcNeedsPassword(conn));
   return !conn.integratedAuth && network && !conn.hasPassword && !state.passwords[conn.id];
@@ -1921,7 +1912,7 @@ async function remember(tab: SqlTab, sql: string, ok: boolean, elapsedMs: number
 function pushOutput(tabId: string, entry: OutputEntry) {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "sql") return;
-  patchTab(tabId, { output: [...tab.output.slice(-199), entry] });
+  patchTab(tabId, { output: appendOutput(tab.output, entry) });
 }
 
 export function describeResults(results: ResultSet[], elapsedMs: number) {
@@ -3007,11 +2998,16 @@ export function revertTableChange(tabId: string, row: number, col: number | null
 export function deleteTableRows(tabId: string, rows: number[]) {
   const tab = state.tabs[tabIndex(tabId)];
   if (!tab || tab.kind !== "table") return;
+  // A multiple selection can be thousands of rows: looked up in a set, not the list.
+  const picked = new Set(rows);
   const existing = rows.filter((row) => row < tab.rows.length);
-  const inserts = tab.inserts.filter((_, offset) => !rows.includes(tab.rows.length + offset));
+  const inserts = tab.inserts.filter((_, offset) => !picked.has(tab.rows.length + offset));
   const deleted = new Set(tab.deleted);
+  // Supr marks every selected row; only when all of them were marked already does it take the marks off again
+  // (a selection mixing both is deleted whole, not flipped row by row).
+  const restore = existing.length > 0 && existing.every((row) => deleted.has(row));
   for (const row of existing) {
-    if (deleted.has(row)) deleted.delete(row);
+    if (restore) deleted.delete(row);
     else deleted.add(row);
   }
   patchTab(tab.id, { deleted: [...deleted], inserts });
@@ -3493,6 +3489,11 @@ export interface ExportSource {
   tableName: string;
   /** The grid's column order (headers dragged): the file follows what is on screen. */
   columnOrder?: ColumnOrder;
+  /**
+   * «Exportar selección…»: the grid's selected rows and columns, in screen order, written as they are instead of
+   * running `sql` again (empty then).
+   */
+  rows?: { columns: ColumnInfo[]; rows: Cell[][]; /** The grid's column count: the dialog says whether all were picked. */ gridColumns: number };
 }
 
 /**
@@ -3563,7 +3564,7 @@ export async function startExport(sqlOverride?: string) {
     notify("Solo se exporta una consulta de lectura", "warning", "La exportación vuelve a ejecutar la consulta. Selecciona la SELECT que quieres exportar: las demás sentencias del script no se repiten.");
     return;
   }
-  const from = /\bfrom\s+([\w."`\[\]]+)/i.exec(sql)?.[1]?.replace(/["`\[\]]/g, "") ?? "resultado";
+  const from = fromTableOf(sql, kind) ?? "resultado";
   openExport({ connId: tab.connId!, database: tab.database, sql: sql.replace(/;\s*$/, ""), label: "el resultado de la consulta", tableName: from, columnOrder: gridColumnOrders.get(tab.id) });
 }
 
@@ -3577,6 +3578,30 @@ export function startTableExport(tabId: string) {
   const order = tableOrderBy(tab);
   if (order) sql += ` ORDER BY ${order}`;
   openExport({ connId: tab.connId, database: tab.obj.database || tab.database, sql, label: where ? `${tab.obj.name} (filtrada)` : tab.obj.name, tableName: tab.qualified, columnOrder: gridColumnOrders.get(tab.id) });
+}
+
+/**
+ * «Exportar selección…» in a tab's grid (#218): exactly the rows selected, which need not be next to each other, with
+ * the selected columns, in screen order, as the grid holds them (no query runs again).
+ */
+export function startSelectionExport(tabId: string, data: { columns: ColumnInfo[]; rows: Cell[][]; gridColumns: number }) {
+  const tab = state.tabs[tabIndex(tabId)];
+  if (!tab?.connId || !data.rows.length || !data.columns.length) return;
+  const count = `${data.rows.length.toLocaleString()} ${data.rows.length === 1 ? "fila" : "filas"}`;
+  if (tab.kind === "table") {
+    openExport({ connId: tab.connId, database: tab.obj.database || tab.database, sql: "", label: `${tab.obj.name} (selección de ${count})`, tableName: tab.qualified, rows: data });
+    return;
+  }
+  // INSERT statements name the table the query reads, as the export of the whole result does: in a script, the
+  // statement of the result shown.
+  let sql = "";
+  if (tab.kind === "sql" && tab.resultsSql) {
+    const grids = tab.results.filter((result) => result.columns.length);
+    const shown = tab.results[tab.activeResult];
+    sql = exportStatement(tab.resultsSql, kindOf(tab.connId), grids.indexOf(shown), grids.length) ?? tab.resultsSql;
+  }
+  const from = fromTableOf(sql, kindOf(tab.connId)) ?? "resultado";
+  openExport({ connId: tab.connId, database: tab.database, sql: "", label: `resultado (selección de ${count})`, tableName: from, rows: data });
 }
 
 /** Export a whole table or view from the explorer. */
@@ -3613,7 +3638,7 @@ export async function runExport() {
   const started = performance.now();
   try {
     const opts = state.exportOpts;
-    const rows = await api().exportQuery(source.connId, source.database, source.sql, exportId, {
+    const options = {
       format,
       path: path || `${base}.${ext}`,
       delimiter: format === "tsv" ? "\t" : opts.delimiter,
@@ -3623,7 +3648,13 @@ export async function runExport() {
       nullText: opts.nullText,
       sqlBatch: opts.sqlBatch,
       columnOrder: source.columnOrder ?? null,
-    });
+    };
+    // A selection is written from the rows the grid holds (already in screen order); anything else reads the query again.
+    const picked = source.rows;
+    const engine = kindOf(source.connId);
+    const rows = picked
+      ? await api().exportGridRows(picked.columns, picked.rows, await selectionColumnNames(source.connId, source.database, picked.columns, format), engine, { ...options, columnOrder: null })
+      : await api().exportQuery(source.connId, source.database, source.sql, exportId, options);
     setState({ exportRows: rows, exportRunning: false, exportOpen: false, exportId: "" });
     const target = path;
     notify(`Exportadas ${rows.toLocaleString()} filas en ${formatMs(performance.now() - started)}`, "success", target || undefined, target && isTauri() ? { label: "Mostrar en la carpeta", run: () => void revealPath(target) } : undefined);
@@ -3634,6 +3665,22 @@ export async function runExport() {
     setState({ exportRunning: false, exportId: "" });
     if (cancelled) notify("Exportación cancelada", "warning");
     else notify("La exportación falló", "error", errorText(err));
+  }
+}
+
+/**
+ * Column names of a selection export's INSERT statements, quoted by the connection's driver as the export of the
+ * whole result does: over ODBC the quote character is the one the driver reports, not the UI's guess per kind (#239).
+ * Only the SQL format writes them, so the other formats need no session.
+ */
+async function selectionColumnNames(connId: string, database: string | undefined, columns: ColumnInfo[], format: string): Promise<string[]> {
+  if (format !== "sql") return columns.map((col) => col.name);
+  const opened = await openSessionFor(connId, database);
+  if (!opened) throw new Error("No se pudo conectar para nombrar las columnas de las sentencias INSERT");
+  try {
+    return await api().quoteIdents(opened.sessionId, columns.map((col) => col.name));
+  } finally {
+    void api().closeSession(opened.sessionId).catch(() => {});
   }
 }
 

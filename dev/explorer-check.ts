@@ -25,6 +25,7 @@ import {
   movedFolderPath,
   NO_FILTER,
   normalizeFolder,
+  odbcNeedsPassword,
   parentFolder,
   parseConnectionsJson,
   passesFilter,
@@ -138,6 +139,19 @@ assert.deepEqual([tokens.odbcConnStr, tokens.extra], ["DSN=x;UID=u", "sslmode=re
 assert.equal(inlinePassword("DSN=x;Pwd = {a;b}}c} ;UID=u"), "a;b}c");
 assert.equal(inlinePassword("DSN=x;PasswordFile=y"), null);
 assert.equal(withoutInlinePassword("PWD=s;DSN=x"), "DSN=x");
+// An ODBC connection imported without passwords is asked for one when it names a user in the field or the string
+// (#220: the exported "DRIVER=…;UID=sa;" used to fail the login without asking).
+const odbc = (odbcConnStr: string, user = "", extra = "") => ({ kind: "odbc" as DbKind, user, odbcConnStr, extra });
+assert.equal(odbcNeedsPassword(odbc("DRIVER={SQL Server};SERVER=localhost,1433;DATABASE=celerdemo;UID=sa;")), true);
+assert.equal(odbcNeedsPassword(odbc("DSN=x", "u")), true);
+assert.equal(odbcNeedsPassword(odbc("DSN=x;User ID = u")), true);
+assert.equal(odbcNeedsPassword(odbc("DSN=x", "", "uid=u")), true);
+assert.equal(odbcNeedsPassword(odbc("DSN=x;UID=u;PWD={a;b}")), false, "carries its password");
+assert.equal(odbcNeedsPassword(odbc("DSN=x;UID=u", "", "Password=p")), false);
+assert.equal(odbcNeedsPassword(odbc("DSN=x;Trusted_Connection=yes")), false, "no user: integrated or the DSN's own");
+assert.equal(odbcNeedsPassword(odbc("DSN=x;UID=")), false, "an empty UID names nobody");
+assert.equal(odbcNeedsPassword(odbc("DSN=x;UserAgent=celer")), false);
+assert.equal(odbcNeedsPassword({ kind: "postgres", user: "u", odbcConnStr: "", extra: "" }), false);
 const doc = JSON.parse(text);
 assert.equal(doc.format, "celer-connections");
 assert.equal(doc.version, 1);

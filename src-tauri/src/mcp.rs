@@ -322,6 +322,19 @@ fn cell_json(c: &Cell) -> Value {
     }
 }
 
+/// True when a text value holds serialised rows (JSON keys, XML elements or attributes) named like a protected
+/// column: whole rows turned into one value by a view or a function the query filter does not know.
+fn serialises_protected(s: &str, red: &Redactor) -> bool {
+    static KEYS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    if !red.active() || !(s.contains('"') || s.contains('<')) {
+        return false;
+    }
+    let re = KEYS.get_or_init(|| {
+        regex::Regex::new(r#""([^"\\]+)"\s*:|<([A-Za-z_][A-Za-z0-9_.:-]*)|([A-Za-z_][A-Za-z0-9_.:-]*)\s*=\s*["']"#).unwrap()
+    });
+    re.captures_iter(s).any(|c| (1..=3).any(|i| c.get(i).is_some_and(|m| red.matches(m.as_str()))))
+}
+
 /// Convierte el primer resultado de una ejecución en JSON compacto, ocultando columnas sensibles.
 fn render_exec(out: &ExecOutput, red: &Redactor, elapsed_ms: u64) -> (Value, u64) {
     let rs = out
@@ -346,6 +359,7 @@ fn render_exec(out: &ExecOutput, red: &Redactor, elapsed_ms: u64) -> (Value, u64
                     .map(|(i, c)| match c {
                         Cell::Null => Value::Null,
                         _ if mask.get(i).copied().unwrap_or(false) => json!(REDACTED),
+                        Cell::Text(s) if serialises_protected(s, red) => json!(REDACTED),
                         _ => cell_json(c),
                     })
                     .collect(),
@@ -1019,8 +1033,21 @@ fn qualifiers(sql: &str, kind: DbKind) -> HashSet<String> {
 /// Ways to read a protected column without naming it, refused in a query that reads a table that has one:
 /// a whole row as a value (`SELECT t FROM users t`, `row_to_json(t.*)`), column alias lists that rename columns
 /// (`WITH s(a, b) AS …`, `FROM users AS u(a, b)`) and set operations (`SELECT 1, 2 WHERE false UNION SELECT * FROM
-/// users`), whose column names come from the first branch. Masking is still best-effort (views, for instance).
+/// users`), whose column names come from the first branch, and whole rows the server serialises (SQL Server's FOR
+/// JSON / FOR XML; PostgreSQL's `table_to_xml` family, refused outright since their table or query is a string).
+/// Masking is still best-effort (views, for instance): `render_exec` also hides serialised cells that name a
+/// protected column.
 fn masking_bypass(t: &[Tok], sens: &Sensitive) -> Option<String> {
+    for (k, x) in t.iter().enumerate() {
+        let Some(n) = tok_name(Some(x)) else { continue };
+        if t.get(k + 1) == Some(&Tok::P('('))
+            && ["query", "table", "schema", "database", "cursor"].iter().any(|p| n.starts_with(&format!("{p}_to_xml")))
+        {
+            return Some(format!(
+                "{n} lee tablas o consultas escritas como texto, y esta conexión tiene columnas protegidas: así sus valores no se pueden ocultar. Consulta las columnas que necesitas con SELECT."
+            ));
+        }
+    }
     if !t.iter().any(|x| tok_name(Some(x)).is_some_and(|n| sens.tables.contains(&n))) {
         return None;
     }
@@ -1033,6 +1060,10 @@ fn masking_bypass(t: &[Tok], sens: &Sensitive) -> Option<String> {
         Some(Tok::Word(w)) => w.as_str(),
         _ => "",
     };
+    // SQL Server returns the rows as one JSON or XML text, keyed by every column it reads.
+    if let Some(k) = (0..t.len()).find(|&k| word(k) == "FOR" && matches!(word(k + 1), "JSON" | "XML")) {
+        return refuse(&format!("FOR {}", word(k + 1)));
+    }
     // Relations the query declares (tables, aliases, CTEs, derived tables) and the positions that declare them.
     let mut relations: HashSet<String> = HashSet::new();
     let mut declared: HashSet<usize> = HashSet::new();
@@ -3206,6 +3237,19 @@ mod tests {
         }
         assert!(!Redactor::new("").active());
         assert!(Redactor::new("(").matches("password")); // patrón inválido → por defecto
+        // Whole rows serialised into one value (#234): JSON keys, XML elements and attributes.
+        for s in [
+            r#"[{"id":1,"password_hash":"h1"}]"#,
+            r#"{"id": 1, "API_KEY" : "k"}"#,
+            "<row><id>1</id><password_hash>h1</password_hash></row>",
+            r#"<users id="1" pwd_salt='x'/>"#,
+        ] {
+            assert!(serialises_protected(s, &r), "{s}");
+        }
+        for s in [r#"{"id":1,"name":"password reset"}"#, "<p>secret plans</p>", "a < b", "plain password text"] {
+            assert!(!serialises_protected(s, &r), "{s}");
+        }
+        assert!(!serialises_protected(r#"{"password":1}"#, &Redactor::new("")));
 
         let out = ExecOutput {
             results: vec![ResultSet {
@@ -3719,6 +3763,7 @@ mod tests {
     fn app_tools_on_engine(conn: Value, settings: Option<Value>) {
         let dir = temp_dir();
         let id = conn["id"].as_str().unwrap().to_string();
+        let kind = conn["kind"].as_str().unwrap().to_string();
         fs::write(dir.join("connections.json"), json!([conn]).to_string()).unwrap();
         if let Some(s) = settings {
             fs::write(dir.join("settings.json"), s.to_string()).unwrap();
@@ -3740,6 +3785,27 @@ mod tests {
         c.ok("open_console", json!({"connId": id, "sql": "SELECT id, nombre FROM mcp_app_probe", "run": true}));
         assert!(c.err("open_console", json!({"connId": id, "sql": "SELECT api_key FROM mcp_app_probe", "run": true})).contains("api_key"));
         c.ok("open_console", json!({"connId": id, "sql": "DELETE FROM mcp_app_probe WHERE id = 0", "run": true}));
+        // The protected value stays hidden, also from rows the server serialises (#234).
+        c.ok("execute_statement", json!({"connId": id, "sql": "INSERT INTO mcp_app_probe VALUES (1, 'a', 'k1secret')"}));
+        let q = c.ok("run_query", json!({"connId": id, "sql": "SELECT * FROM mcp_app_probe"}));
+        assert!(!q.to_string().contains("k1secret"), "{q}");
+        let probes: &[&str] = match kind.as_str() {
+            "mssql" => &[
+                "SELECT * FROM mcp_app_probe FOR JSON AUTO",
+                "SELECT id, nombre FROM mcp_app_probe FOR JSON PATH",
+                "SELECT * FROM mcp_app_probe FOR XML AUTO",
+                "SELECT (SELECT * FROM mcp_app_probe FOR XML RAW, ELEMENTS) AS x",
+            ],
+            "postgres" => &[
+                "SELECT table_to_xml('mcp_app_probe', true, false, '')",
+                "SELECT query_to_xml('select * from mcp_app_probe', true, false, '')",
+            ],
+            _ => &[],
+        };
+        for sql in probes {
+            let e = c.err("run_query", json!({"connId": id, "sql": sql}));
+            assert!(!e.contains("k1secret"), "{sql}: {e}");
+        }
         // At level read the same DELETE is refused, and a read still goes.
         cfg.connections.insert(id.clone(), ConnPermission { level: Level::Read, max_rows: None });
         save_config(&store, cfg.clone()).unwrap();
@@ -3841,6 +3907,20 @@ mod tests {
         bad("SELECT * FROM (SELECT * FROM users) AS d(a, b)", Postgres);
         bad("SELECT 1, 2, 3 WHERE false UNION ALL SELECT * FROM users", Postgres);
         bad("SELECT 1 AS a FROM dual UNION SELECT * FROM `users`", Mysql);
+        // Whole rows serialised by the server (#234).
+        bad("SELECT * FROM users FOR JSON AUTO", Mssql);
+        bad("SELECT id FROM dbo.users u FOR JSON PATH, ROOT('r')", Mssql);
+        bad("SELECT (SELECT * FROM [users] FOR XML AUTO) AS x", Mssql);
+        bad("SELECT * FROM users FOR XML RAW, ELEMENTS", Mssql);
+        // Their table or query is a string the lexer cannot see: refused whatever they name.
+        bad("SELECT table_to_xml('users', true, false, '')", Postgres);
+        bad("SELECT query_to_xml('select * from users', true, false, '')", Postgres);
+        bad("SELECT \"query_to_xml_and_xmlschema\"('select 1', true, false, '')", Postgres);
+        bad("SELECT pg_catalog.schema_to_xml('public', true, false, '')", Postgres);
+        bad("SELECT database_to_xml(true, false, '')", Postgres);
+        bad("SELECT cursor_to_xml('c', 10, true, false, '')", Postgres);
+        ok("SELECT id FROM orders FOR JSON AUTO", Mssql);
+        ok("SELECT * FROM users u FOR UPDATE", Postgres);
         ok("SELECT * FROM users", Postgres);
         ok("SELECT u.* FROM users u WHERE u.id = 1", Postgres);
         ok("SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id ORDER BY u.id LIMIT 5", Postgres);
@@ -4070,9 +4150,17 @@ mod tests {
             "SELECT row_to_json(t) FROM mcp_secret_probe t",
             "WITH s(a, b) AS (SELECT * FROM mcp_secret_probe) SELECT * FROM s",
             "SELECT 1, 'x' WHERE false UNION ALL SELECT * FROM mcp_secret_probe",
+            "SELECT table_to_xml('mcp_secret_probe', true, false, '')",
+            "SELECT query_to_xml('select * from mcp_secret_probe', true, false, '')",
+            "SELECT schema_to_xml('public', true, false, '')",
         ] {
             c.err("run_query", json!({"connId": "pg", "sql": sql}));
         }
+        // A view the filter cannot see into: the serialised row is hidden by its keys.
+        setup(&mut c, "CREATE OR REPLACE VIEW mcp_secret_view AS SELECT row_to_json(t) AS j FROM mcp_secret_probe t");
+        let q = c.ok("run_query", json!({"connId": "pg", "sql": "SELECT j FROM mcp_secret_view"}));
+        assert_eq!(q["rows"][0], json!(["[oculto]"]));
+        setup(&mut c, "DROP VIEW mcp_secret_view");
         setup(&mut c, "DROP TABLE mcp_secret_probe");
         drop(c);
         let _ = fs::remove_dir_all(dir);

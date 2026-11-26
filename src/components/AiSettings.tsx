@@ -63,7 +63,7 @@ export function AiSettings() {
   return (
     <>
       <h4>Asistente integrado</h4>
-      <p class="settings-note">Escribe, explica y corrige SQL con Claude (Ctrl+Alt+I). Envía el esquema y el SQL del editor, nunca filas. De las variables <code>{"${nombre}"}</code> envía el nombre, y su valor solo en las conexiones con nivel «Lectura» o «Lectura y escritura».</p>
+      <p class="settings-note">Escribe, explica y corrige SQL con Claude (Ctrl+Alt+I). Envía el esquema, el SQL del editor y el último error, nunca filas: del error quita los valores de filas que cite y sus líneas de detalle, salvo en las conexiones con nivel «Lectura» o «Lectura y escritura». De las variables <code>{"${nombre}"}</code> envía el nombre, y su valor solo en las conexiones con nivel «Lectura» o «Lectura y escritura».</p>
       <div class="form-row">
         <label class="field">
           <span>Modelo</span>

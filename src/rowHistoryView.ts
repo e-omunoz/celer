@@ -83,7 +83,20 @@ export function rangeText(range: NonNullable<RowHistory["range"]>, cutShort = fa
     return `La lectura se detuvo: se leyó de la posición ${range.fromLsn} a la ${range.readUntil}. En disco quedan ${onDisk}${filled}.`;
   }
   const logs = single ? `del log ${range.firstLog}` : `de los logs ${range.firstLog} a ${range.currentLog}`;
-  return `Leído ${logs}${single ? "" : " que quedan en disco"} (posición ${range.fromLsn} a ${range.readUntil})${filled}. Lo anterior ya no está en los logs.`;
+  const read = `(posición ${range.fromLsn} a ${range.readUntil})`;
+  // Why the read starts there, as the core reports it (#217): older logs still on disk are never said to be gone.
+  const several = range.oldestLog < range.firstLog - 1;
+  const earlier = several ? `los logs ${range.oldestLog} a ${range.firstLog - 1} siguen` : `el log ${range.oldestLog} sigue`;
+  const filledAt = range.firstLogFilled ? `; el ${range.firstLog} se llenó el ${timeText(range.firstLogFilled)}` : "";
+  if (range.startReason === "createdAfter") {
+    const after = range.createdAfterLog ?? range.firstLog - 1;
+    return `Leído ${logs} ${read}${filledAt}. Empieza en el log ${range.firstLog} porque la tabla se creó después de llenarse el log ${after}: ${earlier} en disco, sin cambios suyos.`;
+  }
+  if (range.startReason === "creationReplayed") {
+    const filledBefore = several ? "se llenaron" : "se llenó";
+    return `Leído ${logs} ${read}${filledAt}. Empieza en el log ${range.firstLog} porque la recuperación rápida de Informix reescribió la hora de creación de la tabla: ${earlier} en disco, pero ${filledBefore} antes de esa hora.`;
+  }
+  return `Leído ${logs}${single ? "" : " que quedan en disco"} ${read}${filled}. Lo anterior ya no está en los logs.`;
 }
 
 /** What the dialog says when no change of the row was read. */

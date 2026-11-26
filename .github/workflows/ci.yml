@@ -29,7 +29,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # The JDBC bridge (src-tauri/bridge) is compiled by build.rs with javac, and run by its unit test.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21

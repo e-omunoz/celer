@@ -628,6 +628,8 @@ export interface RowHistoryEvent {
   after: (string | null)[] | null;
 }
 
+export type RowHistoryStartReason = "oldestOnDisk" | "createdAfter" | "creationReplayed";
+
 export interface RowHistory {
   status: "ok" | "unavailable" | "needsFullRowLogging";
   reason: string;
@@ -635,7 +637,21 @@ export interface RowHistory {
   /** Columns the CDC API does not send (TEXT, BYTE, BLOB…). */
   skipped: string[];
   events: RowHistoryEvent[];
-  range: { firstLog: number; firstLogFilled: number | null; currentLog: number; fromLsn: string; readUntil: string; readAt: number } | null;
+  range: {
+    firstLog: number;
+    firstLogFilled: number | null;
+    currentLog: number;
+    fromLsn: string;
+    readUntil: string;
+    readAt: number;
+    /** Why the read starts at `firstLog`: the oldest log on disk, after logs that filled before the table was created,
+     * or after those that filled before the creation time Informix's fast recovery wrote. */
+    startReason: RowHistoryStartReason;
+    /** The oldest log still on disk. */
+    oldestLog: number;
+    /** For "createdAfter": the last log that filled before the table was created. */
+    createdAfterLog: number | null;
+  } | null;
   /** Why the history is not complete; empty when it is. */
   partial: string[];
   notes: string[];

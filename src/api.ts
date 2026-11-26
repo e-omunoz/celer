@@ -19,7 +19,7 @@ import type {
   SshHostKeyInfo,
   TableColumn,
 } from "./types";
-import type { InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, McpStatus, UpdateInfo, WslInfo } from "./types";
+import type { Cell, ColumnInfo, DbKind, InformixDrivers, McpAuditEntry, McpClientInfo, McpConfig, McpStatus, UpdateInfo, WslInfo } from "./types";
 import type { MigrationSource } from "./migrate";
 import type { ImportedSecrets, SecretRequest } from "./connTree";
 import type { ErrorEntry } from "./errorLogText";
@@ -81,6 +81,8 @@ export interface Backend {
   objectSql(sessionId: string, obj: ObjectRef): Promise<{ qualified: string; select: string }>;
   quoteIdents(sessionId: string, names: string[]): Promise<string[]>;
   exportQuery(connId: string, database: string, sql: string, exportId: string, options: ExportOptions): Promise<number>;
+  /** «Exportar selección…»: rows the grid holds, written with the same formats; `quoted` are the names for SQL INSERT. */
+  exportGridRows(columns: ColumnInfo[], rows: Cell[][], quoted: string[], engine: DbKind, options: ExportOptions): Promise<number>;
   /**
    * «Historial de la fila»: the row's past values from Informix's logical logs (CDC API), on a connection of its own.
    * `historyId` is what `cancel` takes to stop it. Engines without it answer "unavailable" with the reason.
@@ -223,6 +225,20 @@ const LOGGED_BY_CORE = new Set([
 
 let failedCall: ((cmd: string, err: unknown) => void) | null = null;
 
+/**
+ * Every native open/save dialog goes through here (#220): the core shows the pointer before it (WebView2 may have
+ * hidden it while the user typed, and the dialog shares that state) and refreshes it after, so it is visible over
+ * the dialog and has the right shape over the page again. Neither step can keep the dialog from opening.
+ */
+async function nativeDialog<T>(show: () => Promise<T>): Promise<T> {
+  await invoke("pointer_before_dialog").catch(() => undefined);
+  try {
+    return await show();
+  } finally {
+    void invoke("pointer_after_dialog").catch(() => undefined);
+  }
+}
+
 /** Called with every call to the core that fails and the core did not log itself. */
 export function onFailedCall(cb: (cmd: string, err: unknown) => void) {
   failedCall = cb;
@@ -278,6 +294,7 @@ function tauriBackend(): Backend {
     quoteIdents: (sessionId, names) => invoke("quote_idents", { sessionId: sessionId, names }),
     exportQuery: (connId, database, sql, exportId, options) =>
       invoke("export_query", { connId: connId, database, sql, exportId: exportId, options }),
+  exportGridRows: (columns, rows, quoted, engine, options) => invoke("export_grid_rows", { columns, rows, quoted, engine, options }),
     rowHistory: (connId, password, historyId, request) => invoke("row_history", { connId, password: password ?? null, historyId, request }),
     addHistory: (entry) => invoke("add_history", { entry }),
     getHistory: (filter, limit) => invoke("get_history", { filter, limit }),
@@ -342,7 +359,7 @@ function tauriBackend(): Backend {
         return scripted;
       }
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const picked = await save({ filters, defaultPath: defaultName });
+      const picked = await nativeDialog(() => save({ filters, defaultPath: defaultName }));
       return picked ?? null;
     },
     pickOpenPath: async (filters) => {
@@ -354,12 +371,12 @@ function tauriBackend(): Backend {
         return scripted;
       }
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const picked = await open({ multiple: false, directory: false, filters });
+      const picked = await nativeDialog(() => open({ multiple: false, directory: false, filters }));
       return typeof picked === "string" ? picked : null;
     },
     pickOpenPaths: async (filters) => {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const picked = await open({ multiple: true, directory: false, filters });
+      const picked = await nativeDialog(() => open({ multiple: true, directory: false, filters }));
       return Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
     },
     onExportProgress: async (cb) => {

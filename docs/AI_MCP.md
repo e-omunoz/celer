@@ -11,7 +11,7 @@ A panel that generates, explains, fixes and optimises SQL with Claude (official 
 |---|---|
 | Models | Claude Opus 5.5 (default), Claude Sonnet 5.5, Claude Haiku 4.5 — Settings › IA y MCP |
 | Sent to the model | engine and database name, the schema (table and column **names**), the console SQL or selection, the last error |
-| Never sent | row data |
+| Never sent | row data: below the connection's «Lectura» AI level, the error loses its DETAIL / CONTEXT lines (`Detalle:`, `Contexto:`) and the row values that known messages quote (PostgreSQL's failing row, `Key (…)=(…)` and unconvertible values; MySQL/MariaDB `Duplicate entry '…'` and incorrect values; SQL Server's duplicate key value, conversion and truncated values) become «valor omitido». Other messages are sent as the server wrote them |
 | API key | stored in the OS credential store (Windows Credential Manager, service `Celer`), never in a file |
 | Safety | Opus/Sonnet requests opt into server-side fallback (`fallbacks: "default"`); refusals and API errors are shown in the panel |
 
@@ -41,8 +41,12 @@ transaction (PostgreSQL / MySQL) or `PRAGMA query_only` (SQLite) and are rolled 
 connection, hard cap 5000), queries time out, and columns matching the sensitive-name pattern are returned as
 `[oculto]`. A query that names a protected column (also of another database on MySQL / SQL Server) is refused, and so
 is one that reads a table with protected columns through a whole row (`SELECT t FROM users t`, `row_to_json(t)`),
-column alias lists (`WITH s(a, b) AS …`, `AS u(a, b)`) or `UNION` / `INTERSECT` / `EXCEPT`. Masking is best-effort:
-it works on names, so a view or function that renames a protected column is not caught; give assistants an account
+column alias lists (`WITH s(a, b) AS …`, `AS u(a, b)`), `UNION` / `INTERSECT` / `EXCEPT` or SQL Server's
+`FOR JSON` / `FOR XML`. PostgreSQL's `query_to_xml`, `table_to_xml`, `schema_to_xml`, `database_to_xml`,
+`cursor_to_xml` and their `*_xmlschema` variants are refused on any database with protected columns, since the table or
+query they read is a string. A text value that holds serialised rows (JSON keys, XML elements or attributes) named like
+a protected column is also returned as `[oculto]`. Masking is best-effort: it works on names, so a view or function
+that renames a protected column, or splits a serialised row across values, is not caught; give assistants an account
 without access to secrets when that matters. Every call is written to `mcp-audit.jsonl` (the SQL without its comments)
 and shown in the settings.
 

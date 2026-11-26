@@ -79,18 +79,34 @@ one has today.
 
 ## Next
 
-Implemented in the current sprint (2.4; one branch per package, integrated in one PR; listed here so the docs match
-the code): theme editor (#107); tear-off outline and ghost card for dragged tabs (#108); consistent motion, component
-styles, drag and drop and F6 between panels (#110); the approved reorganisation of menus, toolbars, dialogs and
-settings, with keyboard submenus (#111); Informix row history from the logical logs (#123); test data generator on
-every engine (#172); and the fixes from the sprint's macro review.
+The 2.5.0 sprint (one branch per package, integrated in one PR; listed here so the docs match the code once it is
+merged; the 2.4.0 sprint's work is in «Done» above and in [CHANGELOG.md](CHANGELOG.md)):
+
+- **Results**: multiple selection in the results grid: Ctrl+click (Cmd+click on macOS) adds or removes rows,
+  Shift+click and Ctrl+Shift+click add ranges; copy, the status bar statistics, deleting rows and exporting the
+  selection all act on exactly the selected rows (#218).
+- **Consoles**: completion puts the columns of the tables the statement names (aliases, quoted and qualified names,
+  Informix `database:owner.table`, subqueries) ahead of keywords and other tables (#219); «Salida» lists the newest
+  run at the top, marked as the latest, and «✦ Corregir con IA» follows it (#225).
+- **Import / export**: the mouse pointer no longer disappears after a native open/save dialog, starting with
+  «Importar conexiones › Fichero de Celer…» (#220).
+- **Drivers**: Informix row history's range line says why the read starts where it does (table created after a log,
+  creation time rewritten by fast recovery, or older than the oldest log on disk) (#217); the engine test for it never
+  restarts the shared Informix server, switching the logical log and retrying instead (#216).
+- **Dependencies**: the Dependabot groups for GitHub Actions, npm and cargo landed together, with the Excel export
+  moved to `rust_xlsxwriter`'s error-returning API (#224, superseding #221, #222 and #223).
+- **Docs**: the 2.4.0 changelog section, this file and the roadmap refreshed (#226); and the fixes from the sprint's
+  macro review (#227).
 
 Still open (see [docs/ROADMAP.md](docs/ROADMAP.md) for the longer view):
 
 1. **Drivers**: Oracle and IBM Db2, a generic connection form driven by each driver's fields, and capability flags
    wired into the UI (Phase 2 of the roadmap).
-2. **Platform**: code signing for the Windows builds.
-3. **Docs**: keep this file and the roadmap refreshed at the end of each sprint (#121).
+2. **Informix row history**: a table restamped by fast recovery is not recognised again after a further restart, and a
+   drop and re-create with the same partnum in the same second can mix histories (#215, deferred: rare, and no
+   reliable source for the real creation time is known yet).
+3. **Platform**: code signing for the Windows builds.
+4. **Docs**: keep this file and the roadmap refreshed at the end of each sprint.
 
 ## Development
 ```powershell

@@ -158,6 +158,8 @@ pub struct LinkDriver<L: Link> {
     /// usuario la cambia).
     db_known: bool,
     quote: String,
+    /// The connection was replaced after a cut (in ms): told once through `Driver::replaced`.
+    replaced: Option<u64>,
 }
 
 impl<L: Link> Drop for LinkDriver<L> {
@@ -207,6 +209,7 @@ impl<L: Link> LinkDriver<L> {
             autocommit: true,
             in_tx: false,
             quote,
+            replaced: None,
         };
         if d.database.is_empty() {
             d.database = d.current_database().unwrap_or_default();
@@ -221,9 +224,13 @@ impl<L: Link> LinkDriver<L> {
             return;
         }
         let db = self.database.clone();
-        // Back in the database it had: it is known again.
-        if self.reconnect((!db.is_empty()).then_some(db.as_str())).is_ok() && !db.is_empty() {
-            self.db_known = true;
+        let t0 = Instant::now();
+        if self.reconnect((!db.is_empty()).then_some(db.as_str())).is_ok() {
+            self.replaced = Some(t0.elapsed().as_millis() as u64);
+            // Back in the database it had: it is known again.
+            if !db.is_empty() {
+                self.db_known = true;
+            }
         }
     }
 
@@ -236,7 +243,9 @@ impl<L: Link> LinkDriver<L> {
         let lost = self.in_tx;
         self.recover();
         if lost {
-            anyhow!("SESSION_LOST: {e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.")
+            // The driver's own error stays underneath, for the guard to word the loss its way.
+            let msg = format!("SESSION_LOST: {e}\nLa transacción que estaba abierta se ha perdido: sus cambios se han deshecho.");
+            e.context(msg)
         } else {
             e
         }
@@ -1580,6 +1589,15 @@ impl<L: Link> Driver for LinkDriver<L> {
 
     fn canceller(&self) -> Canceller {
         self.conn.canceller()
+    }
+
+    /// A cut connection that could not be opened again yet.
+    fn broken(&self) -> bool {
+        self.conn.reset_pending()
+    }
+
+    fn replaced(&mut self) -> Option<u64> {
+        self.replaced.take()
     }
 
     /// Informix: la consulta más barata del catálogo. Otros orígenes ODBC: no hay una consulta que valga para todos,

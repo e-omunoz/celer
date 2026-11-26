@@ -76,7 +76,7 @@ const stopped = await js(`
   document.querySelector('.activity-dialog .icon-btn[title^="Cerrar"]')?.click();
   await sleep(300);
   await until(() => !pane().querySelector('.tb-btn.stop'), 8000);
-  return { running: !!pane().querySelector('.tb-btn.stop'), output: [...pane().querySelectorAll('.out-entry')].pop()?.textContent ?? pane().textContent.slice(0, 200) };
+  return { running: !!pane().querySelector('.tb-btn.stop'), output: (pane().querySelector('.out-entry.latest') ?? pane().querySelector('.out-entry'))?.textContent ?? pane().textContent.slice(0, 200) };
 `);
 check("Cancelar consulta stops it in the console", !stopped.running && /cancel/i.test(stopped.output), JSON.stringify(stopped));
 

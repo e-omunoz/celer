@@ -308,6 +308,19 @@ export function inlinePassword(text: string): string | null {
   return found;
 }
 
+const INLINE_USER = /(?<=^|[;\n])[ \t]*(?:uid|user[ \t]*id|user)[ \t]*=[ \t]*[^;\n \t]/i;
+
+/**
+ * An ODBC connection that logs in with a password it does not carry: it names a user (the field, or `UID=` /
+ * `User ID=` in the string or "Parámetros extra") and has no `PWD=`. Imported without passwords (the export drops
+ * the `PWD=` the store kept), it is asked for one on connecting instead of failing the login.
+ */
+export function odbcNeedsPassword(conn: Pick<ConnConfig, "kind" | "user" | "odbcConnStr" | "extra">): boolean {
+  if (conn.kind !== "odbc") return false;
+  const text = `${conn.odbcConnStr}\n${conn.extra}`;
+  return (!!conn.user.trim() || INLINE_USER.test(text)) && inlinePassword(text) === null;
+}
+
 /** The settings of an SSH tunnel that travel in a file (no password, passphrase or key); null without a tunnel. */
 export function portableSsh(ssh: SshConfig | undefined | null): SshConfig | null {
   if (!ssh || (!ssh.enabled && !ssh.host)) return null;

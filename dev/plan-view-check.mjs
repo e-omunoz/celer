@@ -13,6 +13,17 @@ const H = `
   const until = async (fn, ms = 20000) => { const t = Date.now(); while (Date.now() - t < ms) { const v = fn(); if (v) return v; await sleep(50); } return null; };
   const pane = () => document.querySelector('.pane-host.active');
   const conn = (name) => [...document.querySelectorAll('.tree-row.conn')].find((e) => e.textContent.includes(name));
+  // The explorer draws only the rows in view: scroll it until the connection's row is there.
+  const findConn = async (name) => {
+    const tree = document.querySelector('.tree');
+    for (let top = 0; tree && top <= tree.scrollHeight; top += Math.max(100, tree.clientHeight / 2)) {
+      tree.scrollTop = top;
+      await sleep(80);
+      const row = conn(name);
+      if (row) { row.scrollIntoView({ block: 'center' }); await sleep(80); return row; }
+    }
+    return null;
+  };
 `;
 const js = (code) => app.js(H + code);
 let failed = 0;
@@ -28,7 +39,7 @@ async function press(key, mods = 0) {
 }
 async function consoleFor(name, sql) {
   await js(`
-    const c = conn(${JSON.stringify(name)});
+    const c = conn(${JSON.stringify(name)}) ?? await findConn(${JSON.stringify(name)});
     c.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
     if (!c.classList.contains('connected')) { c.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); await until(() => c.classList.contains('connected')); }
     await sleep(300);
@@ -76,5 +87,7 @@ await js(`await until(() => pane().querySelector('.plan-view') || pane().querySe
 const sq = await planState();
 check("SQLite plan reads, with its temp B-tree warnings", sq.tab && sq.rows.some((r) => /Búsqueda/.test(r)) && sq.warnings >= 1, JSON.stringify(sq));
 writeFileSync(join(out, "plan-sqlite.png"), await app.shot());
+// Leave the explorer at the top for the checks that run after this one and look for their rows there.
+await js(`const tree = document.querySelector('.tree'); if (tree) tree.scrollTop = 0; await sleep(100);`);
 app.close();
 process.exit(failed ? 1 : 0);

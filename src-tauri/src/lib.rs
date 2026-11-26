@@ -491,10 +491,8 @@ fn reorder_connections(window: tauri::WebviewWindow, state: State<'_, Arc<AppSta
 
 #[tauri::command]
 fn delete_connection(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, id: String) -> CmdResult<()> {
-    for s in state.sessions.remove_for_conn(&id) {
-        s.cancel();
-    }
-    forget_free(&id);
+    // As Desconectar: the connections its sessions free on closing are closed too, not left pooled (#242).
+    close_sessions(&state, &id);
     // Hasta cerrar Celer, en memoria: «Deshacer» la devuelve con la conexión.
     let accounts = std::iter::once(id.clone()).chain(SshConfig::ACCOUNTS.iter().map(|a| ssh_account(&id, a)));
     for account in accounts {
@@ -744,14 +742,20 @@ fn close_session(state: State<'_, Arc<AppState>>, session_id: String) {
 /// returns how many there were.
 #[tauri::command]
 fn close_connection_sessions(state: State<'_, Arc<AppState>>, conn_id: String) -> usize {
-    let closed = state.sessions.remove_for_conn(&conn_id);
+    let closed = close_sessions(&state, &conn_id);
+    sqlite::forget_memory(&conn_id);
+    closed
+}
+
+/// Closes every session of a connection (Desconectar, deleting it) and the free connections they leave behind.
+fn close_sessions(state: &AppState, conn_id: &str) -> usize {
+    let closed = state.sessions.remove_for_conn(conn_id);
     for h in &closed {
         h.cancel();
     }
-    sqlite::forget_memory(&conn_id);
     // Las sesiones se cierran en sus hilos (y dejan su conexión libre si pueden): las libres se cierran un poco
     // después, cuando ya han llegado.
-    let id = conn_id.clone();
+    let id = conn_id.to_string();
     std::thread::spawn(move || {
         forget_free(&id);
         std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -1000,6 +1004,21 @@ async fn export_query(
     state.sessions.remove(&export_id);
     state.exports.lock().remove(&export_id);
     res.map_err(err)
+}
+
+/// «Exportar selección…»: rows the grid holds (a multiple selection, in screen order) written as a file, with the
+/// same formats and options as `export_query`. `engine` writes the SQL literals; `quoted` are the column names.
+#[tauri::command]
+async fn export_grid_rows(
+    columns: Vec<ColumnInfo>,
+    rows: Vec<Vec<Cell>>,
+    quoted: Vec<String>,
+    engine: DbKind,
+    options: export::ExportOptions,
+) -> CmdResult<u64> {
+    tokio::task::spawn_blocking(move || export::export_grid(columns, &rows, &quoted, &options, engine).map_err(err))
+        .await
+        .map_err(err)?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1855,6 +1874,66 @@ fn update_install(app: tauri::AppHandle, path: String, relaunch: bool) -> CmdRes
     Ok(())
 }
 
+// ───────────── Native open/save dialogs and the pointer (#220) ─────────────
+//
+// The dialog plugin shows the system's file dialog on a thread of its own, owned by the Celer window: Windows then
+// joins that thread's input state with the window's, and the window's is already joined with WebView2's (its child
+// window, in another process). The pointer's display counter is part of that shared state. WebView2 hides the
+// pointer while the user types (Windows' «Ocultar el puntero mientras se escribe», on by default) by taking the
+// counter below zero, and shows it again only when it sees the mouse move over the page. A dialog opened from the
+// keyboard (the palette, Intro on a menu row, a shortcut) or right after typing inherits the hidden pointer: the
+// mouse moves over the dialog, not the page, so nothing shows it again, and the pointer stays invisible over the
+// dialog and, after it, over the app until it crosses the page. Two sync commands (they run on the main thread, the
+// window's) bracket every native dialog in `api.ts`.
+
+/// Shows the pointer of the main thread's input state: the shared counter raised back to zero, never above, so
+/// WebView2's own hide and show stay balanced, and a visible pointer is left as it was.
+#[cfg(windows)]
+fn show_pointer() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::ShowCursor;
+    // ShowCursor returns the counter after the change: up from wherever it was until it reaches zero, and the one
+    // step up from zero or more undone.
+    unsafe {
+        let mut count = ShowCursor(1);
+        let mut steps = 1;
+        while count < 0 && steps < 64 {
+            count = ShowCursor(1);
+            steps += 1;
+        }
+        if count > 0 {
+            ShowCursor(0);
+        }
+    }
+}
+
+/// Before a native dialog: the pointer is shown, as the arrow, so the dialog has a visible pointer from the start.
+#[tauri::command]
+fn pointer_before_dialog() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{LoadCursorW, SetCursor, IDC_ARROW};
+        show_pointer();
+        unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_ARROW)) };
+    }
+}
+
+/// After the dialog (a file chosen or cancelled): shown again (WebView2 may have hidden it meanwhile), then put back
+/// where it is, which the system delivers as a mouse move, so WebView2 sees it over the page again and gives it the
+/// shape of what is under it (text, a splitter, a link) instead of leaving the dialog's or none.
+#[tauri::command]
+fn pointer_after_dialog() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+        show_pointer();
+        let mut at = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut at) != 0 {
+            SetCursorPos(at.x, at.y);
+        }
+    }
+}
+
 // ───────────── MCP (asistentes de IA externos) ─────────────
 
 #[tauri::command]
@@ -2053,6 +2132,8 @@ pub fn run() {
         })
         .on_window_event(windows::on_event)
         .invoke_handler(tauri::generate_handler![
+            pointer_before_dialog,
+            pointer_after_dialog,
             list_connections,
             connections_problem,
             save_connection,
@@ -2093,6 +2174,7 @@ pub fn run() {
             object_sql,
             quote_idents,
             export_query,
+            export_grid_rows,
             row_history,
             add_history,
             get_history,

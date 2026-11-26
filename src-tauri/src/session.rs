@@ -57,6 +57,11 @@ pub trait Driver: Send {
     fn broken(&self) -> bool {
         false
     }
+    /// The driver replaced a cut connection on its own since this was last asked (JDBC: a cancel the server did not
+    /// obey made the bridge cut it): how long the new one took to open. What the session had on the old one is gone.
+    fn replaced(&mut self) -> Option<u64> {
+        None
+    }
     /// Lo que la sesión tiene que otra conexión no tendría, según el propio driver ("" si nada o si no lo sabe): la
     /// transacción abierta, las tablas temporales, los SET.
     fn session_state(&self) -> String {

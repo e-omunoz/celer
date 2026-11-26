@@ -21,6 +21,15 @@ reaches every server engine by its container name (`celer-pg:5432`, `celer-mysql
 `celer-mssql:1433`, `celer-ifx:9088/9089`), which only resolves inside Docker: through the tunnel is the only way.
 `CELER_SSH_TEST` (engines.sh) runs the tunnel tests; `docker restart celer-sshd` drops every tunnel.
 
+Informix is shared: no test restarts or kills `celer-ifx`. `informix_jdbc_row_history` probes the server's CDC reader
+first and, when it does not read a short history whole, switches the logical log and retries (five rounds with a growing pause, then the
+test fails naming each probe's log and result). Before the probe and between rounds it ends (`onmode -z`) the sessions
+left holding a CDC session nobody reads, which keep the reader stuck: only the run's own read connections once their
+read returned, and anyone's older than any read lasts (240 s); a read still running elsewhere is never touched. Restarting (that test, as a last resort) and killing the server
+(`informix_jdbc_row_history_after_fast_recovery`) need `CELER_INFORMIX_KILLABLE=1` with `CELER_INFORMIX_CONTAINER`, a
+container the run owns: `engines.yml` sets both for its own; `engines.sh` never sets the first.
+`CELER_INFORMIX_STALE_READER=1` leaves the reader at the current log's tail before the probe, to exercise that recovery.
+
 Seeds (`dev\wsl.ps1 db seed`): `dev/seed-postgres.sql`, `seed-mysql.sql` (MySQL and MariaDB), `seed-mssql.sql`,
 `seed-informix.sql`. Azure SQL / Synapse cannot be run locally: check the dialect branches in code and say so.
 

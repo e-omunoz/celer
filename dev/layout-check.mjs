@@ -21,6 +21,9 @@ try {
   await sleep(1200);
   const app = await connect(port, { window: 0 });
   await app.send("Page.enable");
+  // Headless Edge does not always honour --window-size (it can come up at 500x320, where the grid is squeezed and the
+  // cell menu's synthetic click lands on nothing): pin the viewport like the other headless scripts do.
+  await app.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await app.send("Page.navigate", { url });
   await sleep(2500);
   const errors = await app.watchErrors();

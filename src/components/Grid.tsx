@@ -11,6 +11,8 @@ import { gibShows, copyText, openMenu, reducedMotion, rowHeight, setState, state
 import type { Cell, ColumnInfo } from "../types";
 import type { LookupItem, LookupSession } from "../fkLookup";
 import { parseCsv, pastedValue } from "../importFormats";
+import { clickRows, hasRow, rowCount, rowList, type RowRanges } from "../gridSelection";
+import { isToggleClick } from "../treeSelect";
 
 const HEAD_H = 30;
 const MIN_W = 56;
@@ -67,6 +69,8 @@ export interface GridProps {
   sortState?: { col: number; dir: 1 | -1 } | null;
   onSortChange?: (sort: { col: number; dir: 1 | -1 } | null) => void;
   onExport?: () => void;
+  /** «Exportar selección…»: the selected rows and columns, in screen order, as the grid holds them. */
+  onExportRows?: (data: { columns: ColumnInfo[]; rows: Cell[][]; gridColumns: number }) => void;
   /**
    * «Historial de la fila» in the row menu: `blocked` disables it with the reason (engine, protocol, no key), and
    * `rowBlocked` for one row (a new one); `open` gets the row's index in `rows`.
@@ -208,6 +212,12 @@ export function DataGrid(props: GridProps) {
   const [colMove, setColMove] = createSignal<{ col: number; gap: number; x: number; grab: number } | null>(null);
   const [anchor, setAnchor] = createSignal<Pos | null>(null);
   const [focus, setFocus] = createSignal<Pos | null>(null);
+  /**
+   * Whole rows picked with Ctrl+click, Shift+click or Ctrl+Shift+click (#218), which need not be next to each other;
+   * null while the selection is the rectangle from the anchor to the focus. The anchor is then the row clicked last
+   * (where Shift ranges start) and the focus the cell the keyboard goes on from.
+   */
+  const [picked, setPicked] = createSignal<RowRanges | null>(null);
   const [localSort, setLocalSort] = createSignal<{ col: number; dir: 1 | -1 } | null>(null);
   const sort = () => (props.onSortChange ? props.sortState ?? null : localSort());
   const setSort = (next: { col: number; dir: 1 | -1 } | null) => (props.onSortChange ? props.onSortChange(next) : setLocalSort(next));
@@ -308,11 +318,29 @@ export function DataGrid(props: GridProps) {
   const contentW = () => colX()[shownWidths().length] ?? gutter();
   const contentH = () => HEAD_H + ordered().length * rowH() + (props.hasMore ? rowH() : 0);
 
-  const sel = () => {
+  /** The rectangle from the anchor to the focus. */
+  const rect = () => {
     const a = anchor();
     const f = focus();
     if (!a || !f) return null;
     return { r1: Math.min(a.row, f.row), r2: Math.max(a.row, f.row), c1: Math.min(a.col, f.col), c2: Math.max(a.col, f.col) };
+  };
+
+  /**
+   * What is selected: screen rows and the screen columns `c1`…`c2`. The rectangle, or the picked rows with every
+   * column. Copies, deletion, statistics, the export and painting all go by it.
+   */
+  const sel = createMemo((): { rows: RowRanges; c1: number; c2: number } | null => {
+    const rows = picked();
+    if (rows) return rows.length && props.columns.length ? { rows, c1: 0, c2: props.columns.length - 1 } : null;
+    const r = rect();
+    return r && { rows: [[r.r1, r.r2]], c1: r.c1, c2: r.c2 };
+  });
+
+  /** Whether the cell at screen row `row`, screen column `col` is selected. */
+  const isSelected = (row: number, col: number) => {
+    const s = sel();
+    return Boolean(s && col >= s.c1 && col <= s.c2 && hasRow(s.rows, row));
   };
 
   function measureWidths() {
@@ -434,10 +462,10 @@ export function DataGrid(props: GridProps) {
     };
 
     /** One cell of screen column `col` at `x` (its row's background is already there). */
-    const drawCell = (col: number, x: number, y: number, vr: number, source: number) => {
+    const drawCell = (col: number, x: number, y: number, source: number, rowIn: boolean) => {
       const w = cols[col];
       const isDeleted = deleted.has(source);
-      const inside = s && vr >= s.r1 && vr <= s.r2 && col >= s.c1 && col <= s.c2;
+      const inside = rowIn && s && col >= s.c1 && col <= s.c2;
       const sc = order[col] ?? col;
       const raw = data[source]?.[sc];
       const edited = props.edits && Object.prototype.hasOwnProperty.call(props.edits, `${source}:${sc}`);
@@ -497,7 +525,8 @@ export function DataGrid(props: GridProps) {
       const y = HEAD_H + vr * RH - view.y;
       ctx.fillStyle = rowBgOf(vr, source);
       ctx.fillRect(G, y, width - G, RH);
-      for (const col of shown) drawCell(col, at(col), y, vr, source);
+      const rowIn = Boolean(s && hasRow(s.rows, vr));
+      for (const col of shown) drawCell(col, at(col), y, source, rowIn);
       ctx.fillStyle = p.line;
       ctx.fillRect(G, y + RH - 1, width - G, 1);
     }
@@ -613,7 +642,7 @@ export function DataGrid(props: GridProps) {
     for (let vr = start; vr < end; vr++) {
       const source = rows[vr];
       const y = HEAD_H + vr * RH - view.y;
-      const rowSelected = s && vr >= s.r1 && vr <= s.r2;
+      const rowSelected = s && hasRow(s.rows, vr);
       if (rowSelected) {
         ctx.fillStyle = p.sel;
         ctx.fillRect(0, y, G, RH);
@@ -656,7 +685,7 @@ export function DataGrid(props: GridProps) {
         const y = HEAD_H + vr * RH - view.y;
         ctx.fillStyle = rowBgOf(vr, source);
         ctx.fillRect(gx, y, w, RH);
-        drawCell(liftedAt, gx, y, vr, source);
+        drawCell(liftedAt, gx, y, source, Boolean(s && hasRow(s.rows, vr)));
         ctx.fillStyle = p.line;
         ctx.fillRect(gx, y + RH - 1, w, 1);
       }
@@ -731,10 +760,41 @@ export function DataGrid(props: GridProps) {
     const colCount = props.columns.length;
     if (!rowCount || !colCount) return;
     const next = { row: clamp(pos.row, 0, rowCount - 1), col: clamp(pos.col, 0, colCount - 1) };
+    setPicked(null);
     if (!extend || !anchor()) setAnchor(next);
     setFocus(next);
     scrollIntoView(next);
     if (next.row > rowCount - 20 && props.hasMore && !props.loading) props.onNeedMore?.();
+  }
+
+  /** Whole rows `from`…`to` as the rectangle (a click on a row number), the focus on the last column. */
+  function selectRows(from: number, to: number) {
+    const last = props.columns.length - 1;
+    if (last < 0) return;
+    setPicked(null);
+    setAnchor({ row: from, col: 0 });
+    setFocus({ row: to, col: last });
+  }
+
+  /**
+   * Ctrl+click (toggle), Shift+click once rows are picked (range) or Ctrl+Shift+click (both) on screen row `row`:
+   * the picked rows change, starting from what is selected now; the clicked cell becomes the anchor and the focus.
+   */
+  function pickRow(row: number, col: number, mods: { toggle: boolean; range: boolean }) {
+    const now = sel();
+    const next = clickRows(now?.rows ?? [], anchor()?.row ?? null, row, mods);
+    if (!next) return;
+    const pos = { row, col: clamp(col, 0, Math.max(0, props.columns.length - 1)) };
+    setFocus(pos);
+    // Ctrl+click on the only row selected: nothing is selected, the cursor stays there.
+    if (!next.length) {
+      setPicked(null);
+      setAnchor(null);
+      return;
+    }
+    // Shift+click keeps the anchor (the next Shift+click ranges from the same row); the others move it here.
+    if (!mods.range || !anchor()) setAnchor(pos);
+    setPicked(next);
   }
 
   // ------------------------------------------------------------ mouse
@@ -745,11 +805,9 @@ export function DataGrid(props: GridProps) {
     if (target.type === "scrollbar") return;
     root?.focus({ preventScroll: true });
     if (event.button === 2) {
-      if (target.type === "cell") {
-        const s = sel();
-        const inside = s && target.row >= s.r1 && target.row <= s.r2 && target.col >= s.c1 && target.col <= s.c2;
-        if (!inside) setCursor({ row: target.row, col: target.col });
-      }
+      // A right click inside the selection keeps it (the menu acts on all of it); outside, it selects there.
+      if (target.type === "cell" && !isSelected(target.row, target.col)) setCursor({ row: target.row, col: target.col });
+      if (target.type === "gutter" && !(sel() && hasRow(sel()!.rows, target.row))) selectRows(target.row, target.row);
       return;
     }
     if (target.type === "resize") {
@@ -765,8 +823,9 @@ export function DataGrid(props: GridProps) {
     if (target.type === "header") {
       // A click selects the column (Shift+click or Shift+drag: several); dragging it moves it.
       event.preventDefault();
-      if (event.shiftKey && anchor()) setFocus({ row: Math.max(0, ordered().length - 1), col: target.col });
+      if (event.shiftKey && anchor() && !picked()) setFocus({ row: Math.max(0, ordered().length - 1), col: target.col });
       else {
+        setPicked(null);
         setAnchor({ row: 0, col: target.col });
         setFocus({ row: Math.max(0, ordered().length - 1), col: target.col });
         headerPress = { col: target.col, startX: event.clientX, grab: local(event).x + scroll().x - colX()[target.col] };
@@ -779,12 +838,15 @@ export function DataGrid(props: GridProps) {
       return;
     }
     if (target.type === "gutter") {
+      const toggle = isToggleClick(event);
+      if (toggle || (event.shiftKey && picked())) {
+        event.preventDefault();
+        pickRow(target.row, focus()?.col ?? 0, { toggle, range: event.shiftKey });
+        return;
+      }
       const last = props.columns.length - 1;
       if (event.shiftKey && anchor()) setFocus({ row: target.row, col: last });
-      else {
-        setAnchor({ row: target.row, col: 0 });
-        setFocus({ row: target.row, col: last });
-      }
+      else selectRows(target.row, target.row);
       selecting = "rows";
       return;
     }
@@ -792,12 +854,18 @@ export function DataGrid(props: GridProps) {
       props.onNeedMore?.();
       return;
     }
-    if (target.type === "cell" && (event.ctrlKey || event.metaKey) && props.onFollow && props.linkCols?.includes(src(target.col))) {
-      // Ctrl+click on a foreign-key value: jump to the referenced row.
+    if (target.type === "cell" && (event.ctrlKey || event.metaKey) && !event.shiftKey && props.onFollow && props.linkCols?.includes(src(target.col))) {
+      // Ctrl+click on a foreign-key value: jump to the referenced row (rows are picked on any other cell or the number).
       event.preventDefault();
       setCursor({ row: target.row, col: target.col });
       const source = ordered()[target.row];
       if (source !== undefined) props.onFollow(source, src(target.col));
+      return;
+    }
+    if (target.type === "cell" && (isToggleClick(event) || (event.shiftKey && picked()))) {
+      // Ctrl+click (Cmd on macOS) adds or removes the row; Shift+click, once rows are picked, the rows from the last one.
+      event.preventDefault();
+      pickRow(target.row, target.col, { toggle: isToggleClick(event), range: event.shiftKey });
       return;
     }
     if (target.type === "cell") {
@@ -998,6 +1066,7 @@ export function DataGrid(props: GridProps) {
 
   function selectAll() {
     if (!ordered().length || !props.columns.length) return;
+    setPicked(null);
     setAnchor({ row: 0, col: 0 });
     setFocus({ row: ordered().length - 1, col: props.columns.length - 1 });
   }
@@ -1231,12 +1300,13 @@ export function DataGrid(props: GridProps) {
     if (move) setCursor(move);
   }
 
+  /** The selected rows (indexes in `props.rows`) in screen order: copies, deletion and the export take exactly these. */
   function selectedRows() {
     const s = sel();
     if (!s) return [] as number[];
     const rows: number[] = [];
     const order = ordered();
-    for (let vr = s.r1; vr <= s.r2; vr++) {
+    for (const vr of rowList(s.rows)) {
       const source = order[vr];
       if (source !== undefined) rows.push(source);
     }
@@ -1309,6 +1379,14 @@ export function DataGrid(props: GridProps) {
     if (!sel()) return;
     const count = selectedRows().length;
     void copyText(formatSelection(format), `Copiado${count > 1 ? ` · ${count.toLocaleString()} filas` : ""}`);
+  }
+
+  /** «Exportar selección…»: the selected rows and columns, in screen order, to the owner's export. */
+  function exportSelection() {
+    if (!sel() || !props.onExportRows) return;
+    const data = raw(props.rows);
+    const cols = selectedCols();
+    props.onExportRows({ columns: cols.map((c) => props.columns[c]), rows: selectedRows().map((source) => cols.map((c) => data[source]?.[c] ?? null)), gridColumns: props.columns.length });
   }
 
   function quickFilter(mode: "eq" | "ne" | "null" | "not-null" | "contains") {
@@ -1426,6 +1504,7 @@ export function DataGrid(props: GridProps) {
     items.push({ separator: true }, { label: "Ajustar todas las columnas", run: () => autofit() });
     if (!isIdentity(colOrder())) items.push({ label: "Restablecer orden de columnas", run: resetColumnOrder });
     if (props.onExport) items.push({ label: "Exportar…", icon: "download", run: () => props.onExport?.() });
+    if (props.onExportRows && sel()) items.push({ label: many > 1 ? `Exportar selección (${many.toLocaleString()} filas)…` : "Exportar selección…", icon: props.onExport ? undefined : "download", run: exportSelection });
     openMenu(event, items);
   }
 
@@ -1548,6 +1627,16 @@ export function DataGrid(props: GridProps) {
       setSearch(null);
       return;
     }
+    // Esc goes back to the single selection: the active cell alone (a second Esc reaches whatever is around the grid).
+    if (key === "Escape" && f) {
+      const r = rect();
+      if (picked() || (r && (r.r1 !== r.r2 || r.c1 !== r.c2))) {
+        event.preventDefault();
+        event.stopPropagation();
+        setCursor(f);
+        return;
+      }
+    }
     if (!f) {
       if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End", "PageDown", "PageUp", "Tab"].includes(key)) move({ row: 0, col: 0 });
       return;
@@ -1620,6 +1709,7 @@ export function DataGrid(props: GridProps) {
     props.onPaste(cells);
     // The pasted block stays selected.
     const width = Math.max(1, ...block.map((row) => row.length));
+    setPicked(null);
     setAnchor(at);
     setFocus({ row: at.row + block.length - 1, col: Math.min(props.columns.length - 1, at.col + width - 1) });
   }
@@ -1672,8 +1762,12 @@ export function DataGrid(props: GridProps) {
   createEffect(
     on(
       () => [props.resetKey, props.columns] as const,
-      () => {
+      ([key, columns], previous) => {
+        // `on` runs on every notification, not only on a change: a console's next page replaces its result object, which
+        // re-reads the same key and columns. That is more rows of the same result, so the selection and scroll stay.
+        if (previous && previous[0] === key && previous[1] === columns) return;
         setLocalSort(null);
+        setPicked(null);
         setAnchor(null);
         setFocus(null);
         setEditor(null);
@@ -1701,6 +1795,7 @@ export function DataGrid(props: GridProps) {
     on(
       () => props.rowsKey,
       () => {
+        setPicked(null);
         setAnchor(null);
         setFocus(null);
         setEditor(null);
@@ -1709,6 +1804,31 @@ export function DataGrid(props: GridProps) {
       },
       { defer: true },
     ),
+  );
+
+  // Picked rows are screen positions: another order puts other rows there, so a sort ends them (the cell clicked last
+  // stays selected), as a filter or a new result does. More rows (loading the next page) keep them; fewer rows (new
+  // rows taken out) end them too: the rows after the ones that went move up into the picked positions.
+  createEffect(
+    on(
+      sort,
+      () => {
+        if (!picked()) return;
+        setPicked(null);
+        setAnchor(focus());
+      },
+      { defer: true },
+    ),
+  );
+  let shownRows = 0;
+  createEffect(
+    on(ordered, (order) => {
+      const shrank = order.length < shownRows;
+      shownRows = order.length;
+      if (!shrank || !picked()) return;
+      setPicked(null);
+      setAnchor(focus());
+    }),
   );
 
   createEffect(() => {
@@ -1727,6 +1847,7 @@ export function DataGrid(props: GridProps) {
     colMove();
     anchor();
     focus();
+    picked();
     sort();
     hoverCol();
     search();
@@ -1747,7 +1868,7 @@ export function DataGrid(props: GridProps) {
   createEffect(() => {
     const s = sel();
     const run = ++statsRun;
-    if (!s || (s.r1 === s.r2 && s.c1 === s.c2)) {
+    if (!s || (rowCount(s.rows) === 1 && s.c1 === s.c2)) {
       clearStats();
       return;
     }
@@ -1764,16 +1885,23 @@ export function DataGrid(props: GridProps) {
     const distinct = new Set<string>();
     const budget = 250_000;
     const sliceMs = 4; // a slice never holds the main thread for more than a frame's slack, whatever the cell types
-    let vr = s.r1;
+    // Only the selected rows (picked ones need not be next to each other): range by range, row by row.
+    const ranges = s.rows;
+    let ri = 0;
+    let vr = ranges[0]?.[0] ?? 0;
+    let seen = 0;
+    const next = () => {
+      if (++vr > ranges[ri][1] && ++ri < ranges.length) vr = ranges[ri][0];
+    };
     const step = () => {
       if (run !== statsRun) return;
       const deadline = performance.now() + sliceMs;
-      for (; vr <= s.r2; vr++) {
+      for (; ri < ranges.length; next()) {
         if (cells > budget) {
-          vr = s.r2 + 1;
+          ri = ranges.length;
           break;
         }
-        if ((vr & 255) === 0 && performance.now() > deadline) break;
+        if ((++seen & 255) === 0 && performance.now() > deadline) break;
         const row = data[rows[vr]];
         for (let c = s.c1; c <= s.c2; c++) {
           cells++;
@@ -1790,11 +1918,11 @@ export function DataGrid(props: GridProps) {
           }
         }
       }
-      if (vr <= s.r2) {
+      if (ri < ranges.length) {
         timer = window.setTimeout(step, 0);
         return;
       }
-      setState("gridStats", { cells, rows: s.r2 - s.r1 + 1, numeric, sum, min, max, distinct: distinct.size, owner } as GridStats);
+      setState("gridStats", { cells, rows: rowCount(ranges), numeric, sum, min, max, distinct: distinct.size, owner } as GridStats);
     };
     let timer = window.setTimeout(step, 0);
     onCleanup(() => window.clearTimeout(timer));

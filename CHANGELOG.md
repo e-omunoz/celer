@@ -6,6 +6,101 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Multiple selection in the results grid** (#218): Ctrl+click (Cmd+click on macOS) on a row number or any cell
+  adds that row to the selection or takes it out, keeping the rest, so rows 2, 5 and 9 (or 5 and 5000, with pages
+  loaded in between) can be selected together and are highlighted. Shift+click selects the rows from the last one
+  clicked, Ctrl+Shift+click adds that range; a plain click, an arrow key or Esc go back to the single selection, and
+  sorting, filtering or running again clear it. Copies (Ctrl+C, Ctrl+Shift+C, every *Copiar como* format), Supr in a
+  table tab (pending until saved, then deleted by key) and the new *Exportar selección…* take exactly the selected
+  rows, in screen order; the status bar shows how many rows are selected and its statistics cover only them. Ctrl+click
+  on a foreign-key value still opens the referenced row.
+- **Exportar selección…** in the grid's menu writes the selected rows and columns (every export format, Excel
+  included) from what the grid holds, without running the query again.
+
+### Changed
+- **Completion offers the query's columns first** (#219): with tables named in `FROM`/`JOIN`/`UPDATE`/`INTO`, the list
+  in `WHERE`, `AND`/`OR`, `ON`, `GROUP BY`, `ORDER BY`, `HAVING`, `SET`, the `SELECT` list and `INSERT INTO t (…)`
+  shows only those tables' columns (alias as detail), above keywords, functions and table names whatever the case
+  typed (`WHERE c` puts the `c…` columns above `CASE`/`CAST`), also when the `FROM` comes after the caret. Tables are
+  recognised with aliases, quoted names, `schema.table`, `db.dbo.table` and Informix `db[@server]:owner.table`, only
+  in the statement under the caret, ignoring strings and comments; inside a subquery its own tables come first, then
+  the outer query's. With no table named yet (`SELECT |`) nothing changes. Columns that only contain the typed
+  letters in the middle, and the catalog's table names, rank with the keywords, below one that starts with what was
+  typed (`… = 1 AN` keeps `AND` above `quantity`, so Enter does not replace the keyword), and a whole keyword typed
+  (`or`, `not`, `in`, `as`…) stays above every column, even one that starts with it (`notas`, `orders`) (#228).
+- **Salida shows the newest run at the top** (#225): each run's line goes to the top, marked *última*, and the view
+  returns to it; «✦ Corregir con IA» stays on the latest entry when it is an error. New *copiar todo* copies the whole
+  log in the order shown. The 200-entry cap still drops the oldest.
+- Supr on a selection that mixes rows already marked for deletion with unmarked ones now marks them all; only a
+  selection of rows that are all marked is restored (before, each row was flipped).
+- **Dependencies** (#224): the Dependabot updates of November land together: `actions/setup-java` 6, the npm group
+  (13 packages, `@anthropic-ai/sdk` 1.3 among them) and the cargo group (22 crates: `rust_xlsxwriter` 0.102, `mysql`
+  28, `rusqlite` 0.41, `zip` 9, `calamine` 0.37, `russh` 0.65, `base64` 0.23, `getrandom` 0.4, `parking_lot` 0.13,
+  `windows-sys` 0.61…). An Excel export that cannot create its temporary file now fails with the reason (the crate
+  used to panic there).
+
+### Fixed
+- MCP: protected columns no longer reach an assistant through rows the server serialises: SQL Server's `FOR JSON` /
+  `FOR XML` over a table with protected columns and PostgreSQL's `table_to_xml` / `query_to_xml` family are refused,
+  and a JSON or XML value keyed by a protected column comes back as `[oculto]` (#234).
+- In-app AI: «Corregir con IA» no longer sends row values inside the server error. Unless the connection's AI level is
+  «Lectura» or above, PostgreSQL's `Detalle:` / `Contexto:` lines (a whole failing row, a key's value) are left out and
+  the values quoted by duplicate-key and conversion errors (MySQL, MariaDB, SQL Server, PostgreSQL) become «valor
+  omitido»; the panel and Ajustes › IA say so (#235).
+- Export to SQL INSERT: «Tabla de destino» keeps the table's quotes (`"Ventas 2024"`, `` `order` ``,
+  `public."Clientes"`) and takes the query's own FROM, not one inside parentheses (`extract(year FROM fecha)`), a
+  string or a comment, both in «Exportar…» and «Exportar selección…» (#238).
+- «Exportar selección…» to SQL INSERT quotes the column names with the connection's driver, as the export of the whole
+  result does: over ODBC to MySQL/MariaDB it writes `` `id` `` instead of `"id"`, which those servers rejected (#239).
+- Salida: the «ÚLTIMA» tag on the newest entry is readable in the light themes (4.6:1 or more, it was about 3:1 in
+  Celer Claro, Sand and Alto contraste claro) (#237).
+- «Exportar selección…»: the dialog says «la fila seleccionada» for one row and names the columns actually written
+  (all of the grid's, or only the selected ones) instead of «las 1 filas» with the grid's columns (#236).
+- Pending changes bar: Gib in the status bar no longer covers the right end of «Revisar y guardar» and swallows
+  clicks there; the bar keeps its buttons clear of him while he is shown (#231).
+- Informix over JDBC: when «Detener» has to cut and reopen the connection, the error now says that the open
+  transaction and the session's SET went with it, instead of later statements autocommitting in silence (#229).
+- A console that switched to another database no longer leaves its connection to the next session: a new console of
+  a connection with no default database (and every ODBC session) starts in the connection's own database (#233).
+- «Probar conexión» on SQL Server with a database that does not exist says so, instead of the wrong-password hint
+  (#240).
+- «Probar conexión» on Informix (DRDA and JDBC) with a database that does not exist marks «Inicio de sesión» as OK
+  and «Base de datos» as failed, with the database hint also over DRDA (#241).
+- Deleting a connection with open consoles closes their connections on the server, as «Desconectar» does, instead of
+  leaving them logged in for up to 5 minutes (#242).
+- «URL JDBC» reads Connector/J's `address=(host=…)(port=…)` and `(host=…,port=…)` hosts and mssql-jdbc's `{…}`-quoted
+  values (with `;` inside) into the right fields, instead of filling the server with the raw text (#243).
+- Loading the next page of a console result (the button or scrolling to the end) no longer drops the grid's
+  selection: the selected cell or picked rows stay selected.
+- «Exportar selección…» with a binary value over 4 KB in the selected rows stops with a message to export the whole
+  result, instead of writing the grid's cut `0x…` preview (text in the binary column of an SQL INSERT, or a cut value
+  in CSV/JSON). Exporting a query on SQL Server or over ODBC now writes binary values over 4 KB
+  whole instead of cut to the first 4 KB (#230).
+- **Excel export writes dates as dates** (#224): DATE, DATETIME/TIMESTAMP and TIME columns land as Excel dates with a
+  `yyyy-mm-dd` / `yyyy-mm-dd hh:mm:ss` / `hh:mm:ss` format (milliseconds kept), so they sort, filter and compute in
+  Excel; a value Excel cannot hold exactly (a time zone, more than milliseconds, before March 1900) stays text. Importing
+  such a sheet keeps the milliseconds.
+- **Row history: the range line says why the read starts where it does** (#217): «Lo anterior ya no está en los logs»
+  only when the read starts at the oldest log on disk; a table created after log M says the read starts after it and
+  that the older logs are still on disk without its changes, and after Informix's fast recovery the line says the
+  creation time was rewritten. The core reports the reason as data (`startReason`); the texts of a read cut short are
+  unchanged.
+- **Engine tests no longer restart the shared Informix server** (#216): when the CDC reader probe of
+  `informix_jdbc_row_history` does not read a short history whole, the test switches the logical log and retries (five
+  rounds, with a growing pause), then fails naming each probe's log and result; a history read whose reader stopped at
+  the current log's tail is asked again after a log switch too. Only a container the run owns (`CELER_INFORMIX_KILLABLE=1`
+  with `CELER_INFORMIX_CONTAINER`, as in `engines.yml`) may still be restarted.
+- **The pointer no longer disappears in the file dialogs on Windows** (#220): the system's open/save dialog shares
+  the pointer's visibility with the Celer window and WebView2, and WebView2 runtimes that hide the pointer while
+  typing (Windows' *Ocultar el puntero mientras se escribe*) and fail to show it again left it hidden, so it was
+  invisible over the dialog (*Importar conexiones › Fichero de Celer…* from *Nuevo*, the explorer's ⋯ menu or the
+  palette, opening a script, exporting connections or results, importing data, themes and settings) and over the
+  app after choosing or cancelling. Every native dialog now shows the pointer before it opens and gives it its
+  shape back over the page after it.
+- **An ODBC connection imported without passwords asks for its password** (#220): when the user is in the
+  connection string (`UID=…`) rather than the *Usuario* field, connecting no longer fails the login without asking.
+
 ## [2.4.0] - 2026-10-14
 
 ### Added

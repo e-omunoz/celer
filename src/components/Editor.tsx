@@ -37,7 +37,7 @@ import { splitSql } from "../sql";
 import { unfilteredWrites, type Snippet } from "../snippets";
 import { compatibility, guessEngines } from "../engineCompat";
 import { SCOPE_LABELS, variableAt, variableLiteral, type ResolvedVar } from "../variables";
-import { expectAt, findTable, identifierAt, referencedTables, splitQualified, type TableRef } from "../sqlContext";
+import { expectAt, findTable, identifierAt, isConnectiveKeyword, referencedTables, splitOptions, splitQualified, tablesInScope, type TableRef } from "../sqlContext";
 import type { CompletionTable, DbKind, KeywordCase } from "../types";
 
 const language = new Compartment();
@@ -290,18 +290,28 @@ const quoteIfNeeded = (name: string) => (/^[a-z_][a-z0-9_$]*$/.test(name) ? name
  */
 function catalogCompletion(get: () => { tables: CompletionTable[]; defaultSchema?: string; dialect: string }) {
   const source = catalogSource(get);
-  return (ctx: CompletionContext): CompletionResult | null => {
+  // Two sources over one computation: the ranked list that goes above keywords, and the rest, ranked with them.
+  let last: { state: EditorState; pos: number; explicit: boolean; value: CatalogResults } | null = null;
+  const run = (ctx: CompletionContext): CatalogResults => {
+    if (last && last.state === ctx.state && last.pos === ctx.pos && last.explicit === ctx.explicit) return last.value;
+    let value: CatalogResults;
     try {
-      return source(ctx);
+      const result = source(ctx);
+      value = result && "main" in result ? result : { main: result };
     } catch (err) {
       console.error("catalog completion failed", err);
-      return null;
+      value = { main: null };
     }
+    last = { state: ctx.state, pos: ctx.pos, explicit: ctx.explicit, value };
+    return value;
   };
+  return [(ctx: CompletionContext) => run(ctx).main, (ctx: CompletionContext) => run(ctx).extra ?? null];
 }
 
+type CatalogResults = { main: CompletionResult | null; extra?: CompletionResult | null };
+
 function catalogSource(get: () => { tables: CompletionTable[]; defaultSchema?: string; dialect: string }) {
-  return (ctx: CompletionContext): CompletionResult | null => {
+  return (ctx: CompletionContext): CompletionResult | CatalogResults | null => {
     const { tables, defaultSchema, dialect } = get();
     if (!tables.length) return null;
     const word = ctx.matchBefore(/[\w$]*/);
@@ -310,7 +320,8 @@ function catalogSource(get: () => { tables: CompletionTable[]; defaultSchema?: s
     if (/String|Comment|QuotedIdentifier/.test(node.name)) return null;
     const text = ctx.state.doc.toString();
     const stmt = statementAround(text, ctx.pos, dialect);
-    const refs = referencedTables(stmt.text, tables, defaultSchema);
+    // Only the statement under the caret counts, and inside it the query (or subquery) the caret is in.
+    const refs = tablesInScope(stmt.text, word.from - stmt.start, tables, defaultSchema);
     const before = text.slice(stmt.start, word.from);
     const cols = (ref: TableRef, boost: number): Completion[] =>
       ref.table.columns.map((col) => ({ label: col, type: "property", detail: ref.alias, boost, apply: quoteIfNeeded(col) }));
@@ -346,15 +357,32 @@ function catalogSource(get: () => { tables: CompletionTable[]; defaultSchema?: s
       };
     }
 
-    const options: Completion[] = [];
+    // After "${" the variables' list answers alone.
+    if (ctx.state.sliceDoc(word.from - 2, word.from) === "${") return null;
+    // The statement names tables: their columns only (the caret's subquery first, then the query around it), then
+    // the aliases. Those that start with what was typed (or have a word starting with it) are ordered here
+    // (filter: false) so that they come before keywords and functions whatever the case typed. Those matching only
+    // in the middle, and the catalog's table names (to add a JOIN), go in a second, normally filtered result, where
+    // a keyword starting with what was typed (AN → AND) ranks above them and Enter does not replace it.
     if (refs.length) {
-      refs.forEach((ref, i) => options.push(...cols(ref, 8 - Math.min(i, 3))));
-      refs.forEach((ref) => ref.alias !== ref.table.name && options.push({ label: ref.alias, type: "variable", detail: ref.table.name, boost: 5 }));
-    } else {
-      // No FROM yet (e.g. "SELECT |"): every column of the catalog when it is a reasonable list.
-      const total = tables.reduce((n, t) => n + t.columns.length, 0);
-      if (total <= 3000) tables.forEach((t) => options.push(...cols({ table: t, alias: t.name }, 2)));
+      const grouped: { option: Completion; group: number }[] = [];
+      refs.forEach((ref, i) => cols(ref, 8 - Math.min(i, 3)).forEach((option) => grouped.push({ option, group: 0 })));
+      refs.forEach((ref) => ref.alias !== ref.table.name && grouped.push({ option: { label: ref.alias, type: "variable", detail: ref.table.name, boost: 5 }, group: 0 }));
+      tables.forEach((t) => grouped.push({ option: tableOption(t, 1), group: 1 }));
+      const { first, rest } = splitOptions(grouped, word.text);
+      const matched = new Map(first.map((r) => [r.option, r.from < r.to ? [r.from, r.to] : []]));
+      // After a whole keyword (OR, NOT, IN) the columns go under it even when its case differs from what was typed
+      // ("or" against OR costs the keyword 200 in the editor's ranking, "orders" only 100): lower their boost by 200.
+      const demote = isConnectiveKeyword(word.text);
+      return {
+        main: first.length ? { from: word.from, options: first.map((r) => r.option), filter: false, getMatch: (c) => matched.get(c) ?? [] } : null,
+        extra: rest.length ? { from: word.from, options: demote ? rest.map((o) => ({ ...o, boost: (o.boost ?? 0) - 200 })) : rest } : null,
+      };
     }
+    // No table named yet (e.g. "SELECT |"): every column of the catalog when it is a reasonable list.
+    const options: Completion[] = [];
+    const total = tables.reduce((n, t) => n + t.columns.length, 0);
+    if (total <= 3000) tables.forEach((t) => options.push(...cols({ table: t, alias: t.name }, 2)));
     tables.forEach((t) => options.push(tableOption(t, 1)));
     return { from: word.from, options, validFor: /^[\w$]*$/ };
   };
@@ -480,7 +508,7 @@ export function SqlEditor(props: {
     return true;
   }
 
-  const completionSource = catalogCompletion(() => ({ tables: props.tables, defaultSchema: props.defaultSchema, dialect: props.kind }));
+  const [completionSource, catalogRest] = catalogCompletion(() => ({ tables: props.tables, defaultSchema: props.defaultSchema, dialect: props.kind }));
   const templates = snippetSource(() => ({ snippets: props.snippets ?? [], dialect: props.kind }));
   const variableCompletion = variableSource(() => ({ vars: props.variables ?? new Map(), dialect: props.kind }));
   const variableTips = variableHover(() => ({ vars: props.variables ?? new Map(), dialect: props.kind, scopeOf: (v) => props.variableScope?.(v) ?? SCOPE_LABELS[v.scope].toLowerCase() }));
@@ -520,7 +548,7 @@ export function SqlEditor(props: {
           language.of(languageExtension()),
           // One stable source: CodeMirror matches results to sources by identity (a new function per call
           // would leave every result "pending" and never shown).
-          EditorState.languageData.of(() => [{ autocomplete: completionSource }, { autocomplete: templates }, { autocomplete: variableCompletion }]),
+          EditorState.languageData.of(() => [{ autocomplete: completionSource }, { autocomplete: catalogRest }, { autocomplete: templates }, { autocomplete: variableCompletion }]),
           variableTips,
           unfilteredWarning(() => props.kind),
           linkField,

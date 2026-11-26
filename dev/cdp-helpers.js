@@ -3,11 +3,11 @@
 // They find things by what the user sees (connection names, button texts), so a check reads like the steps it takes.
 /* eslint-disable no-unused-vars */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/** Polls `fn` until it returns something truthy (returned) or `ms` pass (null). */
+/** Polls `fn` (sync or async) until it returns something truthy (returned) or `ms` pass (null). */
 const until = async (fn, ms = 10000) => {
   const t = Date.now();
   while (Date.now() - t < ms) {
-    const v = fn();
+    const v = await fn();
     if (v) return v;
     await sleep(40);
   }

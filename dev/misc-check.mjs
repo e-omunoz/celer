@@ -55,7 +55,7 @@ const appName = await js(`return pane().querySelector('.results canvas') ? (awai
 void appName;
 const shown = await js(`
   // Read the value through the record panel: activate the first cell.
-  const out = [...pane().querySelectorAll('.out-entry')].pop()?.textContent ?? '';
+  const out = (pane().querySelector('.out-entry.latest') ?? pane().querySelector('.out-entry'))?.textContent ?? '';
   return { out, rtab: pane().querySelector('.rtab.on')?.textContent ?? '' };
 `);
 check("startup script ran (SHOW application_name returned a row)", /Resultado/.test(shown.rtab), JSON.stringify(shown));

@@ -276,7 +276,7 @@ Measured on a laptop against the seeded PostgreSQL test database:
 
 ## Building from source
 
-Requirements: [Rust](https://rustup.rs) (stable), [Node.js](https://nodejs.org) 20+ and, on Windows, the Visual Studio
+Requirements: [Rust](https://rustup.rs) (stable), [Node.js](https://nodejs.org) 22.12+ and, on Windows, the Visual Studio
 Build Tools with the C++ workload.
 
 ```bash

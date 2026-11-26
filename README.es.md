@@ -278,7 +278,7 @@ Medido en un portátil contra la base de datos PostgreSQL de pruebas:
 
 ## Compilar desde el código
 
-Requisitos: [Rust](https://rustup.rs) (estable), [Node.js](https://nodejs.org) 20+ y, en Windows, Visual Studio Build
+Requisitos: [Rust](https://rustup.rs) (estable), [Node.js](https://nodejs.org) 22.12+ y, en Windows, Visual Studio Build
 Tools con la carga de trabajo de C++.
 
 ```bash

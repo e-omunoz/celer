@@ -430,6 +430,8 @@ pub struct Guarded {
     key: String,
     home: String,
     database: String,
+    /// The database the session opened in: its connection is handed on only while it is still there (#233).
+    opened: String,
     autocommit: bool,
     in_tx: bool,
     /// BEGIN sin COMMIT en un motor cuyo driver no sigue la transacción en modo automático (Informix, ODBC).
@@ -500,6 +502,7 @@ impl Guarded {
             owner: o.owner,
             key: o.key,
             home: o.database,
+            opened: database.clone(),
             database,
             autocommit: o.autocommit,
             in_tx: false,
@@ -568,6 +571,15 @@ impl Guarded {
         (looks_lost(&text) || kind == DbKind::Informix) && d.ping().is_err()
     }
 
+    /// The session's state went with its connection.
+    fn forget_state(&mut self) {
+        self.in_tx = false;
+        self.tx_maybe = false;
+        self.temp = false;
+        self.settings = false;
+        self.cursor = false;
+    }
+
     /// Para las pruebas: como si la sesión llevara `idle` sin usarse.
     #[cfg(test)]
     pub(crate) fn pretend_idle(&mut self, idle: Duration) {
@@ -585,11 +597,7 @@ impl Guarded {
         if let Some(old) = self.inner.take() {
             let _ = std::thread::Builder::new().name("celer-close".into()).spawn(move || drop(old));
         }
-        self.in_tx = false;
-        self.tx_maybe = false;
-        self.temp = false;
-        self.settings = false;
-        self.cursor = false;
+        self.forget_state();
         self.reconnecting.store(true, Ordering::SeqCst);
         let opened = (|| -> Result<Box<dyn Driver>> {
             let mut d = connect_retrying(&self.connect, true)?;
@@ -623,6 +631,20 @@ impl Guarded {
 
     fn recover_from(&mut self, e: anyhow::Error) -> Recovery {
         let cancelled = self.cancelled.swap(false, Ordering::SeqCst);
+        // The driver already put another connection in place of the cut one (JDBC: the bridge cuts it when a cancel
+        // is not obeyed, #229): what the session had is gone all the same, and the statement is not repeated.
+        if let Some(ms) = self.inner.as_deref_mut().and_then(|d| d.replaced()) {
+            let lost = self.lost_state();
+            self.forget_state();
+            self.touch();
+            // The driver's own SESSION_LOST wording gives way to the guard's, which names everything lost.
+            let error = match e.chain().nth(1) {
+                Some(cause) if is_code(&e, "SESSION_LOST") => anyhow!("{cause}"),
+                _ => e,
+            };
+            let reason = short(&error.to_string());
+            return Recovery::Back { ms, lost, reason, cancelled: true, error };
+        }
         if !self.is_lost(&e) {
             return Recovery::Not(e);
         }
@@ -1031,6 +1053,7 @@ impl Drop for Guarded {
             || self.temp
             || self.settings
             || self.pending_loss.is_some()
+            || !self.database.eq_ignore_ascii_case(&self.opened)
             || d.broken()
             || !d.session_state().is_empty()
         {
@@ -1062,6 +1085,8 @@ mod tests {
         hang: Mutex<Duration>,
         /// Lo que tarda en abrirse una conexión.
         connect_delay: Mutex<Duration>,
+        /// The next statement is cancelled and the driver replaces its connection itself (the JDBC bridge, #229).
+        reset: AtomicBool,
     }
 
     struct Fake {
@@ -1071,6 +1096,7 @@ mod tests {
         database: String,
         autocommit: bool,
         in_tx: bool,
+        replaced: Option<u64>,
     }
 
     impl Fake {
@@ -1095,6 +1121,12 @@ mod tests {
     impl Driver for Fake {
         fn execute(&mut self, sql: &str, _fetch: usize) -> Result<ExecOutput> {
             self.alive()?;
+            if self.server.reset.swap(false, Ordering::SeqCst) {
+                // A new connection under the same driver: back in autocommit, the transaction gone.
+                self.in_tx = false;
+                self.replaced = Some(7);
+                bail!("Consulta cancelada (se reabre la conexión…)");
+            }
             self.server.executed.lock().push(format!("{}:{sql}", self.id));
             let upper = sql.trim().to_uppercase();
             if upper.starts_with("BEGIN") {
@@ -1178,6 +1210,9 @@ mod tests {
         fn broken(&self) -> bool {
             self.dead
         }
+        fn replaced(&mut self) -> Option<u64> {
+            self.replaced.take()
+        }
     }
 
     fn connector(server: &Arc<Server>) -> Connector {
@@ -1192,7 +1227,7 @@ mod tests {
             }
             std::thread::sleep(*server.connect_delay.lock());
             let id = server.connects.fetch_add(1, Ordering::SeqCst) + 1;
-            Ok(Box::new(Fake { server: server.clone(), id, dead: false, database: "app".into(), autocommit: true, in_tx: false }) as Box<dyn Driver>)
+            Ok(Box::new(Fake { server: server.clone(), id, dead: false, database: "app".into(), autocommit: true, in_tx: false, replaced: None }) as Box<dyn Driver>)
         })
     }
 
@@ -1423,6 +1458,29 @@ mod tests {
         assert!(e.contains("SET"), "{e}");
     }
 
+    /// #229: the driver itself replaced the connection after a cancel the server did not obey (JDBC). The transaction
+    /// and the SETs went with it: the cancel says so, the statement is not repeated and nothing is left to COMMIT.
+    #[test]
+    fn a_connection_the_driver_replaced_is_not_lost_in_silence() {
+        let server = Arc::new(Server::default());
+        let mut g = Guarded::open(connector(&server), opts(DbKind::Informix, "")).unwrap();
+        g.execute("SET LOCK MODE TO WAIT 7", 10).unwrap();
+        g.execute("BEGIN WORK", 10).unwrap();
+        g.execute("INSERT INTO t VALUES (10)", 10).unwrap();
+        server.reset.store(true, Ordering::SeqCst);
+        let e = g.execute("SELECT COUNT(*) FROM systables a, systables b", 10).unwrap_err().to_string();
+        assert!(e.starts_with("SESSION_LOST: Consulta cancelada") && e.contains("transacción") && e.contains("SET"), "{e}");
+        assert!(!e.contains("SESSION_LOST: SESSION_LOST"), "{e}");
+        assert_eq!(server.executed.lock().iter().filter(|s| s.contains("COUNT")).count(), 0, "not repeated");
+        assert!(g.lost_state().is_empty(), "the state went with the old connection");
+        assert!(!g.broken());
+        // Without state, the cancel is just a cancel.
+        server.reset.store(true, Ordering::SeqCst);
+        let e = g.execute("SELECT COUNT(*) FROM systables a, systables b", 10).unwrap_err().to_string();
+        assert_eq!(e, "Consulta cancelada (se reabre la conexión…)");
+        assert_eq!(first_cell(&g.execute("SELECT 1", 10).unwrap()), 1, "the driver's own new connection goes on");
+    }
+
     #[test]
     fn a_transaction_lost_while_the_server_was_down_is_not_committed_later() {
         let server = Arc::new(Server::default());
@@ -1513,5 +1571,27 @@ mod tests {
         assert!(pool_forget("owner-pool-test") >= 1, "disconnecting closes the free ones");
         let g = Guarded::open(connector(&server), opts(DbKind::Postgres, key)).unwrap();
         assert!(!g.reused);
+    }
+
+    /// #233: a session that moved to another database does not hand its connection on: the next session of the
+    /// connection, with no database of its own, starts in the connection's default one.
+    #[test]
+    fn a_connection_moved_to_another_database_is_not_reused() {
+        let server = Arc::new(Server::default());
+        let key = "pool-test-moved";
+        let mut g = Guarded::open(connector(&server), Opts { database: String::new(), ..opts(DbKind::Mysql, key) }).unwrap();
+        g.execute("USE shop", 10).unwrap();
+        drop(g);
+        let mut g = Guarded::open(connector(&server), Opts { database: String::new(), ..opts(DbKind::Mysql, key) }).unwrap();
+        assert!(!g.reused, "the free connection was in another database");
+        assert_eq!(g.current_database().unwrap(), "app");
+        // Back where it opened, it is handed on again.
+        g.execute("USE shop", 10).unwrap();
+        g.execute("USE app", 10).unwrap();
+        drop(g);
+        let g = Guarded::open(connector(&server), Opts { database: String::new(), ..opts(DbKind::Mysql, key) }).unwrap();
+        assert!(g.reused);
+        drop(g);
+        pool_forget("owner-pool-test-moved");
     }
 }

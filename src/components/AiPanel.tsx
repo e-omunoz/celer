@@ -137,7 +137,7 @@ function KeySetup() {
       <button type="button" class="btn primary" disabled={!key().trim()} onClick={() => void saveAiKey(key())}>Guardar clave</button>
       <ul class="ai-privacy">
         <li>La clave se guarda en el almacén de credenciales del sistema, no en ficheros.</li>
-        <li>Se envía el <b>esquema</b> (nombres de tablas y columnas), el SQL del editor y el último error. <b>Nunca filas de datos.</b></li>
+        <li>Se envía el <b>esquema</b> (nombres de tablas y columnas), el SQL del editor y el último error. <b>Nunca filas de datos:</b> del error se quitan los valores de filas que cite (fila que falla, clave duplicada, valor que no convierte) y sus líneas de detalle, salvo si la conexión permite a la IA leer datos.</li>
         <li>De las variables <code>{"${nombre}"}</code> se envía el nombre; su valor, solo si la conexión permite a la IA leer datos («Lectura» o «Lectura y escritura» en Ajustes › IA › Servidor MCP).</li>
         <li>Para que una IA externa lea datos, usa el servidor MCP en Ajustes › IA, con permisos por conexión.</li>
       </ul>
