@@ -6,6 +6,8 @@ All notable changes to Celer are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-26
+
 ### Added
 - **Multiple selection in the results grid** (#218): Ctrl+click (Cmd+click on macOS) on a row number or any cell
   adds that row to the selection or takes it out, keeping the rest, so rows 2, 5 and 9 (or 5 and 5000, with pages
@@ -1081,7 +1083,8 @@ All notable changes to Celer are documented here. The format follows
 - Phase 1 client: SQL Server, Informix, SQLite and ODBC drivers, CodeMirror editor, canvas grid, table viewer,
   export, history and themes.
 
-[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/e-omunoz/celer/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/e-omunoz/celer/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/e-omunoz/celer/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/e-omunoz/celer/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/e-omunoz/celer/compare/v2.1.1...v2.2.0
